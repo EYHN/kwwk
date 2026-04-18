@@ -144,8 +144,19 @@ public enum AgentLoop {
         emit: @escaping AgentEventSink,
         streamFn: @escaping StreamFn
     ) async throws {
+        // Single source of truth: `currentContext.messages` is the running
+        // transcript used both for the request body and the agentEnd payload.
+        // We snapshot its length here so the delta emitted at agentEnd is
+        // exactly the messages appended inside this run (prompts passed to
+        // `run()` were already appended before we got here — they are part of
+        // the "prior" context, not the "new" delta, which matches how the
+        // original parallel-array version behaved).
+        let baseCount = currentContext.messages.count
+        func delta() -> [Message] {
+            Array(currentContext.messages[baseCount...])
+        }
+
         var firstTurn = initialFirstTurn
-        var newMessages: [Message] = []
         var pendingMessages = await config.getSteeringMessages()
 
         outer: while true {
@@ -163,7 +174,6 @@ public enum AgentLoop {
                         await emit(.messageStart(message: message))
                         await emit(.messageEnd(message: message))
                         currentContext.messages.append(message)
-                        newMessages.append(message)
                     }
                     pendingMessages = []
                 }
@@ -182,11 +192,10 @@ public enum AgentLoop {
                 // Providers like OpenAI Responses and Anthropic Messages
                 // enforce that ordering.
                 currentContext.messages.append(.assistant(assistant))
-                newMessages.append(.assistant(assistant))
 
                 if assistant.stopReason == .error || assistant.stopReason == .aborted {
                     await emit(.turnEnd(message: .assistant(assistant), toolResults: []))
-                    await emit(.agentEnd(messages: newMessages))
+                    await emit(.agentEnd(messages: delta()))
                     return
                 }
 
@@ -208,7 +217,6 @@ public enum AgentLoop {
                     )
                     for result in toolResults {
                         currentContext.messages.append(.toolResult(result))
-                        newMessages.append(.toolResult(result))
                     }
                 }
 
@@ -229,7 +237,11 @@ public enum AgentLoop {
                     )
                     await emit(.messageStart(message: .assistant(aborted)))
                     await emit(.messageEnd(message: .assistant(aborted)))
-                    await emit(.agentEnd(messages: newMessages))
+                    // `aborted` is not appended to currentContext — preserving
+                    // the prior behavior where the synthetic abort message is
+                    // surfaced via messageEnd but not part of the agent-end
+                    // delta or the transcript.
+                    await emit(.agentEnd(messages: delta()))
                     return
                 }
 
@@ -244,7 +256,7 @@ public enum AgentLoop {
             break
         }
 
-        await emit(.agentEnd(messages: newMessages))
+        await emit(.agentEnd(messages: delta()))
     }
 
     // MARK: - Stream assistant response

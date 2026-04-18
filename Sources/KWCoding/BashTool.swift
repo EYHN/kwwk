@@ -128,172 +128,217 @@ private func readAll(_ handle: FileHandle) -> String {
 }
 
 public func createBashTool(cwd: String, options: BashToolOptions = .init()) -> AgentTool {
-    // Dynamic description — so the model learns about run_in_background only
-    // when a manager is actually attached.
     let hasManager = options.manager != nil
-    let descText: String
-    if hasManager {
-        descText = """
-        Execute a shell command. Runs in \(cwd) by default. Stdout and stderr are returned on completion.
-
-        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID and output file path immediately; you will receive a <task-notification> user message when the task finishes. Use the Read tool on the output file path to inspect stdout/stderr in the meantime — do NOT poll or sleep.
-
-        Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.
-        """
-    } else {
-        descText = "Execute a shell command and return its output."
-    }
-
-    let parameters: JSONValue = {
-        var props: [String: JSONValue] = [
-            "command": ["type": "string"],
-            "timeout": .object([
-                "type": .string("number"),
-                "description": .string("Seconds before the foreground soft timeout. When a background manager is attached, the command auto-moves to background at this point. Default \(options.defaultTimeoutSeconds), max \(options.maxTimeoutSeconds)."),
-                "minimum": .int(1),
-                "maximum": .int(options.maxTimeoutSeconds),
-            ]),
-        ]
-        if hasManager {
-            props["description"] = [
-                "type": "string",
-                "description": "Short active-voice description of what this command does (e.g. \"Install deps\", \"Run tests\"). Shown to the user; helps identify background tasks.",
-            ]
-            props["run_in_background"] = [
-                "type": "boolean",
-                "description": "If true, start the command in the background and return immediately with a task id. You will be notified on completion. Do NOT use '&' at the end of the command.",
-            ]
-        }
-        return .object([
-            "type": .string("object"),
-            "properties": .object(props),
-            "required": .array([.string("command")]),
-        ])
-    }()
-
     let ops: BashOperations = {
         if let local = options.operations as? LocalBashOperations, local.cwd == nil {
             return LocalBashOperations(cwd: cwd, shellPath: local.shellPath)
         }
         return options.operations
     }()
-    let resolvedShell: String = options.shellPath
+
     let defaultTimeoutSec = options.defaultTimeoutSeconds
     let maxTimeoutSec = options.maxTimeoutSeconds
     let manager = options.manager
     let sessionId = options.sessionId
     let autoBg = options.autoBackgroundOnTimeout
     let hardTimeoutSec = options.hardTimeoutSeconds
+    let shellPath = options.shellPath
 
     return AgentTool(
         name: "bash",
         label: "bash",
-        description: descText,
-        parameters: parameters,
+        description: bashToolDescription(hasManager: hasManager, cwd: cwd),
+        parameters: bashToolParameters(
+            hasManager: hasManager,
+            defaultTimeoutSec: defaultTimeoutSec,
+            maxTimeoutSec: maxTimeoutSec
+        ),
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
-            guard case .object(let obj) = args,
-                  case .string(let command) = obj["command"] ?? .null else {
-                throw CodingToolError.invalidArgument("bash: `command` is required")
-            }
-            let description: String? = {
-                if case .string(let s) = obj["description"] ?? .null { return s }
-                return nil
-            }()
-            let timeoutSec: Int = {
-                let raw: Int
-                if case .int(let v) = obj["timeout"] ?? .null { raw = v }
-                else if case .double(let v) = obj["timeout"] ?? .null { raw = Int(v) }
-                else { raw = defaultTimeoutSec }
-                return min(max(raw, 1), maxTimeoutSec)
-            }()
-            let runInBg: Bool = {
-                if case .bool(let b) = obj["run_in_background"] ?? .null { return b }
-                return false
-            }()
-
-            // Path 1: explicit background.
-            if runInBg, let manager = manager {
-                let runner = BashBackgroundRunner(
-                    command: command,
-                    workDir: cwd,
-                    description: description,
-                    hardTimeoutSeconds: hardTimeoutSec,
-                    shellPath: resolvedShell,
-                    label: description ?? shortLabel(command)
-                )
-                let (taskId, outputFile) = await manager.spawn(
-                    runner: runner,
-                    sessionId: sessionId
-                )
-                let msg = "Command started in background with task id \(taskId). You will receive a <task-notification> user message when it completes. Output is being written to: \(outputFile.path). Use the Read tool on that file to inspect stdout/stderr in the meantime; do NOT poll or sleep."
-                return AgentToolResult(
-                    content: [.text(TextContent(text: msg))],
-                    details: .object([
-                        "status": .string("background_started"),
-                        "taskId": .string(taskId),
-                        "outputFile": .string(outputFile.path),
-                    ])
-                )
-            }
-
-            // Path 2: foreground with possible auto-background-on-timeout.
-            if let manager = manager, autoBg {
-                return try await runForegroundWithFlip(
-                    command: command,
-                    description: description,
-                    cwd: cwd,
-                    shellPath: resolvedShell,
-                    timeoutSeconds: timeoutSec,
-                    hardTimeoutSeconds: hardTimeoutSec,
-                    cancellation: cancellation,
-                    manager: manager,
-                    sessionId: sessionId
-                )
-            }
-
-            // Path 3: legacy pipe-based foreground (no manager attached).
-            let result = try await ops.execute(
-                command: command,
-                timeout: timeoutSec * 1000,
-                cancellation: cancellation
+            let input = try BashInput.parse(
+                args,
+                defaultTimeoutSec: defaultTimeoutSec,
+                maxTimeoutSec: maxTimeoutSec
             )
-            let body = [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
-            return AgentToolResult(
-                content: [.text(TextContent(text: body))],
-                details: .object([
-                    "stdout": .string(result.stdout),
-                    "stderr": .string(result.stderr),
-                    "exitCode": .int(Int(result.exitCode)),
-                    "durationMs": .int(result.durationMs),
-                ])
+
+            // Dispatch: background spawn → foreground-with-auto-flip → legacy pipe.
+            // Only the first two paths need a manager; without one we fall
+            // through to the pre-background pipe executor so older callers
+            // keep working.
+            if input.runInBackground, let manager {
+                return await runBashInBackground(
+                    input: input,
+                    manager: manager,
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    shellPath: shellPath,
+                    hardTimeoutSeconds: hardTimeoutSec
+                )
+            }
+            if let manager, autoBg {
+                return try await runBashForegroundWithFlip(
+                    input: input,
+                    manager: manager,
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    shellPath: shellPath,
+                    hardTimeoutSeconds: hardTimeoutSec,
+                    cancellation: cancellation
+                )
+            }
+            return try await runBashLegacy(
+                input: input,
+                ops: ops,
+                cancellation: cancellation
             )
         }
     )
 }
 
-// MARK: - Foreground-with-flip path
+// MARK: - Schema
 
-/// Run a command in the foreground with stdout/stderr fd-dup'd onto a file.
-/// If the command exceeds `timeoutSeconds`, hand the still-running process
-/// off to the background manager (adopt) and return an `auto_backgrounded`
-/// result — the process is NOT killed.
-private func runForegroundWithFlip(
-    command: String,
-    description: String?,
+private func bashToolDescription(hasManager: Bool, cwd: String) -> String {
+    if hasManager {
+        return """
+        Execute a shell command. Runs in \(cwd) by default. Stdout and stderr are returned on completion.
+
+        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID and output file path immediately; you will receive a <task-notification> user message when the task finishes. Use the Read tool on the output file path to inspect stdout/stderr in the meantime — do NOT poll or sleep.
+
+        Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.
+        """
+    }
+    return "Execute a shell command and return its output."
+}
+
+private func bashToolParameters(
+    hasManager: Bool,
+    defaultTimeoutSec: Int,
+    maxTimeoutSec: Int
+) -> JSONValue {
+    var props: [String: JSONValue] = [
+        "command": ["type": "string"],
+        "timeout": .object([
+            "type": .string("number"),
+            "description": .string("Seconds before the foreground soft timeout. When a background manager is attached, the command auto-moves to background at this point. Default \(defaultTimeoutSec), max \(maxTimeoutSec)."),
+            "minimum": .int(1),
+            "maximum": .int(maxTimeoutSec),
+        ]),
+    ]
+    if hasManager {
+        props["description"] = [
+            "type": "string",
+            "description": "Short active-voice description of what this command does (e.g. \"Install deps\", \"Run tests\"). Shown to the user; helps identify background tasks.",
+        ]
+        props["run_in_background"] = [
+            "type": "boolean",
+            "description": "If true, start the command in the background and return immediately with a task id. You will be notified on completion. Do NOT use '&' at the end of the command.",
+        ]
+    }
+    return .object([
+        "type": .string("object"),
+        "properties": .object(props),
+        "required": .array([.string("command")]),
+    ])
+}
+
+// MARK: - Input parsing
+
+/// Validated view of the `bash` tool arguments. Centralizes the JSONValue
+/// unpacking so the dispatch code reads like business logic.
+private struct BashInput {
+    let command: String
+    let description: String?
+    /// Seconds, already clamped to `[1, maxTimeoutSec]`.
+    let timeoutSeconds: Int
+    let runInBackground: Bool
+
+    static func parse(
+        _ args: JSONValue,
+        defaultTimeoutSec: Int,
+        maxTimeoutSec: Int
+    ) throws -> BashInput {
+        guard case .object(let obj) = args,
+              case .string(let command) = obj["command"] ?? .null else {
+            throw CodingToolError.invalidArgument("bash: `command` is required")
+        }
+        let description: String? = {
+            if case .string(let s) = obj["description"] ?? .null { return s }
+            return nil
+        }()
+        let timeoutSec: Int = {
+            let raw: Int
+            if case .int(let v) = obj["timeout"] ?? .null { raw = v }
+            else if case .double(let v) = obj["timeout"] ?? .null { raw = Int(v) }
+            else { raw = defaultTimeoutSec }
+            return min(max(raw, 1), maxTimeoutSec)
+        }()
+        let runInBg: Bool = {
+            if case .bool(let b) = obj["run_in_background"] ?? .null { return b }
+            return false
+        }()
+        return BashInput(
+            command: command,
+            description: description,
+            timeoutSeconds: timeoutSec,
+            runInBackground: runInBg
+        )
+    }
+}
+
+// MARK: - Path 1: explicit background
+
+private func runBashInBackground(
+    input: BashInput,
+    manager: BackgroundTaskManager,
+    sessionId: String?,
     cwd: String,
     shellPath: String,
-    timeoutSeconds: Int,
-    hardTimeoutSeconds: Int,
-    cancellation: CancellationHandle?,
+    hardTimeoutSeconds: Int
+) async -> AgentToolResult {
+    let runner = BashBackgroundRunner(
+        command: input.command,
+        workDir: cwd,
+        description: input.description,
+        hardTimeoutSeconds: hardTimeoutSeconds,
+        shellPath: shellPath,
+        label: input.description ?? bashShortLabel(input.command)
+    )
+    let (taskId, outputFile) = await manager.spawn(
+        runner: runner,
+        sessionId: sessionId
+    )
+    let msg = "Command started in background with task id \(taskId). You will receive a <task-notification> user message when it completes. Output is being written to: \(outputFile.path). Use the Read tool on that file to inspect stdout/stderr in the meantime; do NOT poll or sleep."
+    return AgentToolResult(
+        content: [.text(TextContent(text: msg))],
+        details: .object([
+            "status": .string("background_started"),
+            "taskId": .string(taskId),
+            "outputFile": .string(outputFile.path),
+        ])
+    )
+}
+
+// MARK: - Path 2: foreground with auto-flip-to-background on timeout
+
+/// Run the command in the foreground with stdout/stderr fd-dup'd onto a file.
+/// If it exceeds `input.timeoutSeconds`, hand the still-running process off
+/// to the background manager (adopt) and return an `auto_backgrounded`
+/// result — the process is NOT killed, bytes already on disk are preserved,
+/// and the completion notification fires via the Manager.
+private func runBashForegroundWithFlip(
+    input: BashInput,
     manager: BackgroundTaskManager,
-    sessionId: String?
+    sessionId: String?,
+    cwd: String,
+    shellPath: String,
+    hardTimeoutSeconds: Int,
+    cancellation: CancellationHandle?
 ) async throws -> AgentToolResult {
     let outputFile = await manager.allocateForegroundOutputFile()
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: shellPath)
-    process.arguments = ["-lc", command]
+    process.arguments = ["-lc", input.command]
     process.currentDirectoryURL = URL(fileURLWithPath: cwd)
 
     guard let writeHandle = try? FileHandle(forWritingTo: outputFile) else {
@@ -328,7 +373,7 @@ private func runForegroundWithFlip(
         startedAt: start
     )
 
-    let exit = await bundle.waitUpTo(seconds: timeoutSeconds)
+    let exit = await bundle.waitUpTo(seconds: input.timeoutSeconds)
 
     if let code = exit {
         // Completed within soft timeout.
@@ -353,11 +398,12 @@ private func runForegroundWithFlip(
         )
     }
 
-    // Soft timeout fired. Flip to background — process keeps running.
+    // Soft timeout fired. Flip to background — the process keeps running,
+    // its fds keep writing to outputFile, and the manager owns completion.
     let spec = BackgroundTaskSpec(
         kind: "bash",
-        label: description ?? shortLabel(command),
-        description: description,
+        label: input.description ?? bashShortLabel(input.command),
+        description: input.description,
         hardTimeoutSeconds: hardTimeoutSeconds
     )
     let (taskId, adoptedFile) = await manager.adopt(
@@ -368,20 +414,49 @@ private func runForegroundWithFlip(
             await bundle.awaitAdoptedCompletion(cancellation: bgCancel)
         }
     )
-    let msg = "Command exceeded the foreground soft timeout of \(timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive a <task-notification> user message when it completes. Full output is being written to: \(adoptedFile.path). Use the Read tool on that path to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start."
+    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive a <task-notification> user message when it completes. Full output is being written to: \(adoptedFile.path). Use the Read tool on that path to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
             "status": .string("auto_backgrounded"),
             "taskId": .string(taskId),
             "outputFile": .string(adoptedFile.path),
-            "softTimeoutSeconds": .int(timeoutSeconds),
+            "softTimeoutSeconds": .int(input.timeoutSeconds),
         ])
     )
 }
 
-/// Sendable wrapper over the non-Sendable `Process` + `FileHandle` so the
-/// adopt closure can capture them.
+// MARK: - Path 3: legacy pipe-based foreground (no manager attached)
+
+private func runBashLegacy(
+    input: BashInput,
+    ops: BashOperations,
+    cancellation: CancellationHandle?
+) async throws -> AgentToolResult {
+    let result = try await ops.execute(
+        command: input.command,
+        timeout: input.timeoutSeconds * 1000,
+        cancellation: cancellation
+    )
+    let body = [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+    return AgentToolResult(
+        content: [.text(TextContent(text: body))],
+        details: .object([
+            "stdout": .string(result.stdout),
+            "stderr": .string(result.stderr),
+            "exitCode": .int(Int(result.exitCode)),
+            "durationMs": .int(result.durationMs),
+        ])
+    )
+}
+
+// MARK: - Foreground/adopted process wrapper
+
+/// Sendable wrapper over the non-Sendable `Process` + `FileHandle`. Two roles:
+///   * Race the soft timeout against `waitUntilExit()` via `waitUpTo`.
+///   * If the timeout wins, the Manager's adopt closure calls
+///     `awaitAdoptedCompletion` to wait for the real exit and convert it to
+///     a `BackgroundTaskOutcome` using the shared `BashProcessOutcome` mapper.
 private final class ForegroundBashExecution: @unchecked Sendable {
     let process: Process
     let writeHandle: FileHandle
@@ -433,7 +508,6 @@ private final class ForegroundBashExecution: @unchecked Sendable {
 
     func awaitAdoptedCompletion(cancellation: CancellationHandle) async -> BackgroundTaskOutcome {
         cancellation.onCancel { [control] _ in control.terminate() }
-        // Process already running and fd-dup'd to outputFile. Just wait.
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             DispatchQueue.global().async {
                 self.process.waitUntilExit()
@@ -441,20 +515,9 @@ private final class ForegroundBashExecution: @unchecked Sendable {
             }
         }
         try? writeHandle.close()
-        let code = process.terminationStatus
-        if control.didCancel || cancellation.isCancelled {
-            return BackgroundTaskOutcome(
-                success: false,
-                summary: "aborted",
-                details: .object(["exitCode": .int(Int(code))]),
-                errorMessage: nil
-            )
-        }
-        return BackgroundTaskOutcome(
-            success: code == 0,
-            summary: "exit \(code)",
-            details: .object(["exitCode": .int(Int(code))]),
-            errorMessage: nil
+        return BashProcessOutcome.from(
+            process: process,
+            cancelled: control.didCancel || cancellation.isCancelled
         )
     }
 
@@ -467,7 +530,7 @@ private final class ForegroundBashExecution: @unchecked Sendable {
     }
 }
 
-// MARK: - Helpers
+// MARK: - Manager helper
 
 extension BackgroundTaskManager {
     /// Allocate an output file inside the manager's output dir without
@@ -483,10 +546,4 @@ extension BackgroundTaskManager {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         return url
     }
-}
-
-private func shortLabel(_ command: String, max: Int = 80) -> String {
-    let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.count <= max { return trimmed }
-    return String(trimmed.prefix(max)) + "…"
 }

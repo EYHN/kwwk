@@ -29,7 +29,7 @@ public struct BashBackgroundRunner: BackgroundTaskRunner {
         self.extraEnv = extraEnv
         self.spec = BackgroundTaskSpec(
             kind: "bash",
-            label: label ?? truncated(command),
+            label: label ?? bashShortLabel(command),
             description: description,
             hardTimeoutSeconds: hardTimeoutSeconds
         )
@@ -118,9 +118,22 @@ enum BashRunnerImpl {
 
         process.waitUntilExit()
 
+        return BashProcessOutcome.from(
+            process: process,
+            cancelled: control.didCancel || cancellation.isCancelled
+        )
+    }
+}
+
+/// Maps a finished `Process` to a `BackgroundTaskOutcome`. Shared between the
+/// spawn path (`BashRunnerImpl.run`) and the foreground-adopted path
+/// (`ForegroundBashExecution.awaitAdoptedCompletion`) so both produce
+/// identical success/summary/details for a given process state.
+enum BashProcessOutcome {
+    static func from(process: Process, cancelled: Bool) -> BackgroundTaskOutcome {
         let code = process.terminationStatus
         let reason = process.terminationReason
-        if control.didCancel || cancellation.isCancelled {
+        if cancelled {
             return BackgroundTaskOutcome(
                 success: false,
                 summary: "aborted",
@@ -185,7 +198,11 @@ final class BashProcessControl: @unchecked Sendable {
     }
 }
 
-private func truncated(_ s: String, max: Int = 80) -> String {
-    if s.count <= max { return s }
-    return String(s.prefix(max)) + "…"
+/// Trim whitespace and cap at `max` chars for UI labels (background task
+/// lists, TUI spinners). Shared between BashBackgroundRunner (bg task label)
+/// and BashTool (adopt-path label).
+func bashShortLabel(_ command: String, max: Int = 80) -> String {
+    let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.count <= max { return trimmed }
+    return String(trimmed.prefix(max)) + "…"
 }
