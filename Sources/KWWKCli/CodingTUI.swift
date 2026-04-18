@@ -88,6 +88,34 @@ func runCodingTUIInternal(
         requestRender: { runner.tui.requestRender() }
     )
 
+    // Queue panel: a persistent listing of steering messages waiting
+    // for a turn boundary, rendered between the status bar and the
+    // prompt. Rebuilt from `agent.queuedSteeringMessages()` whenever
+    // something might have changed the queue:
+    //   - Enter handler after an implicit steer.
+    //   - `/queue clear` outcome.
+    //   - Every agent event (turn boundaries drain the queue).
+    //   - The 500ms poll tick already used by the status bar.
+    //
+    // The panel collapses to zero rows when empty, so the transcript
+    // reclaims the space — no wasted real estate when idle.
+    let refreshQueuePanel: @MainActor @Sendable () -> Void = {
+        let messages = agent.queuedSteeringMessages()
+        if messages.isEmpty {
+            layout.setQueueLines([])
+            return
+        }
+        var lines: [String] = [
+            Style.dimmed("  ↓ \(messages.count) queued \(messages.count == 1 ? "prompt" : "prompts"):")
+        ]
+        for (i, msg) in messages.enumerated() {
+            let preview = previewQueuedMessageLine(msg)
+            lines.append(Style.dimmed("    \(i + 1). \(preview)"))
+        }
+        layout.setQueueLines(lines)
+    }
+    refreshQueuePanel()
+
     let statusBar = CodingStatusBar(
         layout: layout,
         runner: runner,
@@ -170,6 +198,10 @@ func runCodingTUIInternal(
                 }
             default: break
             }
+            // The agent loop drains the steering queue at turn
+            // boundaries — refresh the panel on every event so a
+            // queued prompt disappears as soon as it enters context.
+            refreshQueuePanel()
             layout.fitViewport(height: runner.terminal.height)
             runner.tui.requestRender()
         }
@@ -221,14 +253,14 @@ func runCodingTUIInternal(
             // auto-compacting, because they don't call `agent.prompt`.
             // For LLM prompts we check state first so we can steer
             // instead of racing the current turn / the pending
-            // message-array replacement.
+            // message-array replacement. The queue panel above the
+            // input (see `refreshQueuePanel`) shows what's waiting —
+            // no transcript notification needed since the panel is
+            // persistent until the message drains.
             if case .prompt = parsed, agent.state.isStreaming || autoCompact.isCompacting {
                 agent.steer(.user(UserMessage(content: [.text(TextContent(text: text))])))
                 layout.input.value = ""
-                notifications.clear()
-                let reason = autoCompact.isCompacting ? "auto-compact finishes" : "the current turn finishes"
-                notifications.append(Style.dimmed("  queued — will run after \(reason)"))
-                recomputeTranscript()
+                refreshQueuePanel()
                 runner.tui.requestRender()
                 return
             }
@@ -246,6 +278,11 @@ func runCodingTUIInternal(
             case .command(let name, let args):
                 if let cmd = slashRegistry.find(name) {
                     await cmd.handler(slashContext, args)
+                    // `/queue clear` (and maybe future commands) may
+                    // mutate the steering queue — refresh so the
+                    // panel above the input stays accurate.
+                    refreshQueuePanel()
+                    runner.tui.requestRender()
                 } else {
                     notifications.append(Style.error("  unknown slash command: /\(name)"))
                     recomputeTranscript()
@@ -310,13 +347,15 @@ func runCodingTUIInternal(
         }
     }
 
-    // Periodic refresh so the background-task count stays live even when
-    // there aren't any agent events firing. 500ms is invisibly slow for
-    // a human but cheap (just an actor dict count).
+    // Periodic refresh so the background-task count + queue panel stay
+    // live even when there aren't any agent events firing. 500ms is
+    // invisibly slow for a human but cheap — just an actor dict count
+    // and a queue snapshot.
     let pollTask = Task.detached {
         while !Task.isCancelled {
             try? await Task.sleep(nanoseconds: 500_000_000)
             await statusBar.render()
+            await MainActor.run { refreshQueuePanel() }
         }
     }
     defer { pollTask.cancel() }
@@ -352,4 +391,24 @@ private func shortenPath(_ path: String, to maxLen: Int) -> String {
     let head = path.prefix(maxLen / 2 - 1)
     let tail = path.suffix(maxLen / 2 - 2)
     return "\(head)…\(tail)"
+}
+
+/// Flatten a queued user message to a single truncated line for the
+/// queue panel above the input. Multi-line bodies collapse to spaces
+/// so the panel's row count stays predictable (1 per queued message
+/// plus a header line).
+func previewQueuedMessageLine(_ msg: Message, max: Int = 100) -> String {
+    let raw: String = {
+        switch msg {
+        case .user(let u):
+            return u.content.compactMap { block -> String? in
+                if case .text(let t) = block { return t.text }
+                return nil
+            }.joined(separator: " ")
+        default:
+            return "(\(msg.role.rawValue) message)"
+        }
+    }()
+    let flat = raw.replacingOccurrences(of: "\n", with: " ")
+    return flat.count <= max ? flat : String(flat.prefix(max)) + "…"
 }

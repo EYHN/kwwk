@@ -10,11 +10,18 @@ final class CodingLayout: @unchecked Sendable {
     let transcript: TextComponent
     let divider: HorizontalRule
     let status: TextComponent
+    /// Dedicated area above the input that lists currently-queued steering
+    /// messages. Rendered as 0 rows when empty so the layout collapses
+    /// cleanly — the transcript reclaims the space.
+    let queue: TextComponent
     let input: InputComponent
     let promptRow: PromptRow
 
-    /// Rows used by everything except the transcript body. The body's
-    /// `maxLines` is set to `terminalHeight - reservedRows` each render cycle.
+    /// Rows used by every fixed part (header + divider + status +
+    /// blanks + prompt). The transcript body's `maxLines` is set to
+    /// `terminalHeight - reservedRows - queue.lines.count` each render
+    /// cycle so the queue display can grow and shrink without
+    /// overflowing the terminal.
     let reservedRows: Int
 
     /// How many rows the status block occupies. Defaults to 1; pass 2 when
@@ -27,6 +34,7 @@ final class CodingLayout: @unchecked Sendable {
         self.transcript = TextComponent([])
         self.divider = HorizontalRule("─")
         self.status = TextComponent([])
+        self.queue = TextComponent([])
         self.input = InputComponent()
         self.promptRow = PromptRow(prompt: Style.prompt("❯ "), input: input)
 
@@ -36,6 +44,7 @@ final class CodingLayout: @unchecked Sendable {
         //   blank:      1
         //   divider:    1
         //   status:     statusRows
+        //   queue:      variable (queue.lines.count, tracked separately)
         //   blank:      1
         //   prompt:     1
         self.reservedRows = 3 + 1 + 1 + statusRows + 1 + 1
@@ -49,6 +58,7 @@ final class CodingLayout: @unchecked Sendable {
         tui.addChild(transcript)
         tui.addChild(divider)
         tui.addChild(status)
+        tui.addChild(queue)
         tui.addChild(TextComponent([""]))
         tui.addChild(promptRow)
     }
@@ -60,13 +70,30 @@ final class CodingLayout: @unchecked Sendable {
     /// repad the transcript when the terminal resizes.
     private var currentLines: [String] = []
 
-    /// Recompute `transcript.maxLines` based on the terminal's current height
-    /// and re-pad the content so the tail stays glued to the bottom of the
-    /// transcript region.
+    /// Last terminal height seen by `fitViewport`. Stored so we can
+    /// re-fit when the queue area grows/shrinks without requiring the
+    /// caller to re-measure the terminal.
+    private var lastTerminalHeight: Int = 20
+
+    /// Recompute `transcript.maxLines` based on the terminal's current
+    /// height minus the queue area's current size, then re-pad the
+    /// content so the tail stays glued to the bottom of the transcript
+    /// region.
     func fitViewport(height: Int) {
-        transcriptBudget = max(1, height - reservedRows)
+        lastTerminalHeight = height
+        let queueRows = queue.lines.count
+        transcriptBudget = max(1, height - reservedRows - queueRows)
         transcript.maxLines = transcriptBudget
         applyPaddedLines()
+    }
+
+    /// Replace the queue panel's contents. Automatically re-fits the
+    /// viewport so the transcript reclaims space when the queue shrinks
+    /// and yields space when it grows.
+    func setQueueLines(_ lines: [String]) {
+        queue.lines = lines
+        queue.invalidate()
+        fitViewport(height: lastTerminalHeight)
     }
 
     /// Replace the whole transcript line list. Pads with empty rows at the

@@ -79,38 +79,28 @@ final class CodingStatusBar {
         // there's nothing for the user to act on, so don't add visual
         // chrome. The row is still reserved by the layout so everything
         // below it (prompt, divider) doesn't jitter.
-        // Steering queue indicator appears on every "busy" state (streaming
-        // / aborting / compacting) and also on otherwise-idle-with-bg-tasks.
-        // The queue only accumulates while the agent is busy, so it's
-        // naturally empty when idle.
-        let queued = agent.queuedSteeringCount()
-        let queueTag = queued > 0
-            ? Style.dimmed("· ↓ \(queued) queued")
-            : nil
-
+        // Queue visibility lives in its own panel above the prompt
+        // (see `refreshQueuePanel` in CodingTUI.swift). The status bar
+        // stays focused on "what's the agent doing right now" so the
+        // two lines don't compete for eyeballs.
         let line: String
         if mode == .compacting {
             // Takes precedence over every other state: while compacting,
             // the agent itself is idle but we don't want the user to
             // type a prompt that would race the message replacement.
-            var parts = [Style.running("◐ auto-compacting \(compactingMessageCount) messages…")]
-            if let queueTag { parts.append(queueTag) }
-            parts.append(Style.dimmed("· new prompts will queue"))
-            line = parts.joined(separator: " ")
+            line = Style.running("◐ auto-compacting \(compactingMessageCount) messages…") + " " +
+                Style.dimmed("· new prompts will queue")
         } else if let flash = flashText {
             line = Style.dimmed(flash)
         } else if mode == .aborting {
             // Aborting takes precedence over streaming: after `agent.abort()`
             // fires, `isStreaming` stays true for a beat until agentEnd
             // lands, but we want the user to see "aborting…" immediately.
-            var parts = [Style.running("● aborting…")]
-            if let queueTag { parts.append(queueTag) }
-            parts.append(Style.dimmed("· Ctrl-C to force quit"))
-            line = parts.joined(separator: " ")
+            line = Style.running("● aborting…") + " " +
+                Style.dimmed("· Ctrl-C to force quit")
         } else if isStreaming {
             var parts = [Style.running("● generating…")]
             parts.append(Style.dimmed("· Esc to cancel"))
-            if let queueTag { parts.append(queueTag) }
             if running > 0 {
                 parts.append(Style.dimmed("· \(running) bg \(running == 1 ? "task" : "tasks") running"))
             }
