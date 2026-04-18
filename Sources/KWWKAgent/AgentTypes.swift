@@ -20,9 +20,24 @@ public typealias StreamFn = @Sendable (Model, Context, StreamOptions?) async thr
 public struct AgentToolResult: Sendable, Hashable {
     public var content: [ToolResultBlock]
     public var details: JSONValue?
-    public init(content: [ToolResultBlock], details: JSONValue? = nil) {
+    /// Optional UI-only display lines. When non-nil, the TUI renderer
+    /// prefers these over its default truncated preview of `content`.
+    /// Tools use this to summarize noisy output for the user (e.g.
+    /// "listed 847 paths", "matched 3 files", "exit 0 · 2.3s") while
+    /// still handing the full `content` to the LLM.
+    ///
+    /// Pure UI-side data — never leaves the process, never seen by any
+    /// provider. Doesn't affect `content` → wire serialization.
+    public var uiDisplay: [String]?
+
+    public init(
+        content: [ToolResultBlock],
+        details: JSONValue? = nil,
+        uiDisplay: [String]? = nil
+    ) {
         self.content = content
         self.details = details
+        self.uiDisplay = uiDisplay
     }
 }
 

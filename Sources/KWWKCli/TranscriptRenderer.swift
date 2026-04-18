@@ -30,8 +30,22 @@ final class TranscriptRenderer {
         case .messageStart(let message):
             switch message {
             case .user(let u):
-                append(Style.user("❯ " + userText(u)))
-                append("")
+                let text = userText(u)
+                // Background-task completion notifications arrive as
+                // synthetic user messages carrying a `<task-notification>`
+                // XML block. Rendering them raw dumps 15+ lines of tags into
+                // the UI; detect them by the fixed lead-in the bridge
+                // emits (see `BackgroundTaskNotification.messageText()`)
+                // and fold them into a tool-result-style summary instead.
+                if let summary = BgNotificationSummary.parse(text) {
+                    for line in summary.render() {
+                        append(line)
+                    }
+                    append("")
+                } else {
+                    append(Style.user("❯ " + text))
+                    append("")
+                }
             case .assistant:
                 // Start of a streaming turn: reserve a cursor for overwriting.
                 let start = lines.count
@@ -149,20 +163,25 @@ final class TranscriptRenderer {
     }
 
     private func formatToolResult(_ result: AgentToolResult, isError: Bool) -> [String] {
+        let arm = "  ⎿ "
+        func styler(_ s: String) -> String { isError ? Style.error(s) : Style.dimmed(s) }
+
+        // Tool-defined UI display wins over the default preview: tools that
+        // know their output is noisy (e.g. "ls -R" or "grep") can supply a
+        // pre-formatted summary here and it's shown as-is.
+        if let display = result.uiDisplay, !display.isEmpty {
+            return display.map { styler(arm + truncate($0, to: 200)) }
+        }
+
         let text = result.content.compactMap { block -> String? in
             if case .text(let t) = block { return t.text } else { return nil }
         }.joined(separator: "\n")
-        let lines = text.components(separatedBy: "\n")
-        let preview = Array(lines.prefix(4))
-        let hidden = max(0, lines.count - preview.count)
-        let arm = "  ⎿ "
-        var out: [String] = preview.map { line in
-            let body = arm + truncate(line, to: 200)
-            return isError ? Style.error(body) : Style.dimmed(body)
-        }
+        let allLines = text.components(separatedBy: "\n")
+        let preview = Array(allLines.prefix(4))
+        let hidden = max(0, allLines.count - preview.count)
+        var out: [String] = preview.map { styler(arm + truncate($0, to: 200)) }
         if hidden > 0 {
-            let note = "  ⎿ … \(hidden) more lines"
-            out.append(isError ? Style.error(note) : Style.dimmed(note))
+            out.append(styler("  ⎿ … \(hidden) more lines"))
         }
         return out
     }
