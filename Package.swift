@@ -45,7 +45,7 @@ let package = Package(
         ),
         .testTarget(
             name: "KWWKCliTests",
-            dependencies: ["KWWKCli"],
+            dependencies: ["KWWKCli", "KWWKAgent", "KWWKAI"],
             path: "Tests/KWWKCliTests"
         ),
     ],

@@ -1,13 +1,14 @@
 import Foundation
 import KWWKAgent
 
-/// Two-line status bar with dynamic state + static keyboard hints.
+/// One-line state bar. The line itself carries the contextual keyboard
+/// hint so we don't burn a second row on a static "Ctrl-C: quit" banner.
 ///
-///   row 1: ● generating… · Esc to cancel
-///          ○ 3 background tasks running · Esc to stop them
-///          ready
-///          killed 2 background tasks (flashes briefly)
-///   row 2: Esc: cancel generation / stop bg tasks · Ctrl-C: quit
+///   ● generating…  · Esc to cancel  · N bg tasks running
+///   ● aborting…    · Ctrl-C to force quit
+///   ○ 3 background tasks running  · Esc to stop them
+///   killed 2 background tasks    (flashes briefly)
+///   (blank)                       when idle with nothing running
 ///
 /// The bar is re-rendered on agent events AND on a poll timer (so background
 /// task counts stay live even when the agent is idle).
@@ -62,14 +63,19 @@ final class CodingStatusBar {
             .filter { $0.status == .running }.count
         let isStreaming = agent.state.isStreaming
 
-        let line1: String
+        // Contextual state + hint on a single line. When the agent is
+        // idle and no background tasks are running, the line is blank —
+        // there's nothing for the user to act on, so don't add visual
+        // chrome. The row is still reserved by the layout so everything
+        // below it (prompt, divider) doesn't jitter.
+        let line: String
         if let flash = flashText {
-            line1 = Style.dimmed(flash)
+            line = Style.dimmed(flash)
         } else if mode == .aborting {
             // Aborting takes precedence over streaming: after `agent.abort()`
             // fires, `isStreaming` stays true for a beat until agentEnd
             // lands, but we want the user to see "aborting…" immediately.
-            line1 = Style.running("● aborting…") + " " +
+            line = Style.running("● aborting…") + " " +
                 Style.dimmed("· Ctrl-C to force quit")
         } else if isStreaming {
             var parts = [Style.running("● generating…")]
@@ -77,17 +83,17 @@ final class CodingStatusBar {
             if running > 0 {
                 parts.append(Style.dimmed("· \(running) bg \(running == 1 ? "task" : "tasks") running"))
             }
-            line1 = parts.joined(separator: " ")
+            line = parts.joined(separator: " ")
         } else if running > 0 {
             let noun = running == 1 ? "task" : "tasks"
-            line1 = Style.dimmed("○ \(running) background \(noun) running") + " " +
+            line = Style.dimmed("○ \(running) background \(noun) running") + " " +
                 Style.dimmed("· Esc to stop them")
         } else {
-            line1 = Style.dimmed("ready")
+            // Idle, no background tasks — nothing to surface.
+            line = ""
         }
 
-        let line2 = Style.dimmed("  Esc: cancel generation / stop bg tasks · Ctrl-C: quit")
-        let newLines = [line1, line2]
+        let newLines = [line]
         if newLines != lastRenderedLines {
             lastRenderedLines = newLines
             layout.status.lines = newLines

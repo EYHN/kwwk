@@ -36,14 +36,17 @@ func runCodingTUIInternal(
     // behavior). Pass `useAlternateScreen: true` if you want a blank
     // fullscreen buffer instead.
     let runner = TUIRunner(useAlternateScreen: false, hideCursor: false)
-    let layout = CodingLayout(statusRows: 2)
+    let layout = CodingLayout(statusRows: 1)
     let renderer = TranscriptRenderer()
-
+    let headerModelLine = TextComponent([""])
     layout.header.lines = [
         Style.header("✻ kwwk coding agent"),
         Style.dimmed("  \(modelLabel)"),
         Style.dimmed("  \(shortenPath(cwd, to: max(20, runner.terminal.width - 4)))"),
     ]
+    // `headerModelLine` is a no-op placeholder used by the unused-var
+    // silencer below; the real header is `layout.header`.
+    _ = headerModelLine
     layout.install(into: runner.tui)
     layout.fitViewport(height: runner.terminal.height)
     runner.focus(layout.promptRow)
@@ -53,6 +56,28 @@ func runCodingTUIInternal(
             runner.tui.requestRender()
         }
     }
+
+    // Non-LLM messages the coding TUI wants to surface to the user
+    // ("switched to gpt-5.4", "unknown slash command /foo", etc.). These
+    // ride along with the transcript so they stay visible as the view
+    // scrolls.
+    let notifications = NotificationLog()
+    // `recomputeTranscript` is a captured @Sendable closure (not a local
+    // `func`) so it can be passed into the agent's `subscribe` callback
+    // and into ModalHost without Swift 6's strict-concurrency checker
+    // complaining about non-Sendable function references.
+    let recomputeTranscript: @MainActor @Sendable () -> Void = {
+        layout.setTranscript(renderer.lines.all + notifications.all)
+    }
+
+    // Modal overlay host — takes over the transcript area for selectors
+    // (/model). Only one modal is active at a time; its bindings are
+    // wired below via `modal.routeXxx`.
+    let modal = ModalHost(
+        layout: layout,
+        restoreTranscript: recomputeTranscript,
+        requestRender: { runner.tui.requestRender() }
+    )
 
     let statusBar = CodingStatusBar(
         layout: layout,
@@ -66,7 +91,12 @@ func runCodingTUIInternal(
     _ = agent.subscribe { event, _ in
         await MainActor.run {
             renderer.apply(event)
-            layout.setTranscript(renderer.lines.all)
+            // Don't clobber an open modal. When it closes, the host's
+            // restoreTranscript hook runs `recomputeTranscript()` so any
+            // state that accumulated during the modal pops back into view.
+            if !modal.isOpen {
+                recomputeTranscript()
+            }
             switch event {
             case .agentStart:
                 statusBar.setMode(.streaming)
@@ -80,25 +110,73 @@ func runCodingTUIInternal(
         await statusBar.render()
     }
 
+    // Slash command registry. Handlers get a `SlashContext` with the
+    // agent + modal host + a `notify` hook that prints a dimmed line into
+    // the transcript.
+    let slashRegistry = SlashCommandRegistry()
+    registerBuiltinSlashCommands(slashRegistry)
+    let slashContext = SlashContext(
+        agent: agent,
+        modal: modal,
+        notify: { line in
+            notifications.append(line)
+            if !modal.isOpen { recomputeTranscript() }
+            runner.tui.requestRender()
+        }
+    )
+
+    // --- keybindings ----------------------------------------------------
+
+    // Enter. Three modes of operation:
+    //   1. modal open → forward to modal's confirm handler.
+    //   2. input starts with `/` → slash command dispatch.
+    //   3. anything else → submit as an LLM prompt.
     runner.bind(.init("enter")) { _ in
-        let text = layout.input.value
-        guard !text.isEmpty else { return }
-        layout.input.value = ""
-        runner.tui.requestRender()
-        Task.detached {
-            do {
-                try await agent.prompt(text)
-            } catch {
-                await MainActor.run {
-                    layout.status.lines = [
-                        Style.error("error: \(error)"),
-                        Style.dimmed("  Esc: cancel / stop bg tasks · Ctrl-C: quit"),
-                    ]
+        Task { @MainActor in
+            if modal.isOpen {
+                modal.routeConfirm()
+                return
+            }
+            let text = layout.input.value
+            guard !text.isEmpty else { return }
+            layout.input.value = ""
+            // Each non-empty Enter starts a fresh action — expire the
+            // notifications from the previous one (e.g. stale `/help`
+            // output, `/model: cancelled` crumbs) so they don't pile up
+            // forever below the transcript.
+            notifications.clear()
+            recomputeTranscript()
+            runner.tui.requestRender()
+
+            switch SlashInput.parse(text) {
+            case .command(let name, let args):
+                if let cmd = slashRegistry.find(name) {
+                    await cmd.handler(slashContext, args)
+                } else {
+                    notifications.append(Style.error("  unknown slash command: /\(name)"))
+                    recomputeTranscript()
                     runner.tui.requestRender()
+                }
+            case .prompt(let body):
+                Task.detached {
+                    do {
+                        try await agent.prompt(body)
+                    } catch {
+                        await MainActor.run {
+                            layout.status.lines = [Style.error("error: \(error)")]
+                            runner.tui.requestRender()
+                        }
+                    }
                 }
             }
         }
     }
+
+    // Arrow keys — only have meaning inside a modal (move selection).
+    // Outside a modal they're no-ops, which matches pi-mono's behavior
+    // (we don't have a scrollback feature yet).
+    runner.bind(.init("up"))   { _ in Task { @MainActor in modal.routeUp() } }
+    runner.bind(.init("down")) { _ in Task { @MainActor in modal.routeDown() } }
 
     // Ctrl-C: always exits (single tap). Keep it as the hard-stop key so
     // there's always a predictable way out.
@@ -109,21 +187,23 @@ func runCodingTUIInternal(
         }
     }
 
-    // Esc: the primary "stop" key. Never exits — Ctrl-C is the only
-    // way out of the app.
-    //   1. While the agent is streaming → abort the current generation.
-    //   2. While idle AND background tasks are running → kill them all.
-    //   3. Otherwise → no-op.
+    // Esc. Three modes of operation:
+    //   1. modal open → cancel the modal (no agent state touched).
+    //   2. agent streaming → abort the current generation.
+    //   3. idle AND background tasks running → kill them all.
+    //   4. idle, no bg tasks → no-op (Ctrl-C is the only way out).
     runner.bind(.init("escape")) { _ in
-        if agent.state.isStreaming {
-            agent.abort()
-            Task { @MainActor in
+        Task { @MainActor in
+            if modal.isOpen {
+                modal.routeCancel()
+                return
+            }
+            if agent.state.isStreaming {
+                agent.abort()
                 statusBar.setMode(.aborting)
                 await statusBar.render()
+                return
             }
-            return
-        }
-        Task { @MainActor in
             let running = await bgManager.list(sessionId: sessionId)
                 .filter { $0.status == .running }.count
             if running > 0 {
@@ -158,6 +238,20 @@ func runCodingTUIInternal(
 }
 
 // MARK: - Helpers
+
+/// Non-LLM lines surfaced beneath the transcript (slash-command output,
+/// modal results, error toasts). Kept separate from `TranscriptRenderer`'s
+/// accumulated lines so we can rebuild the display as
+/// `renderer + notifications` without losing either stream.
+///
+/// Lifetime: cleared on each new Enter press so feedback from a previous
+/// action doesn't accumulate indefinitely.
+@MainActor
+final class NotificationLog {
+    private(set) var all: [String] = []
+    func append(_ line: String) { all.append(line) }
+    func clear() { all.removeAll() }
+}
 
 private func shortenPath(_ path: String, to maxLen: Int) -> String {
     if path.count <= maxLen { return path }
