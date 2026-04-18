@@ -167,10 +167,11 @@ struct CodingTUI {
             }
         }
 
-        // Esc: the primary "stop" key.
+        // Esc: the primary "stop" key. Never exits — Ctrl-C is the only
+        // way out of the app.
         //   1. While the agent is streaming → abort the current generation.
         //   2. While idle AND background tasks are running → kill them all.
-        //   3. Otherwise → exit the app.
+        //   3. Otherwise → no-op.
         runner.bind(.init("escape")) { _ in
             if agent.state.isStreaming {
                 agent.abort()
@@ -187,9 +188,9 @@ struct CodingTUI {
                     await bgManager.killAll(sessionId: sessionId)
                     statusBar.flashKilled(count: running)
                     await statusBar.render()
-                } else {
-                    runner.exit()
                 }
+                // No bg tasks, nothing streaming → Esc does nothing. The
+                // user exits via Ctrl-C.
             }
         }
 
