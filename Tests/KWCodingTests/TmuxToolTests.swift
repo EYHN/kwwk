@@ -12,7 +12,13 @@ private func tmuxAvailable() async -> Bool {
 }
 
 private func makeSessionManager() -> TmuxSessionManager {
-    TmuxSessionManager()
+    // Unique socket + session per test so parallel-running tests don't
+    // collide with `duplicate session: kw`.
+    let id = UUID().uuidString.prefix(8)
+    return TmuxSessionManager(
+        socketName: "kw-test-\(id)",
+        sessionName: "t\(id)"
+    )
 }
 
 @Suite("TmuxSessionManager")

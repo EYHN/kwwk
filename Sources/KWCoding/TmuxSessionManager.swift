@@ -37,9 +37,20 @@ public actor TmuxSessionManager {
     private var sessionStarted: Bool = false
     private var panes: [String: PaneInfo] = [:]
 
-    public init(tmuxPath: String = "tmux") {
-        self.socketName = "kw-\(ProcessInfo.processInfo.processIdentifier)"
-        self.sessionName = "kw"
+    /// - Parameters:
+    ///   - tmuxPath: Resolved via PATH when bare (the default).
+    ///   - socketName: Defaults to `kw-<pid>` so multiple kw processes
+    ///     don't collide on the same socket. Tests override for isolation.
+    ///   - sessionName: tmux session name under the socket. Defaults to
+    ///     `"kw"`; tests override so parallel suites don't hit
+    ///     `duplicate session` errors.
+    public init(
+        tmuxPath: String = "tmux",
+        socketName: String? = nil,
+        sessionName: String = "kw"
+    ) {
+        self.socketName = socketName ?? "kw-\(ProcessInfo.processInfo.processIdentifier)"
+        self.sessionName = sessionName
         self.tmuxPath = tmuxPath
     }
 
