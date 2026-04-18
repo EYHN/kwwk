@@ -71,8 +71,21 @@ public actor BackgroundTaskManager {
         if let dir = outputDir {
             self.outputDir = dir
         } else {
-            let home = FileManager.default.homeDirectoryForCurrentUser
-            self.outputDir = home.appendingPathComponent(".kw/bg", isDirectory: true)
+            // `/tmp/kwwk-bg-<pid>`. Rationale:
+            //   - `/tmp` so these per-session scratch files don't end up in
+            //     the user's home backup / iCloud sync.
+            //   - `-<pid>` so concurrent `kwwk` processes don't interleave
+            //     output files in the same directory (would race on
+            //     `fg_<uuid>.log` allocation and make `list(taskId:)`
+            //     ambiguous across sessions).
+            //   - Foreground adopt path reuses this directory too
+            //     (see `allocateForegroundOutputFile` in BashTool.swift),
+            //     so both bg spawns and fg-flipped commands land here.
+            let pid = ProcessInfo.processInfo.processIdentifier
+            self.outputDir = URL(
+                fileURLWithPath: "/tmp/kwwk-bg-\(pid)",
+                isDirectory: true
+            )
         }
     }
 
