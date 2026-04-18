@@ -1,0 +1,583 @@
+import Foundation
+
+/// Amazon Bedrock Converse Stream provider. Speaks the `ConverseStream`
+/// operation directly over HTTPS + SigV4 + AWS event-stream framing, with no
+/// AWS SDK dependency. Only long-term credentials (access key + secret) +
+/// optional STS session token are supported here — callers using EC2 IAM
+/// roles should fetch creds out-of-band and construct `Credentials`.
+public final class BedrockProvider: APIProvider, @unchecked Sendable {
+    public let api: String
+    public let client: HTTPClient
+    public let region: String
+    public let credentialsProvider: @Sendable () async -> AWSSigV4.Credentials?
+    public let service: String
+
+    public init(
+        api: String = "bedrock-converse-stream",
+        client: HTTPClient = URLSessionHTTPClient(),
+        region: String = ProcessInfo.processInfo.environment["AWS_REGION"]
+            ?? ProcessInfo.processInfo.environment["AWS_DEFAULT_REGION"]
+            ?? "us-east-1",
+        service: String = "bedrock",
+        credentialsProvider: (@Sendable () async -> AWSSigV4.Credentials?)? = nil
+    ) {
+        self.api = api
+        self.client = client
+        self.region = region
+        self.service = service
+        self.credentialsProvider = credentialsProvider ?? {
+            let env = ProcessInfo.processInfo.environment
+            guard let key = env["AWS_ACCESS_KEY_ID"],
+                  let secret = env["AWS_SECRET_ACCESS_KEY"] else { return nil }
+            return AWSSigV4.Credentials(
+                accessKeyId: key,
+                secretAccessKey: secret,
+                sessionToken: env["AWS_SESSION_TOKEN"]
+            )
+        }
+    }
+
+    public func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
+        let out = AssistantMessageStream()
+        Task.detached { await self.run(out: out, model: model, context: context, options: options) }
+        return out
+    }
+
+    private func run(
+        out: AssistantMessageStream,
+        model: Model,
+        context: Context,
+        options: StreamOptions?
+    ) async {
+        guard let creds = await credentialsProvider() else {
+            let msg = Self.makeError(api: api, model: model, text: "AWS credentials unavailable")
+            out.push(.error(reason: .error, error: msg))
+            out.end(msg)
+            return
+        }
+
+        let host = "bedrock-runtime.\(region).amazonaws.com"
+        let modelPath = model.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? model.id
+        let path = "/model/\(modelPath)/converse-stream"
+        guard let url = URL(string: "https://\(host)\(path)") else {
+            let msg = Self.makeError(api: api, model: model, text: "Invalid Bedrock URL")
+            out.push(.error(reason: .error, error: msg))
+            out.end(msg)
+            return
+        }
+
+        let body: Data
+        do {
+            body = try Self.encodeBody(model: model, context: context, options: options)
+        } catch {
+            let msg = Self.makeError(api: api, model: model, text: "Failed to encode request: \(error)")
+            out.push(.error(reason: .error, error: msg))
+            out.end(msg)
+            return
+        }
+
+        var headers: [String: String] = [
+            "content-type": "application/json",
+            "accept": "application/vnd.amazon.eventstream",
+        ]
+        headers = AWSSigV4.signPOST(
+            url: url,
+            body: body,
+            region: region,
+            service: service,
+            credentials: creds,
+            extraHeaders: headers
+        )
+        for (k, v) in options?.headers ?? [:] { headers[k] = v }
+
+        do {
+            let (response, stream) = try await client.stream(
+                url: url, method: "POST", headers: headers, body: body
+            )
+            if response.statusCode >= 400 {
+                let msg = Self.makeError(
+                    api: api, model: model,
+                    text: "Bedrock returned status \(response.statusCode)"
+                )
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+                return
+            }
+            let state = BedrockStreamState(api: api, provider: model.provider, modelId: model.id)
+            state.signal = options?.cancellation
+            try await drive(events: parseAWSEventStream(bytes: stream), out: out, state: state)
+        } catch {
+            let msg = Self.makeError(api: api, model: model, text: "\(error)")
+            out.push(.error(reason: .error, error: msg))
+            out.end(msg)
+        }
+    }
+
+    private func drive(
+        events: AsyncThrowingStream<AWSEventMessage, Error>,
+        out: AssistantMessageStream,
+        state: BedrockStreamState
+    ) async throws {
+        var emittedStart = false
+        for try await event in events {
+            if state.signal?.isCancelled == true {
+                let aborted = state.asAborted()
+                out.push(.error(reason: .aborted, error: aborted))
+                out.end(aborted)
+                return
+            }
+            let type = event.headers[":event-type"] ?? ""
+            let messageType = event.headers[":message-type"] ?? "event"
+
+            if messageType == "exception" {
+                let text: String = {
+                    guard let obj = parseJSONObject(String(data: event.payload, encoding: .utf8) ?? ""),
+                          case .object(let dict) = obj,
+                          case .string(let msg) = dict["message"] ?? .null else {
+                        return "Bedrock exception: \(type)"
+                    }
+                    return msg
+                }()
+                let err = state.asError(text: text)
+                out.push(.error(reason: .error, error: err))
+                out.end(err)
+                return
+            }
+
+            guard let obj = parseJSONObject(String(data: event.payload, encoding: .utf8) ?? ""),
+                  case .object(let payload) = obj else { continue }
+
+            switch type {
+            case "messageStart":
+                if !emittedStart {
+                    out.push(.start(partial: state.snapshot()))
+                    emittedStart = true
+                }
+            case "contentBlockStart":
+                let blockIndex: Int = {
+                    if case .int(let v) = payload["contentBlockIndex"] ?? .null { return v } else { return 0 }
+                }()
+                if case .object(let start) = payload["start"] ?? .null {
+                    if case .object(let toolUse) = start["toolUse"] ?? .null {
+                        let id: String = {
+                            if case .string(let v) = toolUse["toolUseId"] ?? .null { return v } else { return "" }
+                        }()
+                        let name: String = {
+                            if case .string(let v) = toolUse["name"] ?? .null { return v } else { return "" }
+                        }()
+                        let index = state.noteToolUseBlock(at: blockIndex, id: id, name: name)
+                        if !emittedStart {
+                            out.push(.start(partial: state.snapshot()))
+                            emittedStart = true
+                        }
+                        out.push(.toolCallStart(contentIndex: index, partial: state.snapshot()))
+                    }
+                }
+            case "contentBlockDelta":
+                let blockIndex: Int = {
+                    if case .int(let v) = payload["contentBlockIndex"] ?? .null { return v } else { return 0 }
+                }()
+                guard case .object(let delta) = payload["delta"] ?? .null else { break }
+                if case .string(let text) = delta["text"] ?? .null {
+                    let (index, firstSeen) = state.noteTextBlock(at: blockIndex)
+                    if !emittedStart {
+                        out.push(.start(partial: state.snapshot()))
+                        emittedStart = true
+                    }
+                    if firstSeen {
+                        out.push(.textStart(contentIndex: index, partial: state.snapshot()))
+                    }
+                    state.appendText(index: index, text: text)
+                    out.push(.textDelta(contentIndex: index, delta: text, partial: state.snapshot()))
+                }
+                if case .object(let reasoning) = delta["reasoningContent"] ?? .null,
+                   case .string(let text) = reasoning["text"] ?? .null {
+                    let (index, firstSeen) = state.noteThinkingBlock(at: blockIndex)
+                    if !emittedStart {
+                        out.push(.start(partial: state.snapshot()))
+                        emittedStart = true
+                    }
+                    if firstSeen {
+                        out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
+                    }
+                    state.appendThinking(index: index, text: text)
+                    out.push(.thinkingDelta(contentIndex: index, delta: text, partial: state.snapshot()))
+                }
+                if case .object(let toolUse) = delta["toolUse"] ?? .null,
+                   case .string(let input) = toolUse["input"] ?? .null {
+                    if let index = state.toolCallIndex(at: blockIndex) {
+                        state.appendToolCallArgs(index: index, chunk: input)
+                        out.push(.toolCallDelta(contentIndex: index, delta: input, partial: state.snapshot()))
+                    }
+                }
+            case "contentBlockStop":
+                let blockIndex: Int = {
+                    if case .int(let v) = payload["contentBlockIndex"] ?? .null { return v } else { return 0 }
+                }()
+                state.finishBlock(at: blockIndex) { event in out.push(event) }
+            case "messageStop":
+                if case .string(let reason) = payload["stopReason"] ?? .null {
+                    state.stopReason = Self.mapStopReason(reason)
+                }
+            case "metadata":
+                if case .object(let usage) = payload["usage"] ?? .null {
+                    state.applyUsage(usage)
+                }
+            default:
+                break
+            }
+        }
+
+        state.finalizePending { event in out.push(event) }
+        let final = state.finalize()
+        out.push(.done(reason: final.stopReason, message: final))
+        out.end(final)
+    }
+
+    // MARK: - Encoding
+
+    private static func encodeBody(
+        model: Model, context: Context, options: StreamOptions?
+    ) throws -> Data {
+        var root: [String: Any] = [
+            "messages": encodeMessages(context: context),
+        ]
+        if let sys = context.systemPrompt, !sys.isEmpty {
+            root["system"] = [["text": sys]]
+        }
+        var inference: [String: Any] = [:]
+        if let t = options?.temperature { inference["temperature"] = t }
+        let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil)
+        if let m = maxTokens { inference["maxTokens"] = m }
+        if !inference.isEmpty { root["inferenceConfig"] = inference }
+        if let tools = context.tools, !tools.isEmpty {
+            var toolConfig: [String: Any] = [
+                "tools": tools.map { tool -> [String: Any] in
+                    let schema: Any = anyFromJSONValue(tool.parameters) ?? [String: Any]()
+                    return [
+                        "toolSpec": [
+                            "name": tool.name,
+                            "description": tool.description,
+                            "inputSchema": ["json": schema],
+                        ] as [String: Any],
+                    ]
+                },
+            ]
+            if let choice = encodeToolChoice(options?.toolChoice) {
+                toolConfig["toolChoice"] = choice
+            }
+            root["toolConfig"] = toolConfig
+        }
+        if let reasoning = options?.reasoning {
+            var extras: [String: Any] = ["thinking": ["type": "enabled"]]
+            if let budget = options?.thinkingBudgets?.budget(for: reasoning) {
+                var thinking = extras["thinking"] as? [String: Any] ?? [:]
+                thinking["budget_tokens"] = budget
+                extras["thinking"] = thinking
+            }
+            root["additionalModelRequestFields"] = extras
+        }
+        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    private static func encodeMessages(context: Context) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for message in context.messages {
+            switch message {
+            case .user(let u):
+                var parts: [[String: Any]] = []
+                for block in u.content {
+                    switch block {
+                    case .text(let t):
+                        parts.append(["text": t.text])
+                    case .image(let i):
+                        parts.append([
+                            "image": [
+                                "format": Self.imageFormat(i.mimeType),
+                                "source": ["bytes": i.data],
+                            ],
+                        ])
+                    }
+                }
+                out.append(["role": "user", "content": parts])
+
+            case .assistant(let a):
+                var parts: [[String: Any]] = []
+                for block in a.content {
+                    switch block {
+                    case .text(let t):
+                        if !t.text.isEmpty { parts.append(["text": t.text]) }
+                    case .thinking(let th):
+                        if !th.thinking.isEmpty {
+                            parts.append([
+                                "reasoningContent": [
+                                    "reasoningText": [
+                                        "text": th.thinking,
+                                        "signature": th.thinkingSignature ?? "",
+                                    ],
+                                ],
+                            ])
+                        }
+                    case .toolCall(let tc):
+                        let input: Any = anyFromJSONValue(tc.arguments) ?? [String: Any]()
+                        parts.append([
+                            "toolUse": [
+                                "toolUseId": tc.id,
+                                "name": tc.name,
+                                "input": input,
+                            ] as [String: Any],
+                        ])
+                    }
+                }
+                if !parts.isEmpty {
+                    out.append(["role": "assistant", "content": parts])
+                }
+
+            case .toolResult(let tr):
+                var content: [[String: Any]] = []
+                for block in tr.content {
+                    switch block {
+                    case .text(let t): content.append(["text": t.text])
+                    case .image(let i):
+                        content.append([
+                            "image": [
+                                "format": imageFormat(i.mimeType),
+                                "source": ["bytes": i.data],
+                            ],
+                        ])
+                    }
+                }
+                var entry: [String: Any] = [
+                    "toolResult": [
+                        "toolUseId": tr.toolCallId,
+                        "content": content,
+                    ],
+                ]
+                if tr.isError {
+                    var inner = entry["toolResult"] as? [String: Any] ?? [:]
+                    inner["status"] = "error"
+                    entry["toolResult"] = inner
+                }
+                out.append(["role": "user", "content": [entry]])
+            }
+        }
+        return out
+    }
+
+    private static func encodeToolChoice(_ choice: ToolChoice?) -> Any? {
+        guard let choice else { return nil }
+        switch choice {
+        case .auto: return ["auto": [:] as [String: Any]]
+        case .none: return nil // Converse doesn't expose a `none` — drop.
+        case .required: return ["any": [:] as [String: Any]]
+        case .tool(let name): return ["tool": ["name": name]]
+        }
+    }
+
+    private static func imageFormat(_ mimeType: String) -> String {
+        switch mimeType {
+        case "image/png": return "png"
+        case "image/jpeg": return "jpeg"
+        case "image/gif": return "gif"
+        case "image/webp": return "webp"
+        default: return "png"
+        }
+    }
+
+    private static func mapStopReason(_ raw: String) -> StopReason {
+        switch raw {
+        case "end_turn", "stop_sequence": return .stop
+        case "max_tokens": return .length
+        case "tool_use": return .toolUse
+        default: return .stop
+        }
+    }
+
+    private static func makeError(api: String, model: Model, text: String) -> AssistantMessage {
+        AssistantMessage(
+            content: [],
+            api: api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(),
+            stopReason: .error,
+            errorMessage: text,
+            timestamp: Timestamp.now()
+        )
+    }
+}
+
+// MARK: - Mutable state
+
+final class BedrockStreamState: @unchecked Sendable {
+    let api: String
+    let provider: String
+    let modelId: String
+    var signal: CancellationHandle?
+    var usage = Usage()
+    var stopReason: StopReason = .stop
+    var errorMessage: String?
+
+    enum Block {
+        case text(TextContent)
+        case thinking(ThinkingContent)
+        case toolUse(id: String, name: String, json: String)
+    }
+
+    private let lock = NSLock()
+    private var blocks: [Int: Block] = [:]
+    /// Bedrock's `contentBlockIndex` → our ordinal index in `order`.
+    private var blockByIndex: [Int: Int] = [:]
+    private var order: [Int] = []
+    private var endedIndices: Set<Int> = []
+
+    init(api: String, provider: String, modelId: String) {
+        self.api = api
+        self.provider = provider
+        self.modelId = modelId
+    }
+
+    func noteTextBlock(at blockIndex: Int) -> (index: Int, firstSeen: Bool) {
+        lock.withLock {
+            if let existing = blockByIndex[blockIndex] { return (existing, false) }
+            let idx = order.count
+            blockByIndex[blockIndex] = idx
+            order.append(idx)
+            blocks[idx] = .text(TextContent(text: ""))
+            return (idx, true)
+        }
+    }
+
+    func noteThinkingBlock(at blockIndex: Int) -> (index: Int, firstSeen: Bool) {
+        lock.withLock {
+            if let existing = blockByIndex[blockIndex] { return (existing, false) }
+            let idx = order.count
+            blockByIndex[blockIndex] = idx
+            order.append(idx)
+            blocks[idx] = .thinking(ThinkingContent(thinking: ""))
+            return (idx, true)
+        }
+    }
+
+    func noteToolUseBlock(at blockIndex: Int, id: String, name: String) -> Int {
+        lock.withLock {
+            if let existing = blockByIndex[blockIndex] { return existing }
+            let idx = order.count
+            blockByIndex[blockIndex] = idx
+            order.append(idx)
+            blocks[idx] = .toolUse(id: id, name: name, json: "")
+            return idx
+        }
+    }
+
+    func toolCallIndex(at blockIndex: Int) -> Int? {
+        lock.withLock { blockByIndex[blockIndex] }
+    }
+
+    func appendText(index: Int, text: String) {
+        lock.withLock {
+            if case .text(var t) = blocks[index] { t.text += text; blocks[index] = .text(t) }
+        }
+    }
+    func appendThinking(index: Int, text: String) {
+        lock.withLock {
+            if case .thinking(var th) = blocks[index] { th.thinking += text; blocks[index] = .thinking(th) }
+        }
+    }
+    func appendToolCallArgs(index: Int, chunk: String) {
+        lock.withLock {
+            if case .toolUse(let id, let name, let json) = blocks[index] {
+                blocks[index] = .toolUse(id: id, name: name, json: json + chunk)
+            }
+        }
+    }
+
+    func finishBlock(at blockIndex: Int, emit: (AssistantMessageEvent) -> Void) {
+        let idx: Int? = lock.withLock { blockByIndex[blockIndex] }
+        guard let idx, !endedIndices.contains(idx) else { return }
+        let partial = snapshot()
+        guard let block = lock.withLock({ blocks[idx] }) else { return }
+        switch block {
+        case .text(let t):
+            emit(.textEnd(contentIndex: idx, content: t.text, partial: partial))
+        case .thinking(let th):
+            emit(.thinkingEnd(contentIndex: idx, content: th.thinking, partial: partial))
+        case .toolUse(let id, let name, let json):
+            let call = ToolCall(id: id, name: name, arguments: parseArgs(json))
+            emit(.toolCallEnd(contentIndex: idx, toolCall: call, partial: partial))
+        }
+        _ = lock.withLock { endedIndices.insert(idx) }
+    }
+
+    func finalizePending(emit: (AssistantMessageEvent) -> Void) {
+        let indices = lock.withLock { order }
+        for idx in indices where !endedIndices.contains(idx) {
+            let partial = snapshot()
+            guard let block = lock.withLock({ blocks[idx] }) else { continue }
+            switch block {
+            case .text(let t):
+                emit(.textEnd(contentIndex: idx, content: t.text, partial: partial))
+            case .thinking(let th):
+                emit(.thinkingEnd(contentIndex: idx, content: th.thinking, partial: partial))
+            case .toolUse(let id, let name, let json):
+                let call = ToolCall(id: id, name: name, arguments: parseArgs(json))
+                emit(.toolCallEnd(contentIndex: idx, toolCall: call, partial: partial))
+            }
+            _ = lock.withLock { endedIndices.insert(idx) }
+        }
+    }
+
+    func applyUsage(_ obj: [String: JSONValue]) {
+        if case .int(let v) = obj["inputTokens"] ?? .null { usage.input = v }
+        if case .int(let v) = obj["outputTokens"] ?? .null { usage.output = v }
+        if case .int(let v) = obj["cacheReadInputTokens"] ?? .null { usage.cacheRead = v }
+        if case .int(let v) = obj["cacheWriteInputTokens"] ?? .null { usage.cacheWrite = v }
+        usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+    }
+
+    func snapshot() -> AssistantMessage {
+        lock.withLock {
+            AssistantMessage(
+                content: order.compactMap { idx -> AssistantBlock? in
+                    switch blocks[idx] {
+                    case .text(let t): return .text(t)
+                    case .thinking(let th): return .thinking(th)
+                    case .toolUse(let id, let name, let json):
+                        return .toolCall(ToolCall(id: id, name: name, arguments: parseArgs(json)))
+                    case .none: return nil
+                    }
+                },
+                api: api,
+                provider: provider,
+                model: modelId,
+                usage: usage,
+                stopReason: stopReason,
+                errorMessage: errorMessage,
+                timestamp: Timestamp.now()
+            )
+        }
+    }
+
+    func finalize() -> AssistantMessage { snapshot() }
+
+    func asAborted() -> AssistantMessage {
+        stopReason = .aborted
+        errorMessage = "Request was aborted"
+        return snapshot()
+    }
+
+    func asError(text: String) -> AssistantMessage {
+        stopReason = .error
+        errorMessage = text
+        return snapshot()
+    }
+
+    private func parseArgs(_ json: String) -> JSONValue {
+        if json.isEmpty { return .object([:]) }
+        if let data = json.data(using: .utf8),
+           let v = try? JSONDecoder().decode(JSONValue.self, from: data) {
+            return v
+        }
+        return .object([:])
+    }
+}

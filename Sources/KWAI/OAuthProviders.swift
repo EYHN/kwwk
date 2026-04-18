@@ -1,0 +1,305 @@
+import Foundation
+
+// MARK: - Anthropic
+
+public struct AnthropicOAuthProvider: OAuthProvider {
+    public let id = "anthropic"
+    public let name = "Anthropic (Claude Pro/Max)"
+    public let tokenURL: URL
+    public let clientID: String
+
+    public init(
+        tokenURL: URL = URL(string: "https://platform.claude.com/v1/oauth/token")!,
+        clientID: String = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    ) {
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+    }
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let body: [String: Any] = [
+            "grant_type": "refresh_token",
+            "client_id": clientID,
+            "refresh_token": credentials.refresh,
+        ]
+        let bodyData = try JSONSerialization.data(withJSONObject: body)
+        let (response, responseBody) = try await client.request(
+            url: tokenURL, method: "POST",
+            headers: ["content-type": "application/json", "accept": "application/json"],
+            body: bodyData
+        )
+        if response.statusCode >= 400 {
+            let bodyText = String(data: responseBody, encoding: .utf8) ?? ""
+            throw OAuthError.refreshFailed("anthropic \(response.statusCode): \(bodyText)")
+        }
+        let json = try OAuth.decodeTokenResponse(responseBody)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return OAuthCredentials(
+            access: json.accessToken,
+            refresh: json.refreshToken ?? credentials.refresh,
+            expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
+            extras: credentials.extras
+        )
+    }
+}
+
+// MARK: - Google (shared by Gemini CLI + Antigravity)
+
+public struct GoogleOAuthProvider: OAuthProvider {
+    public let id: String
+    public let name: String
+    public let tokenURL: URL
+    public let clientID: String
+    public let clientSecret: String
+
+    public init(
+        id: String,
+        name: String,
+        tokenURL: URL = URL(string: "https://oauth2.googleapis.com/token")!,
+        clientID: String,
+        clientSecret: String
+    ) {
+        self.id = id
+        self.name = name
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+        self.clientSecret = clientSecret
+    }
+
+    /// Gemini CLI (Google Cloud Code Assist).
+    public static func geminiCli() -> GoogleOAuthProvider {
+        GoogleOAuthProvider(
+            id: "google-gemini-cli",
+            name: "Gemini CLI (Google Cloud Code Assist)",
+            clientID: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+            clientSecret: "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"
+        )
+    }
+
+    /// Antigravity (Google Cloud's newer multi-model endpoint).
+    public static func antigravity() -> GoogleOAuthProvider {
+        GoogleOAuthProvider(
+            id: "google-antigravity",
+            name: "Google Antigravity",
+            clientID: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
+            clientSecret: "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"
+        )
+    }
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let form = OAuth.urlEncodedForm([
+            "client_id": clientID,
+            "client_secret": clientSecret,
+            "refresh_token": credentials.refresh,
+            "grant_type": "refresh_token",
+        ])
+        let (response, responseBody) = try await client.request(
+            url: tokenURL, method: "POST",
+            headers: [
+                "content-type": "application/x-www-form-urlencoded",
+                "accept": "application/json",
+            ],
+            body: Data(form.utf8)
+        )
+        if response.statusCode >= 400 {
+            let bodyText = String(data: responseBody, encoding: .utf8) ?? ""
+            throw OAuthError.refreshFailed("\(id) \(response.statusCode): \(bodyText)")
+        }
+        let json = try OAuth.decodeTokenResponse(responseBody)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return OAuthCredentials(
+            access: json.accessToken,
+            refresh: json.refreshToken ?? credentials.refresh,
+            expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
+            extras: credentials.extras
+        )
+    }
+}
+
+// MARK: - OpenAI Codex
+
+public struct OpenAICodexOAuthProvider: OAuthProvider {
+    public let id = "openai-codex"
+    public let name = "ChatGPT Plus/Pro (Codex Subscription)"
+    public let tokenURL: URL
+    public let clientID: String
+
+    public init(
+        tokenURL: URL = URL(string: "https://auth.openai.com/oauth/token")!,
+        clientID: String = "app_EMoamEEZ73f0CkXaXp7hrann"
+    ) {
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+    }
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let form = OAuth.urlEncodedForm([
+            "grant_type": "refresh_token",
+            "refresh_token": credentials.refresh,
+            "client_id": clientID,
+        ])
+        let (response, responseBody) = try await client.request(
+            url: tokenURL, method: "POST",
+            headers: [
+                "content-type": "application/x-www-form-urlencoded",
+                "accept": "application/json",
+            ],
+            body: Data(form.utf8)
+        )
+        if response.statusCode >= 400 {
+            let bodyText = String(data: responseBody, encoding: .utf8) ?? ""
+            throw OAuthError.refreshFailed("openai-codex \(response.statusCode): \(bodyText)")
+        }
+        let json = try OAuth.decodeTokenResponse(responseBody)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        var extras = credentials.extras
+        if let accountId = Self.extractAccountId(fromJWT: json.accessToken) {
+            extras["accountId"] = .string(accountId)
+        }
+        return OAuthCredentials(
+            access: json.accessToken,
+            refresh: json.refreshToken ?? credentials.refresh,
+            expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
+            extras: extras
+        )
+    }
+
+    /// Extract the ChatGPT account id from the access token JWT claim. Codex
+    /// requests route by account id, so we cache it on refresh.
+    static func extractAccountId(fromJWT token: String) -> String? {
+        let parts = token.split(separator: ".")
+        guard parts.count >= 2 else { return nil }
+        let payload = String(parts[1])
+        var padded = payload
+        while padded.count % 4 != 0 { padded.append("=") }
+        let urlSafe = padded
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        guard let data = Data(base64Encoded: urlSafe),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        // Claim path used by pi: "https://api.openai.com/auth".chatgpt_account_id
+        if let claim = obj["https://api.openai.com/auth"] as? [String: Any],
+           let id = claim["chatgpt_account_id"] as? String {
+            return id
+        }
+        return nil
+    }
+}
+
+// MARK: - GitHub Copilot
+
+public struct GitHubCopilotOAuthProvider: OAuthProvider {
+    public let id = "github-copilot"
+    public let name = "GitHub Copilot"
+    public let tokenURL: URL
+    public let extraHeaders: [String: String]
+
+    public init(
+        tokenURL: URL = URL(string: "https://api.github.com/copilot_internal/v2/token")!,
+        extraHeaders: [String: String] = [
+            "editor-version": "vscode/1.107.0",
+            "editor-plugin-version": "copilot-chat/0.35.0",
+            "user-agent": "GitHubCopilotChat/0.35.0",
+            "copilot-integration-id": "vscode-chat",
+        ]
+    ) {
+        self.tokenURL = tokenURL
+        self.extraHeaders = extraHeaders
+    }
+
+    /// Copilot doesn't do standard OAuth token refresh — instead the stored
+    /// `refresh` is a long-lived GitHub PAT that we exchange for a short
+    /// session token on every request. The session token is cached as
+    /// `access` until it expires.
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        var headers: [String: String] = [
+            "accept": "application/json",
+            "authorization": "Bearer \(credentials.refresh)",
+        ]
+        for (k, v) in extraHeaders { headers[k] = v }
+        let (response, body) = try await client.request(
+            url: tokenURL, method: "GET", headers: headers, body: nil
+        )
+        if response.statusCode >= 400 {
+            let text = String(data: body, encoding: .utf8) ?? ""
+            throw OAuthError.refreshFailed("github-copilot \(response.statusCode): \(text)")
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let token = obj["token"] as? String else {
+            throw OAuthError.invalidResponse("github-copilot response missing token")
+        }
+        // `expires_at` is Unix seconds. Refresh 5 minutes early.
+        let expiresAtSec: Int64 = {
+            if let v = obj["expires_at"] as? Int { return Int64(v) }
+            if let v = obj["expires_at"] as? Int64 { return v }
+            if let v = obj["expires_at"] as? Double { return Int64(v) }
+            return Int64(Date().timeIntervalSince1970) + 25 * 60
+        }()
+        var extras = credentials.extras
+        if let endpoints = obj["endpoints"] as? [String: Any],
+           let api = endpoints["api"] as? String {
+            extras["endpoint"] = .string(api)
+        }
+        return OAuthCredentials(
+            access: token,
+            refresh: credentials.refresh,
+            expires: expiresAtSec * 1000 - 5 * 60 * 1000,
+            extras: extras
+        )
+    }
+}
+
+// MARK: - Helpers
+
+enum OAuth {
+    struct TokenResponse: Decodable {
+        let accessToken: String
+        let refreshToken: String?
+        let expiresIn: Int
+        let scope: String?
+
+        enum CodingKeys: String, CodingKey {
+            case accessToken = "access_token"
+            case refreshToken = "refresh_token"
+            case expiresIn = "expires_in"
+            case scope
+        }
+    }
+
+    static func decodeTokenResponse(_ data: Data) throws -> TokenResponse {
+        do {
+            return try JSONDecoder().decode(TokenResponse.self, from: data)
+        } catch {
+            let body = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            throw OAuthError.invalidResponse("could not decode OAuth token response: \(body)")
+        }
+    }
+
+    static func urlEncodedForm(_ params: [String: String]) -> String {
+        params.keys.sorted().map { key -> String in
+            let v = params[key] ?? ""
+            let encKey = key.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? key
+            let encVal = v.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? v
+            return "\(encKey)=\(encVal)"
+        }.joined(separator: "&")
+    }
+
+    /// RFC 3986 unreserved characters. `application/x-www-form-urlencoded`
+    /// wants everything outside this set percent-encoded, including colons
+    /// (important for device-flow grants that carry a URN).
+    private static let formAllowed: CharacterSet = {
+        var s = CharacterSet()
+        s.insert(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~")
+        return s
+    }()
+}

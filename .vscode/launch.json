@@ -1,0 +1,76 @@
+{
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kw-tui-demo",
+      "program": "${workspaceFolder:kw}/.build/debug/kw-tui-demo",
+      "preLaunchTask": "swift: Build Debug kw-tui-demo"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kw-tui-demo",
+      "program": "${workspaceFolder:kw}/.build/release/kw-tui-demo",
+      "preLaunchTask": "swift: Build Release kw-tui-demo"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kw-chat-demo",
+      "program": "${workspaceFolder:kw}/.build/debug/kw-chat-demo",
+      "preLaunchTask": "swift: Build Debug kw-chat-demo"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kw-chat-demo",
+      "program": "${workspaceFolder:kw}/.build/release/kw-chat-demo",
+      "preLaunchTask": "swift: Build Release kw-chat-demo"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kw-coding-tui",
+      "program": "${workspaceFolder:kw}/.build/debug/kw-coding-tui",
+      "preLaunchTask": "swift: Build Debug kw-coding-tui"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kw-coding-tui",
+      "program": "${workspaceFolder:kw}/.build/release/kw-coding-tui",
+      "preLaunchTask": "swift: Build Release kw-coding-tui"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kw-tui-snapshot",
+      "program": "${workspaceFolder:kw}/.build/debug/kw-tui-snapshot",
+      "preLaunchTask": "swift: Build Debug kw-tui-snapshot"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kw-tui-snapshot",
+      "program": "${workspaceFolder:kw}/.build/release/kw-tui-snapshot",
+      "preLaunchTask": "swift: Build Release kw-tui-snapshot"
+    }
+  ]
+}
