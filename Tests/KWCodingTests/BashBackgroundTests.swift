@@ -1,0 +1,319 @@
+import Foundation
+import Testing
+@testable import KWCoding
+@testable import KWAgent
+@testable import KWAI
+
+private func makeTempDir() -> URL {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("kw-bashbg-\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+}
+
+private func awaitUntil(
+    _ budgetMs: Int,
+    _ predicate: @Sendable () async -> Bool
+) async -> Bool {
+    let start = Date()
+    while Date().timeIntervalSince(start) * 1000 < Double(budgetMs) {
+        if await predicate() { return true }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+    }
+    return false
+}
+
+@Suite("BashBackgroundRunner")
+struct BashBackgroundRunnerTests {
+
+    @Test("runs a command, writes stdout to the output file and reports exit 0")
+    func runsAndWrites() async {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(
+            command: "echo hello-bg-runner",
+            workDir: nil,
+            description: "echo test"
+        )
+        let (taskId, file) = await manager.spawn(runner: runner, sessionId: "s1")
+        let done = await awaitUntil(3000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(done)
+        let snap = await manager.get(taskId)
+        #expect(snap?.status == .completed)
+        if let outcome = snap?.outcome {
+            #expect(outcome.success == true)
+            #expect(outcome.summary == "exit 0")
+        }
+        let contents = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        #expect(contents.contains("hello-bg-runner"))
+    }
+
+    @Test("non-zero exit code is reported as failure")
+    func failure() async {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(command: "exit 3")
+        let (taskId, _) = await manager.spawn(runner: runner)
+        let done = await awaitUntil(3000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(done)
+        let snap = await manager.get(taskId)
+        #expect(snap?.status == .failed)
+        #expect(snap?.outcome?.summary == "exit 3")
+    }
+
+    @Test("cancellation kills the running process and emits killed outcome")
+    func cancel() async {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(command: "sleep 30")
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
+        // Allow process to start.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        try? await manager.kill(taskId)
+        let done = await awaitUntil(3000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(done)
+        let snap = await manager.get(taskId)
+        #expect(snap?.status == .killed)
+    }
+}
+
+@Suite("Bash tool + background manager")
+struct BashToolBackgroundTests {
+
+    @Test("run_in_background=true returns immediately with a task id")
+    func explicitBackground() async throws {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let cwdDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cwdDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            manager: manager,
+            sessionId: "s1"
+        ))
+        let result = try await tool.execute(
+            "call-1",
+            .object([
+                "command": .string("echo hi > out.txt && sleep 0.05 && cat out.txt"),
+                "run_in_background": .bool(true),
+                "description": .string("echo then cat"),
+            ]),
+            nil, nil
+        )
+        guard case .object(let obj) = result.details ?? .null else {
+            Issue.record("expected details.object, got \(String(describing: result.details))")
+            return
+        }
+        guard case .string(let status) = obj["status"] ?? .null else {
+            Issue.record("expected status string")
+            return
+        }
+        #expect(status == "background_started")
+        guard case .string(let taskId) = obj["taskId"] ?? .null else {
+            Issue.record("expected taskId string")
+            return
+        }
+        #expect(taskId.hasPrefix("bg_"))
+
+        let done = await awaitUntil(3000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(done)
+        let snap = await manager.get(taskId)
+        #expect(snap?.status == .completed)
+    }
+
+    @Test("foreground command within timeout returns normally (no flip)")
+    func foregroundNoFlip() async throws {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let cwdDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cwdDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            defaultTimeoutSeconds: 30,
+            manager: manager,
+            sessionId: "s1",
+            autoBackgroundOnTimeout: true
+        ))
+        let result = try await tool.execute(
+            "call-1",
+            .object(["command": .string("echo fg-works")]),
+            nil, nil
+        )
+        if case .text(let t) = result.content.first {
+            #expect(t.text.contains("fg-works"))
+        }
+        guard case .object(let obj) = result.details ?? .null else {
+            Issue.record("expected details.object")
+            return
+        }
+        if case .int(let code) = obj["exitCode"] ?? .null {
+            #expect(code == 0)
+        } else {
+            Issue.record("expected exitCode")
+        }
+    }
+
+    @Test("soft timeout flips foreground command to background")
+    func autoBackgroundOnTimeout() async throws {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let cwdDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cwdDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            defaultTimeoutSeconds: 1,      // soft timeout = 1s
+            manager: manager,
+            sessionId: "sF",
+            autoBackgroundOnTimeout: true,
+            hardTimeoutSeconds: 30
+        ))
+        let result = try await tool.execute(
+            "call-1",
+            .object([
+                "command": .string("sleep 3; echo done-after-sleep"),
+                "description": .string("slow echo"),
+            ]),
+            nil, nil
+        )
+        guard case .object(let obj) = result.details ?? .null else {
+            Issue.record("expected details.object")
+            return
+        }
+        if case .string(let status) = obj["status"] ?? .null {
+            #expect(status == "auto_backgrounded")
+        } else {
+            Issue.record("expected status=auto_backgrounded")
+        }
+        guard case .string(let taskId) = obj["taskId"] ?? .null else {
+            Issue.record("expected taskId")
+            return
+        }
+
+        // Wait for the background task to complete.
+        let done = await awaitUntil(8000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(done)
+        let snap = await manager.get(taskId)
+        #expect(snap?.status == .completed)
+        if let file = snap?.outputFile {
+            let contents = (try? String(contentsOfFile: file, encoding: .utf8)) ?? ""
+            #expect(contents.contains("done-after-sleep"))
+        }
+    }
+}
+
+@Suite("bg_status tool")
+struct BgStatusToolTests {
+
+    @Test("list returns running tasks")
+    func listRunning() async throws {
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(command: "sleep 10")
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let tool = createBgStatusTool(manager: manager, sessionId: "s1")
+        let result = try await tool.execute(
+            "call-1",
+            .object(["action": .string("list")]),
+            nil, nil
+        )
+        if case .text(let t) = result.content.first {
+            #expect(t.text.contains(taskId))
+        }
+        try? await manager.kill(taskId)
+    }
+
+    @Test("status returns details for a task")
+    func statusByTaskId() async throws {
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(command: "echo hi")
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
+        let done = await awaitUntil(3000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(done)
+
+        let tool = createBgStatusTool(manager: manager, sessionId: "s1")
+        let result = try await tool.execute(
+            "call-1",
+            .object(["action": .string("status"), "task_id": .string(taskId)]),
+            nil, nil
+        )
+        if case .text(let t) = result.content.first {
+            #expect(t.text.contains("completed"))
+        }
+    }
+
+    @Test("kill terminates a running task")
+    func killViaTool() async throws {
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(command: "sleep 30")
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let tool = createBgStatusTool(manager: manager, sessionId: "s1")
+        _ = try await tool.execute(
+            "call-1",
+            .object(["action": .string("kill"), "task_id": .string(taskId)]),
+            nil, nil
+        )
+        let gone = await awaitUntil(2000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+        #expect(gone)
+        let snap = await manager.get(taskId)
+        #expect(snap?.status == .killed)
+    }
+
+    @Test("task_id scoped to another session is hidden")
+    func crossSessionScoping() async throws {
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let runner = BashBackgroundRunner(command: "echo hi")
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "sA")
+        _ = await awaitUntil(3000) {
+            let s = await manager.get(taskId)
+            return s?.status != .running
+        }
+
+        let tool = createBgStatusTool(manager: manager, sessionId: "sB")
+        await #expect(throws: Error.self) {
+            _ = try await tool.execute(
+                "call-1",
+                .object(["action": .string("status"), "task_id": .string(taskId)]),
+                nil, nil
+            )
+        }
+    }
+}

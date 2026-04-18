@@ -39,15 +39,35 @@ struct CodingTUI {
             contextWindow: 200_000,
             maxTokens: 8192
         )
-        let tools: [AgentTool] = [
+
+        // Background-task infrastructure. Enables `run_in_background`,
+        // auto-background on timeout, `bg_status`, and completion
+        // notifications surfaced as <task-notification> user messages.
+        let bgManager = BackgroundTaskManager()
+        let sessionId = UUID().uuidString
+
+        var tools: [AgentTool] = [
             createReadTool(cwd: cwd),
             createWriteTool(cwd: cwd),
             createEditTool(cwd: cwd),
-            createBashTool(cwd: cwd),
+            createBashTool(cwd: cwd, options: BashToolOptions(
+                defaultTimeoutSeconds: 120,
+                manager: bgManager,
+                sessionId: sessionId,
+                autoBackgroundOnTimeout: true
+            )),
             createGrepTool(cwd: cwd),
             createFindTool(cwd: cwd),
             createLSTool(cwd: cwd),
+            createBgStatusTool(manager: bgManager, sessionId: sessionId),
         ]
+        // Optional: tmux pane tool for driving TUI programs (vim, htop, …).
+        // Registered only when tmux is on PATH so the agent doesn't see a
+        // tool it can't actually use.
+        if let tmuxTool = await createTmuxTool() {
+            tools.append(tmuxTool)
+        }
+
         let systemPrompt = buildSystemPrompt(SystemPromptOptions(
             cwd: cwd,
             selectedToolNames: tools.map { $0.name },
@@ -58,6 +78,12 @@ struct CodingTUI {
             model: model,
             tools: tools
         ))
+
+        // Wire background notifications into the agent: completions are
+        // steered as user messages (picked up at the next turn boundary);
+        // idle agents get woken with a fresh `continue()`.
+        let detachBg = await agent.attachBackgroundManager(bgManager, sessionId: sessionId)
+        _ = detachBg // retained for process lifetime
 
         // --- TUI (shared layout) ------------------------------------------
         // Inline render mode — the frame anchors at the current cursor and
@@ -145,6 +171,12 @@ struct CodingTUI {
         runner.bind(.init("escape")) { _ in runner.exit() }
 
         try await runner.run()
+
+        // Shutdown cleanup: kill any still-running background tasks and
+        // tear down the isolated tmux socket so we don't leak processes
+        // after the user exits.
+        await agent.abortAndKillBackgroundTasks()
+        await TmuxSessionManager.shared.teardown()
     }
 }
 
