@@ -6,3 +6,5 @@ DerivedData/
 .swiftpm/
 Package.resolved
 *.xcodeproj
+.vscode/
+.claude/settings.local.json
