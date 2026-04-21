@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAI
 
 /// Live smoke test against ChatGPT Codex using the OAuth creds in
-/// `~/.kw/oauth.json`. Prints every event with a monotonic timestamp
+/// `~/.kwwk/oauth.json`. Prints every event with a monotonic timestamp
 /// so we can inspect what the endpoint actually emits for reasoning —
 /// specifically whether `[thinking]` blocks arrive at all when
 /// `reasoning: {effort}` is requested.
@@ -19,7 +19,7 @@ struct LiveCodexStreamTests {
             return
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let oauthURL = home.appendingPathComponent(".kw/oauth.json")
+        let oauthURL = home.appendingPathComponent(".kwwk/oauth.json")
         let data = try Data(contentsOf: oauthURL)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         guard let entry = json["openai-codex"] as? [String: Any] else { return }
@@ -85,13 +85,13 @@ struct LiveCodexStreamTests {
             return
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let oauthURL = home.appendingPathComponent(".kw/oauth.json")
+        let oauthURL = home.appendingPathComponent(".kwwk/oauth.json")
         let data = try Data(contentsOf: oauthURL)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         guard let entry = json["openai-codex"] as? [String: Any],
               let refresh = entry["refresh"] as? String, !refresh.isEmpty
         else {
-            Issue.record("no openai-codex OAuth in ~/.kw/oauth.json")
+            Issue.record("no openai-codex OAuth in ~/.kwwk/oauth.json")
             return
         }
 

@@ -77,7 +77,7 @@ public enum OAuthError: Error, LocalizedError {
 
 // MARK: - Credential store
 
-/// Persists credentials on disk. Default location is `~/.kw/oauth.json` —
+/// Persists credentials on disk. Default location is `~/.kwwk/oauth.json` —
 /// compatible with pi's `~/.pi/agent/oauth.json` schema so users can migrate
 /// by copying the file across.
 public actor OAuthStore {
@@ -95,7 +95,7 @@ public actor OAuthStore {
                 return FileManager.default.homeDirectoryForCurrentUser
                 #endif
             }()
-            self.url = home.appendingPathComponent(".kw").appendingPathComponent("oauth.json")
+            self.url = home.appendingPathComponent(".kwwk").appendingPathComponent("oauth.json")
         }
         if let data = try? Data(contentsOf: self.url),
            let decoded = try? JSONDecoder().decode([String: OAuthCredentials].self, from: data) {

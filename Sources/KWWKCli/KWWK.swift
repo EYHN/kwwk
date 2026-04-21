@@ -9,7 +9,7 @@ public enum KWWK {
     /// current working directory).
     ///
     /// Credentials are resolved automatically from the OAuth store
-    /// (`~/.kw/oauth.json`). Throws `AuthResolveError.noCredentials`
+    /// (`~/.kwwk/oauth.json`). Throws `AuthResolveError.noCredentials`
     /// with a message pointing at `kwwk login` if none are configured.
     ///
     /// `tools` controls which coding tools the agent is given. Default is
@@ -39,7 +39,7 @@ public enum KWWK {
 
     /// Launch the interactive `kwwk login` flow: TUI selector over the
     /// supported OAuth providers → browser-based OAuth dance → persist
-    /// credentials to `~/.kw/oauth.json`.
+    /// credentials to `~/.kwwk/oauth.json`.
     public static func runLogin() async throws {
         try await runLoginInternal()
     }

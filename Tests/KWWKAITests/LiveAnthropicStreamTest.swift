@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAI
 
 /// Live smoke test — hits real `api.anthropic.com` using a key read from
-/// `~/.kw/oauth.json` and prints each streamed event with a monotonic
+/// `~/.kwwk/oauth.json` and prints each streamed event with a monotonic
 /// millisecond timestamp so we can see tokens arriving incrementally.
 ///
 /// Gated behind the `KWWK_LIVE_ANTHROPIC=1` env var so normal test runs
@@ -18,14 +18,14 @@ struct LiveAnthropicStreamTests {
             return
         }
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let oauthURL = home.appendingPathComponent(".kw/oauth.json")
+        let oauthURL = home.appendingPathComponent(".kwwk/oauth.json")
         let data = try Data(contentsOf: oauthURL)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
         guard let entry = json["anthropic-api-key"] as? [String: Any],
               let apiKey = entry["access"] as? String,
               !apiKey.isEmpty
         else {
-            Issue.record("no anthropic-api-key in ~/.kw/oauth.json")
+            Issue.record("no anthropic-api-key in ~/.kwwk/oauth.json")
             return
         }
 

@@ -35,7 +35,7 @@ struct KwwkCLI {
           kwwk login        log in to an OAuth provider
           kwwk --help       show this message
 
-        Credentials are read from the OAuth store at ~/.kw/oauth.json.
+        Credentials are read from the OAuth store at ~/.kwwk/oauth.json.
         Run `kwwk login` once to register a provider (OAuth subscription
         or API key).
         """)
