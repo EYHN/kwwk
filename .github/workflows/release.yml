@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release build
+        run: swift build -c release --product kwwk
+
+      - name: Compute tarball SHA256
+        id: hash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          url="https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${tag}.tar.gz"
+          sha=$(curl -fsSL --retry 3 "$url" | shasum -a 256 | awk '{print $1}')
+          {
+            echo "tag=${tag}"
+            echo "url=${url}"
+            echo "sha256=${sha}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
+            || gh release create "${GITHUB_REF_NAME}" --generate-notes
+
+      - name: Update homebrew-tap formula
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAG:    ${{ steps.hash.outputs.tag }}
+          URL:    ${{ steps.hash.outputs.url }}
+          SHA256: ${{ steps.hash.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/EYHN/homebrew-tap.git" tap
+          cd tap
+          # Stable anchors: `url "<...>"` and `sha256 "<...>"` — one occurrence each.
+          sed -i '' -E \
+            -e "s|(url \")[^\"]*(\")|\\1${URL}\\2|" \
+            -e "s|(sha256 \")[^\"]*(\")|\\1${SHA256}\\2|" \
+            Formula/kwwk.rb
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "formula already matches ${TAG} — nothing to push"
+          else
+            git commit -am "kwwk: bump to ${TAG}"
+            git push origin main
+          fi
