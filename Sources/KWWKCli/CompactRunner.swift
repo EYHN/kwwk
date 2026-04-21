@@ -129,7 +129,7 @@ func renderForSummary(_ messages: [Message]) -> String {
 /// Returns three lines (leading blank, rule, trailing blank) so callers
 /// can hand them straight to `TUI.commit(_:)`.
 func renderCompactBoundary(messagesCompacted: Int, hasRunningTasksLedger: Bool, width: Int) -> [String] {
-    var label = "compacted \(messagesCompacted) messages → 1 recap"
+    var label = "compacted"
     if hasRunningTasksLedger { label += " (+ running-task ledger)" }
     let prefix = "── "
     let spacedLabel = " \(label) "

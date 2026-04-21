@@ -126,14 +126,14 @@ struct CompactCommandTests {
         }
         // The durable boundary lives in scrollback now, not in the
         // transient notification area.
-        #expect(commits.joined.contains("compacted 6 messages → 1 recap"))
+        #expect(commits.joined.contains("compacted"))
         // And it's shaped like a horizontal rule so it stands out when
         // the user scrolls back through history.
         #expect(commits.joined.contains("──"))
     }
 
     @MainActor
-    @Test("renderCompactBoundary fills the width and includes the message count")
+    @Test("renderCompactBoundary fills the width with a compacted rule")
     func renderCompactBoundaryShape() {
         let lines = renderCompactBoundary(
             messagesCompacted: 17,
@@ -145,7 +145,7 @@ struct CompactCommandTests {
         #expect(lines.first == "")
         #expect(lines.last == "")
         let rule = lines[1]
-        #expect(rule.contains("compacted 17 messages → 1 recap"))
+        #expect(rule.contains("compacted"))
         #expect(rule.contains("──"))
     }
 
