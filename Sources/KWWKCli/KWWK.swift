@@ -23,7 +23,7 @@ public enum KWWK {
     public static func runCodingTUI(
         cwd: String? = nil,
         tools: CodingTools = .all,
-        autoCompactThreshold: Double? = 0.75
+        autoCompactThreshold: Double? = 0.10  // TEMP: lowered from 0.75 for testing — revert before next stable
     ) async throws {
         let resolved = try await resolveAgentAuth()
         let workDir = cwd ?? FileManager.default.currentDirectoryPath

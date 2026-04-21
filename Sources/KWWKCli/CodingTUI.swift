@@ -13,7 +13,7 @@ func runCodingTUIInternal(
     cwd: String,
     tools: CodingTools,
     apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
-    autoCompactThreshold: Double? = 0.75
+    autoCompactThreshold: Double? = 0.10  // TEMP: lowered from 0.75 for testing — revert before next stable
 ) async throws {
     // --- agent + background manager -------------------------------------
     let bgManager = BackgroundTaskManager()
