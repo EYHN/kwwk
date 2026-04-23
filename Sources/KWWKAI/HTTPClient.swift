@@ -3,6 +3,16 @@ import Foundation
 import FoundationNetworking
 #endif
 
+// MARK: - Timeouts (model API)
+
+/// Seconds for `URLRequest` and for `URLSession` resource budget. Defaults are
+/// ~60s in Foundation and can cause `NSURLErrorDomain -1001` on slow first byte
+/// or long streaming responses; 3600s matches multi-minute agent turns.
+public enum KWWKHTTPTimeLimits {
+    public static let requestTimeout: TimeInterval = 3600
+    public static let resourceTimeout: TimeInterval = 24 * 3600
+}
+
 /// Minimal HTTP client abstraction used by streaming providers. Tests inject a
 /// stub implementation; production code uses `URLSessionHTTPClient`.
 public protocol HTTPClient: Sendable {
@@ -19,8 +29,15 @@ public protocol HTTPClient: Sendable {
 public struct URLSessionHTTPClient: HTTPClient {
     public let session: URLSession
 
-    public init(session: URLSession = .shared) {
-        self.session = session
+    private static let longTimeoutSession: URLSession = {
+        let c = URLSessionConfiguration.default
+        c.timeoutIntervalForRequest = KWWKHTTPTimeLimits.requestTimeout
+        c.timeoutIntervalForResource = KWWKHTTPTimeLimits.resourceTimeout
+        return URLSession(configuration: c)
+    }()
+
+    public init(session: URLSession? = nil) {
+        self.session = session ?? Self.longTimeoutSession
     }
 
     public func stream(
@@ -33,6 +50,7 @@ public struct URLSessionHTTPClient: HTTPClient {
         request.httpMethod = method
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.httpBody = body
+        request.timeoutInterval = KWWKHTTPTimeLimits.requestTimeout
         return try await streamViaDelegate(base: session, request: request)
     }
 }
