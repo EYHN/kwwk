@@ -76,7 +76,7 @@ class KwwkHarborAgent(BaseInstalledAgent):
             command=(
                 "set -euo pipefail; "
                 "export LD_LIBRARY_PATH=/mnt/kwwk/runtime-libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}; "
-                "command -v kwwk; kwwk --help 2>&1 | head -n 1"
+                "command -v kwwk; kwwk --help 2>&1 | head -n 1 || true"
             ),
         )
 
