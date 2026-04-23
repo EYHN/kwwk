@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Prepare host tooling for Terminal-Bench 2.0 via Harbor (Python 3.12+).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export PATH="${HOME}/.local/bin:${PATH}"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "python3 is required." >&2
+  exit 1
+fi
+
+python3 -m pip install --user -r "${ROOT}/harbor_bench/requirements.txt"
+
+mkdir -p "${ROOT}/harbor_bench/secrets"
+echo "Place oauth.json at: ${ROOT}/harbor_bench/secrets/oauth.json"
+
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "Docker daemon is reachable."
+else
+  echo "Warning: Docker is not usable from this shell. Harbor needs a running Docker daemon." >&2
+fi
+
+echo "Harbor CLI: $(command -v harbor || echo 'missing — add ~/.local/bin to PATH')"

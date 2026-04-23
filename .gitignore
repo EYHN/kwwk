@@ -8,3 +8,9 @@ Package.resolved
 *.xcodeproj
 .vscode/
 .claude/
+
+# Terminal-Bench / Harbor secrets (oauth, Linux kwwk binary)
+harbor_bench/secrets/
+
+# Python cache
+harbor_bench/__pycache__/
