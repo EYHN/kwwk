@@ -28,7 +28,11 @@ from harbor.models.agent.name import AgentName
 
 
 class KwwkHarborAgent(BaseInstalledAgent):
-    """Runs `kwwk -p` inside the sandbox with credentials from ~/.kwwk/oauth.json."""
+    """Runs `kwwk -p` inside the sandbox with credentials from ~/.kwwk/oauth.json.
+
+    The Linux binary expects ``kwwk_KWWKAI.resources/`` (models.json) next to the
+    resolved executable path — mount it beside ``kwwk`` (e.g. under ``/mnt/kwwk/``).
+    """
 
     def __init__(
         self,
