@@ -1,0 +1,8 @@
+{
+  "anthropic": {
+    "access": "PASTE_ACCESS_TOKEN",
+    "refresh": "PASTE_REFRESH_TOKEN",
+    "expires": 1893456000000,
+    "extras": {}
+  }
+}

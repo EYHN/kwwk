@@ -11,6 +11,8 @@ Package.resolved
 
 # Terminal-Bench / Harbor secrets (oauth, Linux kwwk binary)
 harbor_bench/secrets/
+# Real credentials only — never commit
+harbor_bench/local.oauth.json
 
 # Python cache
 harbor_bench/__pycache__/
