@@ -8,7 +8,8 @@ export PATH="${HOME}/.local/bin:${PATH}"
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 
 KWWK_BIN="${KWWK_BIN:-${ROOT}/harbor_bench/secrets/kwwk}"
-OAUTH_JSON="${OAUTH_JSON:-${ROOT}/harbor_bench/secrets/oauth.json}"
+# Same default as `kwwk login` (e.g. /Users/eyhn/.kwwk/oauth.json on macOS, ~/.kwwk/oauth.json on Linux).
+OAUTH_JSON="${OAUTH_JSON:-${HOME}/.kwwk/oauth.json}"
 
 if [[ ! -f "${KWWK_BIN}" ]]; then
   echo "Set KWWK_BIN to your Linux kwwk binary path (currently missing: ${KWWK_BIN})" >&2

@@ -13,7 +13,8 @@ fi
 python3 -m pip install --user -r "${ROOT}/harbor_bench/requirements.txt"
 
 mkdir -p "${ROOT}/harbor_bench/secrets"
-echo "Place oauth.json at: ${ROOT}/harbor_bench/secrets/oauth.json"
+echo "Default OAUTH for run_kwwk_tb2.example.sh: \${HOME}/.kwwk/oauth.json (from kwwk login)."
+echo "Override with: OAUTH_JSON=/path ./harbor_bench/run_kwwk_tb2.example.sh"
 
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
   echo "Docker daemon is reachable."

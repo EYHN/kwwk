@@ -10,8 +10,10 @@ Example::
       --agent-import-path harbor_bench.kwwk_agent:KwwkHarborAgent \\
       --ak kwwk_binary_container=/mnt/kwwk/kwwk \\
       --ak oauth_container_path=/mnt/kwwk/oauth.json \\
-      --mounts-json '[{"type":"bind","source":"/ABS/PATH/to/kwwk","target":"/mnt/kwwk/kwwk"},{"type":"bind","source":"/ABS/PATH/to/oauth.json","target":"/mnt/kwwk/oauth.json"}]' \\
+      --mounts-json '[{"type":"bind","source":"/ABS/kwwk","target":"/mnt/kwwk/kwwk"},{"type":"bind","source":"/ABS/DOT_KWWK/oauth.json","target":"/mnt/kwwk/oauth.json"}]' \\
       -n 2 -y
+
+    Host oauth path is usually ``~/.kwwk/oauth.json`` (e.g. ``/Users/you/.kwwk/oauth.json`` on macOS).
 """
 
 from __future__ import annotations
