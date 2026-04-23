@@ -35,12 +35,25 @@ print(json.dumps([
 ]))
 ")"
 
+# Default concurrency only if caller did not pass -n / --n-concurrent (avoid duplicate -n).
+has_n=0
+for a in "$@"; do
+  if [[ "$a" == "-n" || "$a" == "--n-concurrent" ]]; then
+    has_n=1
+    break
+  fi
+done
+default_n=()
+if [[ "$has_n" -eq 0 ]]; then
+  default_n=( -n "${N_CONCURRENT:-4}" )
+fi
+
 exec harbor run \
   -d terminal-bench/terminal-bench-2 \
   --agent-import-path harbor_bench.kwwk_agent:KwwkHarborAgent \
   --ak kwwk_binary_container=/mnt/kwwk/kwwk \
   --ak oauth_container_path=/mnt/kwwk/oauth.json \
   --mounts-json "${MOUNTS}" \
-  -n "${N_CONCURRENT:-4}" \
   -y \
+  "${default_n[@]}" \
   "$@"

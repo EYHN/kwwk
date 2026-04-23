@@ -55,6 +55,25 @@ class KwwkHarborAgent(BaseInstalledAgent):
     async def install(self, environment: BaseEnvironment) -> None:
         kb = shlex.quote(self._kwwk_binary_container)
 
+        # The Swift Linux build links to libcurl; many minimal TB2 images have no libcurl.
+        await self.exec_as_root(
+            environment,
+            command=(
+                "set -euo pipefail; "
+                "if command -v apt-get &>/dev/null; then"
+                "  export DEBIAN_FRONTEND=noninteractive; "
+                "  apt-get update -qq && apt-get install -y -qq libcurl4 || apt-get install -y -qq curl; "
+                " elif command -v apk &>/dev/null; then"
+                "  apk add --no-cache curl libcurl; "
+                " elif command -v dnf &>/dev/null; then"
+                "  dnf install -y libcurl; "
+                " elif command -v yum &>/dev/null; then"
+                "  yum install -y libcurl; "
+                " else true; fi"
+            ),
+            env={"DEBIAN_FRONTEND": "noninteractive"},
+        )
+
         await self.exec_as_agent(
             environment,
             command='set -euo pipefail; mkdir -p "$HOME/.kwwk"'
