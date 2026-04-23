@@ -3,9 +3,9 @@ import KWWKAgent
 
 /// Public entry points for the `kwwk` binary. Everything else in KWWKCli is
 /// internal — external consumers drive the CLI through these three
-/// functions. All three work on macOS and Linux; individual OAuth login
-/// providers surface `OAuthError.transport` on Linux because the browser
-/// callback loop depends on Apple's `Network.framework`.
+/// functions. All three work on macOS and Linux: the OAuth callback server
+/// is backed by SwiftNIO and the browser launcher falls back to `xdg-open`
+/// off-Apple, so no entry point is platform-gated.
 public enum KWWK {
 
     /// Launch the interactive coding-agent TUI in `cwd` (defaults to the
@@ -43,10 +43,11 @@ public enum KWWK {
     }
 
     /// Launch the interactive `kwwk login` flow: TUI selector over the
-    /// supported providers → browser OAuth (macOS) or API-key form → persist
-    /// credentials to `~/.kwwk/oauth.json`. On Linux the browser-OAuth
-    /// providers throw at runtime (no `Network.framework`) — the API-key
-    /// flow still works.
+    /// supported providers → browser OAuth or API-key form → persist
+    /// credentials to `~/.kwwk/oauth.json`. Works on macOS and Linux
+    /// (callback server runs on SwiftNIO; browser launcher uses
+    /// `/usr/bin/open` on macOS, `xdg-open` on Linux, and falls back to
+    /// printing the URL to stderr if neither is available).
     public static func runLogin() async throws {
         try await runLoginInternal()
     }
@@ -56,7 +57,11 @@ public enum KWWK {
     ///
     ///   - `prompt` is handed to the agent verbatim;
     ///   - assistant text streams to stdout as it arrives;
-    ///   - tool-call breadcrumbs and the final summary go to stderr;
+    ///   - on a successful run nothing is written to stderr (no banner,
+    ///     no tool breadcrumbs, no summary) — stdout carries only the
+    ///     assistant reply so the output is pipe-clean;
+    ///   - genuine failures (auth missing, stream error, abort) print a
+    ///     one-line message to stderr;
     ///   - returns `0` on a clean stop, `1` on error / aborted / length-capped.
     ///
     /// Credentials are resolved the same way as `runCodingTUI` (from the
