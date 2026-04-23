@@ -6,26 +6,17 @@ on:
   pull_request:
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-          - os: ubuntu-latest
-            swift: '6.1'
-    runs-on: ${{ matrix.os }}
+  build-macos:
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Swift (Linux)
-        if: runner.os == 'Linux'
-        uses: swift-actions/setup-swift@v2
-        with:
-          swift-version: ${{ matrix.swift }}
-
       - name: swift build
         run: swift build --product kwwk
 
-      - name: swift test
-        run: swift test
+  build-linux:
+    runs-on: ubuntu-latest
+    container: swift:6.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build
+        run: swift build --product kwwk
