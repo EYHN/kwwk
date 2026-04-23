@@ -124,6 +124,11 @@ func runHeadlessInternal(
     }
 
     let stop = box.lock.withLock { box.finalStopReason }
+    if stop != .stop {
+        // One-line for bench / CI: exit 1 is often expected (e.g. .toolUse); not always an error.
+        let s = stop.map { String(describing: $0) } ?? "nil"
+        writeStderr("kwwk: headless exit 1, finalStopReason=\(s)\n")
+    }
     return stop == .stop ? 0 : 1
 }
 

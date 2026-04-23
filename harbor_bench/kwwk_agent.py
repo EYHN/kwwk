@@ -52,6 +52,14 @@ class KwwkHarborAgent(BaseInstalledAgent):
         # Synthetic label for Harbor enums; identify runs via agent_import_path in job metadata.
         return AgentName.NOP.value
 
+    _EXIT_README = """kwwk -p (headless) exit codes (see Sources/KWWKCli/Headless.swift in repo):
+  0  final assistant StopReason was .stop (API "end_turn" / clean completion).
+  1  any other case: toolUse, length, error, aborted, or unset stop reason, or
+     thrown error (stderr may show "kwwk: ..." for the latter).
+  For Terminal-Bench, exit 1 is often still a successful multi-tool run — the
+  verifier checks the workspace, not this exit code.
+"""
+
     async def install(self, environment: BaseEnvironment) -> None:
         kb = shlex.quote(self._kwwk_binary_container)
 
@@ -59,7 +67,7 @@ class KwwkHarborAgent(BaseInstalledAgent):
         # task images are offline or have no root package manager in agent setup.
         await self.exec_as_agent(
             environment,
-            command='set -euo pipefail; mkdir -p "$HOME/.kwwk"'
+            command='set -euo pipefail; mkdir -p "$HOME/.kwwk" /logs/agent'
             + (
                 f'; cp {shlex.quote(self._oauth_container_path)} "$HOME/.kwwk/oauth.json"'
                 if self._oauth_container_path
@@ -84,8 +92,8 @@ class KwwkHarborAgent(BaseInstalledAgent):
         return "command -v kwwk >/dev/null && readlink -f $(command -v kwwk) || true"
 
     def populate_context_post_run(self, context: AgentContext) -> None:
-        # Token usage lives in Harbor job logs if needed later.
-        pass
+        # Always on the host trial dir — explains why kwwk-exit.code is often 1.
+        (self.logs_dir / "kwwk-exit.readme").write_text(self._EXIT_README, encoding="utf-8")
 
     @with_prompt_template
     async def run(
@@ -105,7 +113,8 @@ class KwwkHarborAgent(BaseInstalledAgent):
                 "set -uo pipefail; "
                 "export LD_LIBRARY_PATH=/mnt/kwwk/runtime-libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}; "
                 "mkdir -p /logs/agent; "
-                f"kwwk -p {escaped} "
+                "if command -v stdbuf &>/dev/null; then S='stdbuf -oL -eL'; else S=; fi; "
+                f"$S kwwk -p {escaped} "
                 ">/logs/agent/kwwk-stdout.log 2>/logs/agent/kwwk-stderr.log; "
                 "echo $? >/logs/agent/kwwk-exit.code; "
                 "true"
