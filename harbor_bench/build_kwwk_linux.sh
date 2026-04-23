@@ -36,3 +36,5 @@ cp -a "$BUNDLE_DIR" "$ROOT/harbor_bench/secrets/"
 echo "OK: $OUT"
 echo "     -> $ROOT/harbor_bench/secrets/kwwk + kwwk_KWWKAI.resources"
 ldd "$OUT" | head -8
+
+KWWK_BIN="$OUT" "$ROOT/harbor_bench/bundle_kwwk_runtime_libs.sh"
