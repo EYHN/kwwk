@@ -58,6 +58,8 @@ class KwwkHarborAgent(BaseInstalledAgent):
      thrown error (stderr may show "kwwk: ..." for the latter).
   For Terminal-Bench, exit 1 is often still a successful multi-tool run — the
   verifier checks the workspace, not this exit code.
+  If stderr shows lastAssistantError=... it is the `AssistantMessage.errorMessage`
+  from the run (e.g. "Maximum turn limit (N) reached" or a stream/API failure).
 """
 
     async def install(self, environment: BaseEnvironment) -> None:

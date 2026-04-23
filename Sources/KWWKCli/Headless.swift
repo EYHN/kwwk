@@ -71,6 +71,9 @@ func runHeadlessInternal(
     // arbitrary threads.
     final class Box: @unchecked Sendable {
         var finalStopReason: StopReason?
+        /// Last completed assistant message (e.g. synthetic error "Maximum turn limit", stream failure text).
+        var lastAssistant: AssistantMessage?
+        var runSummary: AgentRunSummary?
         var needsTrailingNewline = false
         let lock = NSLock()
     }
@@ -86,7 +89,10 @@ func runHeadlessInternal(
                 }
             }
 
-        case .messageEnd:
+        case .messageEnd(let message):
+            if case .assistant(let a) = message {
+                box.lock.withLock { box.lastAssistant = a }
+            }
             // Separate consecutive assistant messages (tool-use → text →
             // more text) with a newline so piped output doesn't run
             // together.
@@ -98,7 +104,10 @@ func runHeadlessInternal(
             if needs { writeStdout("\n") }
 
         case .agentEnd(_, let summary):
-            box.lock.withLock { box.finalStopReason = summary.finalStopReason }
+            box.lock.withLock {
+                box.finalStopReason = summary.finalStopReason
+                box.runSummary = summary
+            }
             if summary.finalStopReason != .stop,
                let err = agent.state.errorMessage {
                 writeStderr("kwwk: \(err)\n")
@@ -125,9 +134,18 @@ func runHeadlessInternal(
 
     let stop = box.lock.withLock { box.finalStopReason }
     if stop != .stop {
-        // One-line for bench / CI: exit 1 is often expected (e.g. .toolUse); not always an error.
+        // One line for bench / CI. `AssistantMessage.errorMessage` often explains `.error` (e.g. turn cap, stream failure).
         let s = stop.map { String(describing: $0) } ?? "nil"
-        writeStderr("kwwk: headless exit 1, finalStopReason=\(s)\n")
+        var parts = ["kwwk: headless exit 1, finalStopReason=\(s)"]
+        let (last, sum) = box.lock.withLock { (box.lastAssistant, box.runSummary) }
+        if let em = last?.errorMessage, !em.isEmpty {
+            let oneLine = em.replacingOccurrences(of: "\n", with: " ")
+            parts.append("lastAssistantError=\(oneLine)")
+        }
+        if let sum = sum {
+            parts.append("turns=\(sum.turns)")
+        }
+        writeStderr(parts.joined(separator: " ") + "\n")
     }
     return stop == .stop ? 0 : 1
 }
