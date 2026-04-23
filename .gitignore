@@ -1,6 +1,8 @@
 .DS_Store
 /.build
 .swiftpm-cache/
+.kwwk_watch_state.txt
+/jobs/
 /Packages
 xcuserdata/
 DerivedData/

@@ -6,7 +6,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="${KWWK_SWIFT_IMAGE:-swift:6.1-noble}"
+# Default to 22.04 (glibc 2.35) so the binary runs inside TB2 / Harbor task images
+# (older glibc) — noble uses glibc 2.39+ and may require symbols missing on jammy.
+IMAGE="${KWWK_SWIFT_IMAGE:-swift:6.1-jammy}"
 
 docker pull "$IMAGE" >/dev/null
 docker run --rm --network host \

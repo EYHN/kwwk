@@ -1,0 +1,11 @@
+# Drop-in replacement for Harbor's docker-compose-base.yaml (pip install).
+# `deploy.resources.limits` (CPU/RAM) breaks runc on some hosts where the root
+# cgroup is in threaded/domain mode. Copy over:
+#   cp harbor_bench/docker-compose-base.patched-for-threaded-cgroup.yaml \
+#      "$(python3 -c "import harbor.environments.docker as d, pathlib; print(pathlib.Path(d.__file__).parent / 'docker-compose-base.yaml')")"
+services:
+  main:
+    volumes:
+      - ${HOST_VERIFIER_LOGS_PATH}:${ENV_VERIFIER_LOGS_PATH}
+      - ${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}
+      - ${HOST_ARTIFACTS_PATH}:${ENV_ARTIFACTS_PATH}

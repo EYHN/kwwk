@@ -89,7 +89,18 @@ class KwwkHarborAgent(BaseInstalledAgent):
         context: AgentContext,
     ) -> None:
         escaped = shlex.quote(instruction)
+        # Log full I/O to /logs/agent (bind-mounted to the host trial's agent/ dir)
+        # so we can debug GLIBC, API, and headless stop-reason issues after the run.
+        # Headless `kwwk -p` may exit 1 when StopReason != .stop — the shell always
+        # returns 0 so Harbor does not treat a normal model finish as a harness error.
         await self.exec_as_agent(
             environment,
-            command=f"set -euo pipefail; kwwk -p {escaped}",
+            command=(
+                "set -uo pipefail; "
+                "mkdir -p /logs/agent; "
+                f"kwwk -p {escaped} "
+                ">/logs/agent/kwwk-stdout.log 2>/logs/agent/kwwk-stderr.log; "
+                "echo $? >/logs/agent/kwwk-exit.code; "
+                "true"
+            ),
         )

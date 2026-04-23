@@ -13,18 +13,19 @@ cat >/etc/docker/daemon.json <<'JSON'
   "storage-driver": "vfs",
   "iptables": false,
   "ip-forward": false,
-  "bridge": "none"
+  "bridge": "none",
+  "default-cgroupns-mode": "host"
 }
 JSON
 
-# Clear stale run state; keeps images under /var/lib/docker when not deleting it.
-# Comment out the next two lines if you need to preserve local images.
-rm -rf /var/run/docker
-mkdir -p /var/lib/docker
-
 pkill -9 dockerd 2>/dev/null || true
+pkill -9 containerd 2>/dev/null || true
+sleep 2
+# Clear stale run state after daemons exit.
+rm -rf /var/run/docker 2>/dev/null || true
+mkdir -p /var/lib/docker
 sleep 1
-nohup dockerd >>/var/log/dockerd-harbor.log 2>&1 &
+nohup dockerd >>/tmp/dockerd-harbor.log 2>&1 &
 sleep 5
 
 # Allow the primary login user to use docker without newgrp
