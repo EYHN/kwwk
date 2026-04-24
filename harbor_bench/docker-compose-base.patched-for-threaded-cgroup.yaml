@@ -1,10 +1,17 @@
 # Drop-in replacement for Harbor's docker-compose-base.yaml (pip install).
-# `deploy.resources.limits` (CPU/RAM) breaks runc on some hosts where the root
-# cgroup is in threaded/domain mode. Copy over:
-#   cp harbor_bench/docker-compose-base.patched-for-threaded-cgroup.yaml \
-#      "$(python3 -c "import harbor.environments.docker as d, pathlib; print(pathlib.Path(d.__file__).parent / 'docker-compose-base.yaml')")"
+# - `deploy.resources.limits` (CPU/RAM) breaks runc on some hosts where the root
+#   cgroup is in threaded/domain mode (removed in upstream Harbor; kept here
+#   if you pin an older package).
+# - `network_mode: host` so the task container uses the host network namespace.
+#   Default Docker bridge + broken iptables/NAT (non-`docker0` `br-*` bridges) can
+#   block outbound HTTPS to e.g. api.anthropic.com; host network matches `curl` on
+#   the host. Tasks with `allow_internet: false` appends `network_mode: none` last
+#   and will override this (no model API in those tasks anyway).
+# Apply:
+#   ./harbor_bench/patch_harbor_docker_compose.sh
 services:
   main:
+    network_mode: host
     volumes:
       - ${HOST_VERIFIER_LOGS_PATH}:${ENV_VERIFIER_LOGS_PATH}
       - ${HOST_AGENT_LOGS_PATH}:${ENV_AGENT_LOGS_PATH}

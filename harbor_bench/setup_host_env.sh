@@ -12,6 +12,11 @@ fi
 
 python3 -m pip install --user -r "${ROOT}/harbor_bench/requirements.txt"
 
+# Use host network for Harbor task containers (fixes broken Docker bridge NAT in some cloud setups).
+"${ROOT}/harbor_bench/patch_harbor_docker_compose.sh" || {
+  echo "Warning: could not patch Harbor docker-compose-base.yaml. Re-run: ./harbor_bench/patch_harbor_docker_compose.sh" >&2
+}
+
 mkdir -p "${ROOT}/harbor_bench/secrets"
 echo "Default OAUTH for run_kwwk_tb2.example.sh: \${HOME}/.kwwk/oauth.json (from kwwk login)."
 echo "Override with: OAUTH_JSON=/path ./harbor_bench/run_kwwk_tb2.example.sh"

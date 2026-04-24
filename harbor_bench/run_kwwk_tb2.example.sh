@@ -12,6 +12,8 @@ KWWK_RESOURCES="${KWWK_RESOURCES:-${ROOT}/harbor_bench/secrets/kwwk_KWWKAI.resou
 KWWK_RUNTIME_LIBS="${KWWK_RUNTIME_LIBS:-${ROOT}/harbor_bench/secrets/kwwk-runtime-libs}"
 # Same default as `kwwk login` (e.g. /Users/eyhn/.kwwk/oauth.json on macOS, ~/.kwwk/oauth.json on Linux).
 OAUTH_JSON="${OAUTH_JSON:-${HOME}/.kwwk/oauth.json}"
+# kwwk/libcurl needs a CA bundle; base images (host net) may lack a full /etc/ssl/certs.
+SSL_CERTS_DIR="${SSL_CERTS_DIR:-/etc/ssl/certs}"
 
 if [[ ! -f "${KWWK_BIN}" ]]; then
   echo "Set KWWK_BIN to your Linux kwwk binary path (currently missing: ${KWWK_BIN})" >&2
@@ -30,14 +32,20 @@ if [[ ! -f "${OAUTH_JSON}" ]]; then
   echo "Set OAUTH_JSON or place oauth.json at ${OAUTH_JSON}" >&2
   exit 1
 fi
+if [[ ! -d "${SSL_CERTS_DIR}" ]]; then
+  echo "SSL_CERTS_DIR must be a directory (missing: ${SSL_CERTS_DIR})" >&2
+  exit 1
+fi
 
-MOUNTS="$(python3 -c "
+MOUNTS="$(SSL_CERTS_DIR="${SSL_CERTS_DIR}" KWWK_BIN="${KWWK_BIN}" KWWK_RESOURCES="${KWWK_RESOURCES}" KWWK_RUNTIME_LIBS="${KWWK_RUNTIME_LIBS}" OAUTH_JSON="${OAUTH_JSON}" python3 -c "
 import json, os
+certs = os.environ['SSL_CERTS_DIR']
 print(json.dumps([
-    {'type': 'bind', 'source': os.path.abspath('${KWWK_BIN}'), 'target': '/mnt/kwwk/kwwk'},
-    {'type': 'bind', 'source': os.path.abspath('${KWWK_RESOURCES}'), 'target': '/mnt/kwwk/kwwk_KWWKAI.resources'},
-    {'type': 'bind', 'source': os.path.abspath('${KWWK_RUNTIME_LIBS}'), 'target': '/mnt/kwwk/runtime-libs'},
-    {'type': 'bind', 'source': os.path.abspath('${OAUTH_JSON}'), 'target': '/mnt/kwwk/oauth.json'},
+    {'type': 'bind', 'source': os.path.abspath(os.environ['KWWK_BIN']), 'target': '/mnt/kwwk/kwwk'},
+    {'type': 'bind', 'source': os.path.abspath(os.environ['KWWK_RESOURCES']), 'target': '/mnt/kwwk/kwwk_KWWKAI.resources'},
+    {'type': 'bind', 'source': os.path.abspath(os.environ['KWWK_RUNTIME_LIBS']), 'target': '/mnt/kwwk/runtime-libs'},
+    {'type': 'bind', 'source': os.path.abspath(os.environ['OAUTH_JSON']), 'target': '/mnt/kwwk/oauth.json'},
+    {'type': 'bind', 'source': os.path.abspath(certs), 'target': '/etc/ssl/certs'},
 ]))
 ")"
 
