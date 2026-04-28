@@ -41,18 +41,7 @@ enum AuthResolveError: Error, LocalizedError {
 ///
 /// Registers the chosen provider on `APIRegistry.shared` as a side effect so
 /// the returned model can be used immediately.
-///
-/// `modelOverride` (optional) replaces the provider's hardcoded default model
-/// id — catalog metadata is still resolved from `ModelsCatalog`, falling back
-/// to sane defaults if the id is unknown.
-///
-/// `context1m` opts the Anthropic OAuth provider into the 1M-context beta
-/// (adds `context-1m-2025-08-07` to the `anthropic-beta` header and bumps
-/// `contextWindow` to 1M). It is silently ignored by other providers.
-func resolveAgentAuth(
-    modelOverride: String? = nil,
-    context1m: Bool = false
-) async throws -> ResolvedAuth {
+func resolveAgentAuth() async throws -> ResolvedAuth {
     let store = OAuthStore()
     let all = await store.all()
 
@@ -62,22 +51,19 @@ func resolveAgentAuth(
     if let providerId = pickStoredProvider(from: all), let creds = all[providerId] {
         switch providerId {
         case "openai-codex":
-            return await registerCodex(store: store, creds: creds, modelOverride: modelOverride)
+            return await registerCodex(store: store, creds: creds)
         case "anthropic":
-            return await registerAnthropicOAuth(
-                store: store, creds: creds,
-                modelOverride: modelOverride, context1m: context1m
-            )
+            return await registerAnthropicOAuth(store: store, creds: creds)
         case "anthropic-api-key":
-            return await registerAnthropicAPIKey(creds: creds, modelOverride: modelOverride)
+            return await registerAnthropicAPIKey(creds: creds)
         case "openai-api-key":
-            return await registerOpenAIAPIKey(creds: creds, modelOverride: modelOverride)
+            return await registerOpenAIAPIKey(creds: creds)
         case "openai-compatible":
-            return try await registerOpenAICompatible(creds: creds, modelOverride: modelOverride)
+            return try await registerOpenAICompatible(creds: creds)
         case "google-api-key":
-            return await registerGoogleAPIKey(creds: creds, modelOverride: modelOverride)
+            return await registerGoogleAPIKey(creds: creds)
         case "github-copilot":
-            return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride)
+            return await registerGitHubCopilot(store: store, creds: creds)
         case "google-gemini-cli", "google-antigravity":
             throw AuthResolveError.unsupportedProvider(providerId)
         default:
@@ -111,8 +97,7 @@ private func pickStoredProvider(from all: [String: OAuthCredentials]) -> String?
 
 private func registerCodex(
     store: OAuthStore,
-    creds: OAuthCredentials,
-    modelOverride: String? = nil
+    creds: OAuthCredentials
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
     // Grab a fresh token if expired. If the refresh fails we still register
@@ -132,11 +117,10 @@ private func registerCodex(
         originator: "kwwk"
     ))
 
-    let modelId = modelOverride ?? "gpt-5.4"
-    let catalogEntry = ModelsCatalog.model(provider: "openai-codex", id: modelId)
+    let catalogEntry = ModelsCatalog.model(provider: "openai-codex", id: "gpt-5.4")
     let model = Model(
-        id: modelId,
-        name: catalogEntry?.name ?? modelId,
+        id: "gpt-5.4",
+        name: catalogEntry?.name ?? "gpt-5.4",
         api: "chatgpt-codex",
         provider: "chatgpt-codex",
         baseUrl: "https://chatgpt.com",
@@ -155,7 +139,7 @@ private func registerCodex(
 
     return ResolvedAuth(
         model: model,
-        modelLabel: "\(modelId) · ChatGPT Codex",
+        modelLabel: "gpt-5.4 · ChatGPT Codex",
         apiKeyResolver: resolver
     )
 }
@@ -164,30 +148,15 @@ private func registerCodex(
 
 private func registerAnthropicOAuth(
     store: OAuthStore,
-    creds: OAuthCredentials,
-    modelOverride: String? = nil,
-    context1m: Bool = false
+    creds: OAuthCredentials
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
     _ = try? await manager.apiKey(for: "anthropic")
 
-    // Opt into the 1M-context beta when requested. Sent alongside the OAuth
-    // beta as a single comma-separated `anthropic-beta` header value, which
-    // is the wire format the Messages API expects. Requires the account to
-    // have long-context billing enabled — without that, every request 401s
-    // with `"Extra usage is required for long context requests."` even on
-    // small prompts.
-    let beta = context1m
-        ? "oauth-2025-04-20,context-1m-2025-08-07"
-        : "oauth-2025-04-20"
-    await APIRegistry.shared.register(ProviderVariants.anthropicOAuth(
-        accessToken: nil,
-        beta: beta
-    ))
+    await APIRegistry.shared.register(ProviderVariants.anthropicOAuth(accessToken: nil))
 
-    let modelId = modelOverride ?? "claude-sonnet-4-5-20250929"
+    let modelId = "claude-sonnet-4-5-20250929"
     let catalog = ModelsCatalog.model(provider: "anthropic", id: modelId)
-    let defaultContext = context1m ? 1_000_000 : 200_000
     let model = Model(
         id: modelId,
         name: catalog?.name ?? modelId,
@@ -196,7 +165,7 @@ private func registerAnthropicOAuth(
         baseUrl: "https://api.anthropic.com",
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
-        contextWindow: context1m ? 1_000_000 : (catalog?.contextWindow ?? defaultContext),
+        contextWindow: catalog?.contextWindow ?? 200_000,
         maxTokens: catalog?.maxTokens ?? 8192
     )
 
@@ -204,10 +173,9 @@ private func registerAnthropicOAuth(
         try? await manager.apiKey(for: "anthropic")
     }
 
-    let suffix = context1m ? " · Anthropic OAuth (1M ctx)" : " · Anthropic OAuth"
     return ResolvedAuth(
         model: model,
-        modelLabel: "\(modelId)\(suffix)",
+        modelLabel: "\(modelId) · Anthropic OAuth",
         apiKeyResolver: resolver
     )
 }
@@ -216,8 +184,7 @@ private func registerAnthropicOAuth(
 
 private func registerGitHubCopilot(
     store: OAuthStore,
-    creds: OAuthCredentials,
-    modelOverride: String? = nil
+    creds: OAuthCredentials
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
     // Prime the session token — Copilot's `refresh` is actually a PAT →
@@ -265,8 +232,8 @@ private func registerGitHubCopilot(
 
     // Default to `gpt-4.1` — generally available on all Copilot tiers, no
     // policy-enable dependency. Users can /model to Claude/GPT-5/etc after
-    // login-time policy-enable has run, or set `--model` at launch.
-    let defaultId = modelOverride ?? "gpt-4.1"
+    // login-time policy-enable has run.
+    let defaultId = "gpt-4.1"
     let fallback = Model(
         id: defaultId,
         name: defaultId,
@@ -315,14 +282,11 @@ private func registerGitHubCopilot(
 
 // MARK: - Anthropic API key (login form)
 
-private func registerAnthropicAPIKey(
-    creds: OAuthCredentials,
-    modelOverride: String? = nil
-) async -> ResolvedAuth {
+private func registerAnthropicAPIKey(creds: OAuthCredentials) async -> ResolvedAuth {
     let baseURL = stringExtra(creds, "baseUrl") ?? "https://api.anthropic.com"
     await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: creds.access))
 
-    let modelId = modelOverride ?? "claude-sonnet-4-5-20250929"
+    let modelId = "claude-sonnet-4-5-20250929"
     let catalog = ModelsCatalog.model(provider: "anthropic", id: modelId)
     let model = Model(
         id: modelId,
@@ -344,14 +308,11 @@ private func registerAnthropicAPIKey(
 
 // MARK: - OpenAI API key (login form)
 
-private func registerOpenAIAPIKey(
-    creds: OAuthCredentials,
-    modelOverride: String? = nil
-) async -> ResolvedAuth {
+private func registerOpenAIAPIKey(creds: OAuthCredentials) async -> ResolvedAuth {
     let baseURL = stringExtra(creds, "baseUrl") ?? "https://api.openai.com"
     await APIRegistry.shared.register(OpenAIResponsesProvider(defaultAPIKey: creds.access))
 
-    let modelId = modelOverride ?? "gpt-5"
+    let modelId = "gpt-5"
     let catalog = ModelsCatalog.model(provider: "openai", id: modelId)
     let model = Model(
         id: modelId,
@@ -373,14 +334,11 @@ private func registerOpenAIAPIKey(
 
 // MARK: - Google AI Studio (Gemini direct, login form)
 
-private func registerGoogleAPIKey(
-    creds: OAuthCredentials,
-    modelOverride: String? = nil
-) async -> ResolvedAuth {
+private func registerGoogleAPIKey(creds: OAuthCredentials) async -> ResolvedAuth {
     let baseURL = stringExtra(creds, "baseUrl") ?? "https://generativelanguage.googleapis.com"
     await APIRegistry.shared.register(GoogleGeminiProvider(defaultAPIKey: creds.access))
 
-    let modelId = modelOverride ?? "gemini-2.5-pro"
+    let modelId = "gemini-2.5-pro"
     let catalog = ModelsCatalog.model(provider: "google", id: modelId)
     let model = Model(
         id: modelId,
@@ -405,15 +363,11 @@ private func registerGoogleAPIKey(
 
 // MARK: - OpenAI-compatible (login form)
 
-private func registerOpenAICompatible(
-    creds: OAuthCredentials,
-    modelOverride: String? = nil
-) async throws -> ResolvedAuth {
+private func registerOpenAICompatible(creds: OAuthCredentials) async throws -> ResolvedAuth {
     guard let baseURL = stringExtra(creds, "baseUrl"), !baseURL.isEmpty else {
         throw AuthResolveError.unsupportedProvider("openai-compatible (missing baseUrl)")
     }
-    let storedModel = stringExtra(creds, "defaultModel")
-    guard let modelId = modelOverride ?? storedModel, !modelId.isEmpty else {
+    guard let modelId = stringExtra(creds, "defaultModel"), !modelId.isEmpty else {
         throw AuthResolveError.unsupportedProvider("openai-compatible (missing defaultModel)")
     }
     await APIRegistry.shared.register(OpenAICompletionsProvider(defaultAPIKey: creds.access))
