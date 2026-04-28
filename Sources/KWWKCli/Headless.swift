@@ -28,9 +28,11 @@ func runHeadlessInternal(
     cwd: String,
     tools: CodingTools,
     thinkingLevel: ThinkingLevel = .medium,
-    autoCompactThreshold: Double? = 0.75
+    autoCompactThreshold: Double? = 0.75,
+    modelOverride: String? = nil,
+    context1m: Bool = false
 ) async throws -> Int32 {
-    let resolved = try await resolveAgentAuth()
+    let resolved = try await resolveAgentAuth(modelOverride: modelOverride, context1m: context1m)
 
     let bgManager = BackgroundTaskManager()
     let sessionId = UUID().uuidString

@@ -14,24 +14,46 @@ import KWWKCli
 ///   kwwk -p <prompt>        → one-shot, non-interactive run (stdout = reply)
 ///   kwwk --help             → usage
 ///
-/// `--thinking <off|minimal|low|medium|high|xhigh>` is a global flag that
-/// applies to both the TUI and headless modes. Default is `medium`.
+/// Global flags (apply to both TUI and headless `-p`):
+///   `--thinking <off|minimal|low|medium|high|xhigh>` — reasoning effort, default `medium`.
+///   `--model <id>`     — override the resolved provider's default model id
+///                        (e.g. `--model claude-opus-4-5`). Catalog metadata
+///                        is looked up by id; unknown ids fall back to sane
+///                        defaults for `contextWindow` / `maxTokens`.
+///   `--context-1m`     — opt into Anthropic's 1M-context beta. Adds
+///                        `context-1m-2025-08-07` to the `anthropic-beta`
+///                        header and bumps `contextWindow` to 1_000_000.
+///                        Requires the account to have long-context billing
+///                        enabled. Ignored for non-Anthropic providers.
 @main
 struct KwwkCLI {
     static func main() async {
         var args = Array(CommandLine.arguments.dropFirst())
         let thinkingLevel: ThinkingLevel
         (args, thinkingLevel) = extractThinking(args)
+        let modelOverride: String?
+        (args, modelOverride) = extractStringFlag(args, "--model")
+        let context1m: Bool
+        (args, context1m) = extractBoolFlag(args, "--context-1m")
 
         let subcommand = args.first
 
         switch subcommand {
         case nil:
-            await runOrExit { try await KWWK.runCodingTUI(thinkingLevel: thinkingLevel) }
+            await runOrExit { try await KWWK.runCodingTUI(
+                thinkingLevel: thinkingLevel,
+                modelOverride: modelOverride,
+                context1m: context1m
+            ) }
         case "login":
             await runOrExit { try await KWWK.runLogin() }
         case "-p", "--print":
-            await runPrint(rest: Array(args.dropFirst()), thinkingLevel: thinkingLevel)
+            await runPrint(
+                rest: Array(args.dropFirst()),
+                thinkingLevel: thinkingLevel,
+                modelOverride: modelOverride,
+                context1m: context1m
+            )
         case "-h", "--help":
             printUsage()
         default:
@@ -55,6 +77,10 @@ struct KwwkCLI {
         global options:
           --thinking <level>          reasoning effort: off, minimal, low,
                                       medium (default), high, xhigh
+          --model <id>                override the provider's default model id
+                                      (e.g. --model claude-opus-4-5)
+          --context-1m                opt into Anthropic 1M-context beta
+                                      (long-context billing must be on)
 
         Credentials are read from the OAuth store at ~/.kwwk/oauth.json.
         Run `kwwk login` once to register a provider (OAuth subscription
@@ -87,6 +113,42 @@ struct KwwkCLI {
         return (out, level)
     }
 
+    /// Pull `<flag> <value>` out of argv and return the remaining args plus
+    /// the (optional) value. Missing flag → `nil`. Flag without a value →
+    /// usage error.
+    static func extractStringFlag(_ argv: [String], _ flag: String) -> ([String], String?) {
+        var out: [String] = []
+        var value: String? = nil
+        var i = 0
+        while i < argv.count {
+            if argv[i] == flag {
+                guard i + 1 < argv.count else {
+                    FileHandle.standardError.write(Data(
+                        "kwwk: \(flag) needs an argument\n".utf8
+                    ))
+                    Foundation.exit(2)
+                }
+                value = argv[i + 1]
+                i += 2
+            } else {
+                out.append(argv[i])
+                i += 1
+            }
+        }
+        return (out, value)
+    }
+
+    /// Pull a boolean `<flag>` out of argv. Returns `(remaining, true)` if
+    /// present, `(argv, false)` if not.
+    static func extractBoolFlag(_ argv: [String], _ flag: String) -> ([String], Bool) {
+        var out: [String] = []
+        var seen = false
+        for arg in argv {
+            if arg == flag { seen = true } else { out.append(arg) }
+        }
+        return (out, seen)
+    }
+
     /// Handle `-p` / `--print`. Everything after the flag is joined into
     /// the prompt; if nothing is supplied (or the token is a bare `-`),
     /// the prompt is read from stdin until EOF.
@@ -96,7 +158,12 @@ struct KwwkCLI {
     /// missing credentials, stream error) still print a one-line message
     /// to stderr so a non-zero exit isn't mysterious. Exit codes: 2 = bad
     /// invocation, 1 = runtime/auth failure, 0 = success.
-    static func runPrint(rest: [String], thinkingLevel: ThinkingLevel) async {
+    static func runPrint(
+        rest: [String],
+        thinkingLevel: ThinkingLevel,
+        modelOverride: String?,
+        context1m: Bool
+    ) async {
         let prompt: String
         if rest.isEmpty || rest == ["-"] {
             // Use fd 0 directly instead of `fileno(stdin)` — on Linux
@@ -122,7 +189,12 @@ struct KwwkCLI {
         }
 
         do {
-            let code = try await KWWK.runHeadless(prompt: prompt, thinkingLevel: thinkingLevel)
+            let code = try await KWWK.runHeadless(
+                prompt: prompt,
+                thinkingLevel: thinkingLevel,
+                modelOverride: modelOverride,
+                context1m: context1m
+            )
             Foundation.exit(code)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
