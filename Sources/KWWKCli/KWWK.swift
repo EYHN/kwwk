@@ -27,9 +27,11 @@ public enum KWWK {
         cwd: String? = nil,
         tools: CodingTools = .all,
         autoCompactThreshold: Double? = 0.75,
-        thinkingLevel: ThinkingLevel = .medium
+        thinkingLevel: ThinkingLevel = .medium,
+        modelOverride: String? = nil,
+        context1m: Bool = false
     ) async throws {
-        let resolved = try await resolveAgentAuth()
+        let resolved = try await resolveAgentAuth(modelOverride: modelOverride, context1m: context1m)
         let workDir = cwd ?? FileManager.default.currentDirectoryPath
         try await runCodingTUIInternal(
             model: resolved.model,
@@ -72,14 +74,18 @@ public enum KWWK {
         prompt: String,
         cwd: String? = nil,
         tools: CodingTools = .all,
-        thinkingLevel: ThinkingLevel = .medium
+        thinkingLevel: ThinkingLevel = .medium,
+        modelOverride: String? = nil,
+        context1m: Bool = false
     ) async throws -> Int32 {
         let workDir = cwd ?? FileManager.default.currentDirectoryPath
         return try await runHeadlessInternal(
             prompt: prompt,
             cwd: workDir,
             tools: tools,
-            thinkingLevel: thinkingLevel
+            thinkingLevel: thinkingLevel,
+            modelOverride: modelOverride,
+            context1m: context1m
         )
     }
 }
