@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KWWK="${KWWK_BIN:-$ROOT/harbor_bench/secrets/kwwk}"
 OUT="$ROOT/harbor_bench/secrets/kwwk-runtime-libs"
 # Must match the image used in build_kwwk_linux.sh
-IMAGE="${KWWK_BUNDLE_IMAGE:-${KWWK_SWIFT_IMAGE:-swift:6.1-jammy}}"
+IMAGE="${KWWK_BUNDLE_IMAGE:-${KWWK_SWIFT_IMAGE:-swift:6.1-focal}}"
 
 if [[ ! -f "$KWWK" || ! -x "$KWWK" ]]; then
   echo "Missing kwwk at $KWWK (build with ./harbor_bench/build_kwwk_linux.sh first)" >&2

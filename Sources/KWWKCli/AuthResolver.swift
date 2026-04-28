@@ -153,9 +153,12 @@ private func registerAnthropicOAuth(
     let manager = OAuthManager(store: store)
     _ = try? await manager.apiKey(for: "anthropic")
 
-    await APIRegistry.shared.register(ProviderVariants.anthropicOAuth(accessToken: nil))
+    await APIRegistry.shared.register(ProviderVariants.anthropicOAuth(
+        accessToken: nil,
+        beta: "oauth-2025-04-20,context-1m-2025-08-07"
+    ))
 
-    let modelId = "claude-sonnet-4-5-20250929"
+    let modelId = "claude-opus-4-7"
     let catalog = ModelsCatalog.model(provider: "anthropic", id: modelId)
     let model = Model(
         id: modelId,
@@ -165,8 +168,8 @@ private func registerAnthropicOAuth(
         baseUrl: "https://api.anthropic.com",
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
-        contextWindow: catalog?.contextWindow ?? 200_000,
-        maxTokens: catalog?.maxTokens ?? 8192
+        contextWindow: 1_000_000,
+        maxTokens: catalog?.maxTokens ?? 32000
     )
 
     let resolver: @Sendable (String) async -> String? = { _ in

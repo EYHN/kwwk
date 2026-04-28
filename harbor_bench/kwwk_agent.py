@@ -67,14 +67,16 @@ class KwwkHarborAgent(BaseInstalledAgent):
 
         # Prefer bundled .so from the host (see bundle_kwwk_runtime_libs.sh) over apt — many
         # task images are offline or have no root package manager in agent setup.
+        # Symlink the entire $HOME/.kwwk directory to /mnt/kwwk_dot (a host
+        # bind-mount of /root/.kwwk). kwwk's OAuth manager uses
+        # `Data.write(to:options:.atomic)` which rename(2)s a tempfile onto
+        # the target — that would *replace* a per-file symlink and silently
+        # break refresh persistence. Symlinking the directory instead keeps
+        # the rename inside the bind-mount, so refreshed tokens land back on
+        # the host and survive container teardown.
         await self.exec_as_agent(
             environment,
-            command='set -euo pipefail; mkdir -p "$HOME/.kwwk" /logs/agent'
-            + (
-                f'; cp {shlex.quote(self._oauth_container_path)} "$HOME/.kwwk/oauth.json"'
-                if self._oauth_container_path
-                else ""
-            ),
+            command='set -euo pipefail; mkdir -p /logs/agent; rm -rf "$HOME/.kwwk"; ln -sfn /mnt/kwwk_dot "$HOME/.kwwk"',
         )
         # Writable install path; avoid sudo inside the agent user shell.
         await self.exec_as_root(
@@ -116,7 +118,7 @@ class KwwkHarborAgent(BaseInstalledAgent):
                 "export LD_LIBRARY_PATH=/mnt/kwwk/runtime-libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}; "
                 "mkdir -p /logs/agent; "
                 "if command -v stdbuf &>/dev/null; then S='stdbuf -oL -eL'; else S=; fi; "
-                f"$S kwwk -p {escaped} "
+                f"$S kwwk --thinking xhigh -p {escaped} "
                 ">/logs/agent/kwwk-stdout.log 2>/logs/agent/kwwk-stderr.log; "
                 "echo $? >/logs/agent/kwwk-exit.code; "
                 "true"

@@ -1,0 +1,364 @@
+[
+  {
+    "name": "tb2-local",
+    "version": "2.0",
+    "description": "TB2 subset: 71 tasks (TB2 web list n HF sandboxes-tasks main HEAD).",
+    "tasks": [
+      {
+        "name": "adaptive-rejection-sampler",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "adaptive-rejection-sampler"
+      },
+      {
+        "name": "bn-fit-modify",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "bn-fit-modify"
+      },
+      {
+        "name": "break-filter-js-from-html",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "break-filter-js-from-html"
+      },
+      {
+        "name": "build-cython-ext",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "build-cython-ext"
+      },
+      {
+        "name": "build-pmars",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "build-pmars"
+      },
+      {
+        "name": "build-pov-ray",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "build-pov-ray"
+      },
+      {
+        "name": "caffe-cifar-10",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "caffe-cifar-10"
+      },
+      {
+        "name": "cancel-async-tasks",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "cancel-async-tasks"
+      },
+      {
+        "name": "chess-best-move",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "chess-best-move"
+      },
+      {
+        "name": "circuit-fibsqrt",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "circuit-fibsqrt"
+      },
+      {
+        "name": "cobol-modernization",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "cobol-modernization"
+      },
+      {
+        "name": "code-from-image",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "code-from-image"
+      },
+      {
+        "name": "configure-git-webserver",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "configure-git-webserver"
+      },
+      {
+        "name": "constraints-scheduling",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "constraints-scheduling"
+      },
+      {
+        "name": "count-dataset-tokens",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "count-dataset-tokens"
+      },
+      {
+        "name": "crack-7z-hash",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "crack-7z-hash"
+      },
+      {
+        "name": "db-wal-recovery",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "db-wal-recovery"
+      },
+      {
+        "name": "distribution-search",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "distribution-search"
+      },
+      {
+        "name": "dna-assembly",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "dna-assembly"
+      },
+      {
+        "name": "dna-insert",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "dna-insert"
+      },
+      {
+        "name": "extract-elf",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "extract-elf"
+      },
+      {
+        "name": "feal-differential-cryptanalysis",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "feal-differential-cryptanalysis"
+      },
+      {
+        "name": "feal-linear-cryptanalysis",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "feal-linear-cryptanalysis"
+      },
+      {
+        "name": "filter-js-from-html",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "filter-js-from-html"
+      },
+      {
+        "name": "financial-document-processor",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "financial-document-processor"
+      },
+      {
+        "name": "fix-code-vulnerability",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "fix-code-vulnerability"
+      },
+      {
+        "name": "fix-git",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "fix-git"
+      },
+      {
+        "name": "fix-ocaml-gc",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "fix-ocaml-gc"
+      },
+      {
+        "name": "git-leak-recovery",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "git-leak-recovery"
+      },
+      {
+        "name": "gpt2-codegolf",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "gpt2-codegolf"
+      },
+      {
+        "name": "hf-model-inference",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "hf-model-inference"
+      },
+      {
+        "name": "install-windows-3.11",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "install-windows-3.11"
+      },
+      {
+        "name": "kv-store-grpc",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "kv-store-grpc"
+      },
+      {
+        "name": "large-scale-text-editing",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "large-scale-text-editing"
+      },
+      {
+        "name": "largest-eigenval",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "largest-eigenval"
+      },
+      {
+        "name": "log-summary-date-ranges",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "log-summary-date-ranges"
+      },
+      {
+        "name": "mailman",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "mailman"
+      },
+      {
+        "name": "make-doom-for-mips",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "make-doom-for-mips"
+      },
+      {
+        "name": "make-mips-interpreter",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "make-mips-interpreter"
+      },
+      {
+        "name": "mcmc-sampling-stan",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "mcmc-sampling-stan"
+      },
+      {
+        "name": "merge-diff-arc-agi-task",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "merge-diff-arc-agi-task"
+      },
+      {
+        "name": "model-extraction-relu-logits",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "model-extraction-relu-logits"
+      },
+      {
+        "name": "mteb-leaderboard",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "mteb-leaderboard"
+      },
+      {
+        "name": "mteb-retrieve",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "mteb-retrieve"
+      },
+      {
+        "name": "nginx-request-logging",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "nginx-request-logging"
+      },
+      {
+        "name": "openssl-selfsigned-cert",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "openssl-selfsigned-cert"
+      },
+      {
+        "name": "password-recovery",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "password-recovery"
+      },
+      {
+        "name": "path-tracing",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "path-tracing"
+      },
+      {
+        "name": "path-tracing-reverse",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "path-tracing-reverse"
+      },
+      {
+        "name": "polyglot-c-py",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "polyglot-c-py"
+      },
+      {
+        "name": "polyglot-rust-c",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "polyglot-rust-c"
+      },
+      {
+        "name": "prove-plus-comm",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "prove-plus-comm"
+      },
+      {
+        "name": "pypi-server",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "pypi-server"
+      },
+      {
+        "name": "pytorch-model-cli",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "pytorch-model-cli"
+      },
+      {
+        "name": "pytorch-model-recovery",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "pytorch-model-recovery"
+      },
+      {
+        "name": "qemu-alpine-ssh",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "qemu-alpine-ssh"
+      },
+      {
+        "name": "qemu-startup",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "qemu-startup"
+      },
+      {
+        "name": "query-optimize",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "query-optimize"
+      },
+      {
+        "name": "regex-log",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "regex-log"
+      },
+      {
+        "name": "reshard-c4-data",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "reshard-c4-data"
+      },
+      {
+        "name": "rstan-to-pystan",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "rstan-to-pystan"
+      },
+      {
+        "name": "sanitize-git-repo",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "sanitize-git-repo"
+      },
+      {
+        "name": "schemelike-metacircular-eval",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "schemelike-metacircular-eval"
+      },
+      {
+        "name": "sparql-university",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "sparql-university"
+      },
+      {
+        "name": "sqlite-db-truncate",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "sqlite-db-truncate"
+      },
+      {
+        "name": "sqlite-with-gcov",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "sqlite-with-gcov"
+      },
+      {
+        "name": "torch-pipeline-parallelism",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "torch-pipeline-parallelism"
+      },
+      {
+        "name": "torch-tensor-parallelism",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "torch-tensor-parallelism"
+      },
+      {
+        "name": "train-fasttext",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "train-fasttext"
+      },
+      {
+        "name": "tune-mjcf",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "tune-mjcf"
+      },
+      {
+        "name": "video-processing",
+        "git_url": "https://huggingface.co/datasets/laude-institute/sandboxes-tasks.git",
+        "path": "video-processing"
+      }
+    ]
+  }
+]
