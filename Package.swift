@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "KWWKAgent", targets: ["KWWKAgent"]),
         .library(name: "KWWKCli", targets: ["KWWKCli"]),
         .executable(name: "kwwk", targets: ["kwwk"]),
+        .executable(name: "kwwk-generate-models", targets: ["kwwk-generate-models"]),
     ],
     dependencies: [
         // swift-crypto's `Crypto` module is source-compatible with Apple's
@@ -49,6 +50,10 @@ let package = Package(
             name: "kwwk",
             dependencies: ["KWWKCli"],
             path: "Sources/kwwk"
+        ),
+        .executableTarget(
+            name: "kwwk-generate-models",
+            path: "Scripts/GenerateModels"
         ),
         .testTarget(
             name: "KWWKAITests",

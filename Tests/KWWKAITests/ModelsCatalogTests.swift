@@ -12,6 +12,8 @@ struct ModelsCatalogTests {
         #expect(providers.contains("openai"))
         #expect(providers.contains("google"))
         #expect(providers.contains("amazon-bedrock"))
+        #expect(!providers.contains("google-gemini-cli"))
+        #expect(!providers.contains("google-antigravity"))
 
         let total = ModelsCatalog.all.count
         #expect(total >= 500)   // pi ships ~840; allow headroom for future trims
