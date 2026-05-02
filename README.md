@@ -348,12 +348,12 @@ swift test
 ## A note on OAuth client IDs
 
 `Sources/KWWKAI/OAuthProviders.swift` reuses the OAuth client IDs (and,
-for Google, the client secret) shipped by the upstream first-party CLIs
-— Anthropic's Claude Code, OpenAI's Codex CLI, Google's Gemini CLI, and
-GitHub Copilot's VS Code extension. Those credentials are not secrets
-in any meaningful sense — they are embedded in those open-source CLIs
-and are required for the "log in with your existing subscription" flow
-to work. They remain the property of their respective vendors, who may
+where applicable, public app metadata) shipped by the upstream
+first-party CLIs — Anthropic's Claude Code, OpenAI's Codex CLI, and
+GitHub Copilot's VS Code extension. Those credentials are not secrets in
+any meaningful sense — they are embedded in those open-source CLIs and
+are required for the "log in with your existing subscription" flow to
+work. They remain the property of their respective vendors, who may
 rotate or revoke them at any time. `kwwk` is not affiliated with or
 endorsed by any of these vendors.
 

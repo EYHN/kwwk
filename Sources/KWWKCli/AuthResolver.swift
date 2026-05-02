@@ -78,8 +78,6 @@ func resolveAgentAuth(
             return await registerGoogleAPIKey(creds: creds, modelOverride: modelOverride)
         case "github-copilot":
             return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride)
-        case "google-gemini-cli", "google-antigravity":
-            throw AuthResolveError.unsupportedProvider(providerId)
         default:
             throw AuthResolveError.unsupportedProvider(providerId)
         }
@@ -99,8 +97,6 @@ private func pickStoredProvider(from all: [String: OAuthCredentials]) -> String?
         "openai-api-key",
         "openai-compatible",
         "google-api-key",
-        "google-gemini-cli",
-        "google-antigravity",
         "github-copilot",
     ]
     for id in priority where all[id] != nil { return id }
