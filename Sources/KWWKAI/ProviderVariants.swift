@@ -22,12 +22,14 @@ public enum ProviderVariants {
         endpoint: URL,
         apiVersion: String = "2024-10-01-preview",
         apiKey: String? = nil,
-        client: HTTPClient = URLSessionHTTPClient()
+        client: HTTPClient = URLSessionHTTPClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient()
     ) -> OpenAIResponsesProvider {
         let endpointString = endpoint.absoluteString.trimmedSlashes
         return OpenAIResponsesProvider(
             api: "azure-openai-responses",
             client: client,
+            webSocketClient: webSocketClient,
             defaultBaseURL: endpoint,
             defaultAPIKey: apiKey,
             urlBuilder: { model, options, _ in
@@ -112,6 +114,7 @@ public enum ProviderVariants {
         accessToken: String? = nil,
         accountId: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient(),
         originator: String = "kw-cli"
     ) -> OpenAIResponsesProvider {
         var extra: [String: String] = [
@@ -124,6 +127,7 @@ public enum ProviderVariants {
         return OpenAIResponsesProvider(
             api: "chatgpt-codex",
             client: client,
+            webSocketClient: webSocketClient,
             defaultBaseURL: URL(string: "https://chatgpt.com")!,
             defaultAPIKey: accessToken,
             extraHeaders: extra,
@@ -206,6 +210,7 @@ public enum ProviderVariants {
     public static func githubCopilotResponses(
         sessionToken: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient(),
         integrationID: String = "vscode-chat",
         api: String = "openai-responses",
         baseURL: URL = URL(string: "https://api.individual.githubcopilot.com")!
@@ -214,6 +219,7 @@ public enum ProviderVariants {
         return OpenAIResponsesProvider(
             api: api,
             client: client,
+            webSocketClient: webSocketClient,
             defaultBaseURL: baseURL,
             defaultAPIKey: sessionToken,
             extraHeaders: copilotEditorHeaders(integrationID: integrationID),

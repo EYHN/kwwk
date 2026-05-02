@@ -1,5 +1,27 @@
 import Foundation
 
+/// Diagnostic event emitted by providers or other internal components when
+/// verbose mode is enabled. This is UI-only telemetry; providers must avoid
+/// putting secrets or request bodies in these messages.
+public struct VerboseEvent: Codable, Sendable, Hashable {
+    public var timestamp: Int64
+    public var source: String
+    public var message: String
+    public var metadata: [String: JSONValue]
+
+    public init(
+        source: String,
+        message: String,
+        metadata: [String: JSONValue] = [:],
+        timestamp: Int64 = Timestamp.now()
+    ) {
+        self.timestamp = timestamp
+        self.source = source
+        self.message = message
+        self.metadata = metadata
+    }
+}
+
 /// Event emitted by `AssistantMessageStream`. Mirrors pi-ai's
 /// `AssistantMessageEvent` discriminated union.
 public enum AssistantMessageEvent: Sendable, Hashable {

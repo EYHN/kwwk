@@ -51,6 +51,7 @@ struct AgentInitTests {
         let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
         #expect(agent.state.systemPrompt == "")
         #expect(agent.state.thinkingLevel == .off)
+        #expect(agent.state.verboseEnabled == false)
         #expect(agent.state.tools.isEmpty)
         #expect(agent.state.messages.isEmpty)
         #expect(agent.state.isStreaming == false)
@@ -101,6 +102,21 @@ struct AgentInitTests {
         agent.state.messages = messages
         messages.append(.user(UserMessage(text: "again")))
         #expect(agent.state.messages.count == 1)
+    }
+
+    @Test("coding agent carries configured session id into stream options")
+    func codingAgentKeepsSessionId() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let agent = await makeCodingAgent(CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: FileManager.default.temporaryDirectory.path,
+            tools: [],
+            sessionId: "stable-session"
+        ))
+
+        #expect(agent.sessionId == "stable-session")
     }
 }
 
@@ -317,6 +333,55 @@ struct AgentIntegrationTests {
             Issue.record("expected assistant message with thinking block")
         }
     }
+
+    @Test("bridges StreamOptions verbose callback into AgentEvent.verbose")
+    func bridgesVerboseEvents() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let streamFn: StreamFn = { model, _, options in
+            await options?.emitVerbose(
+                source: "test.provider",
+                message: "connected",
+                metadata: ["attempt": .int(1)]
+            )
+            let message = AssistantMessage(
+                content: [.text(TextContent(text: "ok"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id
+            )
+            let stream = AssistantMessageStream()
+            stream.push(.start(partial: message))
+            stream.push(.textStart(contentIndex: 0, partial: message))
+            stream.push(.textDelta(contentIndex: 0, delta: "ok", partial: message))
+            stream.push(.textEnd(contentIndex: 0, content: "ok", partial: message))
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+            return stream
+        }
+        let agent = Agent(
+            initialState: AgentInitialState(
+                model: registration.getModel(),
+                verboseEnabled: true
+            ),
+            streamFn: streamFn
+        )
+        let recorder = VerboseEventLog()
+        _ = agent.subscribe { event, _ in
+            if case .verbose(let verbose) = event {
+                await recorder.append(verbose)
+            }
+        }
+
+        try await agent.prompt("hi")
+
+        let events = await recorder.values()
+        #expect(events.count == 1)
+        #expect(events.first?.source == "test.provider")
+        #expect(events.first?.message == "connected")
+        #expect(events.first?.metadata["attempt"] == .int(1))
+    }
 }
 
 @Suite("Agent.continue")
@@ -454,6 +519,12 @@ actor EventLog {
     var log: [String] = []
     func append(_ s: String) { log.append(s) }
     func values() -> [String] { log }
+}
+
+actor VerboseEventLog {
+    var log: [VerboseEvent] = []
+    func append(_ event: VerboseEvent) { log.append(event) }
+    func values() -> [VerboseEvent] { log }
 }
 
 actor AsyncBarrier {

@@ -88,6 +88,12 @@ public struct StreamOptions: Sendable {
     /// Providers that lack an analog ignore this.
     public var parallelToolCalls: Bool?
 
+    /// Enables provider/internal diagnostic logging for this stream.
+    public var verbose: Bool?
+
+    /// Optional sink used by providers to surface verbose diagnostics.
+    public var onVerbose: (@Sendable (VerboseEvent) async -> Void)?
+
     public init(
         temperature: Double? = nil,
         maxTokens: Int? = nil,
@@ -102,7 +108,9 @@ public struct StreamOptions: Sendable {
         thinkingBudgets: ThinkingBudgets? = nil,
         cancellation: CancellationHandle? = nil,
         toolChoice: ToolChoice? = nil,
-        parallelToolCalls: Bool? = nil
+        parallelToolCalls: Bool? = nil,
+        verbose: Bool? = nil,
+        onVerbose: (@Sendable (VerboseEvent) async -> Void)? = nil
     ) {
         self.temperature = temperature
         self.maxTokens = maxTokens
@@ -118,5 +126,16 @@ public struct StreamOptions: Sendable {
         self.cancellation = cancellation
         self.toolChoice = toolChoice
         self.parallelToolCalls = parallelToolCalls
+        self.verbose = verbose
+        self.onVerbose = onVerbose
+    }
+
+    public func emitVerbose(
+        source: String,
+        message: String,
+        metadata: [String: JSONValue] = [:]
+    ) async {
+        guard verbose == true else { return }
+        await onVerbose?(VerboseEvent(source: source, message: message, metadata: metadata))
     }
 }

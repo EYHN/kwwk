@@ -14,6 +14,7 @@ public final class AgentState: @unchecked Sendable {
     private var _model: Model
     private var _thinkingLevel: ThinkingLevel
     private var _thinkingDisplay: ThinkingDisplay
+    private var _verboseEnabled: Bool
     private var _tools: [AgentTool]
     private var _messages: [Message]
     private var _isStreaming: Bool = false
@@ -26,6 +27,7 @@ public final class AgentState: @unchecked Sendable {
         model: Model,
         thinkingLevel: ThinkingLevel = .off,
         thinkingDisplay: ThinkingDisplay = .collapsed,
+        verboseEnabled: Bool = false,
         tools: [AgentTool] = [],
         messages: [Message] = []
     ) {
@@ -33,6 +35,7 @@ public final class AgentState: @unchecked Sendable {
         self._model = model
         self._thinkingLevel = thinkingLevel
         self._thinkingDisplay = thinkingDisplay
+        self._verboseEnabled = verboseEnabled
         self._tools = tools
         self._messages = messages
     }
@@ -57,6 +60,11 @@ public final class AgentState: @unchecked Sendable {
     public var thinkingDisplay: ThinkingDisplay {
         get { lock.withLock { _thinkingDisplay } }
         set { lock.withLock { _thinkingDisplay = newValue } }
+    }
+
+    public var verboseEnabled: Bool {
+        get { lock.withLock { _verboseEnabled } }
+        set { lock.withLock { _verboseEnabled = newValue } }
     }
 
     /// Array setter copies to prevent external aliasing. Reads return a
@@ -117,4 +125,3 @@ public final class AgentState: @unchecked Sendable {
         lock.withLock { _errorMessage = message }
     }
 }
-

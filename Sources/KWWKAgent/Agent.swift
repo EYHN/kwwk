@@ -13,6 +13,7 @@ public struct AgentInitialState: Sendable {
     public var model: Model
     public var thinkingLevel: ThinkingLevel
     public var thinkingDisplay: ThinkingDisplay
+    public var verboseEnabled: Bool
     public var tools: [AgentTool]
     public var messages: [Message]
 
@@ -21,6 +22,7 @@ public struct AgentInitialState: Sendable {
         model: Model,
         thinkingLevel: ThinkingLevel = .off,
         thinkingDisplay: ThinkingDisplay = .collapsed,
+        verboseEnabled: Bool = false,
         tools: [AgentTool] = [],
         messages: [Message] = []
     ) {
@@ -28,6 +30,7 @@ public struct AgentInitialState: Sendable {
         self.model = model
         self.thinkingLevel = thinkingLevel
         self.thinkingDisplay = thinkingDisplay
+        self.verboseEnabled = verboseEnabled
         self.tools = tools
         self.messages = messages
     }
@@ -161,6 +164,7 @@ public final class Agent: @unchecked Sendable {
             model: options.initialState.model,
             thinkingLevel: options.initialState.thinkingLevel,
             thinkingDisplay: options.initialState.thinkingDisplay,
+            verboseEnabled: options.initialState.verboseEnabled,
             tools: options.initialState.tools,
             messages: options.initialState.messages
         )
@@ -376,6 +380,7 @@ extension Agent {
             reasoning: effectiveReasoning,
             thinkingBudgets: thinkingBudgets,
             sessionId: sessionId,
+            verboseEnabled: state.verboseEnabled,
             maxRetryDelayMs: maxRetryDelayMs,
             toolExecution: toolExecution,
             toolChoice: toolChoice,

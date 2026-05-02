@@ -159,6 +159,9 @@ public enum AgentEvent: Sendable {
     /// produces a fresh `messageStart` + updates.
     case streamRewind
 
+    /// Diagnostic event emitted only when verbose mode is enabled.
+    case verbose(VerboseEvent)
+
     public var type: String {
         switch self {
         case .agentStart: return "agent_start"
@@ -173,6 +176,7 @@ public enum AgentEvent: Sendable {
         case .toolExecutionEnd: return "tool_execution_end"
         case .streamRetry: return "stream_retry"
         case .streamRewind: return "stream_rewind"
+        case .verbose: return "verbose"
         }
     }
 }

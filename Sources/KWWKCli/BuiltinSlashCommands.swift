@@ -28,6 +28,11 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
         handler: handleThinkingCommand
     ))
     registry.register(SlashCommand(
+        name: "verbose",
+        description: "Toggle verbose provider/internal diagnostics",
+        handler: handleVerboseCommand
+    ))
+    registry.register(SlashCommand(
         name: "help",
         description: "List available slash commands",
         handler: { ctx, _ in
@@ -155,6 +160,42 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
         maxTokens: resolvedMaxTokens,
         headers: current.headers
     )
+}
+
+// MARK: - /verbose
+
+/// `/verbose` toggles verbose provider/internal diagnostics for subsequent
+/// requests. `/verbose on|off|status` sets or reads the mode explicitly.
+@MainActor
+private func handleVerboseCommand(_ ctx: SlashContext, _ args: String) async {
+    let trimmed = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let previous = ctx.agent.state.verboseEnabled
+
+    let next: Bool?
+    switch trimmed {
+    case "", "toggle":
+        next = !previous
+    case "on", "enable", "enabled", "true", "yes":
+        next = true
+    case "off", "disable", "disabled", "false", "no":
+        next = false
+    case "status":
+        next = nil
+    default:
+        ctx.notify(Style.error("  /verbose: unknown arg '\(args)'. Try /verbose, /verbose on, /verbose off, or /verbose status"))
+        return
+    }
+
+    if let next {
+        ctx.agent.state.verboseEnabled = next
+        if next == previous {
+            ctx.notify(Style.dimmed("  /verbose: already \(next ? "on" : "off")"))
+        } else {
+            ctx.notify(Style.dimmed("  /verbose: \(previous ? "on" : "off") → \(next ? "on" : "off")"))
+        }
+    } else {
+        ctx.notify(Style.dimmed("  /verbose: \(previous ? "on" : "off")"))
+    }
 }
 
 // MARK: - /thinking
