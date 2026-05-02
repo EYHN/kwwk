@@ -8,6 +8,14 @@ public protocol APIProvider: Sendable {
     func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream
 }
 
+/// Optional provider lifecycle hook for resources keyed by
+/// `StreamOptions.sessionId` (for example, persistent WebSocket
+/// connections). Providers that do not keep per-session resources do not need
+/// to conform.
+public protocol APIProviderSessionLifecycle: Sendable {
+    func closeSession(sessionId: String) async
+}
+
 /// A globally addressable registry of `APIProvider` instances, keyed by
 /// `api` string. Registrations can be tagged with an opaque `sourceId` so
 /// groups of providers can be removed together.
@@ -43,6 +51,15 @@ public actor APIRegistry {
             providers.removeValue(forKey: api)
         }
     }
+
+    public func closeSession(sessionId: String) async {
+        guard !sessionId.isEmpty else { return }
+        let snapshot = Array(providers.values)
+        for provider in snapshot {
+            guard let lifecycle = provider as? APIProviderSessionLifecycle else { continue }
+            await lifecycle.closeSession(sessionId: sessionId)
+        }
+    }
 }
 
 public enum ProviderNotFoundError: Error, Equatable {
@@ -64,4 +81,12 @@ public func complete(model: Model, context: Context, options: StreamOptions? = n
     // Drain events so producers aren't blocked waiting for consumption.
     for await _ in s {}
     return await s.result()
+}
+
+/// Close provider-owned resources associated with a session id across every
+/// registered provider. This is intentionally provider-scoped: higher layers
+/// remain responsible for their own session-scoped resources such as
+/// background tasks.
+public func closeProviderSession(sessionId: String) async {
+    await APIRegistry.shared.closeSession(sessionId: sessionId)
 }

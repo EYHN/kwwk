@@ -24,7 +24,7 @@ struct EscapeKeyFlushTests {
         #expect(fired.get() == false)
 
         // Wait past the flush timer + scheduler jitter. 250ms is generous.
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        _ = await waitUntil { fired.get() == true }
         #expect(fired.get() == true, "standalone ESC was never delivered")
     }
 
@@ -53,12 +53,25 @@ struct EscapeKeyFlushTests {
         runner.bind(.init("escape")) { _ in count.bump() }
 
         runner.ingest(Data([0x1B]))
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        _ = await waitUntil { count.get() == 1 }
         runner.ingest(Data([0x1B]))
-        try? await Task.sleep(nanoseconds: 150_000_000)
+        _ = await waitUntil { count.get() == 2 }
 
         #expect(count.get() == 2)
     }
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    pollNanoseconds: UInt64 = 20_000_000,
+    _ predicate: @escaping @Sendable () -> Bool
+) async -> Bool {
+    let deadline = ContinuousClock.now + .nanoseconds(Int(timeoutNanoseconds))
+    while ContinuousClock.now < deadline {
+        if predicate() { return true }
+        try? await Task.sleep(nanoseconds: pollNanoseconds)
+    }
+    return predicate()
 }
 
 // MARK: - Thread-safe test bookkeeping

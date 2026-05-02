@@ -38,8 +38,10 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     deinit {
         // Best-effort cleanup — the login flow calls `stop()` or `cancel()`
         // explicitly, but a leak-safe deinit prevents a zombie event loop
-        // when callers drop the server without finishing the flow.
-        try? group.syncShutdownGracefully()
+        // when callers drop the server without finishing the flow. Deinit can
+        // run on the NIO event loop that just closed the callback channel, so
+        // use the asynchronous shutdown API instead of blocking that thread.
+        group.shutdownGracefully { _ in }
     }
 
     public var redirectURI: String {

@@ -203,6 +203,18 @@ public actor BackgroundTaskManager {
         for id in ids { try? kill(id) }
     }
 
+    /// Close a logical session owned by a higher-level runtime.
+    ///
+    /// This is intentionally generic: the manager does not know whether the
+    /// session belongs to a CLI run, a subagent, a test harness, or another
+    /// caller. Closing a session cancels any still-running tasks in that
+    /// session and discards queued notifications for that session, because
+    /// the owner is going away and can no longer consume them.
+    public func closeSession(sessionId: String) {
+        killAll(sessionId: sessionId)
+        _ = drainNotifications(sessionId: sessionId)
+    }
+
     /// Snapshot of one task (running or terminal).
     public func get(_ taskId: String) -> BackgroundTaskSnapshot? {
         tasks[taskId].map { snapshot(id: taskId, entry: $0) }

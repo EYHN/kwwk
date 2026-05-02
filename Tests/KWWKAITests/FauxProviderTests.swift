@@ -16,6 +16,21 @@ struct FauxProviderTests {
 
     // MARK: - registration & simple completion
 
+    @Test("cancellation listener registration can be removed")
+    func cancellationRegistrationCanBeRemoved() {
+        let cancellation = CancellationHandle()
+        final class Box: @unchecked Sendable {
+            var count = 0
+        }
+        let box = Box()
+        let registration = cancellation.onCancel { _ in box.count += 1 }
+        registration.cancel()
+
+        cancellation.cancel(reason: "test")
+
+        #expect(box.count == 0)
+    }
+
     @Test("registers a custom provider and estimates usage")
     func registersAndEstimatesUsage() async throws {
         let registration = await registerFauxProvider()
@@ -613,5 +628,40 @@ struct APIRegistryTests {
                 context: Context(messages: [.user(UserMessage(text: "hi"))])
             )
         }
+    }
+
+    @Test("closeProviderSession notifies lifecycle-aware providers")
+    func closeProviderSessionNotifiesLifecycleProvider() async {
+        let provider = LifecycleTrackingProvider(api: "lifecycle-\(UUID().uuidString)")
+        let sourceId = "lifecycle-test-\(UUID().uuidString)"
+        await APIRegistry.shared.register(provider, sourceId: sourceId)
+
+        let sessionId = "session-\(UUID().uuidString)"
+        await closeProviderSession(sessionId: sessionId)
+
+        #expect(provider.closedSessions.contains(sessionId))
+        await APIRegistry.shared.unregisterSource(sourceId)
+    }
+}
+
+private final class LifecycleTrackingProvider: APIProvider, APIProviderSessionLifecycle, @unchecked Sendable {
+    let api: String
+    private let lock = NSLock()
+    private var sessions: [String] = []
+
+    init(api: String) {
+        self.api = api
+    }
+
+    var closedSessions: [String] {
+        lock.withLock { sessions }
+    }
+
+    func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
+        AssistantMessageStream()
+    }
+
+    func closeSession(sessionId: String) async {
+        lock.withLock { sessions.append(sessionId) }
     }
 }

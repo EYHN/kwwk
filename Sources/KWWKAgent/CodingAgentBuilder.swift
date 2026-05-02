@@ -49,7 +49,11 @@ public struct CodingAgentConfig: Sendable {
     /// agent's notification bridge (so `<task-notification>` user messages
     /// appear at turn boundaries).
     public var backgroundManager: BackgroundTaskManager?
+    /// Programmatic subagents available to the model through the `agent` tool.
+    /// When empty, no `agent` tool is registered.
+    public var subagents: [SubagentDefinition]
     public var sessionId: String
+    public var apiKeyResolver: (@Sendable (String) async -> String?)?
     /// Soft foreground timeout for bash commands. The command auto-moves to
     /// the background on this deadline when a `backgroundManager` is attached.
     public var bashDefaultTimeoutSeconds: Int
@@ -61,7 +65,9 @@ public struct CodingAgentConfig: Sendable {
         tools: CodingTools = .all,
         systemPrompt: String? = nil,
         backgroundManager: BackgroundTaskManager? = nil,
+        subagents: [SubagentDefinition] = [],
         sessionId: String = UUID().uuidString,
+        apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600
     ) {
@@ -70,9 +76,27 @@ public struct CodingAgentConfig: Sendable {
         self.tools = tools
         self.systemPrompt = systemPrompt
         self.backgroundManager = backgroundManager
+        self.subagents = subagents
         self.sessionId = sessionId
+        self.apiKeyResolver = apiKeyResolver
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+    }
+}
+
+public extension CodingAgentConfig {
+    func withBuiltinSubagents(
+        _ selection: BuiltinSubagentSelection = .all
+    ) -> CodingAgentConfig {
+        var copy = self
+        copy.subagents = SubagentDefinition.builtins(for: copy.tools, selection: selection)
+        return copy
+    }
+
+    mutating func useBuiltinSubagents(
+        _ selection: BuiltinSubagentSelection = .all
+    ) {
+        subagents = SubagentDefinition.builtins(for: tools, selection: selection)
     }
 }
 
@@ -95,30 +119,31 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
     let bgManager = config.backgroundManager
     let sessionId = config.sessionId
 
-    var tools: [AgentTool] = []
-    if config.tools.contains(.read)  { tools.append(createReadTool(cwd: cwd)) }
-    if config.tools.contains(.write) { tools.append(createWriteTool(cwd: cwd)) }
-    if config.tools.contains(.edit)  { tools.append(createEditTool(cwd: cwd)) }
-    if config.tools.contains(.bash) {
-        tools.append(createBashTool(cwd: cwd, options: BashToolOptions(
-            defaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
-            maxTimeoutSeconds: config.bashMaxTimeoutSeconds,
-            manager: bgManager,
+    var tools = await buildCodingToolList(
+        cwd: cwd,
+        selected: config.tools,
+        backgroundManager: bgManager,
+        sessionId: sessionId,
+        bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
+        bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds
+    )
+    let subagentParent = SubagentParentBox(
+        fallbackModel: config.model,
+        fallbackThinkingLevel: .off,
+        fallbackThinkingBudgets: nil,
+        fallbackMaxRetryDelayMs: nil,
+        fallbackAPIKeyResolver: config.apiKeyResolver
+    )
+    if !config.subagents.isEmpty {
+        tools.append(_createAgentTool(
+            cwd: cwd,
+            subagents: config.subagents,
+            backgroundManager: bgManager,
             sessionId: sessionId,
-            autoBackgroundOnTimeout: true
-        )))
-    }
-    if config.tools.contains(.grep) { tools.append(createGrepTool(cwd: cwd)) }
-    if config.tools.contains(.find) { tools.append(createFindTool(cwd: cwd)) }
-    if config.tools.contains(.ls)   { tools.append(createLSTool(cwd: cwd)) }
-    if config.tools.contains(.taskStatus), let bgManager {
-        tools.append(createTaskStatusTool(manager: bgManager, sessionId: sessionId))
-    }
-    if config.tools.contains(.waitTask), let bgManager {
-        tools.append(createWaitTaskTool(manager: bgManager, sessionId: sessionId))
-    }
-    if config.tools.contains(.tmux), let tmuxTool = await createTmuxTool(bgManager: bgManager, sessionId: sessionId) {
-        tools.append(tmuxTool)
+            parentSnapshot: { subagentParent.snapshot() },
+            bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
+            bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds
+        ))
     }
 
     let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(
@@ -127,18 +152,57 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         toolSnippets: DefaultToolSnippets.all
     ))
 
-    let agent = Agent(
+    let agent = Agent(options: AgentOptions(
         initialState: AgentInitialState(
             systemPrompt: systemPrompt,
             model: config.model,
             tools: tools
         ),
-        sessionId: sessionId
-    )
+        sessionId: sessionId,
+        apiKeyResolver: config.apiKeyResolver
+    ))
+    subagentParent.attach(agent)
 
     if let bgManager {
         _ = await agent.attachBackgroundManager(bgManager, sessionId: sessionId)
     }
 
     return agent
+}
+
+internal func buildCodingToolList(
+    cwd: String,
+    selected: CodingTools,
+    backgroundManager: BackgroundTaskManager?,
+    sessionId: String?,
+    bashDefaultTimeoutSeconds: Int = 120,
+    bashMaxTimeoutSeconds: Int = 600
+) async -> [AgentTool] {
+    var tools: [AgentTool] = []
+    if selected.contains(.read)  { tools.append(createReadTool(cwd: cwd)) }
+    if selected.contains(.write) { tools.append(createWriteTool(cwd: cwd)) }
+    if selected.contains(.edit)  { tools.append(createEditTool(cwd: cwd)) }
+    if selected.contains(.bash) {
+        tools.append(createBashTool(cwd: cwd, options: BashToolOptions(
+            defaultTimeoutSeconds: bashDefaultTimeoutSeconds,
+            maxTimeoutSeconds: bashMaxTimeoutSeconds,
+            manager: backgroundManager,
+            sessionId: sessionId,
+            autoBackgroundOnTimeout: true
+        )))
+    }
+    if selected.contains(.grep) { tools.append(createGrepTool(cwd: cwd)) }
+    if selected.contains(.find) { tools.append(createFindTool(cwd: cwd)) }
+    if selected.contains(.ls)   { tools.append(createLSTool(cwd: cwd)) }
+    if selected.contains(.taskStatus), let backgroundManager {
+        tools.append(createTaskStatusTool(manager: backgroundManager, sessionId: sessionId))
+    }
+    if selected.contains(.waitTask), let backgroundManager {
+        tools.append(createWaitTaskTool(manager: backgroundManager, sessionId: sessionId))
+    }
+    if selected.contains(.tmux),
+       let tmuxTool = await createTmuxTool(bgManager: backgroundManager, sessionId: sessionId) {
+        tools.append(tmuxTool)
+    }
+    return tools
 }

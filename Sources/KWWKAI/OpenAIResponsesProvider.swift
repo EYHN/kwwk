@@ -17,7 +17,7 @@ import FoundationNetworking
 ///  - Output items are typed (`message`, `function_call`, `reasoning`) and
 ///    carry `output_index` + `content_index` for nested content.
 ///  - `parallel_tool_calls` is a top-level boolean.
-public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
+public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifecycle, @unchecked Sendable {
     public typealias URLBuilder = @Sendable (Model, StreamOptions?, URL) -> URL
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
     public typealias WebSocketURLBuilder = @Sendable (URL) -> URL
@@ -82,6 +82,10 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
         let out = AssistantMessageStream()
         Task.detached { await self.run(out: out, model: model, context: context, options: options) }
         return out
+    }
+
+    public func closeSession(sessionId: String) async {
+        sessions.closeSession(sessionId: sessionId)
     }
 
     private func run(
@@ -249,6 +253,8 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
         defer { session.endWebSocketRun() }
 
         var connection: (any WebSocketConnection)?
+        var cancellationRegistration: CancellationRegistration?
+        defer { cancellationRegistration?.cancel() }
         do {
             if let existing = session.takeConnection() {
                 connection = existing
@@ -268,6 +274,10 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                     message: "connected"
                 )
             }
+            if let connection {
+                session.storeConnection(connection)
+                cancellationRegistration = options?.cancellation?.onCancel { _ in connection.close() }
+            }
             let payload = try session.prepareWebSocketPayload(from: request)
             try await connection?.send(.text(payload.text))
             var metadata: [String: JSONValue] = [
@@ -283,7 +293,6 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                 metadata: metadata
             )
         } catch {
-            connection?.close()
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             await options?.emitVerbose(
                 source: verboseSource,
@@ -333,7 +342,6 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                     metadata: ["response_id": .string(responseId)]
                 )
             } else if result.endedWithoutTerminalEvent {
-                connection.close()
                 let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
                 if !progress.hasReceivedEvent {
                     await options?.emitVerbose(
@@ -363,7 +371,6 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                 out.end(err)
                 return .failedWithoutFallback
             } else {
-                connection.close()
                 session.resetWebSocketState(resetFailureCount: progress.hasReceivedEvent)
                 await options?.emitVerbose(
                     source: verboseSource,
@@ -373,7 +380,6 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
             }
             return .completed
         } catch {
-            connection.close()
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             if !progress.hasReceivedEvent {
                 await options?.emitVerbose(
@@ -903,6 +909,12 @@ private final class OpenAIResponsesSessionStore: @unchecked Sendable {
             return created
         }
     }
+
+    func closeSession(sessionId: String) {
+        guard !sessionId.isEmpty else { return }
+        let session = lock.withLock { sessions.removeValue(forKey: sessionId) }
+        session?.close()
+    }
 }
 
 private final class OpenAIResponsesSessionState: @unchecked Sendable {
@@ -913,14 +925,19 @@ private final class OpenAIResponsesSessionState: @unchecked Sendable {
     private var webSocketFailureCount = 0
     private var disabled = false
     private var webSocketInFlight = false
+    private var closed = false
+
+    deinit {
+        close()
+    }
 
     var webSocketDisabled: Bool {
-        lock.withLock { disabled }
+        lock.withLock { disabled || closed }
     }
 
     func beginWebSocketRun() -> OpenAIResponsesWebSocketRunLease {
         lock.withLock {
-            if disabled { return .disabled }
+            if disabled || closed { return .disabled }
             if webSocketInFlight { return .busy }
             webSocketInFlight = true
             return .acquired
@@ -940,7 +957,14 @@ private final class OpenAIResponsesSessionState: @unchecked Sendable {
     }
 
     func storeConnection(_ next: any WebSocketConnection) {
-        lock.withLock { connection = next }
+        let shouldClose = lock.withLock { () -> Bool in
+            guard !closed else { return true }
+            connection = next
+            return false
+        }
+        if shouldClose {
+            next.close()
+        }
     }
 
     @discardableResult
@@ -970,6 +994,20 @@ private final class OpenAIResponsesSessionState: @unchecked Sendable {
         let old = lock.withLock { () -> (any WebSocketConnection)? in
             if disable { disabled = true }
             if resetFailureCount { webSocketFailureCount = 0 }
+            let old = connection
+            connection = nil
+            lastRequest = nil
+            lastResponse = nil
+            return old
+        }
+        old?.close()
+    }
+
+    func close() {
+        let old = lock.withLock { () -> (any WebSocketConnection)? in
+            closed = true
+            disabled = true
+            webSocketInFlight = false
             let old = connection
             connection = nil
             lastRequest = nil
