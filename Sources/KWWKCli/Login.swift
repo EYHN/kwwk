@@ -30,11 +30,6 @@ private let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
-        id: "google-gemini-cli",
-        display: "Gemini CLI (Google Cloud Code Assist)",
-        flow: .oauth
-    ),
-    LoginEntry(
         id: "github-copilot",
         display: "GitHub Copilot",
         flow: .oauth
@@ -294,8 +289,6 @@ private func runOAuthFlow(providerId: String) async throws {
             credentials = try await OAuthLogin.loginAnthropic()
         case "openai-codex":
             credentials = try await OAuthLogin.loginOpenAICodex()
-        case "google-gemini-cli":
-            credentials = try await OAuthLogin.loginGeminiCLI()
         case "github-copilot":
             credentials = try await OAuthLogin.loginGitHubCopilot()
         default:

@@ -331,6 +331,22 @@ To use a subscription (OAuth) token instead of a raw API key, drive the
 flow via `KWWKAI.OAuth` / `OAuthLogin` — the same code path the CLI's
 `kwwk login` command uses.
 
+### Updating the model catalog
+
+`/model` reads the bundled catalog at
+`Sources/KWWKAI/Resources/models.json`, generated from pi-mono's
+`packages/ai/src/models.generated.ts`.
+
+```sh
+swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts
+swift test
+```
+
+The generator writes `Sources/KWWKAI/Resources/models.json` by default
+and intentionally drops the upstream `google-gemini-cli` and
+`google-antigravity` provider groups, because kwwk does not ship those
+subscription/OAuth surfaces.
+
 ---
 
 ## Layout
@@ -348,12 +364,12 @@ swift test
 ## A note on OAuth client IDs
 
 `Sources/KWWKAI/OAuthProviders.swift` reuses the OAuth client IDs (and,
-for Google, the client secret) shipped by the upstream first-party CLIs
-— Anthropic's Claude Code, OpenAI's Codex CLI, Google's Gemini CLI, and
-GitHub Copilot's VS Code extension. Those credentials are not secrets
-in any meaningful sense — they are embedded in those open-source CLIs
-and are required for the "log in with your existing subscription" flow
-to work. They remain the property of their respective vendors, who may
+where applicable, public app metadata) shipped by the upstream
+first-party CLIs — Anthropic's Claude Code, OpenAI's Codex CLI, and
+GitHub Copilot's VS Code extension. Those credentials are not secrets in
+any meaningful sense — they are embedded in those open-source CLIs and
+are required for the "log in with your existing subscription" flow to
+work. They remain the property of their respective vendors, who may
 rotate or revoke them at any time. `kwwk` is not affiliated with or
 endorsed by any of these vendors.
 

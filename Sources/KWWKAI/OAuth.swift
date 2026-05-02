@@ -167,8 +167,6 @@ public actor OAuthManager {
     public static func defaultProviders() -> [OAuthProvider] {
         [
             AnthropicOAuthProvider(),
-            GoogleOAuthProvider.geminiCli(),
-            GoogleOAuthProvider.antigravity(),
             OpenAICodexOAuthProvider(),
             GitHubCopilotOAuthProvider(),
         ]
@@ -219,8 +217,6 @@ public actor OAuthManager {
         case "anthropic": return "anthropic"
         case "github-copilot": return "github-copilot"
         case "openai-codex": return "openai-codex"
-        case "google-gemini-cli": return "google-gemini-cli"
-        case "google-antigravity": return "google-antigravity"
         default: return provider
         }
     }

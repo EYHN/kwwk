@@ -114,39 +114,6 @@ struct AnthropicOAuthTests {
     }
 }
 
-@Suite("OAuth refresh — Google (Gemini CLI)")
-struct GoogleOAuthTests {
-    @Test("POSTs x-www-form-urlencoded body") func geminiRefresh() async throws {
-        let body = #"{"access_token":"gca","refresh_token":"gcr","expires_in":3600}"#
-        let client = StubResponseClient(body: Data(body.utf8))
-        let provider = GoogleOAuthProvider.geminiCli()
-        _ = try await provider.refresh(
-            OAuthCredentials(access: "a", refresh: "r", expires: 0, extras: ["projectId": .string("p-1")]),
-            using: client
-        )
-        let req = client.lastRequest!
-        #expect(req.headers["content-type"] == "application/x-www-form-urlencoded")
-        let sent = String(data: req.body ?? Data(), encoding: .utf8) ?? ""
-        #expect(sent.contains("grant_type=refresh_token"))
-        #expect(sent.contains("refresh_token=r"))
-        #expect(sent.contains("client_id="))
-        #expect(sent.contains("client_secret="))
-    }
-
-    @Test("preserves extras across refresh") func preservesExtras() async throws {
-        let body = #"{"access_token":"a2","expires_in":100}"#
-        let client = StubResponseClient(body: Data(body.utf8))
-        let updated = try await GoogleOAuthProvider.geminiCli().refresh(
-            OAuthCredentials(
-                access: "a1", refresh: "r1", expires: 0,
-                extras: ["projectId": .string("abc")]
-            ),
-            using: client
-        )
-        #expect(updated.extras["projectId"] == .string("abc"))
-    }
-}
-
 @Suite("OAuth refresh — OpenAI Codex")
 struct OpenAICodexOAuthTests {
     @Test("form POST + persists accountId from JWT") func codexRefresh() async throws {
