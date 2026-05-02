@@ -33,6 +33,11 @@ public typealias StreamFn = @Sendable (Model, Context, StreamOptions?) async thr
 public struct AgentToolResult: Sendable, Hashable {
     public var content: [ToolResultBlock]
     public var details: JSONValue?
+    /// Structured runtime events produced by the tool. The agent loop
+    /// forwards these as `AgentEvent.runtimeEvent` after the corresponding
+    /// tool update/end event. They are process-local telemetry; providers
+    /// never see them.
+    public var runtimeEvents: [AgentRuntimeEvent]?
     /// Optional UI-only display lines. When non-nil, the TUI renderer
     /// prefers these over its default truncated preview of `content`.
     /// Tools use this to summarize noisy output for the user (e.g.
@@ -46,15 +51,91 @@ public struct AgentToolResult: Sendable, Hashable {
     public init(
         content: [ToolResultBlock],
         details: JSONValue? = nil,
+        runtimeEvents: [AgentRuntimeEvent]? = nil,
         uiDisplay: [String]? = nil
     ) {
         self.content = content
         self.details = details
+        self.runtimeEvents = runtimeEvents
         self.uiDisplay = uiDisplay
     }
 }
 
 public typealias AgentToolUpdate = @Sendable (AgentToolResult) -> Void
+
+public enum SubagentLifecycleKind: String, Sendable, Hashable {
+    case started = "subagent_started"
+    case toolUpdate = "subagent_tool_update"
+    case backgroundStarted = "subagent_background_started"
+    case completed = "subagent_completed"
+    case failed = "subagent_failed"
+}
+
+public struct SubagentLifecycleEvent: Sendable, Hashable {
+    public var kind: SubagentLifecycleKind
+    public var toolCallId: String?
+    public var subagentType: String
+    public var childSessionId: String
+    public var description: String?
+    public var model: String?
+    public var stopReason: StopReason?
+    public var usage: Usage?
+    public var usageEstimated: Bool
+    public var turns: Int?
+    public var cost: Cost?
+    public var durationMs: Int?
+    public var backgroundTaskId: String?
+    public var outputFile: String?
+    public var message: String?
+    public var errorMessage: String?
+
+    public init(
+        kind: SubagentLifecycleKind,
+        toolCallId: String? = nil,
+        subagentType: String,
+        childSessionId: String,
+        description: String? = nil,
+        model: String? = nil,
+        stopReason: StopReason? = nil,
+        usage: Usage? = nil,
+        usageEstimated: Bool = false,
+        turns: Int? = nil,
+        cost: Cost? = nil,
+        durationMs: Int? = nil,
+        backgroundTaskId: String? = nil,
+        outputFile: String? = nil,
+        message: String? = nil,
+        errorMessage: String? = nil
+    ) {
+        self.kind = kind
+        self.toolCallId = toolCallId
+        self.subagentType = subagentType
+        self.childSessionId = childSessionId
+        self.description = description
+        self.model = model
+        self.stopReason = stopReason
+        self.usage = usage
+        self.usageEstimated = usageEstimated
+        self.turns = turns
+        self.cost = cost
+        self.durationMs = durationMs
+        self.backgroundTaskId = backgroundTaskId
+        self.outputFile = outputFile
+        self.message = message
+        self.errorMessage = errorMessage
+    }
+}
+
+public enum AgentRuntimeEvent: Sendable, Hashable {
+    case subagent(SubagentLifecycleEvent)
+
+    public var type: String {
+        switch self {
+        case .subagent(let event):
+            return event.kind.rawValue
+        }
+    }
+}
 
 /// Tool executed by the agent. Throwing from `execute` is how tools report
 /// failures — the agent loop will turn the error into an error tool result.
@@ -113,19 +194,77 @@ public struct AgentRunSummary: Sendable {
     /// or the provider's native reason. Nil if the run emitted no
     /// assistant messages at all.
     public var finalStopReason: StopReason?
+    /// Subagent invocations observed during this run. Foreground subagents
+    /// carry final usage; background subagents are recorded at spawn time and
+    /// report completion through background-task notifications.
+    public var subagents: [SubagentRunSummary]
 
     public init(
         turns: Int = 0,
         usage: Usage = Usage(),
         cost: Cost = Cost(),
         durationMs: Int = 0,
-        finalStopReason: StopReason? = nil
+        finalStopReason: StopReason? = nil,
+        subagents: [SubagentRunSummary] = []
     ) {
         self.turns = turns
         self.usage = usage
         self.cost = cost
         self.durationMs = durationMs
         self.finalStopReason = finalStopReason
+        self.subagents = subagents
+    }
+}
+
+public enum SubagentRunStatus: String, Sendable, Hashable {
+    case completed
+    case backgroundStarted = "background_started"
+    case failed
+}
+
+public struct SubagentRunSummary: Sendable, Hashable {
+    public var subagentType: String
+    public var childSessionId: String?
+    public var description: String?
+    public var status: SubagentRunStatus
+    public var model: String?
+    public var stopReason: StopReason?
+    public var usage: Usage?
+    public var turns: Int?
+    public var cost: Cost?
+    public var durationMs: Int?
+    public var backgroundTaskId: String?
+    public var outputFile: String?
+    public var errorMessage: String?
+
+    public init(
+        subagentType: String,
+        childSessionId: String? = nil,
+        description: String? = nil,
+        status: SubagentRunStatus,
+        model: String? = nil,
+        stopReason: StopReason? = nil,
+        usage: Usage? = nil,
+        turns: Int? = nil,
+        cost: Cost? = nil,
+        durationMs: Int? = nil,
+        backgroundTaskId: String? = nil,
+        outputFile: String? = nil,
+        errorMessage: String? = nil
+    ) {
+        self.subagentType = subagentType
+        self.childSessionId = childSessionId
+        self.description = description
+        self.status = status
+        self.model = model
+        self.stopReason = stopReason
+        self.usage = usage
+        self.turns = turns
+        self.cost = cost
+        self.durationMs = durationMs
+        self.backgroundTaskId = backgroundTaskId
+        self.outputFile = outputFile
+        self.errorMessage = errorMessage
     }
 }
 
@@ -144,6 +283,7 @@ public enum AgentEvent: Sendable {
     case toolExecutionStart(toolCallId: String, toolName: String, args: JSONValue)
     case toolExecutionUpdate(toolCallId: String, toolName: String, args: JSONValue, partialResult: AgentToolResult)
     case toolExecutionEnd(toolCallId: String, toolName: String, result: AgentToolResult, isError: Bool)
+    case runtimeEvent(AgentRuntimeEvent)
 
     /// Emitted just before the agent loop sleeps to back off after a
     /// retryable stream failure. `attempt` is zero-indexed and counts the
@@ -174,10 +314,29 @@ public enum AgentEvent: Sendable {
         case .toolExecutionStart: return "tool_execution_start"
         case .toolExecutionUpdate: return "tool_execution_update"
         case .toolExecutionEnd: return "tool_execution_end"
+        case .runtimeEvent(let event): return event.type
         case .streamRetry: return "stream_retry"
         case .streamRewind: return "stream_rewind"
         case .verbose: return "verbose"
         }
+    }
+}
+
+internal struct StructuredToolExecutionError: LocalizedError, @unchecked Sendable {
+    let message: String
+    let details: JSONValue?
+    let runtimeEvents: [AgentRuntimeEvent]?
+
+    var errorDescription: String? { message }
+
+    init(
+        message: String,
+        details: JSONValue? = nil,
+        runtimeEvents: [AgentRuntimeEvent]? = nil
+    ) {
+        self.message = message
+        self.details = details
+        self.runtimeEvents = runtimeEvents
     }
 }
 

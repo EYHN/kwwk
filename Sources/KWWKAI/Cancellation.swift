@@ -6,11 +6,23 @@ import Foundation
 /// can be cancelled from the outside. Swift has `Task.isCancelled`, but it
 /// only applies to the calling task — so we model an external handle that can
 /// be awaited and queried by producers and consumers alike.
+public struct CancellationRegistration: Sendable {
+    private let cancelHandler: @Sendable () -> Void
+
+    init(_ cancelHandler: @escaping @Sendable () -> Void) {
+        self.cancelHandler = cancelHandler
+    }
+
+    public func cancel() {
+        cancelHandler()
+    }
+}
+
 public final class CancellationHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var _isCancelled = false
     private var _reason: String?
-    private var listeners: [@Sendable (String?) -> Void] = []
+    private var listeners: [(id: UUID, handler: @Sendable (String?) -> Void)] = []
 
     public init() {}
 
@@ -36,7 +48,7 @@ public final class CancellationHandle: @unchecked Sendable {
         }
         _isCancelled = true
         _reason = reason
-        callbacks = listeners
+        callbacks = listeners.map(\.handler)
         listeners.removeAll()
         lock.unlock()
         for cb in callbacks {
@@ -46,15 +58,26 @@ public final class CancellationHandle: @unchecked Sendable {
 
     /// Register a callback that fires exactly once when the handle is cancelled.
     /// If already cancelled, fires synchronously.
-    public func onCancel(_ handler: @Sendable @escaping (String?) -> Void) {
+    @discardableResult
+    public func onCancel(_ handler: @Sendable @escaping (String?) -> Void) -> CancellationRegistration {
+        let id = UUID()
         lock.lock()
         if _isCancelled {
             let r = _reason
             lock.unlock()
             handler(r)
-            return
+            return CancellationRegistration {}
         }
-        listeners.append(handler)
+        listeners.append((id: id, handler: handler))
+        lock.unlock()
+        return CancellationRegistration { [weak self] in
+            self?.removeListener(id)
+        }
+    }
+
+    private func removeListener(_ id: UUID) {
+        lock.lock()
+        listeners.removeAll { $0.id == id }
         lock.unlock()
     }
 

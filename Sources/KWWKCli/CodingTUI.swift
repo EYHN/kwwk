@@ -12,6 +12,7 @@ func runCodingTUIInternal(
     modelLabel: String,
     cwd: String,
     tools: CodingTools,
+    builtinSubagents: BuiltinSubagentSelection = .all,
     apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
     autoCompactThreshold: Double? = 0.75,
     thinkingLevel: ThinkingLevel = .medium
@@ -24,13 +25,10 @@ func runCodingTUIInternal(
         cwd: cwd,
         tools: tools,
         backgroundManager: bgManager,
-        sessionId: sessionId
+        subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
+        sessionId: sessionId,
+        apiKeyResolver: apiKeyResolver
     ))
-    // Wire the OAuth resolver (Codex) so access tokens refresh on every
-    // stream request. Nil for static api-key providers like Anthropic.
-    if let apiKeyResolver {
-        agent.apiKeyResolver = apiKeyResolver
-    }
     // Turn on extended thinking by default — otherwise reasoning-capable
     // providers never produce `[thinking]` blocks. The level is a user
     // intent: the agent loop filters it to `nil` when the live model
@@ -539,14 +537,23 @@ func runCodingTUIInternal(
     }
     defer { pollTask.cancel() }
 
-    try await runner.run()
+    let shutdown: @MainActor @Sendable () async -> Void = {
+        // Kill any still-running background tasks, close provider-held
+        // session resources, and tear down the isolated tmux socket so we
+        // don't leak processes after the user exits.
+        pollTask.cancel()
+        await agent.abortAndKillBackgroundTasks()
+        await agent.closeSession()
+        await TmuxSessionManager.shared.teardown()
+    }
 
-    // Shutdown cleanup: kill any still-running background tasks and
-    // tear down the isolated tmux socket so we don't leak processes
-    // after the user exits.
-    pollTask.cancel()
-    await agent.abortAndKillBackgroundTasks()
-    await TmuxSessionManager.shared.teardown()
+    do {
+        try await runner.run()
+    } catch {
+        await shutdown()
+        throw error
+    }
+    await shutdown()
 }
 
 // MARK: - Helpers

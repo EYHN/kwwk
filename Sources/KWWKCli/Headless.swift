@@ -27,6 +27,7 @@ func runHeadlessInternal(
     prompt text: String,
     cwd: String,
     tools: CodingTools,
+    builtinSubagents: BuiltinSubagentSelection = .all,
     thinkingLevel: ThinkingLevel = .medium,
     autoCompactThreshold: Double? = 0.75,
     modelOverride: String? = nil,
@@ -41,11 +42,10 @@ func runHeadlessInternal(
         cwd: cwd,
         tools: tools,
         backgroundManager: bgManager,
-        sessionId: sessionId
+        subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
+        sessionId: sessionId,
+        apiKeyResolver: resolved.apiKeyResolver
     ))
-    if let apiKeyResolver = resolved.apiKeyResolver {
-        agent.apiKeyResolver = apiKeyResolver
-    }
     agent.state.thinkingLevel = thinkingLevel
 
     // Auto-compact: watch per-turn usage and summarize the transcript
@@ -120,12 +120,14 @@ func runHeadlessInternal(
     do {
         try await agent.prompt(text)
     } catch {
+        await agent.closeSession()
         let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         writeStderr("kwwk: \(msg)\n")
         return 1
     }
 
     let stop = box.lock.withLock { box.finalStopReason }
+    await agent.closeSession()
     return stop == .stop ? 0 : 1
 }
 

@@ -66,6 +66,7 @@ final class TranscriptRenderer {
         let id: String
         let name: String
         let args: JSONValue
+        var partial: AgentToolResult?
         var resolution: [String]?   // nil = running
     }
 
@@ -140,6 +141,8 @@ final class TranscriptRenderer {
             n += 1  // header
             if let resolved = slot.resolution {
                 n += max(0, resolved.count - 2)  // body (skip leading blank + header)
+            } else if let partial = slot.partial {
+                n += formatToolResult(partial, isError: false).count
             } else {
                 n += 1  // "running…"
             }
@@ -229,7 +232,12 @@ final class TranscriptRenderer {
             }
 
         case .toolExecutionStart(let id, let name, let args):
-            toolSlots.append(ToolSlot(id: id, name: name, args: args, resolution: nil))
+            toolSlots.append(ToolSlot(id: id, name: name, args: args, partial: nil, resolution: nil))
+            recomputeLive()
+
+        case .toolExecutionUpdate(let id, _, _, let partialResult):
+            guard let idx = toolSlots.firstIndex(where: { $0.id == id }) else { break }
+            toolSlots[idx].partial = partialResult
             recomputeLive()
 
         case .toolExecutionEnd(let id, _, let result, let isError):
@@ -340,6 +348,8 @@ final class TranscriptRenderer {
                 // two from the resolved payload and keep only the body.
                 let body = resolved.dropFirst(2)
                 out.append(contentsOf: body)
+            } else if let partial = slot.partial {
+                out.append(contentsOf: formatToolResult(partial, isError: false))
             } else {
                 out.append(Style.dimmed("  ⎿  running…"))
             }

@@ -131,6 +131,24 @@ struct BackgroundTaskManagerTests {
         #expect(notif.messageText().contains("<task-notification>"))
     }
 
+    @Test("closeSession kills running tasks and drains notifications for that session")
+    func closeSessionKillsAndDrains() async {
+        let outputDir = makeOutputDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let (closedTaskId, _) = await manager.spawn(runner: ForeverRunner(), sessionId: "child")
+        let (otherTaskId, _) = await manager.spawn(runner: ForeverRunner(), sessionId: "parent")
+        defer { Task { await manager.killAll(sessionId: nil) } }
+
+        await manager.closeSession(sessionId: "child")
+
+        let closedTask = await manager.get(closedTaskId)
+        let otherTask = await manager.get(otherTaskId)
+        #expect(closedTask?.status == .killed)
+        #expect(otherTask?.status == .running)
+        #expect(await manager.hasNotifications(sessionId: "child") == false)
+    }
+
     @Test("kill cancels a running task and emits a killed notification")
     func killFlowsThrough() async {
         let outputDir = makeOutputDir()

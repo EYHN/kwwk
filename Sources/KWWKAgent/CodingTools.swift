@@ -5,6 +5,7 @@ public enum CodingToolError: Error, Equatable, LocalizedError {
     case notImplemented
     case fileNotFound(String)
     case invalidArgument(String)
+    case runtime(String)
     case textNotFound(String)
     case multipleMatches(count: Int)
     case offsetOutOfRange(offset: Int, totalLines: Int)
@@ -18,6 +19,8 @@ public enum CodingToolError: Error, Equatable, LocalizedError {
         case .fileNotFound(let path):
             return "file not found: \(path)"
         case .invalidArgument(let message):
+            return message
+        case .runtime(let message):
             return message
         case .textNotFound(let message):
             return message

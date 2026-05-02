@@ -26,6 +26,13 @@ struct TranscriptCommitTests {
         AgentToolResult(content: [.text(TextContent(text: text))])
     }
 
+    private func toolDisplay(_ text: String) -> AgentToolResult {
+        AgentToolResult(
+            content: [.text(TextContent(text: text))],
+            uiDisplay: [text]
+        )
+    }
+
     @MainActor
     @Test("user message commits immediately with leading blank + prompt marker")
     func userCommitsImmediately() {
@@ -198,6 +205,33 @@ struct TranscriptCommitTests {
         #expect(commits.contains(where: { $0.contains("file1") }))
         #expect(commits.last != "")
         #expect(r.liveLines.isEmpty)
+    }
+
+    @MainActor
+    @Test("tool execution updates render partial ui display while running")
+    func toolExecutionUpdateRendersPartialDisplay() {
+        let r = TranscriptRenderer()
+        r.apply(.toolExecutionStart(toolCallId: "1", toolName: "agent", args: .object([:])))
+        r.apply(.toolExecutionUpdate(
+            toolCallId: "1",
+            toolName: "agent",
+            args: .object([:]),
+            partialResult: toolDisplay("agent explore running · 128 tokens")
+        ))
+
+        #expect(r.drainCommits().isEmpty)
+        #expect(r.liveLines.contains(where: { $0.contains("128 tokens") }))
+        #expect(!r.liveLines.contains(where: { $0.contains("running…") }))
+
+        r.apply(.toolExecutionEnd(
+            toolCallId: "1",
+            toolName: "agent",
+            result: toolDisplay("agent explore completed · 256 tokens"),
+            isError: false
+        ))
+        let commits = r.drainCommits()
+        #expect(commits.contains(where: { $0.contains("256 tokens") }))
+        #expect(!commits.contains(where: { $0.contains("128 tokens") }))
     }
 
     @MainActor

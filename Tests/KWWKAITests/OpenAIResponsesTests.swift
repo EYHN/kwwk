@@ -266,6 +266,26 @@ struct OpenAIResponsesTests {
         #expect(messages.contains("WebSocket response completed; failure count reset"))
     }
 
+    @Test("closeSession closes stored WebSocket connection")
+    func closeSessionClosesStoredWebSocketConnection() async throws {
+        let http = StubSSEClient(body: Self.textSSE)
+        let connection = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.textSSE)])
+        let ws = StubWebSocketClient(connection: connection)
+        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
+
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "ws-close-session")
+        )
+        for await _ in s {}
+        _ = await s.result()
+
+        #expect(connection.closed == false)
+        await provider.closeSession(sessionId: "ws-close-session")
+        #expect(connection.closed == true)
+    }
+
     @Test("reuses previous response id and sends only new input over WebSocket")
     func webSocketIncrementalInput() async throws {
         let first = Self.textSSE
