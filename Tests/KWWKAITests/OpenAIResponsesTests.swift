@@ -76,7 +76,7 @@ struct OpenAIResponsesTests {
     @Test("streams text + completes with usage")
     func basicText() async throws {
         let client = StubSSEClient(body: Self.textSSE)
-        let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: "sk-test")
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "sk-test")
         let s = provider.stream(
             model: Self.model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
@@ -97,7 +97,7 @@ struct OpenAIResponsesTests {
     @Test("streams function_call with incremental arguments")
     func toolUse() async throws {
         let client = StubSSEClient(body: Self.toolUseSSE)
-        let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: "k")
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         let s = provider.stream(
             model: Self.model,
             context: Context(messages: [.user(UserMessage(text: "go"))]),
@@ -120,7 +120,7 @@ struct OpenAIResponsesTests {
     @Test("surfaces reasoning items as thinking blocks")
     func reasoningBlocks() async throws {
         let client = StubSSEClient(body: Self.reasoningSSE)
-        let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: "k")
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         let s = provider.stream(
             model: Self.model,
             context: Context(messages: [.user(UserMessage(text: "think"))]),
@@ -140,7 +140,7 @@ struct OpenAIResponsesTests {
     @Test("encodes input array with instructions + tools")
     func bodyEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)
-        let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: "k")
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         _ = provider.stream(
             model: Self.model,
             context: Context(
@@ -177,7 +177,7 @@ struct OpenAIResponsesTests {
     @Test("represents tool_result as function_call_output in the input array")
     func toolResultEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)
-        let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: "k")
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         let assistant = AssistantMessage(
             content: [.toolCall(ToolCall(id: "call_1", name: "calc", arguments: ["a": 1]))],
             api: "openai-responses",
@@ -215,7 +215,7 @@ struct OpenAIResponsesTests {
 
         """
         let client = StubSSEClient(body: errorSSE)
-        let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: "k")
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         let s = provider.stream(
             model: Self.model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
@@ -225,5 +225,457 @@ struct OpenAIResponsesTests {
         let result = await s.result()
         #expect(result.stopReason == .error)
         #expect(result.errorMessage == "quota exceeded")
+    }
+
+    @Test("defaults to WebSocket and sends response.create")
+    func webSocketDefault() async throws {
+        let http = StubSSEClient(body: Self.textSSE)
+        let connection = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.textSSE)])
+        let ws = StubWebSocketClient(connection: connection)
+        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
+        let verbose = VerboseEventRecorder()
+
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(
+                sessionId: "ws-default",
+                verbose: true,
+                onVerbose: { event in await verbose.append(event) }
+            )
+        )
+        for await _ in s {}
+        let result = await s.result()
+
+        #expect(result.responseId == "resp_1")
+        #expect(ws.connectCount == 1)
+        #expect(http.lastRequest == nil)
+        #expect(ws.lastURL?.absoluteString == "wss://api.openai.com/v1/responses")
+        #expect(ws.lastHeaders["authorization"] == "Bearer k")
+        #expect(ws.lastHeaders["OpenAI-Beta"] == "responses_websockets=2026-02-06")
+
+        let payload = try Self.jsonObject(connection.sentTexts[0])
+        #expect(payload["type"] as? String == "response.create")
+        #expect(payload["previous_response_id"] == nil)
+        let input = payload["input"] as? [[String: Any]]
+        #expect(input?.count == 1)
+
+        let messages = await verbose.messages()
+        #expect(messages.contains("attempting WebSocket stream"))
+        #expect(messages.contains("sent response.create"))
+        #expect(messages.contains("WebSocket response completed; failure count reset"))
+    }
+
+    @Test("reuses previous response id and sends only new input over WebSocket")
+    func webSocketIncrementalInput() async throws {
+        let first = Self.textSSE
+        let second = Self.textSSE.replacingOccurrences(of: "resp_1", with: "resp_2")
+        let connection = StubWebSocketConnection(batches: [
+            Self.webSocketMessages(from: first),
+            Self.webSocketMessages(from: second),
+        ])
+        let ws = StubWebSocketClient(connection: connection)
+        let provider = OpenAIResponsesProvider(
+            client: StubSSEClient(body: ""),
+            webSocketClient: ws,
+            defaultAPIKey: "k"
+        )
+
+        let firstStream = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "ws-incremental")
+        )
+        for await _ in firstStream {}
+        let firstResult = await firstStream.result()
+
+        let secondStream = provider.stream(
+            model: Self.model,
+            context: Context(messages: [
+                .user(UserMessage(text: "hi")),
+                .assistant(firstResult),
+                .user(UserMessage(text: "again")),
+            ]),
+            options: StreamOptions(sessionId: "ws-incremental")
+        )
+        for await _ in secondStream {}
+        let secondResult = await secondStream.result()
+
+        #expect(firstResult.responseId == "resp_1")
+        #expect(secondResult.responseId == "resp_2")
+        #expect(ws.connectCount == 1)
+        #expect(connection.sentTexts.count == 2)
+
+        let payload = try Self.jsonObject(connection.sentTexts[1])
+        #expect(payload["previous_response_id"] as? String == "resp_1")
+        let input = payload["input"] as? [[String: Any]]
+        #expect(input?.count == 1)
+        #expect(input?.first?["role"] as? String == "user")
+        let content = input?.first?["content"] as? [[String: Any]]
+        #expect(content?.first?["text"] as? String == "again")
+    }
+
+    @Test("falls back to HTTP on connect failure and disables WebSocket after the failure budget")
+    func webSocketConnectFailureBudgetFallsBackToHTTP() async throws {
+        let http = StubSSEClient(body: Self.textSSE)
+        let ws = StubWebSocketClient(error: StubWebSocketError.connect)
+        let provider = OpenAIResponsesProvider(
+            client: http,
+            webSocketClient: ws,
+            defaultAPIKey: "k",
+            maxWebSocketFailures: 2
+        )
+        let options = StreamOptions(sessionId: "ws-fallback")
+
+        let first = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: options
+        )
+        for await _ in first {}
+        #expect(await first.result().responseId == "resp_1")
+        #expect(ws.connectCount == 1)
+        #expect(http.lastRequest != nil)
+
+        let second = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "again"))]),
+            options: options
+        )
+        for await _ in second {}
+        #expect(await second.result().responseId == "resp_1")
+        #expect(ws.connectCount == 2)
+
+        let third = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "after disabled"))]),
+            options: options
+        )
+        for await _ in third {}
+        #expect(await third.result().responseId == "resp_1")
+        #expect(ws.connectCount == 2)
+    }
+
+    @Test("falls back to HTTP when WebSocket receive fails before the first event")
+    func webSocketReceiveFailureBeforeFirstEventFallsBackToHTTP() async throws {
+        let http = StubSSEClient(body: Self.textSSE)
+        let connection = StubWebSocketConnection(batches: [[]], receiveError: StubWebSocketError.receive)
+        let ws = StubWebSocketClient(connection: connection)
+        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
+
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "ws-receive-fallback")
+        )
+        for await _ in s {}
+        let result = await s.result()
+
+        #expect(result.responseId == "resp_1")
+        #expect(ws.connectCount == 1)
+        #expect(http.lastRequest != nil)
+    }
+
+    @Test("reconnects on the next request after a WebSocket stream failure")
+    func webSocketStreamFailureReconnectsNextRequest() async throws {
+        let responseCreated = """
+        {"type":"response.created","response":{"id":"resp_partial","status":"in_progress"}}
+        """
+        let firstConnection = StubWebSocketConnection(
+            batches: [[responseCreated]],
+            receiveError: StubWebSocketError.receive
+        )
+        let secondConnection = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.textSSE)])
+        let ws = StubWebSocketClient(connections: [firstConnection, secondConnection])
+        let http = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
+        let options = StreamOptions(sessionId: "ws-reconnect-after-stream-error")
+
+        let first = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: options
+        )
+        for await _ in first {}
+        let firstResult = await first.result()
+        #expect(firstResult.stopReason == .error)
+        #expect(firstResult.errorMessage?.contains("WebSocket stream failed") == true)
+        #expect(http.lastRequest == nil)
+        #expect(ws.connectCount == 1)
+
+        let second = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: options
+        )
+        for await _ in second {}
+        #expect(await second.result().responseId == "resp_1")
+        #expect(ws.connectCount == 2)
+        #expect(http.lastRequest == nil)
+    }
+
+    @Test("returns a stream error when WebSocket closes before response.completed after events")
+    func webSocketCloseAfterEventsBeforeCompletedReturnsError() async throws {
+        let responseCreated = """
+        {"type":"response.created","response":{"id":"resp_partial","status":"in_progress"}}
+        """
+        let connection = StubWebSocketConnection(batches: [[responseCreated]])
+        let ws = StubWebSocketClient(connection: connection)
+        let http = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
+
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "ws-close-after-events")
+        )
+        for await _ in s {}
+        let result = await s.result()
+
+        #expect(result.stopReason == .error)
+        #expect(result.errorMessage?.contains("closed before response.completed") == true)
+        #expect(ws.connectCount == 1)
+        #expect(http.lastRequest == nil)
+    }
+
+    @Test("returns an error instead of multiplexing a busy WebSocket session")
+    func webSocketBusySessionReturnsError() async throws {
+        let http = StubSSEClient(body: Self.textSSE.replacingOccurrences(of: "resp_1", with: "resp_http"))
+        let connection = StubWebSocketConnection(
+            batches: [Self.webSocketMessages(from: Self.textSSE)],
+            firstReceiveDelayNanoseconds: 300_000_000
+        )
+        let ws = StubWebSocketClient(connection: connection)
+        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
+        let options = StreamOptions(sessionId: "ws-busy-session")
+
+        let first = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "first"))]),
+            options: options
+        )
+        #expect(await Self.waitUntil { connection.sentTexts.count == 1 })
+
+        let second = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "second"))]),
+            options: options
+        )
+        for await _ in second {}
+        let secondResult = await second.result()
+
+        for await _ in first {}
+        let firstResult = await first.result()
+
+        #expect(firstResult.responseId == "resp_1")
+        #expect(secondResult.stopReason == .error)
+        #expect(secondResult.errorMessage?.contains("in-flight response") == true)
+        #expect(ws.connectCount == 1)
+        #expect(connection.sentTexts.count == 1)
+        #expect(http.lastRequest == nil)
+    }
+
+    @Test("successful WebSocket responses reset the failure budget")
+    func webSocketSuccessResetsFailureBudget() async throws {
+        let failingFirst = StubWebSocketConnection(batches: [[]], receiveError: StubWebSocketError.receive)
+        let succeedingThenFailingSecond = StubWebSocketConnection(
+            batches: [Self.webSocketMessages(from: Self.textSSE)],
+            sendErrors: [nil, StubWebSocketError.send]
+        )
+        let succeedingFourth = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.textSSE)])
+        let ws = StubWebSocketClient(connections: [
+            failingFirst,
+            succeedingThenFailingSecond,
+            succeedingFourth,
+        ])
+        let http = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(
+            client: http,
+            webSocketClient: ws,
+            defaultAPIKey: "k",
+            maxWebSocketFailures: 2
+        )
+        let options = StreamOptions(sessionId: "ws-budget-reset")
+
+        let first = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "first"))]),
+            options: options
+        )
+        for await _ in first {}
+        #expect(await first.result().responseId == "resp_1")
+        #expect(http.lastRequest != nil)
+
+        let second = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "second"))]),
+            options: options
+        )
+        for await _ in second {}
+        #expect(await second.result().responseId == "resp_1")
+
+        let third = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "third"))]),
+            options: options
+        )
+        for await _ in third {}
+        #expect(await third.result().responseId == "resp_1")
+
+        let fourth = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "fourth"))]),
+            options: options
+        )
+        for await _ in fourth {}
+        #expect(await fourth.result().responseId == "resp_1")
+        #expect(ws.connectCount == 3)
+    }
+
+    private static func webSocketMessages(from sse: String) -> [String] {
+        sse.components(separatedBy: "\n\n").compactMap { block in
+            let dataLines = block.split(separator: "\n").compactMap { line -> String? in
+                let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard text.hasPrefix("data:") else { return nil }
+                return String(text.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            }
+            return dataLines.isEmpty ? nil : dataLines.joined(separator: "\n")
+        }
+    }
+
+    private static func jsonObject(_ text: String) throws -> [String: Any] {
+        let data = Data(text.utf8)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    }
+
+    private static func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        _ predicate: @escaping @Sendable () -> Bool
+    ) async -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if predicate() { return true }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return predicate()
+    }
+}
+
+enum StubWebSocketError: Error {
+    case connect
+    case receive
+    case send
+}
+
+actor VerboseEventRecorder {
+    private var events: [VerboseEvent] = []
+
+    func append(_ event: VerboseEvent) {
+        events.append(event)
+    }
+
+    func messages() -> [String] {
+        events.map(\.message)
+    }
+}
+
+final class StubWebSocketClient: WebSocketClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private var connections: [StubWebSocketConnection]
+    private let error: Error?
+    private var _connectCount = 0
+    private var _lastURL: URL?
+    private var _lastHeaders: [String: String] = [:]
+
+    init(connection: StubWebSocketConnection = StubWebSocketConnection(batches: []), error: Error? = nil) {
+        self.connections = [connection]
+        self.error = error
+    }
+
+    init(connections: [StubWebSocketConnection]) {
+        self.connections = connections
+        self.error = nil
+    }
+
+    var connectCount: Int { lock.withLock { _connectCount } }
+    var lastURL: URL? { lock.withLock { _lastURL } }
+    var lastHeaders: [String: String] { lock.withLock { _lastHeaders } }
+
+    func connect(url: URL, headers: [String: String]) async throws -> any WebSocketConnection {
+        try lock.withLock {
+            _connectCount += 1
+            _lastURL = url
+            _lastHeaders = headers
+            if let error { throw error }
+            if connections.count > 1 {
+                return connections.removeFirst()
+            }
+            return connections.first ?? StubWebSocketConnection(batches: [])
+        }
+    }
+}
+
+final class StubWebSocketConnection: WebSocketConnection, @unchecked Sendable {
+    private let lock = NSLock()
+    private var batches: [[String]]
+    private var receiveError: Error?
+    private var sendErrors: [Error?]
+    private var firstReceiveDelayNanoseconds: UInt64
+    private var pending: [WebSocketMessage] = []
+    private var _sentTexts: [String] = []
+    private var _closed = false
+
+    init(
+        batches: [[String]],
+        receiveError: Error? = nil,
+        sendErrors: [Error?] = [],
+        firstReceiveDelayNanoseconds: UInt64 = 0
+    ) {
+        self.batches = batches
+        self.receiveError = receiveError
+        self.sendErrors = sendErrors
+        self.firstReceiveDelayNanoseconds = firstReceiveDelayNanoseconds
+    }
+
+    var sentTexts: [String] { lock.withLock { _sentTexts } }
+    var closed: Bool { lock.withLock { _closed } }
+
+    func send(_ message: WebSocketMessage) async throws {
+        try lock.withLock {
+            if !sendErrors.isEmpty, let error = sendErrors.removeFirst() {
+                throw error
+            }
+            if case .text(let text) = message {
+                _sentTexts.append(text)
+            }
+            if !batches.isEmpty {
+                pending.append(contentsOf: batches.removeFirst().map(WebSocketMessage.text))
+            }
+        }
+    }
+
+    func receive() async throws -> WebSocketMessage? {
+        let delay = lock.withLock { () -> UInt64 in
+            let delay = firstReceiveDelayNanoseconds
+            firstReceiveDelayNanoseconds = 0
+            return delay
+        }
+        if delay > 0 {
+            try await Task.sleep(nanoseconds: delay)
+        }
+        return try lock.withLock { () throws -> WebSocketMessage? in
+            if !pending.isEmpty {
+                return pending.removeFirst()
+            }
+            if let error = receiveError {
+                receiveError = nil
+                throw error
+            }
+            return nil
+        }
+    }
+
+    func close() {
+        lock.withLock { _closed = true }
     }
 }

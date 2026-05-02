@@ -8,6 +8,7 @@ public struct AgentLoopConfig: Sendable {
     public var reasoning: ReasoningLevel?
     public var thinkingBudgets: ThinkingBudgets?
     public var sessionId: String?
+    public var verboseEnabled: Bool
     public var maxRetryDelayMs: Int?
     public var toolExecution: ToolExecutionMode
     public var toolChoice: ToolChoice?
@@ -34,6 +35,7 @@ public struct AgentLoopConfig: Sendable {
         reasoning: ReasoningLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         sessionId: String? = nil,
+        verboseEnabled: Bool = false,
         maxRetryDelayMs: Int? = nil,
         toolExecution: ToolExecutionMode = .parallel,
         toolChoice: ToolChoice? = nil,
@@ -54,6 +56,7 @@ public struct AgentLoopConfig: Sendable {
         self.reasoning = reasoning
         self.thinkingBudgets = thinkingBudgets
         self.sessionId = sessionId
+        self.verboseEnabled = verboseEnabled
         self.maxRetryDelayMs = maxRetryDelayMs
         self.toolExecution = toolExecution
         self.toolChoice = toolChoice
@@ -448,7 +451,11 @@ public enum AgentLoop {
             thinkingBudgets: config.thinkingBudgets,
             cancellation: cancellation,
             toolChoice: config.toolChoice,
-            parallelToolCalls: config.parallelToolCalls
+            parallelToolCalls: config.parallelToolCalls,
+            verbose: config.verboseEnabled,
+            onVerbose: { event in
+                await emit(.verbose(event))
+            }
         )
 
         var lastError: Error?

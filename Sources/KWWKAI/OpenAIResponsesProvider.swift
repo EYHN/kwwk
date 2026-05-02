@@ -20,34 +20,44 @@ import FoundationNetworking
 public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
     public typealias URLBuilder = @Sendable (Model, StreamOptions?, URL) -> URL
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
+    public typealias WebSocketURLBuilder = @Sendable (URL) -> URL
 
     public let api: String
     public let client: HTTPClient
+    public let webSocketClient: WebSocketClient?
     public let defaultBaseURL: URL
     public let defaultAPIKey: String?
     public let extraHeaders: [String: String]
     public let urlBuilder: URLBuilder
+    public let webSocketURLBuilder: WebSocketURLBuilder
     public let authHeaderBuilder: AuthHeaderBuilder
+    public let maxWebSocketFailures: Int
     /// Request-body fields merged in last (so they override defaults). Use
     /// for vendor quirks like ChatGPT Codex requiring `store: false`.
     public let bodyOverrides: [String: JSONValue]
+    private let sessions = OpenAIResponsesSessionStore()
 
     public init(
         api: String = "openai-responses",
         client: HTTPClient = URLSessionHTTPClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient(),
         defaultBaseURL: URL = URL(string: "https://api.openai.com")!,
         defaultAPIKey: String? = nil,
         extraHeaders: [String: String] = [:],
         bodyOverrides: [String: JSONValue] = [:],
         urlBuilder: URLBuilder? = nil,
+        webSocketURLBuilder: WebSocketURLBuilder? = nil,
+        maxWebSocketFailures: Int = 3,
         authHeaderBuilder: AuthHeaderBuilder? = nil
     ) {
         self.api = api
         self.client = client
+        self.webSocketClient = webSocketClient
         self.defaultBaseURL = defaultBaseURL
         self.defaultAPIKey = defaultAPIKey
         self.extraHeaders = extraHeaders
         self.bodyOverrides = bodyOverrides
+        self.maxWebSocketFailures = max(1, maxWebSocketFailures)
         self.urlBuilder = urlBuilder ?? { model, _, fallback in
             var base = model.baseUrl.isEmpty ? fallback.absoluteString : model.baseUrl
             while base.hasSuffix("/") { base.removeLast() }
@@ -55,6 +65,15 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
             // (pi-mono's models.generated.ts does this for OpenAI).
             let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
             return URL(string: "\(versioned)/responses") ?? fallback.appendingPathComponent("v1/responses")
+        }
+        self.webSocketURLBuilder = webSocketURLBuilder ?? { httpURL in
+            var components = URLComponents(url: httpURL, resolvingAgainstBaseURL: false)
+            switch components?.scheme {
+            case "https": components?.scheme = "wss"
+            case "http": components?.scheme = "ws"
+            default: break
+            }
+            return components?.url ?? httpURL
         }
         self.authHeaderBuilder = authHeaderBuilder ?? { key in ["authorization": "Bearer \(key)"] }
     }
@@ -73,9 +92,9 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
     ) async {
         let url = urlBuilder(model, options, defaultBaseURL)
 
-        let body: Data
+        let request: OpenAIResponsesRequest
         do {
-            body = try Self.encodeBody(
+            request = try Self.makeRequest(
                 model: model,
                 context: context,
                 options: options,
@@ -88,19 +107,71 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
             return
         }
 
-        var headers: [String: String] = [
-            "content-type": "application/json",
-            "accept": "text/event-stream",
-        ]
-        for (k, v) in extraHeaders { headers[k] = v }
-        if let key = options?.apiKey ?? defaultAPIKey {
-            for (k, v) in authHeaderBuilder(key) { headers[k] = v }
+        let session = sessions.session(for: options?.sessionId)
+        let transport = options?.transport ?? .auto
+        if transport != .sse,
+           let webSocketClient,
+           !session.webSocketDisabled {
+            let wsURL = webSocketURLBuilder(url)
+            await options?.emitVerbose(
+                source: "openai.responses.websocket",
+                message: "attempting WebSocket stream",
+                metadata: ["url": .string(wsURL.absoluteString)]
+            )
+            let wsResult = await runWebSocket(
+                client: webSocketClient,
+                url: wsURL,
+                request: request,
+                out: out,
+                model: model,
+                options: options,
+                session: session
+            )
+            switch wsResult {
+            case .completed:
+                return
+            case .fallbackToHTTP:
+                await options?.emitVerbose(
+                    source: "openai.responses.http",
+                    message: "falling back to HTTP stream"
+                )
+                break
+            case .failedWithoutFallback:
+                return
+            }
+        } else if transport != .sse, session.webSocketDisabled {
+            await options?.emitVerbose(
+                source: "openai.responses.websocket",
+                message: "WebSocket disabled after repeated failures; using HTTP"
+            )
         }
-        for (k, v) in options?.headers ?? [:] { headers[k] = v }
+
+        await runHTTP(
+            url: url,
+            request: request,
+            out: out,
+            model: model,
+            options: options
+        )
+    }
+
+    private func runHTTP(
+        url: URL,
+        request: OpenAIResponsesRequest,
+        out: AssistantMessageStream,
+        model: Model,
+        options: StreamOptions?
+    ) async {
+        let headers = makeHeaders(options: options, accept: "text/event-stream")
+        await options?.emitVerbose(
+            source: "openai.responses.http",
+            message: "starting HTTP stream",
+            metadata: ["url": .string(url.absoluteString)]
+        )
 
         do {
             let (response, stream) = try await client.stream(
-                url: url, method: "POST", headers: headers, body: body
+                url: url, method: "POST", headers: headers, body: try request.data()
             )
             if response.statusCode >= 400 {
                 // Collect whatever the server wrote (usually a small JSON
@@ -123,7 +194,7 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
             }
             let state = OpenAIResponsesState(api: api, provider: model.provider, modelId: model.id)
             state.signal = options?.cancellation
-            try await drive(events: parseSSE(bytes: stream), out: out, state: state)
+            _ = try await drive(events: parseSSE(bytes: stream), out: out, state: state)
         } catch {
             let msg = Self.makeError(api: api, model: model, text: "\(error)")
             out.push(.error(reason: .error, error: msg))
@@ -131,21 +202,250 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
         }
     }
 
-    private func drive(
-        events: AsyncThrowingStream<SSEMessage, Error>,
+    private enum WebSocketRunResult {
+        case completed
+        case fallbackToHTTP
+        case failedWithoutFallback
+    }
+
+    private func runWebSocket(
+        client: WebSocketClient,
+        url: URL,
+        request: OpenAIResponsesRequest,
         out: AssistantMessageStream,
-        state: OpenAIResponsesState
-    ) async throws {
+        model: Model,
+        options: StreamOptions?,
+        session: OpenAIResponsesSessionState
+    ) async -> WebSocketRunResult {
+        var headers = makeHeaders(options: options, accept: nil)
+        // Match Codex's WebSocket transport: the Responses WebSocket beta
+        // header replaces the HTTP/SSE `responses=experimental` beta.
+        mergeHeader(&headers, name: "OpenAI-Beta", value: "responses_websockets=2026-02-06", append: false)
+        let verboseSource = "openai.responses.websocket"
+
+        switch session.beginWebSocketRun() {
+        case .acquired:
+            break
+        case .disabled:
+            await options?.emitVerbose(
+                source: verboseSource,
+                message: "WebSocket disabled after repeated failures; using HTTP"
+            )
+            return .fallbackToHTTP
+        case .busy:
+            await options?.emitVerbose(
+                source: verboseSource,
+                message: "WebSocket session already has an in-flight response; returning stream error"
+            )
+            let err = Self.makeError(
+                api: api,
+                model: model,
+                text: "OpenAI Responses WebSocket session already has an in-flight response for this sessionId. Use a distinct sessionId for parallel runs."
+            )
+            out.push(.error(reason: .error, error: err))
+            out.end(err)
+            return .failedWithoutFallback
+        }
+        defer { session.endWebSocketRun() }
+
+        var connection: (any WebSocketConnection)?
+        do {
+            if let existing = session.takeConnection() {
+                connection = existing
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "reusing WebSocket connection"
+                )
+            } else {
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "connecting",
+                    metadata: ["url": .string(url.absoluteString)]
+                )
+                connection = try await client.connect(url: url, headers: headers)
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "connected"
+                )
+            }
+            let payload = try session.prepareWebSocketPayload(from: request)
+            try await connection?.send(.text(payload.text))
+            var metadata: [String: JSONValue] = [
+                "input_count": .int(payload.inputCount),
+                "incremental": .bool(payload.previousResponseId != nil),
+            ]
+            if let previousResponseId = payload.previousResponseId {
+                metadata["previous_response_id"] = .string(previousResponseId)
+            }
+            await options?.emitVerbose(
+                source: verboseSource,
+                message: "sent response.create",
+                metadata: metadata
+            )
+        } catch {
+            connection?.close()
+            let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+            await options?.emitVerbose(
+                source: verboseSource,
+                message: "WebSocket setup failed; falling back to HTTP",
+                metadata: [
+                    "disabled": .bool(failure.disabled),
+                    "error": .string("\(error)"),
+                    "failure_count": .int(failure.count),
+                ]
+            )
+            return .fallbackToHTTP
+        }
+        guard let connection else {
+            let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+            await options?.emitVerbose(
+                source: verboseSource,
+                message: "WebSocket setup failed; falling back to HTTP",
+                metadata: [
+                    "disabled": .bool(failure.disabled),
+                    "error": .string("connection was nil"),
+                    "failure_count": .int(failure.count),
+                ]
+            )
+            return .fallbackToHTTP
+        }
+
+        let state = OpenAIResponsesState(api: api, provider: model.provider, modelId: model.id)
+        state.signal = options?.cancellation
+        let progress = WebSocketStreamProgress()
+        do {
+            let result = try await drive(
+                events: webSocketEvents(from: connection),
+                out: out,
+                state: state,
+                progress: progress,
+                finishOnStreamEnd: false
+            )
+            if result.completed, let responseId = result.message.responseId {
+                session.recordCompletedResponse(
+                    responseId: responseId,
+                    itemsAdded: Self.encodeAssistantOutputItems(result.message)
+                )
+                session.storeConnection(connection)
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket response completed; failure count reset",
+                    metadata: ["response_id": .string(responseId)]
+                )
+            } else if result.endedWithoutTerminalEvent {
+                connection.close()
+                let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+                if !progress.hasReceivedEvent {
+                    await options?.emitVerbose(
+                        source: verboseSource,
+                        message: "WebSocket closed before response event; falling back to HTTP",
+                        metadata: [
+                            "disabled": .bool(failure.disabled),
+                            "failure_count": .int(failure.count),
+                        ]
+                    )
+                    return .fallbackToHTTP
+                }
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket closed before completed response; returning stream error",
+                    metadata: [
+                        "disabled": .bool(failure.disabled),
+                        "failure_count": .int(failure.count),
+                    ]
+                )
+                let err = Self.makeError(
+                    api: api,
+                    model: model,
+                    text: "WebSocket stream closed before response.completed"
+                )
+                out.push(.error(reason: .error, error: err))
+                out.end(err)
+                return .failedWithoutFallback
+            } else {
+                connection.close()
+                session.resetWebSocketState(resetFailureCount: progress.hasReceivedEvent)
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket closed without completed response",
+                    metadata: ["received_response_event": .bool(progress.hasReceivedEvent)]
+                )
+            }
+            return .completed
+        } catch {
+            connection.close()
+            let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+            if !progress.hasReceivedEvent {
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket failed before response event; falling back to HTTP",
+                    metadata: [
+                        "disabled": .bool(failure.disabled),
+                        "error": .string("\(error)"),
+                        "failure_count": .int(failure.count),
+                    ]
+                )
+                return .fallbackToHTTP
+            }
+            await options?.emitVerbose(
+                source: verboseSource,
+                message: "WebSocket failed after response event; returning stream error",
+                metadata: [
+                    "disabled": .bool(failure.disabled),
+                    "error": .string("\(error)"),
+                    "failure_count": .int(failure.count),
+                ]
+            )
+            let err = Self.makeError(api: api, model: model, text: "WebSocket stream failed: \(error)")
+            out.push(.error(reason: .error, error: err))
+            out.end(err)
+            return .failedWithoutFallback
+        }
+    }
+
+    private func makeHeaders(options: StreamOptions?, accept: String?) -> [String: String] {
+        var headers: [String: String] = ["content-type": "application/json"]
+        if let accept {
+            headers["accept"] = accept
+        }
+        for (k, v) in extraHeaders { mergeHeader(&headers, name: k, value: v, append: false) }
+        if let key = options?.apiKey ?? defaultAPIKey {
+            for (k, v) in authHeaderBuilder(key) {
+                mergeHeader(&headers, name: k, value: v, append: false)
+            }
+        }
+        for (k, v) in options?.headers ?? [:] {
+            mergeHeader(&headers, name: k, value: v, append: false)
+        }
+        return headers
+    }
+
+    private func webSocketEvents(
+        from connection: any WebSocketConnection
+    ) -> WebSocketSSESequence {
+        WebSocketSSESequence(connection: connection)
+    }
+
+    private func drive<S: AsyncSequence>(
+        events: S,
+        out: AssistantMessageStream,
+        state: OpenAIResponsesState,
+        progress: WebSocketStreamProgress? = nil,
+        finishOnStreamEnd: Bool = true
+    ) async throws -> OpenAIResponsesDriveResult where S.Element == SSEMessage {
         var emittedStart = false
         for try await sse in events {
             if state.signal?.isCancelled == true {
                 let aborted = state.asAborted()
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
-                return
+                return OpenAIResponsesDriveResult(message: aborted, completed: false)
             }
             guard case .object(let obj)? = parseJSONObject(sse.data),
                   case .string(let type) = obj["type"] ?? .null else { continue }
+            if type.hasPrefix("response.") {
+                progress?.markReceivedEvent()
+            }
 
             switch type {
             case "response.created":
@@ -272,7 +572,7 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                 let final = state.finalize()
                 out.push(.done(reason: final.stopReason, message: final))
                 out.end(final)
-                return
+                return OpenAIResponsesDriveResult(message: final, completed: true)
 
             case "response.failed", "response.error":
                 let text: String = {
@@ -286,7 +586,18 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                 let err = state.asError(text: text)
                 out.push(.error(reason: .error, error: err))
                 out.end(err)
-                return
+                return OpenAIResponsesDriveResult(message: err, completed: false)
+
+            case "error":
+                let text: String = {
+                    if case .object(let err) = obj["error"] ?? .null,
+                       case .string(let m) = err["message"] ?? .null { return m }
+                    return "OpenAI Responses WebSocket error"
+                }()
+                let err = state.asError(text: text)
+                out.push(.error(reason: .error, error: err))
+                out.end(err)
+                return OpenAIResponsesDriveResult(message: err, completed: false)
 
             default: break
             }
@@ -294,45 +605,50 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
 
         // Stream closed without explicit `response.completed`.
         let final = state.finalize()
-        out.push(.done(reason: final.stopReason, message: final))
-        out.end(final)
+        if finishOnStreamEnd {
+            out.push(.done(reason: final.stopReason, message: final))
+            out.end(final)
+        }
+        return OpenAIResponsesDriveResult(
+            message: final,
+            completed: false,
+            endedWithoutTerminalEvent: true
+        )
     }
 
     // MARK: - Encoding
 
-    private static func encodeBody(
+    private static func makeRequest(
         model: Model, context: Context, options: StreamOptions?,
         bodyOverrides: [String: JSONValue] = [:]
-    ) throws -> Data {
-        var root: [String: Any] = [
-            "model": model.id,
-            "stream": true,
-            "input": encodeInput(context: context),
+    ) throws -> OpenAIResponsesRequest {
+        var root: [String: JSONValue] = [
+            "model": .string(model.id),
+            "stream": .bool(true),
+            "input": .array(encodeInput(context: context)),
         ]
         if let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil) {
-            root["max_output_tokens"] = maxTokens
+            root["max_output_tokens"] = .int(maxTokens)
         }
-        if let temp = options?.temperature { root["temperature"] = temp }
+        if let temp = options?.temperature { root["temperature"] = .double(temp) }
         if let sys = context.systemPrompt, !sys.isEmpty {
-            root["instructions"] = sys
+            root["instructions"] = .string(sys)
         }
         if let tools = context.tools, !tools.isEmpty {
-            root["tools"] = tools.map { tool -> [String: Any] in
-                var entry: [String: Any] = [
-                    "type": "function",
-                    "name": tool.name,
-                    "description": tool.description,
+            root["tools"] = .array(tools.map { tool -> JSONValue in
+                var entry: [String: JSONValue] = [
+                    "type": .string("function"),
+                    "name": .string(tool.name),
+                    "description": .string(tool.description),
                 ]
-                if let params = anyFromJSONValue(tool.parameters) {
-                    entry["parameters"] = params
-                }
-                return entry
-            }
+                entry["parameters"] = tool.parameters
+                return .object(entry)
+            })
             if let choice = encodeToolChoice(options?.toolChoice) {
                 root["tool_choice"] = choice
             }
             if options?.parallelToolCalls == false {
-                root["parallel_tool_calls"] = false
+                root["parallel_tool_calls"] = .bool(false)
             }
         }
         if let reasoning = options?.reasoning {
@@ -342,53 +658,55 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
             // requested `effort`, but the reasoning block streams as
             // start → end with no body — so the UI has nothing to show
             // under `[thinking]`.
-            root["reasoning"] = [
-                "effort": reasoning.rawValue,
-                "summary": "auto",
-            ]
+            root["reasoning"] = .object([
+                "effort": .string(reasoning.rawValue),
+                "summary": .string("auto"),
+            ])
         }
-        if let meta = options?.metadata, let any = anyFromJSONValue(.object(meta)) {
-            root["metadata"] = any
+        if let meta = options?.metadata {
+            root["metadata"] = .object(meta)
         }
         // Apply vendor-specific overrides last so they win against defaults.
         for (key, value) in bodyOverrides {
-            if let any = anyFromJSONValue(value) {
-                root[key] = any
-            }
+            root[key] = value
         }
-        return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        return OpenAIResponsesRequest(fields: root)
     }
 
     /// Convert our Message transcript into OpenAI Responses' `input` array.
     /// Each element is a typed item (`message`, `function_call`, or
     /// `function_call_output`). Assistant messages with tool calls expand
     /// into multiple items.
-    private static func encodeInput(context: Context) -> [[String: Any]] {
-        var out: [[String: Any]] = []
+    private static func encodeInput(context: Context) -> [JSONValue] {
+        var out: [JSONValue] = []
         for message in context.messages {
             switch message {
             case .user(let u):
-                var parts: [[String: Any]] = []
+                var parts: [JSONValue] = []
                 for block in u.content {
                     switch block {
                     case .text(let t):
-                        parts.append(["type": "input_text", "text": t.text])
+                        parts.append(.object(["type": .string("input_text"), "text": .string(t.text)]))
                     case .image(let i):
-                        parts.append([
-                            "type": "input_image",
-                            "image_url": "data:\(i.mimeType);base64,\(i.data)",
-                        ])
+                        parts.append(.object([
+                            "type": .string("input_image"),
+                            "image_url": .string("data:\(i.mimeType);base64,\(i.data)"),
+                        ]))
                     }
                 }
-                out.append(["type": "message", "role": "user", "content": parts])
+                out.append(.object(["type": .string("message"), "role": .string("user"), "content": .array(parts)]))
 
             case .assistant(let a):
-                let textParts: [[String: Any]] = a.content.compactMap { block in
+                let textParts: [JSONValue] = a.content.compactMap { block in
                     guard case .text(let t) = block, !t.text.isEmpty else { return nil }
-                    return ["type": "output_text", "text": t.text]
+                    return .object(["type": .string("output_text"), "text": .string(t.text)])
                 }
                 if !textParts.isEmpty {
-                    out.append(["type": "message", "role": "assistant", "content": textParts])
+                    out.append(.object([
+                        "type": .string("message"),
+                        "role": .string("assistant"),
+                        "content": .array(textParts),
+                    ]))
                 }
                 for block in a.content {
                     if case .toolCall(let tc) = block {
@@ -401,12 +719,12 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                             }
                             return "{}"
                         }()
-                        out.append([
-                            "type": "function_call",
-                            "call_id": tc.id,
-                            "name": tc.name,
-                            "arguments": argsString,
-                        ])
+                        out.append(.object([
+                            "type": .string("function_call"),
+                            "call_id": .string(tc.id),
+                            "name": .string(tc.name),
+                            "arguments": .string(argsString),
+                        ]))
                     }
                 }
 
@@ -414,24 +732,28 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
                 let text = tr.content.compactMap { block -> String? in
                     if case .text(let t) = block { return t.text } else { return nil }
                 }.joined(separator: "\n")
-                out.append([
-                    "type": "function_call_output",
-                    "call_id": tr.toolCallId,
-                    "output": text,
-                ])
+                out.append(.object([
+                    "type": .string("function_call_output"),
+                    "call_id": .string(tr.toolCallId),
+                    "output": .string(text),
+                ]))
             }
         }
         return out
     }
 
-    private static func encodeToolChoice(_ choice: ToolChoice?) -> Any? {
+    private static func encodeAssistantOutputItems(_ message: AssistantMessage) -> [JSONValue] {
+        encodeInput(context: Context(messages: [.assistant(message)]))
+    }
+
+    private static func encodeToolChoice(_ choice: ToolChoice?) -> JSONValue? {
         guard let choice else { return nil }
         switch choice {
-        case .auto: return "auto"
-        case .none: return "none"
-        case .required: return "required"
+        case .auto: return .string("auto")
+        case .none: return .string("none")
+        case .required: return .string("required")
         case .tool(let name):
-            return ["type": "function", "name": name]
+            return .object(["type": .string("function"), "name": .string(name)])
         }
     }
 
@@ -456,6 +778,270 @@ public final class OpenAIResponsesProvider: APIProvider, @unchecked Sendable {
             errorMessage: text,
             timestamp: Timestamp.now()
         )
+    }
+}
+
+private struct OpenAIResponsesDriveResult: Sendable {
+    var message: AssistantMessage
+    var completed: Bool
+    var endedWithoutTerminalEvent = false
+}
+
+private struct WebSocketSSESequence: AsyncSequence, Sendable {
+    typealias Element = SSEMessage
+
+    let connection: any WebSocketConnection
+
+    func makeAsyncIterator() -> Iterator {
+        Iterator(connection: connection)
+    }
+
+    struct Iterator: AsyncIteratorProtocol {
+        let connection: any WebSocketConnection
+
+        mutating func next() async throws -> SSEMessage? {
+            while let message = try await connection.receive() {
+                switch message {
+                case .text(let text):
+                    return SSEMessage(event: "message", data: text, id: nil)
+                case .data(let data):
+                    if let text = String(data: data, encoding: .utf8) {
+                        return SSEMessage(event: "message", data: text, id: nil)
+                    }
+                }
+            }
+            return nil
+        }
+    }
+}
+
+private final class WebSocketStreamProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var receivedEvent = false
+
+    var hasReceivedEvent: Bool {
+        lock.withLock { receivedEvent }
+    }
+
+    func markReceivedEvent() {
+        lock.withLock { receivedEvent = true }
+    }
+}
+
+private struct OpenAIResponsesRequest: Sendable, Equatable {
+    var fields: [String: JSONValue]
+
+    var input: [JSONValue] {
+        if case .array(let input) = fields["input"] ?? .null { return input }
+        return []
+    }
+
+    func withoutInput() -> OpenAIResponsesRequest {
+        var copy = self
+        copy.fields["input"] = .array([])
+        return copy
+    }
+
+    func data() throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: anyFromJSONValue(.object(fields)) ?? [:],
+            options: [.sortedKeys]
+        )
+    }
+
+    func webSocketPayload(previousResponseId: String? = nil, input: [JSONValue]? = nil) throws -> String {
+        var payload = fields
+        payload["type"] = .string("response.create")
+        if let previousResponseId {
+            payload["previous_response_id"] = .string(previousResponseId)
+        }
+        if let input {
+            payload["input"] = .array(input)
+        }
+        let data = try JSONSerialization.data(
+            withJSONObject: anyFromJSONValue(.object(payload)) ?? [:],
+            options: [.sortedKeys]
+        )
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+}
+
+private struct OpenAIResponsesLastResponse: Sendable {
+    var responseId: String
+    var itemsAdded: [JSONValue]
+}
+
+private struct OpenAIResponsesWebSocketFailureStatus: Sendable {
+    var count: Int
+    var disabled: Bool
+}
+
+private struct OpenAIResponsesWebSocketPayload: Sendable {
+    var text: String
+    var previousResponseId: String?
+    var inputCount: Int
+}
+
+private enum OpenAIResponsesWebSocketRunLease: Sendable {
+    case acquired
+    case busy
+    case disabled
+}
+
+private final class OpenAIResponsesSessionStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sessions: [String: OpenAIResponsesSessionState] = [:]
+
+    func session(for sessionId: String?) -> OpenAIResponsesSessionState {
+        guard let sessionId, !sessionId.isEmpty else {
+            return OpenAIResponsesSessionState()
+        }
+        return lock.withLock {
+            if let existing = sessions[sessionId] { return existing }
+            let created = OpenAIResponsesSessionState()
+            sessions[sessionId] = created
+            return created
+        }
+    }
+}
+
+private final class OpenAIResponsesSessionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var connection: (any WebSocketConnection)?
+    private var lastRequest: OpenAIResponsesRequest?
+    private var lastResponse: OpenAIResponsesLastResponse?
+    private var webSocketFailureCount = 0
+    private var disabled = false
+    private var webSocketInFlight = false
+
+    var webSocketDisabled: Bool {
+        lock.withLock { disabled }
+    }
+
+    func beginWebSocketRun() -> OpenAIResponsesWebSocketRunLease {
+        lock.withLock {
+            if disabled { return .disabled }
+            if webSocketInFlight { return .busy }
+            webSocketInFlight = true
+            return .acquired
+        }
+    }
+
+    func endWebSocketRun() {
+        lock.withLock { webSocketInFlight = false }
+    }
+
+    func takeConnection() -> (any WebSocketConnection)? {
+        lock.withLock {
+            let existing = connection
+            connection = nil
+            return existing
+        }
+    }
+
+    func storeConnection(_ next: any WebSocketConnection) {
+        lock.withLock { connection = next }
+    }
+
+    @discardableResult
+    func recordWebSocketFailure(maxFailures: Int) -> OpenAIResponsesWebSocketFailureStatus {
+        let result = lock.withLock { () -> (old: (any WebSocketConnection)?, status: OpenAIResponsesWebSocketFailureStatus) in
+            webSocketFailureCount += 1
+            if webSocketFailureCount >= max(1, maxFailures) {
+                disabled = true
+            }
+            let old = connection
+            connection = nil
+            lastRequest = nil
+            lastResponse = nil
+            return (
+                old,
+                OpenAIResponsesWebSocketFailureStatus(
+                    count: webSocketFailureCount,
+                    disabled: disabled
+                )
+            )
+        }
+        result.old?.close()
+        return result.status
+    }
+
+    func resetWebSocketState(disable: Bool = false, resetFailureCount: Bool = false) {
+        let old = lock.withLock { () -> (any WebSocketConnection)? in
+            if disable { disabled = true }
+            if resetFailureCount { webSocketFailureCount = 0 }
+            let old = connection
+            connection = nil
+            lastRequest = nil
+            lastResponse = nil
+            return old
+        }
+        old?.close()
+    }
+
+    func prepareWebSocketPayload(from request: OpenAIResponsesRequest) throws -> OpenAIResponsesWebSocketPayload {
+        let payload = lock.withLock { () -> (previousResponseId: String?, input: [JSONValue]?) in
+            defer { lastRequest = request }
+            guard let previous = lastRequest,
+                  let response = lastResponse,
+                  !response.responseId.isEmpty,
+                  previous.withoutInput() == request.withoutInput()
+            else {
+                return (nil, nil)
+            }
+
+            let baseline = previous.input + response.itemsAdded
+            let input = request.input
+            guard input.count >= baseline.count,
+                  Array(input.prefix(baseline.count)) == baseline
+            else {
+                return (nil, nil)
+            }
+
+            return (response.responseId, Array(input.dropFirst(baseline.count)))
+        }
+        let text = try request.webSocketPayload(
+            previousResponseId: payload.previousResponseId,
+            input: payload.input
+        )
+        return OpenAIResponsesWebSocketPayload(
+            text: text,
+            previousResponseId: payload.previousResponseId,
+            inputCount: payload.input?.count ?? request.input.count
+        )
+    }
+
+    func recordCompletedResponse(responseId: String, itemsAdded: [JSONValue]) {
+        lock.withLock {
+            webSocketFailureCount = 0
+            lastResponse = OpenAIResponsesLastResponse(
+                responseId: responseId,
+                itemsAdded: itemsAdded
+            )
+        }
+    }
+}
+
+private func mergeHeader(
+    _ headers: inout [String: String],
+    name: String,
+    value: String,
+    append: Bool
+) {
+    if let existingKey = headers.keys.first(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+        if append, !headers[existingKey, default: ""].isEmpty {
+            let existing = headers[existingKey] ?? ""
+            if !existing
+                .split(separator: ",")
+                .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                .contains(value) {
+                headers[existingKey] = "\(existing), \(value)"
+            }
+        } else {
+            headers[existingKey] = value
+        }
+    } else {
+        headers[name] = value
     }
 }
 

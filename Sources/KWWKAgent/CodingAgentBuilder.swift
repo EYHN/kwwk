@@ -127,11 +127,14 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         toolSnippets: DefaultToolSnippets.all
     ))
 
-    let agent = Agent(initialState: AgentInitialState(
-        systemPrompt: systemPrompt,
-        model: config.model,
-        tools: tools
-    ))
+    let agent = Agent(
+        initialState: AgentInitialState(
+            systemPrompt: systemPrompt,
+            model: config.model,
+            tools: tools
+        ),
+        sessionId: sessionId
+    )
 
     if let bgManager {
         _ = await agent.attachBackgroundManager(bgManager, sessionId: sessionId)

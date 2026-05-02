@@ -51,6 +51,11 @@ final class TranscriptRenderer {
     /// the live zone). Reset to 0 on every `messageStart(.assistant)`.
     private var streamingCommittedPrefix: Int = 0
 
+    /// Verbose diagnostics that arrived while the assistant body was live.
+    /// They are committed after `messageEnd` so provider logs don't interleave
+    /// with token streaming in the live zone.
+    private var queuedVerboseLines: [String] = []
+
     /// In-flight tool calls, kept in **start order** so we can drain the
     /// front-of-queue when settlements land (out-of-order completions
     /// wait for preceding ones). Each slot carries either a `.running`
@@ -218,6 +223,7 @@ final class TranscriptRenderer {
                 streamingBody = []
                 streamingCommittedPrefix = 0
                 recomputeLive()
+                flushQueuedVerbose()
             case .toolResult, .user:
                 break
             }
@@ -239,7 +245,7 @@ final class TranscriptRenderer {
             recomputeLive()
 
         case .agentEnd:
-            break
+            flushQueuedVerbose()
 
         case .streamRetry(_, let delayMs, _):
             let delayLabel = delayMs >= 1000
@@ -264,7 +270,16 @@ final class TranscriptRenderer {
             }
             streamingBody = []
             streamingCommittedPrefix = 0
+            queuedVerboseLines.removeAll()
             recomputeLive()
+
+        case .verbose(let event):
+            let lines = renderVerbose(event)
+            if streaming {
+                queuedVerboseLines.append(contentsOf: lines)
+            } else {
+                commit(lines)
+            }
 
         default: break
         }
@@ -288,6 +303,12 @@ final class TranscriptRenderer {
             commit(resolved)
             toolSlots.removeFirst()
         }
+    }
+
+    private func flushQueuedVerbose() {
+        guard !queuedVerboseLines.isEmpty else { return }
+        commit(queuedVerboseLines)
+        queuedVerboseLines.removeAll()
     }
 
     /// Rebuild `liveLines` from the current streaming body + any
@@ -483,6 +504,26 @@ final class TranscriptRenderer {
             out.append(styler("  ⎿ … \(hidden) more lines"))
         }
         return out
+    }
+
+    private func renderVerbose(_ event: VerboseEvent) -> [String] {
+        var line = "  verbose"
+        if !event.source.isEmpty {
+            line += " [\(event.source)]"
+        }
+        line += ": \(event.message)"
+        let metadata = formatVerboseMetadata(event.metadata)
+        if !metadata.isEmpty {
+            line += " · \(metadata)"
+        }
+        return ["", Style.dimmed(line)]
+    }
+
+    private func formatVerboseMetadata(_ metadata: [String: JSONValue]) -> String {
+        metadata.keys.sorted().compactMap { key in
+            guard let value = metadata[key] else { return nil }
+            return "\(key)=\(formatValue(value))"
+        }.joined(separator: " ")
     }
 
     private func truncate(_ s: String, to max: Int) -> String {

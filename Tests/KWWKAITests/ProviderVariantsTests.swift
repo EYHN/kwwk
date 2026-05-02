@@ -39,7 +39,7 @@ struct ProviderVariantsTests {
         _ = provider.stream(
             model: model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
-            options: nil
+            options: StreamOptions(transport: .sse)
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
@@ -62,7 +62,7 @@ struct ProviderVariantsTests {
         _ = provider.stream(
             model: model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
-            options: StreamOptions(metadata: ["deployment": .string("gpt4o-prod")])
+            options: StreamOptions(transport: .sse, metadata: ["deployment": .string("gpt4o-prod")])
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
@@ -206,7 +206,7 @@ struct ProviderVariantsTests {
         _ = provider.stream(
             model: model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
-            options: nil
+            options: StreamOptions(transport: .sse)
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
@@ -214,5 +214,53 @@ struct ProviderVariantsTests {
         #expect(client.lastRequest?.headers["authorization"] == "Bearer codex-bearer")
         #expect(client.lastRequest?.headers["chatgpt-account-id"] == "acct-xyz")
         #expect(client.lastRequest?.headers["openai-beta"] == "responses=experimental")
+    }
+
+    @Test("ChatGPT Codex defaults to WebSocket and uses WebSocket beta")
+    func codexWebSocketDefault() async throws {
+        let http = StubSSEClient(body: Self.openaiResponsesSSE)
+        let connection = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.openaiResponsesSSE)])
+        let ws = StubWebSocketClient(connection: connection)
+        let provider = ProviderVariants.chatgptCodex(
+            accessToken: "codex-bearer",
+            accountId: "acct-xyz",
+            client: http,
+            webSocketClient: ws
+        )
+        let model = Model(id: "gpt-5-codex", name: "gpt-5-codex", api: "chatgpt-codex", provider: "chatgpt-codex")
+
+        let s = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "codex-ws")
+        )
+        for await _ in s {}
+
+        #expect(await s.result().responseId == "r")
+        #expect(http.lastRequest == nil)
+        #expect(ws.lastURL?.absoluteString == "wss://chatgpt.com/backend-api/codex/responses")
+        #expect(ws.lastHeaders["authorization"] == "Bearer codex-bearer")
+        #expect(ws.lastHeaders["chatgpt-account-id"] == "acct-xyz")
+        #expect(ws.lastHeaders["openai-beta"] == "responses_websockets=2026-02-06")
+
+        let payload = try Self.jsonObject(connection.sentTexts[0])
+        #expect(payload["type"] as? String == "response.create")
+        #expect(payload["store"] as? Bool == false)
+    }
+
+    private static func webSocketMessages(from sse: String) -> [String] {
+        sse.components(separatedBy: "\n\n").compactMap { block in
+            let dataLines = block.split(separator: "\n").compactMap { line -> String? in
+                let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard text.hasPrefix("data:") else { return nil }
+                return String(text.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces)
+            }
+            return dataLines.isEmpty ? nil : dataLines.joined(separator: "\n")
+        }
+    }
+
+    private static func jsonObject(_ text: String) throws -> [String: Any] {
+        let data = Data(text.utf8)
+        return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     }
 }
