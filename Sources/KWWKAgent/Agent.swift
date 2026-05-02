@@ -64,7 +64,7 @@ public struct AgentOptions: Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
-    public var apiKeyResolver: (@Sendable (String) async -> String?)?
+    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
     public init(
         initialState: AgentInitialState,
@@ -84,7 +84,7 @@ public struct AgentOptions: Sendable {
         convertToLlm: ConvertToLlmHook? = nil,
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
-        apiKeyResolver: (@Sendable (String) async -> String?)? = nil
+        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil
     ) {
         self.initialState = initialState
         self.streamFn = streamFn
@@ -103,7 +103,7 @@ public struct AgentOptions: Sendable {
         self.convertToLlm = convertToLlm
         self.transformContext = transformContext
         self.betweenTurns = betweenTurns
-        self.apiKeyResolver = apiKeyResolver
+        self.authResolver = authResolver
     }
 }
 
@@ -131,7 +131,7 @@ public final class Agent: @unchecked Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
-    public var apiKeyResolver: (@Sendable (String) async -> String?)?
+    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
     /// Base delay (ms) used for exponential backoff between stream retries.
     /// Exposed internally so tests can shrink the 1-second default.
@@ -184,7 +184,7 @@ public final class Agent: @unchecked Sendable {
         self.convertToLlm = options.convertToLlm
         self.transformContext = options.transformContext
         self.betweenTurns = options.betweenTurns
-        self.apiKeyResolver = options.apiKeyResolver
+        self.authResolver = options.authResolver
         self.steeringQueue = PendingMessageQueue(mode: options.steeringMode)
         self.followUpQueue = PendingMessageQueue(mode: options.followUpMode)
     }
@@ -392,7 +392,7 @@ extension Agent {
                 return steering.drain()
             },
             getFollowUpMessages: { followUp.drain() },
-            apiKeyResolver: apiKeyResolver,
+            authResolver: authResolver,
             beforeToolCall: beforeToolCall,
             afterToolCall: afterToolCall,
             userPromptSubmit: userPromptSubmit,

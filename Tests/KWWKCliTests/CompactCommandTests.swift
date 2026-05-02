@@ -133,6 +133,57 @@ struct CompactCommandTests {
     }
 
     @MainActor
+    @Test("compact passes the active session to auth resolution and streaming")
+    func compactUsesSessionBoundAuth() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+
+        let capture = CompactAuthCapture()
+        faux.setResponses([
+            .factory { _, options, _, _ in
+                capture.recordStream(
+                    sessionId: options?.sessionId,
+                    token: options?.resolvedAuth?.token
+                )
+                return fauxAssistantMessage("session-bound recap")
+            }
+        ])
+
+        let messages: [Message] = [
+            .user(UserMessage(content: [.text(TextContent(text: "one"))])),
+            .assistant(fauxAssistantMessage("two")),
+            .user(UserMessage(content: [.text(TextContent(text: "three"))])),
+            .assistant(fauxAssistantMessage("four")),
+        ]
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: faux.getModel(),
+                messages: messages
+            ),
+            authResolver: { model, sessionId in
+                capture.recordResolver(provider: model.provider, sessionId: sessionId)
+                return ResolvedProviderAuth(token: "session-token", scheme: .bearer)
+            }
+        ))
+
+        let outcome = await performCompact(
+            agent: agent,
+            backgroundManager: BackgroundTaskManager(outputDir: makeTempDir()),
+            sessionId: "compact-session"
+        )
+
+        if case .compacted = outcome {
+            // Expected.
+        } else {
+            Issue.record("expected compaction to succeed")
+        }
+        #expect(capture.resolverProvider == faux.provider)
+        #expect(capture.resolverSessionId == "compact-session")
+        #expect(capture.streamSessionId == "compact-session")
+        #expect(capture.streamToken == "session-token")
+    }
+
+    @MainActor
     @Test("renderCompactBoundary fills the width with a compacted rule")
     func renderCompactBoundaryShape() {
         let lines = renderCompactBoundary(
@@ -210,4 +261,26 @@ final class CommitBox {
     }
 
     var joined: String { lines.joined(separator: "\n") }
+}
+
+private final class CompactAuthCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var resolverProvider: String?
+    private(set) var resolverSessionId: String?
+    private(set) var streamSessionId: String?
+    private(set) var streamToken: String?
+
+    func recordResolver(provider: String, sessionId: String?) {
+        lock.withLock {
+            resolverProvider = provider
+            resolverSessionId = sessionId
+        }
+    }
+
+    func recordStream(sessionId: String?, token: String?) {
+        lock.withLock {
+            streamSessionId = sessionId
+            streamToken = token
+        }
+    }
 }

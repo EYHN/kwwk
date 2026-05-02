@@ -102,7 +102,9 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             "accept": "text/event-stream",
         ]
         for (k, v) in extraHeaders { headers[k] = v }
-        if let key = options?.apiKey ?? defaultAPIKey {
+        if let auth = options?.resolvedAuth {
+            applyResolvedAuth(auth, to: &headers)
+        } else if let key = options?.apiKey ?? defaultAPIKey {
             for (k, v) in authHeaderBuilder(key) { headers[k] = v }
         }
         headersDecorator?(&headers, model, context, options)

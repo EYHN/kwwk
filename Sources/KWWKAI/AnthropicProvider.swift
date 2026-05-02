@@ -98,7 +98,9 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             "anthropic-version": apiVersion,
         ]
         for (k, v) in extraHeaders { headers[k] = v }
-        if let key = options?.apiKey ?? defaultAPIKey {
+        if let auth = options?.resolvedAuth {
+            applyResolvedAuth(auth, to: &headers)
+        } else if let key = options?.apiKey ?? defaultAPIKey {
             for (k, v) in authHeaderBuilder(key) { headers[k] = v }
         }
         if let extra = options?.headers {

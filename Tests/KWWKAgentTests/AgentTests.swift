@@ -382,6 +382,58 @@ struct AgentIntegrationTests {
         #expect(events.first?.message == "connected")
         #expect(events.first?.metadata["attempt"] == .int(1))
     }
+
+    @Test("resolves provider auth per session before streaming")
+    func resolvesProviderAuthBeforeStreaming() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let capture = StreamAuthCapture()
+        let streamFn: StreamFn = { model, _, options in
+            await capture.record(model: model, options: options)
+            let message = AssistantMessage(
+                content: [.text(TextContent(text: "ok"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id
+            )
+            let stream = AssistantMessageStream()
+            stream.push(.start(partial: message))
+            stream.push(.textStart(contentIndex: 0, partial: message))
+            stream.push(.textDelta(contentIndex: 0, delta: "ok", partial: message))
+            stream.push(.textEnd(contentIndex: 0, content: "ok", partial: message))
+            stream.push(.done(reason: .stop, message: message))
+            stream.end(message)
+            return stream
+        }
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: registration.getModel()),
+            streamFn: streamFn,
+            sessionId: "session-auth",
+            authResolver: { model, sessionId in
+                await capture.recordResolver(model: model, sessionId: sessionId)
+                return ResolvedProviderAuth(
+                    token: "resolved-token",
+                    scheme: .bearer,
+                    baseURL: "https://proxy.example",
+                    metadata: ["deployment": .string("prod")]
+                )
+            }
+        ))
+
+        try await agent.prompt("hi")
+
+        let resolved = await capture.resolved
+        let streamed = await capture.streamed
+        #expect(resolved?.model.id == registration.getModel().id)
+        #expect(resolved?.sessionId == "session-auth")
+        #expect(streamed?.model.baseUrl == "https://proxy.example")
+        #expect(streamed?.options?.apiKey == "resolved-token")
+        #expect(streamed?.options?.sessionId == "session-auth")
+        #expect(streamed?.options?.resolvedAuth?.scheme == .bearer)
+        #expect(streamed?.options?.resolvedAuth?.token == "resolved-token")
+        #expect(streamed?.options?.metadata?["deployment"] == .string("prod"))
+    }
 }
 
 @Suite("Agent.continue")
@@ -525,6 +577,19 @@ actor VerboseEventLog {
     var log: [VerboseEvent] = []
     func append(_ event: VerboseEvent) { log.append(event) }
     func values() -> [VerboseEvent] { log }
+}
+
+actor StreamAuthCapture {
+    var resolved: (model: Model, sessionId: String?)?
+    var streamed: (model: Model, options: StreamOptions?)?
+
+    func recordResolver(model: Model, sessionId: String?) {
+        resolved = (model, sessionId)
+    }
+
+    func record(model: Model, options: StreamOptions?) {
+        streamed = (model, options)
+    }
 }
 
 actor AsyncBarrier {

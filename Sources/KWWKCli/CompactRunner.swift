@@ -60,7 +60,8 @@ func performCompact(
         let summary = try await summarizeTranscript(
             messages: snapshot,
             model: agent.state.model,
-            apiKeyResolver: agent.apiKeyResolver
+            sessionId: sessionId,
+            authResolver: agent.authResolver
         )
         var body = """
         <previous-session-summary>
@@ -153,12 +154,13 @@ enum CompactError: Error, LocalizedError {
 
 /// Fire a one-shot LLM call (no tools, isolated system prompt) to produce
 /// a compressed recap of the conversation. The call uses the same model +
-/// api-key resolver as the agent, so Codex / Anthropic / etc. all work
+/// auth resolver as the agent, so Codex / Anthropic / etc. all work
 /// transparently.
 func summarizeTranscript(
     messages: [Message],
     model: Model,
-    apiKeyResolver: (@Sendable (String) async -> String?)?
+    sessionId: String?,
+    authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 ) async throws -> String {
     let transcript = renderForSummary(messages)
 
@@ -191,13 +193,23 @@ func summarizeTranscript(
         tools: []
     )
 
-    var apiKey: String?
-    if let resolver = apiKeyResolver {
-        apiKey = await resolver(model.provider)
+    let resolvedAuth = await authResolver?(model, sessionId)
+    var requestModel = model
+    if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
+        requestModel.baseUrl = baseURL
     }
-    let options = StreamOptions(apiKey: apiKey)
+    let metadata: [String: JSONValue]? = {
+        guard let authMetadata = resolvedAuth?.metadata, !authMetadata.isEmpty else { return nil }
+        return authMetadata
+    }()
+    let options = StreamOptions(
+        apiKey: resolvedAuth?.token,
+        sessionId: sessionId,
+        metadata: metadata,
+        resolvedAuth: resolvedAuth
+    )
 
-    let response = try await stream(model: model, context: context, options: options)
+    let response = try await stream(model: requestModel, context: context, options: options)
     let result = await response.result()
 
     if result.stopReason == .error {

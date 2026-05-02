@@ -10,7 +10,7 @@ public func createAgentTool(
     parentMaxRetryDelayMs: Int? = nil,
     backgroundManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil,
-    apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
+    authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600
 ) -> AgentTool {
@@ -19,7 +19,7 @@ public func createAgentTool(
         thinkingLevel: parentThinkingLevel,
         thinkingBudgets: parentThinkingBudgets,
         maxRetryDelayMs: parentMaxRetryDelayMs,
-        apiKeyResolver: apiKeyResolver
+        authResolver: authResolver
     )
     return _createAgentTool(
         cwd: cwd,
@@ -38,7 +38,7 @@ public func createAgentTool(
     parentAgent: Agent,
     backgroundManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil,
-    fallbackAPIKeyResolver: (@Sendable (String) async -> String?)? = nil,
+    fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600
 ) -> AgentTool {
@@ -47,7 +47,7 @@ public func createAgentTool(
         fallbackThinkingLevel: parentAgent.state.thinkingLevel,
         fallbackThinkingBudgets: parentAgent.thinkingBudgets,
         fallbackMaxRetryDelayMs: parentAgent.maxRetryDelayMs,
-        fallbackAPIKeyResolver: parentAgent.apiKeyResolver ?? fallbackAPIKeyResolver
+        fallbackAuthResolver: parentAgent.authResolver ?? fallbackAuthResolver
     )
     parentBox.attach(parentAgent)
     return _createAgentTool(
@@ -66,7 +66,7 @@ internal struct SubagentParentSnapshot: Sendable {
     var thinkingLevel: ThinkingLevel
     var thinkingBudgets: ThinkingBudgets?
     var maxRetryDelayMs: Int?
-    var apiKeyResolver: (@Sendable (String) async -> String?)?
+    var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 }
 
 internal final class SubagentParentBox: @unchecked Sendable {
@@ -76,20 +76,20 @@ internal final class SubagentParentBox: @unchecked Sendable {
     private let fallbackThinkingLevel: ThinkingLevel
     private let fallbackThinkingBudgets: ThinkingBudgets?
     private let fallbackMaxRetryDelayMs: Int?
-    private let fallbackAPIKeyResolver: (@Sendable (String) async -> String?)?
+    private let fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
     init(
         fallbackModel: Model,
         fallbackThinkingLevel: ThinkingLevel,
         fallbackThinkingBudgets: ThinkingBudgets?,
         fallbackMaxRetryDelayMs: Int?,
-        fallbackAPIKeyResolver: (@Sendable (String) async -> String?)?
+        fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
     ) {
         self.fallbackModel = fallbackModel
         self.fallbackThinkingLevel = fallbackThinkingLevel
         self.fallbackThinkingBudgets = fallbackThinkingBudgets
         self.fallbackMaxRetryDelayMs = fallbackMaxRetryDelayMs
-        self.fallbackAPIKeyResolver = fallbackAPIKeyResolver
+        self.fallbackAuthResolver = fallbackAuthResolver
     }
 
     func attach(_ agent: Agent) {
@@ -104,7 +104,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     thinkingLevel: fallbackThinkingLevel,
                     thinkingBudgets: fallbackThinkingBudgets,
                     maxRetryDelayMs: fallbackMaxRetryDelayMs,
-                    apiKeyResolver: fallbackAPIKeyResolver
+                    authResolver: fallbackAuthResolver
                 )
             }
             return SubagentParentSnapshot(
@@ -112,7 +112,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
                 thinkingLevel: agent.state.thinkingLevel,
                 thinkingBudgets: agent.thinkingBudgets,
                 maxRetryDelayMs: agent.maxRetryDelayMs,
-                apiKeyResolver: agent.apiKeyResolver ?? fallbackAPIKeyResolver
+                authResolver: agent.authResolver ?? fallbackAuthResolver
             )
         }
     }
@@ -443,8 +443,6 @@ private enum SubagentPromptBuilder {
         """
         return buildSystemPrompt(SystemPromptOptions(
             cwd: cwd,
-            selectedToolNames: tools.map { $0.name },
-            toolSnippets: DefaultToolSnippets.all,
             appendSystemPrompt: instructions
         ))
     }
@@ -540,7 +538,7 @@ public struct SubagentRunner: Sendable {
         parentMaxRetryDelayMs: Int? = nil,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String? = nil,
-        apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
+        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600
     ) {
@@ -549,7 +547,7 @@ public struct SubagentRunner: Sendable {
             thinkingLevel: parentThinkingLevel,
             thinkingBudgets: parentThinkingBudgets,
             maxRetryDelayMs: parentMaxRetryDelayMs,
-            apiKeyResolver: apiKeyResolver
+            authResolver: authResolver
         )
         self.cwd = cwd
         self.subagents = subagents
@@ -566,7 +564,7 @@ public struct SubagentRunner: Sendable {
         parentAgent: Agent,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String? = nil,
-        fallbackAPIKeyResolver: (@Sendable (String) async -> String?)? = nil,
+        fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600
     ) {
@@ -575,7 +573,7 @@ public struct SubagentRunner: Sendable {
             fallbackThinkingLevel: parentAgent.state.thinkingLevel,
             fallbackThinkingBudgets: parentAgent.thinkingBudgets,
             fallbackMaxRetryDelayMs: parentAgent.maxRetryDelayMs,
-            fallbackAPIKeyResolver: parentAgent.apiKeyResolver ?? fallbackAPIKeyResolver
+            fallbackAuthResolver: parentAgent.authResolver ?? fallbackAuthResolver
         )
         parentBox.attach(parentAgent)
         self.cwd = cwd
@@ -808,7 +806,7 @@ private struct SubagentInvocationRunner: Sendable {
             sessionId: childSessionId,
             thinkingBudgets: parent.thinkingBudgets,
             maxRetryDelayMs: parent.maxRetryDelayMs,
-            apiKeyResolver: parent.apiKeyResolver
+            authResolver: parent.authResolver
         ))
         let progress = SubagentProgressEmitter(
             subagentName: definition.name,

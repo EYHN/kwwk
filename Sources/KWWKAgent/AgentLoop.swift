@@ -22,7 +22,7 @@ public struct AgentLoopConfig: Sendable {
     public var retryBaseDelayMs: UInt64
     public var getSteeringMessages: @Sendable () async -> [Message]
     public var getFollowUpMessages: @Sendable () async -> [Message]
-    public var apiKeyResolver: (@Sendable (String) async -> String?)?
+    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
     public var beforeToolCall: BeforeToolCallHook?
     public var afterToolCall: AfterToolCallHook?
     public var userPromptSubmit: UserPromptSubmitHook?
@@ -44,7 +44,7 @@ public struct AgentLoopConfig: Sendable {
         retryBaseDelayMs: UInt64 = 1_000,
         getSteeringMessages: @escaping @Sendable () async -> [Message] = { [] },
         getFollowUpMessages: @escaping @Sendable () async -> [Message] = { [] },
-        apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
+        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
         beforeToolCall: BeforeToolCallHook? = nil,
         afterToolCall: AfterToolCallHook? = nil,
         userPromptSubmit: UserPromptSubmitHook? = nil,
@@ -65,7 +65,7 @@ public struct AgentLoopConfig: Sendable {
         self.retryBaseDelayMs = retryBaseDelayMs
         self.getSteeringMessages = getSteeringMessages
         self.getFollowUpMessages = getFollowUpMessages
-        self.apiKeyResolver = apiKeyResolver
+        self.authResolver = authResolver
         self.beforeToolCall = beforeToolCall
         self.afterToolCall = afterToolCall
         self.userPromptSubmit = userPromptSubmit
@@ -444,12 +444,22 @@ public enum AgentLoop {
             tools: context.tools.map { $0.toKWAITool() }
         )
 
-        let resolvedKey = await config.apiKeyResolver?(config.model.provider)
+        let resolvedAuth = await config.authResolver?(config.model, config.sessionId)
+        var requestModel = config.model
+        if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
+            requestModel.baseUrl = baseURL
+        }
+        let mergedMetadata: [String: JSONValue]? = {
+            guard let authMetadata = resolvedAuth?.metadata, !authMetadata.isEmpty else { return nil }
+            return authMetadata
+        }()
         let options = StreamOptions(
-            apiKey: resolvedKey,
+            apiKey: resolvedAuth?.token,
             cacheRetention: nil,
             sessionId: config.sessionId,
             maxRetryDelayMs: config.maxRetryDelayMs,
+            metadata: mergedMetadata,
+            resolvedAuth: resolvedAuth,
             reasoning: config.reasoning,
             thinkingBudgets: config.thinkingBudgets,
             cancellation: cancellation,
@@ -469,7 +479,7 @@ public enum AgentLoop {
             }
 
             do {
-                let response = try await streamFn(config.model, llmContext, options)
+                let response = try await streamFn(requestModel, llmContext, options)
 
                 // Live-stream events as they arrive so the UI shows tokens
                 // in real time. A retryable mid-stream error emits

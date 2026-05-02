@@ -8,11 +8,6 @@ struct SystemPromptTests {
     func defaultPrompt() {
         let prompt = buildSystemPrompt(SystemPromptOptions(
             cwd: "/tmp/project",
-            selectedToolNames: ["read", "bash"],
-            toolSnippets: [
-                "read": "Read file contents",
-                "bash": "Execute shell commands",
-            ],
             date: "2024-06-15"
         ))
         #expect(prompt.contains("operating inside kwwk"))
@@ -25,23 +20,9 @@ struct SystemPromptTests {
 
     @Test("does not render a synthetic tool list")
     func hiddenTools() {
-        let prompt = buildSystemPrompt(SystemPromptOptions(
-            cwd: "/tmp",
-            selectedToolNames: ["read"],
-            toolSnippets: [:]
-        ))
+        let prompt = buildSystemPrompt(SystemPromptOptions(cwd: "/tmp"))
         #expect(!prompt.contains("(none)"))
         #expect(!prompt.contains("Available tools:"))
-    }
-
-    @Test("prefers grep/find/ls over bash when all are present")
-    func preferenceGuideline() {
-        let prompt = buildSystemPrompt(SystemPromptOptions(
-            cwd: "/tmp",
-            selectedToolNames: ["bash", "grep", "find", "ls", "read", "write", "edit"],
-            toolSnippets: DefaultToolSnippets.all
-        ))
-        #expect(prompt.contains("Prefer grep/find/ls tools over bash for file exploration"))
     }
 
     @Test("customPrompt replaces the default body and keeps metadata")
@@ -62,8 +43,6 @@ struct SystemPromptTests {
     func contextFiles() {
         let prompt = buildSystemPrompt(SystemPromptOptions(
             cwd: "/a",
-            selectedToolNames: ["read"],
-            toolSnippets: ["read": "Read file contents"],
             contextFiles: [
                 (path: "CLAUDE.md", content: "be helpful"),
                 (path: "AGENTS.md", content: "use tools"),

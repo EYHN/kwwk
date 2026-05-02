@@ -137,6 +137,29 @@ struct OpenAIResponsesTests {
         } else { Issue.record("expected text last") }
     }
 
+    @Test("resolved auth can select custom API key header")
+    func resolvedAuthCustomAPIKeyHeader() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "sk-default")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(
+                apiKey: "sk-ignored",
+                resolvedAuth: ResolvedProviderAuth(
+                    token: "azure-key",
+                    scheme: .apiKeyHeader(name: "api-key"),
+                    headers: ["x-ms-client-request-id": "req-1"]
+                )
+            )
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let headers = client.lastRequest?.headers ?? [:]
+        #expect(headers["authorization"] == nil)
+        #expect(headers["api-key"] == "azure-key")
+        #expect(headers["x-ms-client-request-id"] == "req-1")
+    }
+
     @Test("encodes input array with instructions + tools")
     func bodyEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)

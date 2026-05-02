@@ -144,6 +144,40 @@ struct GoogleGeminiTests {
         #expect(client.lastRequest?.headers["authorization"] == nil)
     }
 
+    @Test("resolved auth query key controls URL auth")
+    func resolvedAuthQueryKey() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = GoogleGeminiProvider(client: client, defaultAPIKey: "default-key")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(
+                apiKey: "ignored-key",
+                resolvedAuth: ResolvedProviderAuth(token: "resolved-key", scheme: .queryKey(name: "key"))
+            )
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.url.absoluteString.contains("key=resolved-key") == true)
+        #expect(client.lastRequest?.url.absoluteString.contains("ignored-key") == false)
+        #expect(client.lastRequest?.headers["authorization"] == nil)
+    }
+
+    @Test("resolved auth ignores mismatched query key names")
+    func resolvedAuthMismatchedQueryKeyName() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = GoogleGeminiProvider(client: client, defaultAPIKey: "default-key")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(
+                resolvedAuth: ResolvedProviderAuth(token: "resolved-key", scheme: .queryKey(name: "api_key"))
+            )
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.url.absoluteString.contains("resolved-key") == false)
+        #expect(client.lastRequest?.headers["authorization"] == nil)
+    }
+
     @Test("encodes tools as functionDeclarations + systemInstruction")
     func bodyEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)

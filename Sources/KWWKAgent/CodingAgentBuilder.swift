@@ -41,8 +41,8 @@ public struct CodingAgentConfig: Sendable {
     public var model: Model
     public var cwd: String
     public var tools: CodingTools
-    /// If nil, a system prompt is synthesized from the selected tools +
-    /// `DefaultToolSnippets.all`. Pass a non-nil string to fully override.
+    /// If nil, a default system prompt is synthesized. Pass a non-nil string
+    /// to fully override.
     public var systemPrompt: String?
     /// When non-nil, wired into both the bash tool (for
     /// `run_in_background` + auto-background-on-timeout) and the
@@ -53,7 +53,7 @@ public struct CodingAgentConfig: Sendable {
     /// When empty, no `agent` tool is registered.
     public var subagents: [SubagentDefinition]
     public var sessionId: String
-    public var apiKeyResolver: (@Sendable (String) async -> String?)?
+    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
     /// Soft foreground timeout for bash commands. The command auto-moves to
     /// the background on this deadline when a `backgroundManager` is attached.
     public var bashDefaultTimeoutSeconds: Int
@@ -67,7 +67,7 @@ public struct CodingAgentConfig: Sendable {
         backgroundManager: BackgroundTaskManager? = nil,
         subagents: [SubagentDefinition] = [],
         sessionId: String = UUID().uuidString,
-        apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
+        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600
     ) {
@@ -78,7 +78,7 @@ public struct CodingAgentConfig: Sendable {
         self.backgroundManager = backgroundManager
         self.subagents = subagents
         self.sessionId = sessionId
-        self.apiKeyResolver = apiKeyResolver
+        self.authResolver = authResolver
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
     }
@@ -132,7 +132,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         fallbackThinkingLevel: .off,
         fallbackThinkingBudgets: nil,
         fallbackMaxRetryDelayMs: nil,
-        fallbackAPIKeyResolver: config.apiKeyResolver
+        fallbackAuthResolver: config.authResolver
     )
     if !config.subagents.isEmpty {
         tools.append(_createAgentTool(
@@ -146,11 +146,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         ))
     }
 
-    let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(
-        cwd: cwd,
-        selectedToolNames: tools.map { $0.name },
-        toolSnippets: DefaultToolSnippets.all
-    ))
+    let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(cwd: cwd))
 
     let agent = Agent(options: AgentOptions(
         initialState: AgentInitialState(
@@ -159,7 +155,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
             tools: tools
         ),
         sessionId: sessionId,
-        apiKeyResolver: config.apiKeyResolver
+        authResolver: config.authResolver
     ))
     subagentParent.attach(agent)
 

@@ -75,9 +75,12 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         options: StreamOptions?
     ) async {
         // When auth is a header (Vertex Bearer), build URL without the `?key=`.
-        let queryKey: String? = authHeaderBuilder == nil
-            ? (options?.apiKey ?? defaultAPIKey)
-            : nil
+        let queryKey: String? = {
+            if let auth = options?.resolvedAuth {
+                return resolvedQueryKey(auth, expectedName: "key")
+            }
+            return authHeaderBuilder == nil ? (options?.apiKey ?? defaultAPIKey) : nil
+        }()
         let url = urlBuilder(model, options, defaultBaseURL, queryKey)
 
         let body: Data
@@ -95,7 +98,9 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             "accept": "text/event-stream",
         ]
         for (k, v) in extraHeaders { headers[k] = v }
-        if let builder = authHeaderBuilder, let key = options?.apiKey ?? defaultAPIKey {
+        if let auth = options?.resolvedAuth {
+            applyResolvedAuth(auth, to: &headers)
+        } else if let builder = authHeaderBuilder, let key = options?.apiKey ?? defaultAPIKey {
             for (k, v) in builder(key) { headers[k] = v }
         }
         for (k, v) in options?.headers ?? [:] { headers[k] = v }

@@ -3,10 +3,6 @@ import Foundation
 public struct SystemPromptOptions: Sendable {
     public var cwd: String
     public var customPrompt: String?
-    public var selectedToolNames: [String]?
-    /// One-line snippet per tool name — only tools with a snippet appear in the
-    /// "Available tools" list. Matches pi-coding-agent's `toolSnippets`.
-    public var toolSnippets: [String: String]
     public var promptGuidelines: [String]
     public var appendSystemPrompt: String?
     public var contextFiles: [(path: String, content: String)]
@@ -16,8 +12,6 @@ public struct SystemPromptOptions: Sendable {
     public init(
         cwd: String,
         customPrompt: String? = nil,
-        selectedToolNames: [String]? = nil,
-        toolSnippets: [String: String] = [:],
         promptGuidelines: [String] = [],
         appendSystemPrompt: String? = nil,
         contextFiles: [(path: String, content: String)] = [],
@@ -26,8 +20,6 @@ public struct SystemPromptOptions: Sendable {
     ) {
         self.cwd = cwd
         self.customPrompt = customPrompt
-        self.selectedToolNames = selectedToolNames
-        self.toolSnippets = toolSnippets
         self.promptGuidelines = promptGuidelines
         self.appendSystemPrompt = appendSystemPrompt
         self.contextFiles = contextFiles
@@ -36,12 +28,7 @@ public struct SystemPromptOptions: Sendable {
     }
 }
 
-/// Mirror of pi-coding-agent's `buildSystemPrompt`. The default tool list is
-/// [read, bash, edit, write] for guideline selection; tool schemas are provided
-/// to the model separately by the provider.
 public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
-    let tools = options.selectedToolNames ?? ["read", "bash", "edit", "write"]
-
     var guidelines: [String] = []
     var seenGuidelines: Set<String> = []
     func add(_ g: String) {
@@ -51,17 +38,6 @@ public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
         guidelines.append(trimmed)
     }
 
-    let hasBash = tools.contains("bash")
-    let hasGrep = tools.contains("grep")
-    let hasFind = tools.contains("find")
-    let hasLs = tools.contains("ls")
-    let hasRead = tools.contains("read")
-
-    if hasBash && !hasGrep && !hasFind && !hasLs {
-        add("Use bash for file operations like ls, rg, find")
-    } else if hasBash && (hasGrep || hasFind || hasLs) {
-        add("Prefer grep/find/ls tools over bash for file exploration (faster, respects .gitignore)")
-    }
     for g in options.promptGuidelines { add(g) }
     add("Be concise in your responses")
     add("Show file paths clearly when working with files")
@@ -85,7 +61,7 @@ public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
                 prompt += "## \(file.path)\n\n\(file.content)\n\n"
             }
         }
-        if (options.selectedToolNames == nil || hasRead), !options.skills.isEmpty {
+        if !options.skills.isEmpty {
             prompt += formatSkills(options.skills)
         }
         prompt += "\nCurrent date: \(date)\nCurrent working directory: \(normalizedCwd)"
@@ -106,7 +82,7 @@ public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
             prompt += "## \(file.path)\n\n\(file.content)\n\n"
         }
     }
-    if hasRead, !options.skills.isEmpty {
+    if !options.skills.isEmpty {
         prompt += formatSkills(options.skills)
     }
     prompt += "\nCurrent date: \(date)\nCurrent working directory: \(normalizedCwd)"
@@ -118,18 +94,4 @@ private func formatSkills(_ skills: [String]) -> String {
     var out = "\n\n# Skills\n\n"
     for skill in skills { out += "- \(skill)\n" }
     return out
-}
-
-// MARK: - Default tool snippets
-
-public enum DefaultToolSnippets {
-    public static let all: [String: String] = [
-        "read": "Read file contents",
-        "write": "Create or overwrite files",
-        "edit": "Make precise text replacements inside a file",
-        "bash": "Execute shell commands",
-        "grep": "Search file contents for a regex pattern",
-        "find": "Find files matching a glob pattern",
-        "ls": "List directory contents",
-    ]
 }

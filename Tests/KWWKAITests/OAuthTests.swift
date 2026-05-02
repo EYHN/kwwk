@@ -250,7 +250,7 @@ struct OAuthManagerTests {
         }
     }
 
-    @Test("resolver() returns an agent-compatible api-key closure") func resolverShape() async throws {
+    @Test("resolver() returns an agent-compatible auth closure") func resolverShape() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -262,7 +262,37 @@ struct OAuthManagerTests {
         )
         let manager = OAuthManager(store: store, providers: [AnthropicOAuthProvider()])
         let resolver = manager.resolver()
-        #expect(await resolver("anthropic") == "static")
-        #expect(await resolver("unknown-xyz") == nil)
+        let model = Model(id: "claude", api: "anthropic-messages", provider: "anthropic")
+        let auth = await resolver(model, nil)
+        #expect(auth?.token == "static")
+        #expect(auth?.scheme == .bearer)
+        let unknown = Model(id: "unknown", api: "unknown", provider: "unknown-xyz")
+        #expect(await resolver(unknown, nil) == nil)
+    }
+
+    @Test("resolver() includes GitHub Copilot endpoint as baseURL") func resolverPreservesCopilotEndpoint() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let endpoint = "https://api.business.githubcopilot.com"
+        let store = OAuthStore(url: tmp)
+        try await store.set(
+            OAuthCredentials(
+                access: "session-token",
+                refresh: "ghp_pat",
+                expires: Int64.max / 2,
+                extras: ["endpoint": .string(endpoint)]
+            ),
+            for: "github-copilot"
+        )
+        let manager = OAuthManager(store: store, providers: [GitHubCopilotOAuthProvider()])
+        let resolver = manager.resolver()
+        let model = Model(id: "gpt-4.1", api: "openai-completions", provider: "github-copilot")
+
+        let auth = await resolver(model, nil)
+        #expect(auth?.token == "session-token")
+        #expect(auth?.scheme == .bearer)
+        #expect(auth?.baseURL == endpoint)
     }
 }

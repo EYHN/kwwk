@@ -44,7 +44,7 @@ func runHeadlessInternal(
         backgroundManager: bgManager,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
-        apiKeyResolver: resolved.apiKeyResolver
+        authResolver: resolved.authResolver
     ))
     agent.state.thinkingLevel = thinkingLevel
 

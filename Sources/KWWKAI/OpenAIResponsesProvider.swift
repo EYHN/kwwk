@@ -415,7 +415,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             headers["accept"] = accept
         }
         for (k, v) in extraHeaders { mergeHeader(&headers, name: k, value: v, append: false) }
-        if let key = options?.apiKey ?? defaultAPIKey {
+        if let auth = options?.resolvedAuth {
+            applyResolvedAuth(auth, to: &headers) { headers, name, value in
+                mergeHeader(&headers, name: name, value: value, append: false)
+            }
+        } else if let key = options?.apiKey ?? defaultAPIKey {
             for (k, v) in authHeaderBuilder(key) {
                 mergeHeader(&headers, name: k, value: v, append: false)
             }

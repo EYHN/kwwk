@@ -104,6 +104,22 @@ struct OpenAICompletionsTests {
         #expect(client.lastRequest?.headers["authorization"] == "Bearer sk-override")
     }
 
+    @Test("resolved auth overrides apiKey and default key")
+    func resolvedAuthHeader() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-default")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(
+                apiKey: "sk-ignored",
+                resolvedAuth: ResolvedProviderAuth(token: "sk-resolved", scheme: .bearer)
+            )
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.headers["authorization"] == "Bearer sk-resolved")
+    }
+
     @Test("encodes parallel_tool_calls=false + tool_choice at the root")
     func parallelOffEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)

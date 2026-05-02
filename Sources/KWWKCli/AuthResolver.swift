@@ -7,9 +7,9 @@ struct ResolvedAuth: Sendable {
     let model: Model
     let modelLabel: String
     /// For OAuth-backed providers (Codex, Anthropic OAuth, ...), an
-    /// `apiKeyResolver` that calls back into `OAuthManager.apiKey(for:)` so
+    /// `authResolver` that calls back into `OAuthManager.apiKey(for:)` so
     /// tokens refresh on demand. Nil for static api-key providers.
-    let apiKeyResolver: (@Sendable (String) async -> String?)?
+    let authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 }
 
 enum AuthResolveError: Error, LocalizedError {
@@ -116,7 +116,7 @@ private func registerCodex(
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
     // Grab a fresh token if expired. If the refresh fails we still register
-    // the provider — the apiKeyResolver below will retry on the next request
+    // the provider — the authResolver below will retry on the next request
     // and surface the error to the user there.
     _ = try? await manager.apiKey(for: "openai-codex")
 
@@ -149,14 +149,10 @@ private func registerCodex(
         maxTokens: 0
     )
 
-    let resolver: @Sendable (String) async -> String? = { _ in
-        try? await manager.apiKey(for: "openai-codex")
-    }
-
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · ChatGPT Codex",
-        apiKeyResolver: resolver
+        authResolver: oauthResolver(manager: manager, providerId: "openai-codex", scheme: .bearer)
     )
 }
 
@@ -200,15 +196,11 @@ private func registerAnthropicOAuth(
         maxTokens: catalog?.maxTokens ?? 8192
     )
 
-    let resolver: @Sendable (String) async -> String? = { _ in
-        try? await manager.apiKey(for: "anthropic")
-    }
-
     let suffix = context1m ? " · Anthropic OAuth (1M ctx)" : " · Anthropic OAuth"
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId)\(suffix)",
-        apiKeyResolver: resolver
+        authResolver: oauthResolver(manager: manager, providerId: "anthropic", scheme: .bearer)
     )
 }
 
@@ -302,14 +294,15 @@ private func registerGitHubCopilot(
         )
     }()
 
-    let resolver: @Sendable (String) async -> String? = { _ in
-        try? await manager.apiKey(for: "github-copilot")
-    }
-
     return ResolvedAuth(
         model: model,
         modelLabel: "\(defaultId) · GitHub Copilot",
-        apiKeyResolver: resolver
+        authResolver: oauthResolver(
+            manager: manager,
+            providerId: "github-copilot",
+            scheme: .bearer,
+            baseURL: baseURLString
+        )
     )
 }
 
@@ -338,7 +331,7 @@ private func registerAnthropicAPIKey(
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · Anthropic (API key)",
-        apiKeyResolver: nil
+        authResolver: nil
     )
 }
 
@@ -367,7 +360,7 @@ private func registerOpenAIAPIKey(
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · OpenAI (API key)",
-        apiKeyResolver: nil
+        authResolver: nil
     )
 }
 
@@ -399,7 +392,7 @@ private func registerGoogleAPIKey(
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · Google AI Studio",
-        apiKeyResolver: nil
+        authResolver: nil
     )
 }
 
@@ -432,7 +425,7 @@ private func registerOpenAICompatible(
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · \(baseURL)",
-        apiKeyResolver: nil
+        authResolver: nil
     )
 }
 
@@ -441,4 +434,16 @@ private func registerOpenAICompatible(
 private func stringExtra(_ creds: OAuthCredentials, _ key: String) -> String? {
     if case .string(let s) = creds.extras[key] ?? .null { return s }
     return nil
+}
+
+private func oauthResolver(
+    manager: OAuthManager,
+    providerId: String,
+    scheme: AuthScheme,
+    baseURL: String? = nil
+) -> @Sendable (Model, String?) async -> ResolvedProviderAuth? {
+    { _, _ in
+        guard let token = try? await manager.apiKey(for: providerId) else { return nil }
+        return ResolvedProviderAuth(token: token, scheme: scheme, baseURL: baseURL)
+    }
 }

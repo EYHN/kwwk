@@ -13,7 +13,7 @@ func runCodingTUIInternal(
     cwd: String,
     tools: CodingTools,
     builtinSubagents: BuiltinSubagentSelection = .all,
-    apiKeyResolver: (@Sendable (String) async -> String?)? = nil,
+    authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
     autoCompactThreshold: Double? = 0.75,
     thinkingLevel: ThinkingLevel = .medium
 ) async throws {
@@ -27,7 +27,7 @@ func runCodingTUIInternal(
         backgroundManager: bgManager,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
-        apiKeyResolver: apiKeyResolver
+        authResolver: authResolver
     ))
     // Turn on extended thinking by default — otherwise reasoning-capable
     // providers never produce `[thinking]` blocks. The level is a user

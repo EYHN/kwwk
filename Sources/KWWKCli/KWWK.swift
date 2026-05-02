@@ -40,7 +40,7 @@ public enum KWWK {
             cwd: workDir,
             tools: tools,
             builtinSubagents: builtinSubagents,
-            apiKeyResolver: resolved.apiKeyResolver,
+            authResolver: resolved.authResolver,
             autoCompactThreshold: autoCompactThreshold,
             thinkingLevel: thinkingLevel
         )
