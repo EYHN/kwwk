@@ -4,7 +4,7 @@ import Testing
 
 @Suite("System prompt")
 struct SystemPromptTests {
-    @Test("default prompt lists tools that have snippets and applies cwd + date")
+    @Test("default prompt applies identity, guidelines, cwd, and date")
     func defaultPrompt() {
         let prompt = buildSystemPrompt(SystemPromptOptions(
             cwd: "/tmp/project",
@@ -15,21 +15,23 @@ struct SystemPromptTests {
             ],
             date: "2024-06-15"
         ))
-        #expect(prompt.contains("Available tools:"))
-        #expect(prompt.contains("- read: Read file contents"))
-        #expect(prompt.contains("- bash: Execute shell commands"))
+        #expect(prompt.contains("operating inside kwwk"))
+        #expect(!prompt.contains("Available tools:"))
+        #expect(!prompt.contains("- read: Read file contents"))
+        #expect(!prompt.contains("- bash: Execute shell commands"))
         #expect(prompt.contains("Current date: 2024-06-15"))
         #expect(prompt.contains("Current working directory: /tmp/project"))
     }
 
-    @Test("omits tools without snippets and falls back to '(none)'")
+    @Test("does not render a synthetic tool list")
     func hiddenTools() {
         let prompt = buildSystemPrompt(SystemPromptOptions(
             cwd: "/tmp",
             selectedToolNames: ["read"],
             toolSnippets: [:]
         ))
-        #expect(prompt.contains("(none)"))
+        #expect(!prompt.contains("(none)"))
+        #expect(!prompt.contains("Available tools:"))
     }
 
     @Test("prefers grep/find/ls over bash when all are present")

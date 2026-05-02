@@ -37,14 +37,10 @@ public struct SystemPromptOptions: Sendable {
 }
 
 /// Mirror of pi-coding-agent's `buildSystemPrompt`. The default tool list is
-/// [read, bash, edit, write]; tools only render in the prompt when they have
-/// a `toolSnippets` entry, matching the original behavior.
+/// [read, bash, edit, write] for guideline selection; tool schemas are provided
+/// to the model separately by the provider.
 public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
     let tools = options.selectedToolNames ?? ["read", "bash", "edit", "write"]
-    let visible = tools.filter { options.toolSnippets[$0] != nil }
-    let toolsList = visible.isEmpty
-        ? "(none)"
-        : visible.map { "- \($0): \(options.toolSnippets[$0] ?? "")" }.joined(separator: "\n")
 
     var guidelines: [String] = []
     var seenGuidelines: Set<String> = []
@@ -98,12 +94,7 @@ public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
 
     let guidelinesText = guidelines.map { "- \($0)" }.joined(separator: "\n")
     var prompt = """
-    You are an expert coding assistant operating inside kw, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.
-
-    Available tools:
-    \(toolsList)
-
-    In addition to the tools above, you may have access to other custom tools depending on the project.
+    You are an expert coding assistant operating inside kwwk, a coding agent harness. Help users by reading files, running commands, editing code, and writing new files.
 
     Guidelines:
     \(guidelinesText)
