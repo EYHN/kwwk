@@ -352,6 +352,22 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     "tool_call_id": tr.toolCallId,
                     "content": text,
                 ])
+                let images = tr.content.compactMap { block -> ImageContent? in
+                    if case .image(let i) = block { return i } else { return nil }
+                }
+                if !images.isEmpty {
+                    var parts: [[String: Any]] = [[
+                        "type": "text",
+                        "text": "Image output from tool \(tr.toolName) for call \(tr.toolCallId).",
+                    ]]
+                    for i in images {
+                        parts.append([
+                            "type": "image_url",
+                            "image_url": ["url": "data:\(i.mimeType);base64,\(i.data)"],
+                        ])
+                    }
+                    out.append(["role": "user", "content": parts])
+                }
             }
         }
         return out

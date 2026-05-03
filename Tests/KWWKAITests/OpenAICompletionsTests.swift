@@ -180,4 +180,43 @@ struct OpenAICompletionsTests {
         #expect(messages?[3]["role"] as? String == "tool")
         #expect(messages?[3]["tool_call_id"] as? String == "call_1")
     }
+
+    @Test("adds tool_result images as a follow-up image_url message")
+    func transcriptImageEncoding() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [.toolCall(ToolCall(id: "call_1", name: "capture", arguments: [:]))],
+            api: "openai-completions",
+            provider: "openai",
+            model: "gpt-4o-mini",
+            stopReason: .toolUse
+        )
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [
+                .assistant(assistant),
+                .toolResult(ToolResultMessage(
+                    toolCallId: "call_1",
+                    toolName: "capture",
+                    content: [
+                        .text(TextContent(text: "screenshot ready")),
+                        .image(ImageContent(data: "abcd", mimeType: "image/png")),
+                    ]
+                )),
+            ]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let messages = json?["messages"] as? [[String: Any]]
+        #expect(messages?.count == 3)
+        #expect(messages?[1]["role"] as? String == "tool")
+        #expect(messages?[2]["role"] as? String == "user")
+        let content = messages?[2]["content"] as? [[String: Any]]
+        #expect(content?.last?["type"] as? String == "image_url")
+        let imageURL = content?.last?["image_url"] as? [String: Any]
+        #expect(imageURL?["url"] as? String == "data:image/png;base64,abcd")
+    }
 }

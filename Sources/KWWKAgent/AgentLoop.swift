@@ -6,6 +6,7 @@ import KWWKAI
 public struct AgentLoopConfig: Sendable {
     public var model: Model
     public var reasoning: ReasoningLevel?
+    public var thinkingLevel: ThinkingLevel?
     public var thinkingBudgets: ThinkingBudgets?
     public var sessionId: String?
     public var verboseEnabled: Bool
@@ -33,6 +34,7 @@ public struct AgentLoopConfig: Sendable {
     public init(
         model: Model,
         reasoning: ReasoningLevel? = nil,
+        thinkingLevel: ThinkingLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         sessionId: String? = nil,
         verboseEnabled: Bool = false,
@@ -54,6 +56,7 @@ public struct AgentLoopConfig: Sendable {
     ) {
         self.model = model
         self.reasoning = reasoning
+        self.thinkingLevel = thinkingLevel
         self.thinkingBudgets = thinkingBudgets
         self.sessionId = sessionId
         self.verboseEnabled = verboseEnabled
@@ -222,20 +225,45 @@ public enum AgentLoop {
         // can report wall-clock duration without keeping a Date around.
         let runStartMs = Timestamp.now()
         var summary = AgentRunSummary()
+        var summaryCost = Cost()
+        let loopControl = AgentLoopControl(model: config.model, thinkingLevel: config.thinkingLevel)
+        func activeReasoning(for model: Model) -> ReasoningLevel? {
+            let currentThinkingLevel = loopControl.snapshot().thinkingLevel
+            if let currentThinkingLevel {
+                return reasoning(for: currentThinkingLevel, model: model)
+            }
+            return config.reasoning
+        }
+        func activeConfig() -> AgentLoopConfig {
+            let settings = loopControl.snapshot()
+            var active = config
+            active.model = settings.model
+            active.reasoning = activeReasoning(for: settings.model)
+            active.thinkingLevel = settings.thinkingLevel
+            return active
+        }
+        func addCost(_ cost: Cost) {
+            summaryCost.input += cost.input
+            summaryCost.output += cost.output
+            summaryCost.cacheRead += cost.cacheRead
+            summaryCost.cacheWrite += cost.cacheWrite
+            summaryCost.total += cost.total
+        }
         func finalize(_ reason: StopReason?) -> AgentRunSummary {
             var s = summary
             s.durationMs = Int(Timestamp.now() - runStartMs)
             s.finalStopReason = reason ?? s.finalStopReason
-            s.cost = calculateCost(model: config.model, usage: s.usage)
+            s.cost = summaryCost
             return s
         }
-        func accumulate(_ assistant: AssistantMessage) {
+        func accumulate(_ assistant: AssistantMessage, model: Model) {
             summary.turns += 1
             summary.usage.input += assistant.usage.input
             summary.usage.output += assistant.usage.output
             summary.usage.cacheRead += assistant.usage.cacheRead
             summary.usage.cacheWrite += assistant.usage.cacheWrite
             summary.usage.totalTokens += assistant.usage.totalTokens
+            addCost(calculateCost(model: model, usage: assistant.usage))
             summary.finalStopReason = assistant.stopReason
         }
 
@@ -283,14 +311,15 @@ public enum AgentLoop {
                 }
 
                 if let cap = config.maxTurns, turnsExecuted >= cap {
+                    let turnConfig = activeConfig()
                     // Synthesize an error assistant message so the
                     // transcript surfaces a clear "turn cap reached"
                     // line instead of silently returning.
                     let capped = AssistantMessage(
                         content: [],
-                        api: config.model.api,
-                        provider: config.model.provider,
-                        model: config.model.id,
+                        api: turnConfig.model.api,
+                        provider: turnConfig.model.provider,
+                        model: turnConfig.model.id,
                         stopReason: .error,
                         errorMessage: "Maximum turn limit (\(cap)) reached",
                         timestamp: Timestamp.now()
@@ -307,9 +336,10 @@ public enum AgentLoop {
                     return
                 }
 
+                let turnConfig = activeConfig()
                 let assistant = try await streamAssistantResponse(
                     context: &currentContext,
-                    config: config,
+                    config: turnConfig,
                     cancellation: cancellation,
                     emit: emit,
                     streamFn: streamFn
@@ -322,7 +352,7 @@ public enum AgentLoop {
                 // enforce that ordering.
                 currentContext.messages.append(.assistant(assistant))
                 turnsExecuted += 1
-                accumulate(assistant)
+                accumulate(assistant, model: turnConfig.model)
 
                 if assistant.stopReason == .error || assistant.stopReason == .aborted {
                     await emit(.turnEnd(message: .assistant(assistant), toolResults: []))
@@ -337,15 +367,17 @@ public enum AgentLoop {
 
                 var toolResults: [ToolResultMessage] = []
                 if hasMoreToolCalls {
-                    toolResults = await executeToolCalls(
+                    let execution = await executeToolCalls(
                         currentContext: currentContext,
                         assistantMessage: assistant,
                         toolCalls: toolCalls,
-                        mode: config.toolExecution,
-                        config: config,
+                        mode: turnConfig.toolExecution,
+                        config: turnConfig,
+                        runtime: AgentToolRuntime(loop: loopControl),
                         cancellation: cancellation,
                         emit: emit
                     )
+                    toolResults = execution
                     for result in toolResults {
                         currentContext.messages.append(.toolResult(result))
                         if let subagent = subagentRunSummary(from: result) {
@@ -377,11 +409,12 @@ public enum AgentLoop {
                 // next LLM turn — otherwise we'd re-enter streaming with a
                 // cancelled handle and burn a round trip to discover it.
                 if cancellation?.isCancelled == true {
+                    let turnConfig = activeConfig()
                     let aborted = AssistantMessage(
                         content: [],
-                        api: config.model.api,
-                        provider: config.model.provider,
-                        model: config.model.id,
+                        api: turnConfig.model.api,
+                        provider: turnConfig.model.provider,
+                        model: turnConfig.model.id,
                         stopReason: .aborted,
                         errorMessage: "Request was aborted",
                         timestamp: Timestamp.now()
@@ -412,6 +445,20 @@ public enum AgentLoop {
     }
 
     // MARK: - Stream assistant response
+
+    private static func reasoning(for level: ThinkingLevel, model: Model) -> ReasoningLevel? {
+        guard model.reasoning, level != .off else {
+            return nil
+        }
+        switch level {
+        case .off: return nil
+        case .minimal: return .minimal
+        case .low: return .low
+        case .medium: return .medium
+        case .high: return .high
+        case .xhigh: return .xhigh
+        }
+    }
 
     private static let maxRetries = 5
 
@@ -446,6 +493,7 @@ public enum AgentLoop {
         if let convert = config.convertToLlm {
             messages = await convert(messages)
         }
+        messages = sanitizeMessagesForModel(messages, model: config.model)
         let llmContext = Context(
             systemPrompt: context.systemPrompt,
             messages: messages,
@@ -580,6 +628,47 @@ public enum AgentLoop {
         throw lastError ?? AgentError.maxRetriesExceeded
     }
 
+    private static func sanitizeMessagesForModel(_ messages: [Message], model: Model) -> [Message] {
+        guard !model.input.contains(.image) else {
+            return messages
+        }
+        return messages.map { message in
+            switch message {
+            case .user(var user):
+                user.content = user.content.map { block in
+                    switch block {
+                    case .text:
+                        return block
+                    case .image(let image):
+                        return .text(omittedImageText(image, model: model))
+                    }
+                }
+                return .user(user)
+
+            case .toolResult(var result):
+                result.content = result.content.map { block in
+                    switch block {
+                    case .text:
+                        return block
+                    case .image(let image):
+                        return .text(omittedImageText(image, model: model))
+                    }
+                }
+                return .toolResult(result)
+
+            case .assistant:
+                return message
+            }
+        }
+    }
+
+    private static func omittedImageText(_ image: ImageContent, model: Model) -> TextContent {
+        TextContent(
+            text: "[Image omitted: current model \(model.id) accepts text only; " +
+                "\(image.mimeType), \(image.data.count) base64 chars.]"
+        )
+    }
+
     // MARK: - Tool execution
 
     private static func executeToolCalls(
@@ -588,6 +677,7 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         mode: ToolExecutionMode,
         config: AgentLoopConfig,
+        runtime: AgentToolRuntime,
         cancellation: CancellationHandle?,
         emit: @escaping AgentEventSink
     ) async -> [ToolResultMessage] {
@@ -598,6 +688,7 @@ public enum AgentLoop {
                 assistantMessage: assistantMessage,
                 toolCalls: toolCalls,
                 config: config,
+                runtime: runtime,
                 cancellation: cancellation,
                 emit: emit
             )
@@ -607,6 +698,7 @@ public enum AgentLoop {
                 assistantMessage: assistantMessage,
                 toolCalls: toolCalls,
                 config: config,
+                runtime: runtime,
                 cancellation: cancellation,
                 emit: emit
             )
@@ -618,6 +710,7 @@ public enum AgentLoop {
         assistantMessage: AssistantMessage,
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
+        runtime: AgentToolRuntime,
         cancellation: CancellationHandle?,
         emit: @escaping AgentEventSink
     ) async -> [ToolResultMessage] {
@@ -644,7 +737,7 @@ public enum AgentLoop {
                     emit: emit
                 ))
             case .prepared(let prepared):
-                let executed = await executePrepared(prepared, cancellation: cancellation, emit: emit)
+                let executed = await executePrepared(prepared, runtime: runtime, cancellation: cancellation, emit: emit)
                 out.append(await finalize(
                     call: call,
                     assistantMessage: assistantMessage,
@@ -665,6 +758,7 @@ public enum AgentLoop {
         assistantMessage: AssistantMessage,
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
+        runtime: AgentToolRuntime,
         cancellation: CancellationHandle?,
         emit: @escaping AgentEventSink
     ) async -> [ToolResultMessage] {
@@ -691,7 +785,7 @@ public enum AgentLoop {
         let runningTasks: [(id: String, task: Task<ExecutedOutcome, Never>)] = runs.compactMap { run in
             if case .prepared(let p) = run {
                 let t = Task.detached { () -> ExecutedOutcome in
-                    await executePrepared(p, cancellation: cancellation, emit: emit)
+                    await executePrepared(p, runtime: runtime, cancellation: cancellation, emit: emit)
                 }
                 return (p.call.id, t)
             }
@@ -803,6 +897,7 @@ public enum AgentLoop {
 
     private static func executePrepared(
         _ prepared: PreparedToolCall,
+        runtime: AgentToolRuntime,
         cancellation: CancellationHandle?,
         emit: @escaping AgentEventSink
     ) async -> ExecutedOutcome {
@@ -820,7 +915,13 @@ public enum AgentLoop {
             }
         }
         do {
-            let result = try await prepared.tool.execute(prepared.call.id, prepared.args, cancellation, onUpdate)
+            let result = try await prepared.tool.executeWithRuntime(
+                prepared.call.id,
+                prepared.args,
+                cancellation,
+                onUpdate,
+                runtime
+            )
             await emitBox.waitForPending()
             return ExecutedOutcome(result: result, isError: false)
         } catch {

@@ -29,6 +29,56 @@ public enum ThinkingDisplay: String, Sendable, Hashable {
 /// `.error` or `.aborted` — never throw.
 public typealias StreamFn = @Sendable (Model, Context, StreamOptions?) async throws -> AssistantMessageStream
 
+public struct AgentLoopSettings: Sendable {
+    public var model: Model
+    public var thinkingLevel: ThinkingLevel?
+
+    public init(model: Model, thinkingLevel: ThinkingLevel?) {
+        self.model = model
+        self.thinkingLevel = thinkingLevel
+    }
+}
+
+/// Scoped control surface for the currently running agent loop.
+///
+/// Tools can use this to affect later assistant turns in the same run without
+/// re-entering the Agent actor or mutating the durable AgentState.
+public final class AgentLoopControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settings: AgentLoopSettings
+
+    public init(model: Model, thinkingLevel: ThinkingLevel?) {
+        self.settings = AgentLoopSettings(model: model, thinkingLevel: thinkingLevel)
+    }
+
+    public func snapshot() -> AgentLoopSettings {
+        lock.withLock { settings }
+    }
+
+    public func use(model: Model, thinkingLevel: ThinkingLevel? = nil) {
+        lock.withLock {
+            settings.model = model
+            settings.thinkingLevel = thinkingLevel
+        }
+    }
+
+    public func setModel(_ model: Model) {
+        lock.withLock { settings.model = model }
+    }
+
+    public func setThinkingLevel(_ thinkingLevel: ThinkingLevel?) {
+        lock.withLock { settings.thinkingLevel = thinkingLevel }
+    }
+}
+
+public struct AgentToolRuntime: Sendable {
+    public var loop: AgentLoopControl?
+
+    public init(loop: AgentLoopControl?) {
+        self.loop = loop
+    }
+}
+
 /// Partial or final result returned by an `AgentTool.execute` call.
 public struct AgentToolResult: Sendable, Hashable {
     public var content: [ToolResultBlock]
@@ -150,6 +200,13 @@ public struct AgentTool: Sendable {
         _ cancellation: CancellationHandle?,
         _ onUpdate: AgentToolUpdate?
     ) async throws -> AgentToolResult
+    public var executeWithRuntime: @Sendable (
+        _ toolCallId: String,
+        _ args: JSONValue,
+        _ cancellation: CancellationHandle?,
+        _ onUpdate: AgentToolUpdate?,
+        _ runtime: AgentToolRuntime
+    ) async throws -> AgentToolResult
 
     public init(
         name: String,
@@ -168,6 +225,38 @@ public struct AgentTool: Sendable {
         self.description = description
         self.parameters = parameters
         self.execute = execute
+        self.executeWithRuntime = { toolCallId, args, cancellation, onUpdate, _ in
+            try await execute(toolCallId, args, cancellation, onUpdate)
+        }
+    }
+
+    public init(
+        name: String,
+        label: String,
+        description: String,
+        parameters: JSONValue,
+        executeWithRuntime: @escaping @Sendable (
+            _ toolCallId: String,
+            _ args: JSONValue,
+            _ cancellation: CancellationHandle?,
+            _ onUpdate: AgentToolUpdate?,
+            _ runtime: AgentToolRuntime
+        ) async throws -> AgentToolResult
+    ) {
+        self.name = name
+        self.label = label
+        self.description = description
+        self.parameters = parameters
+        self.execute = { toolCallId, args, cancellation, onUpdate in
+            try await executeWithRuntime(
+                toolCallId,
+                args,
+                cancellation,
+                onUpdate,
+                AgentToolRuntime(loop: nil)
+            )
+        }
+        self.executeWithRuntime = executeWithRuntime
     }
 }
 

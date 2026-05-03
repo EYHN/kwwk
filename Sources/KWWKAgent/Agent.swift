@@ -409,6 +409,7 @@ extension Agent {
         return AgentLoopConfig(
             model: state.model,
             reasoning: effectiveReasoning,
+            thinkingLevel: state.thinkingLevel,
             thinkingBudgets: thinkingBudgets,
             sessionId: sessionId,
             verboseEnabled: state.verboseEnabled,

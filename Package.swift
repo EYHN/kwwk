@@ -12,7 +12,10 @@ let package = Package(
         .library(name: "KWWKAI", targets: ["KWWKAI"]),
         .library(name: "KWWKAgent", targets: ["KWWKAgent"]),
         .library(name: "KWWKCli", targets: ["KWWKCli"]),
+        .library(name: "KWWKComputerUse", targets: ["KWWKComputerUse"]),
         .executable(name: "kwwk", targets: ["kwwk"]),
+        .executable(name: "kwwk-cu", targets: ["kwwkcu"]),
+        .executable(name: "kw-generate-models", targets: ["kw-generate-models"]),
     ],
     dependencies: [
         // swift-crypto's `Crypto` module is source-compatible with Apple's
@@ -45,10 +48,28 @@ let package = Package(
             dependencies: ["KWWKAI", "KWWKAgent"],
             path: "Sources/KWWKCli"
         ),
+        .target(
+            name: "KWWKComputerUse",
+            dependencies: [
+                "KWWKAI",
+                "KWWKAgent",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Sources/KWWKComputerUse"
+        ),
         .executableTarget(
             name: "kwwk",
             dependencies: ["KWWKCli"],
             path: "Sources/kwwk"
+        ),
+        .executableTarget(
+            name: "kwwkcu",
+            dependencies: ["KWWKCli", "KWWKComputerUse", "KWWKAI", "KWWKAgent"],
+            path: "Sources/kwwk-cu"
+        ),
+        .executableTarget(
+            name: "kw-generate-models",
+            path: "Sources/kw-generate-models"
         ),
         .testTarget(
             name: "KWWKAITests",
@@ -64,6 +85,11 @@ let package = Package(
             name: "KWWKCliTests",
             dependencies: ["KWWKCli", "KWWKAgent", "KWWKAI"],
             path: "Tests/KWWKCliTests"
+        ),
+        .testTarget(
+            name: "KWWKComputerUseTests",
+            dependencies: ["KWWKComputerUse", "KWWKAI"],
+            path: "Tests/KWWKComputerUseTests"
         ),
     ],
     swiftLanguageModes: [.v6]

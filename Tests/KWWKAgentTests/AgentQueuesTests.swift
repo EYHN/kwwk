@@ -124,6 +124,123 @@ struct AgentQueuesTests {
         }
     }
 
+    @Test("tool runtime can switch model and thinking for the next turn")
+    func toolRuntimeSwitchesNextTurnModel() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
+            FauxModelDefinition(id: "text-model", reasoning: true),
+            FauxModelDefinition(id: "image-model", reasoning: true),
+        ]))
+        defer { faux.unregister() }
+        let witness = Holder<String>()
+
+        faux.setResponses([
+            .message(fauxAssistantMessage(
+                blocks: [fauxToolCall(name: "route", arguments: .object([:]), id: "t1")],
+                stopReason: .toolUse
+            )),
+            .factory { _, options, _, model in
+                await witness.set("\(model.id):\(options?.reasoning?.rawValue ?? "nil")")
+                return fauxAssistantMessage("done")
+            },
+        ])
+
+        let imageModel = try #require(faux.getModel(id: "image-model"))
+        let tool = AgentTool(
+            name: "route",
+            label: "route",
+            description: "switch model",
+            parameters: .object(["type": .string("object")]),
+            executeWithRuntime: { _, _, _, _, runtime in
+                runtime.loop?.use(model: imageModel, thinkingLevel: .minimal)
+                return AgentToolResult(content: [.text(TextContent(text: "routed"))])
+            }
+        )
+
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: try #require(faux.getModel(id: "text-model")),
+                thinkingLevel: .off,
+                tools: [tool]
+            ),
+            toolExecution: .sequential
+        ))
+        try await agent.prompt("call it")
+
+        #expect(await witness.value == "image-model:minimal")
+    }
+
+    @Test("text-only model receives image blocks as text placeholders")
+    func textOnlyModelReceivesImagePlaceholders() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
+            FauxModelDefinition(id: "text-model", input: [.text]),
+        ]))
+        defer { faux.unregister() }
+        let witness = Holder<[Message]>()
+
+        faux.setResponses([
+            .message(fauxAssistantMessage(
+                blocks: [fauxToolCall(name: "capture", arguments: .object([:]), id: "t1")],
+                stopReason: .toolUse
+            )),
+            .factory { ctx, _, _, _ in
+                await witness.set(ctx.messages)
+                return fauxAssistantMessage("done")
+            },
+        ])
+
+        let tool = AgentTool(
+            name: "capture",
+            label: "capture",
+            description: "returns image",
+            parameters: .object(["type": .string("object")]),
+            executeWithRuntime: { _, _, _, _, _ in
+                AgentToolResult(content: [
+                    .text(TextContent(text: "tool text")),
+                    .image(ImageContent(data: "abcd", mimeType: "image/png")),
+                ])
+            }
+        )
+
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: try #require(faux.getModel(id: "text-model")),
+                tools: [tool]
+            ),
+            toolExecution: .sequential
+        ))
+        try await agent.prompt("capture")
+
+        let seen = await witness.value ?? []
+        let hasImage = seen.contains { message in
+            switch message {
+            case .user(let user):
+                return user.content.contains {
+                    if case .image = $0 { return true }
+                    return false
+                }
+            case .toolResult(let result):
+                return result.content.contains {
+                    if case .image = $0 { return true }
+                    return false
+                }
+            case .assistant:
+                return false
+            }
+        }
+        #expect(hasImage == false)
+
+        let toolText = seen.compactMap { message -> String? in
+            guard case .toolResult(let result) = message else { return nil }
+            return result.content.compactMap { block -> String? in
+                if case .text(let text) = block { return text.text }
+                return nil
+            }.joined(separator: "\n")
+        }.joined(separator: "\n")
+        #expect(toolText.contains("tool text"))
+        #expect(toolText.contains("Image omitted"))
+        #expect(toolText.contains("image/png"))
+    }
+
     @Test("convertToLlm filters the message list before streaming")
     func convertToLlmFilters() async throws {
         let faux = await registerFauxProvider()

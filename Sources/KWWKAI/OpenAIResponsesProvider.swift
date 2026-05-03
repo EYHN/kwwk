@@ -493,8 +493,12 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                             if case .string(let v) = item["id"] ?? .null { return v }
                             return ""
                         }()
+                        let arguments: String = {
+                            if case .string(let v) = item["arguments"] ?? .null { return v }
+                            return ""
+                        }()
                         let index = state.noteFunctionCallItem(
-                            outputIndex: outputIndex, callId: callId, name: name
+                            outputIndex: outputIndex, callId: callId, name: name, initialJSON: arguments
                         )
                         if !emittedStart {
                             out.push(.start(partial: state.snapshot()))
@@ -547,6 +551,13 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     }
                 }
 
+            case "response.function_call_arguments.done":
+                if case .int(let outputIndex) = obj["output_index"] ?? .null,
+                   case .string(let arguments) = obj["arguments"] ?? .null,
+                   let index = state.toolCallIndex(for: outputIndex) {
+                    state.setToolCallArgs(at: index, json: arguments)
+                }
+
             case "response.content_part.done":
                 if case .int(let outputIndex) = obj["output_index"] ?? .null,
                    let index = state.textIndex(for: outputIndex) {
@@ -556,6 +567,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
 
             case "response.output_item.done":
                 if case .int(let outputIndex) = obj["output_index"] ?? .null {
+                    if case .object(let item) = obj["item"] ?? .null,
+                       case .string(let arguments) = item["arguments"] ?? .null,
+                       let index = state.toolCallIndex(for: outputIndex) {
+                        state.setToolCallArgs(at: index, json: arguments)
+                    }
                     if let index = state.reasoningIndex(for: outputIndex) {
                         let content = state.thinkingValue(at: index)
                         out.push(.thinkingEnd(contentIndex: index, content: content, partial: state.snapshot()))
@@ -747,6 +763,28 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     "call_id": .string(tr.toolCallId),
                     "output": .string(text),
                 ]))
+                let images = tr.content.compactMap { block -> ImageContent? in
+                    if case .image(let i) = block { return i } else { return nil }
+                }
+                if !images.isEmpty {
+                    var parts: [JSONValue] = [
+                        .object([
+                            "type": .string("input_text"),
+                            "text": .string("Image output from tool \(tr.toolName) for call \(tr.toolCallId)."),
+                        ]),
+                    ]
+                    for image in images {
+                        parts.append(.object([
+                            "type": .string("input_image"),
+                            "image_url": .string("data:\(image.mimeType);base64,\(image.data)"),
+                        ]))
+                    }
+                    out.append(.object([
+                        "type": .string("message"),
+                        "role": .string("user"),
+                        "content": .array(parts),
+                    ]))
+                }
             }
         }
         return out
@@ -1148,13 +1186,13 @@ final class OpenAIResponsesState: @unchecked Sendable {
         }
     }
 
-    func noteFunctionCallItem(outputIndex: Int, callId: String, name: String) -> Int {
+    func noteFunctionCallItem(outputIndex: Int, callId: String, name: String, initialJSON: String = "") -> Int {
         lock.withLock {
             if let existing = toolCallByOutput[outputIndex] { return existing }
             let idx = order.count
             toolCallByOutput[outputIndex] = idx
             order.append(idx)
-            blocks[idx] = .toolUse(id: callId, name: name, json: "")
+            blocks[idx] = .toolUse(id: callId, name: name, json: initialJSON)
             return idx
         }
     }
@@ -1191,6 +1229,14 @@ final class OpenAIResponsesState: @unchecked Sendable {
         lock.withLock {
             if case .toolUse(let id, let name, let json) = blocks[index] {
                 blocks[index] = .toolUse(id: id, name: name, json: json + chunk)
+            }
+        }
+    }
+
+    func setToolCallArgs(at index: Int, json: String) {
+        lock.withLock {
+            if case .toolUse(let id, let name, _) = blocks[index] {
+                blocks[index] = .toolUse(id: id, name: name, json: json)
             }
         }
     }

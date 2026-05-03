@@ -50,6 +50,19 @@ struct OpenAIResponsesTests {
 
     """
 
+    static let toolUseDoneArgumentsSSE = """
+    data: {"type":"response.created","response":{"id":"resp_2b","status":"in_progress"}}
+
+    data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calc","arguments":""}}
+
+    data: {"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\\"a\\":1,\\"b\\":2}"}
+
+    data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","call_id":"call_1","name":"calc","arguments":"{\\"a\\":1,\\"b\\":2}"}}
+
+    data: {"type":"response.completed","response":{"id":"resp_2b","status":"completed","usage":{"input_tokens":12,"output_tokens":8}}}
+
+    """
+
     static let reasoningSSE = """
     data: {"type":"response.created","response":{"id":"resp_3","status":"in_progress"}}
 
@@ -97,6 +110,29 @@ struct OpenAIResponsesTests {
     @Test("streams function_call with incremental arguments")
     func toolUse() async throws {
         let client = StubSSEClient(body: Self.toolUseSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "go"))]),
+            options: nil
+        )
+        var seenEnd = false
+        for await event in s {
+            if case .toolCallEnd(_, let call, _) = event {
+                #expect(call.id == "call_1")
+                #expect(call.name == "calc")
+                #expect(call.arguments == .object(["a": 1, "b": 2]))
+                seenEnd = true
+            }
+        }
+        let result = await s.result()
+        #expect(seenEnd)
+        #expect(result.stopReason == .toolUse)
+    }
+
+    @Test("captures function_call arguments from done events when no deltas stream")
+    func toolUseDoneArguments() async throws {
+        let client = StubSSEClient(body: Self.toolUseDoneArgumentsSSE)
         let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         let s = provider.stream(
             model: Self.model,
@@ -229,6 +265,45 @@ struct OpenAIResponsesTests {
         #expect(input?[1]["type"] as? String == "function_call")
         #expect(input?[2]["type"] as? String == "function_call_output")
         #expect(input?[2]["call_id"] as? String == "call_1")
+    }
+
+    @Test("adds tool_result images as a follow-up input_image message")
+    func toolResultImageEncoding() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [.toolCall(ToolCall(id: "call_1", name: "capture", arguments: [:]))],
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5",
+            stopReason: .toolUse
+        )
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [
+                .assistant(assistant),
+                .toolResult(ToolResultMessage(
+                    toolCallId: "call_1",
+                    toolName: "capture",
+                    content: [
+                        .text(TextContent(text: "screenshot ready")),
+                        .image(ImageContent(data: "abcd", mimeType: "image/png")),
+                    ]
+                )),
+            ]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let input = json?["input"] as? [[String: Any]]
+        #expect(input?.count == 3)
+        #expect(input?[1]["type"] as? String == "function_call_output")
+        let imageMessage = input?[2]
+        #expect(imageMessage?["type"] as? String == "message")
+        let content = imageMessage?["content"] as? [[String: Any]]
+        #expect(content?.last?["type"] as? String == "input_image")
+        #expect(content?.last?["image_url"] as? String == "data:image/png;base64,abcd")
     }
 
     @Test("reports upstream error event as terminal stream error")

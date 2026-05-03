@@ -71,6 +71,60 @@
       "name": "Release kw-tui-snapshot",
       "program": "${workspaceFolder:kw}/.build/release/kw-tui-snapshot",
       "preLaunchTask": "swift: Build Release kw-tui-snapshot"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kwwk",
+      "program": "${workspaceFolder:kw}/.build/debug/kwwk",
+      "preLaunchTask": "swift: Build Debug kwwk"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kwwk",
+      "program": "${workspaceFolder:kw}/.build/release/kwwk",
+      "preLaunchTask": "swift: Build Release kwwk"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kwwk-cu",
+      "program": "${workspaceFolder:kw}/.build/debug/kwwk-cu",
+      "preLaunchTask": "swift: Build Debug kwwk-cu"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kwwk-cu",
+      "program": "${workspaceFolder:kw}/.build/release/kwwk-cu",
+      "preLaunchTask": "swift: Build Release kwwk-cu"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kw-generate-models",
+      "program": "${workspaceFolder:kw}/.build/debug/kw-generate-models",
+      "preLaunchTask": "swift: Build Debug kw-generate-models"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kw-generate-models",
+      "program": "${workspaceFolder:kw}/.build/release/kw-generate-models",
+      "preLaunchTask": "swift: Build Release kw-generate-models"
     }
   ]
 }

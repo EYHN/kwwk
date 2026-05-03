@@ -3,13 +3,13 @@ import KWWKAI
 
 /// Result of resolving which LLM + credentials to use for this session.
 /// The provider has already been registered on `APIRegistry.shared`.
-struct ResolvedAuth: Sendable {
-    let model: Model
-    let modelLabel: String
+public struct ResolvedAuth: Sendable {
+    public let model: Model
+    public let modelLabel: String
     /// For OAuth-backed providers (Codex, Anthropic OAuth, ...), an
     /// `authResolver` that calls back into `OAuthManager.apiKey(for:)` so
     /// tokens refresh on demand. Nil for static api-key providers.
-    let authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    public let authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 }
 
 enum AuthResolveError: Error, LocalizedError {
@@ -49,7 +49,7 @@ enum AuthResolveError: Error, LocalizedError {
 /// `context1m` opts the Anthropic OAuth provider into the 1M-context beta
 /// (adds `context-1m-2025-08-07` to the `anthropic-beta` header and bumps
 /// `contextWindow` to 1M). It is silently ignored by other providers.
-func resolveAgentAuth(
+public func resolveAgentAuth(
     modelOverride: String? = nil,
     context1m: Bool = false
 ) async throws -> ResolvedAuth {

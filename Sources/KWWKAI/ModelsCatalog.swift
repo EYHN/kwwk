@@ -4,8 +4,14 @@ import Foundation
 /// resource at `Resources/models.json`. Regenerate with:
 ///
 ///   swift run kw-generate-models \
+///       https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/ai/src/models.generated.ts \
+///       Sources/KWWKAI/Resources/models.json
+///
+/// Or point at a local pi-mono checkout:
+///
+///   swift run kw-generate-models \
 ///       /path/to/pi-mono/packages/ai/src/models.generated.ts \
-///       Sources/KWAI/Resources/models.json
+///       Sources/KWWKAI/Resources/models.json
 ///
 /// Stays in-process cheap: the JSON is parsed once on first access and held
 /// in a `Model` dictionary keyed by provider + id.
