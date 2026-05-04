@@ -334,8 +334,7 @@ private func previewQueuedMessage(_ msg: Message, max: Int = 80) -> String {
 
 /// `/compact` — thin wrapper around `performCompact` (see CompactRunner.swift)
 /// that surfaces each outcome as a dimmed transcript notification. The
-/// auto-compact driver calls the same `performCompact` so the two
-/// entry points produce bit-identical recap messages.
+/// automatic path uses the same KWWKAgent compactor directly from `Agent`.
 @MainActor
 private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
     let outcome = await performCompact(

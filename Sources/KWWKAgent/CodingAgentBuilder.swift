@@ -54,6 +54,8 @@ public struct CodingAgentConfig: Sendable {
     public var subagents: [SubagentDefinition]
     public var sessionId: String
     public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    public var autoCompactThreshold: Double?
+    public var autoCompactConfig: AgentContextCompactionConfig
     /// Soft foreground timeout for bash commands. The command auto-moves to
     /// the background on this deadline when a `backgroundManager` is attached.
     public var bashDefaultTimeoutSeconds: Int
@@ -68,6 +70,8 @@ public struct CodingAgentConfig: Sendable {
         subagents: [SubagentDefinition] = [],
         sessionId: String = UUID().uuidString,
         authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        autoCompactThreshold: Double? = 0.75,
+        autoCompactConfig: AgentContextCompactionConfig = .init(),
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600
     ) {
@@ -79,6 +83,8 @@ public struct CodingAgentConfig: Sendable {
         self.subagents = subagents
         self.sessionId = sessionId
         self.authResolver = authResolver
+        self.autoCompactThreshold = autoCompactThreshold
+        self.autoCompactConfig = autoCompactConfig
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
     }
@@ -155,6 +161,13 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
             tools: tools
         ),
         sessionId: sessionId,
+        autoCompact: config.autoCompactThreshold.map {
+            AgentAutoCompactOptions(
+                threshold: $0,
+                config: config.autoCompactConfig,
+                backgroundManager: bgManager
+            )
+        },
         authResolver: config.authResolver
     ))
     subagentParent.attach(agent)

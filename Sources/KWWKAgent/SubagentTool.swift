@@ -806,6 +806,7 @@ private struct SubagentInvocationRunner: Sendable {
             sessionId: childSessionId,
             thinkingBudgets: parent.thinkingBudgets,
             maxRetryDelayMs: parent.maxRetryDelayMs,
+            autoCompact: AgentAutoCompactOptions(backgroundManager: backgroundManager),
             authResolver: parent.authResolver
         ))
         let progress = SubagentProgressEmitter(

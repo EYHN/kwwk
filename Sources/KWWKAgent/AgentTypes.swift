@@ -285,6 +285,9 @@ public enum AgentEvent: Sendable {
     case toolExecutionEnd(toolCallId: String, toolName: String, result: AgentToolResult, isError: Bool)
     case runtimeEvent(AgentRuntimeEvent)
 
+    case compactStart(messagesCount: Int, usage: AgentContextUsage)
+    case compactEnd(outcome: AgentContextCompactionOutcome)
+
     /// Emitted just before the agent loop sleeps to back off after a
     /// retryable stream failure. `attempt` is zero-indexed and counts the
     /// attempt that just failed (so `attempt: 0` means "first attempt failed,
@@ -315,6 +318,8 @@ public enum AgentEvent: Sendable {
         case .toolExecutionUpdate: return "tool_execution_update"
         case .toolExecutionEnd: return "tool_execution_end"
         case .runtimeEvent(let event): return event.type
+        case .compactStart: return "compact_start"
+        case .compactEnd: return "compact_end"
         case .streamRetry: return "stream_retry"
         case .streamRewind: return "stream_rewind"
         case .verbose: return "verbose"

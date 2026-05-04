@@ -184,6 +184,42 @@ struct CompactCommandTests {
     }
 
     @MainActor
+    @Test("manual compact uses the agent compaction config")
+    func manualCompactUsesAgentCompactionConfig() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+
+        let messages: [Message] = [
+            .user(UserMessage(text: "one")),
+            .assistant(fauxAssistantMessage("two")),
+            .user(UserMessage(text: "three")),
+            .assistant(fauxAssistantMessage("four")),
+        ]
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: faux.getModel(),
+                messages: messages
+            ),
+            autoCompact: AgentAutoCompactOptions(
+                config: AgentContextCompactionConfig(minMessages: 10)
+            )
+        ))
+
+        let outcome = await performCompact(
+            agent: agent,
+            backgroundManager: BackgroundTaskManager(outputDir: makeTempDir()),
+            sessionId: "compact-session"
+        )
+
+        if case .refusedTooFewMessages(let count) = outcome {
+            #expect(count == 4)
+        } else {
+            Issue.record("expected manual compact to honor minMessages")
+        }
+        #expect(agent.state.messages.count == 4)
+    }
+
+    @MainActor
     @Test("renderCompactBoundary fills the width with a compacted rule")
     func renderCompactBoundaryShape() {
         let lines = renderCompactBoundary(

@@ -45,6 +45,22 @@ public enum AgentError: Error, Equatable {
     case aborted
 }
 
+public struct AgentAutoCompactOptions: Sendable {
+    public var threshold: Double?
+    public var config: AgentContextCompactionConfig
+    public var backgroundManager: BackgroundTaskManager?
+
+    public init(
+        threshold: Double? = 0.75,
+        config: AgentContextCompactionConfig = .init(),
+        backgroundManager: BackgroundTaskManager? = nil
+    ) {
+        self.threshold = threshold
+        self.config = config
+        self.backgroundManager = backgroundManager
+    }
+}
+
 public struct AgentOptions: Sendable {
     public var initialState: AgentInitialState
     public var streamFn: StreamFn?
@@ -64,6 +80,9 @@ public struct AgentOptions: Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
+    /// Automatic context compaction is enabled by default. Pass nil to
+    /// disable it for agents that need full transcript retention.
+    public var autoCompact: AgentAutoCompactOptions?
     public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
     public init(
@@ -84,6 +103,7 @@ public struct AgentOptions: Sendable {
         convertToLlm: ConvertToLlmHook? = nil,
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
+        autoCompact: AgentAutoCompactOptions? = AgentAutoCompactOptions(),
         authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil
     ) {
         self.initialState = initialState
@@ -103,6 +123,7 @@ public struct AgentOptions: Sendable {
         self.convertToLlm = convertToLlm
         self.transformContext = transformContext
         self.betweenTurns = betweenTurns
+        self.autoCompact = autoCompact
         self.authResolver = authResolver
     }
 }
@@ -131,6 +152,7 @@ public final class Agent: @unchecked Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
+    public var autoCompact: AgentAutoCompactOptions?
     public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
     /// Base delay (ms) used for exponential backoff between stream retries.
@@ -184,9 +206,18 @@ public final class Agent: @unchecked Sendable {
         self.convertToLlm = options.convertToLlm
         self.transformContext = options.transformContext
         self.betweenTurns = options.betweenTurns
+        self.autoCompact = options.autoCompact
         self.authResolver = options.authResolver
         self.steeringQueue = PendingMessageQueue(mode: options.steeringMode)
         self.followUpQueue = PendingMessageQueue(mode: options.followUpMode)
+    }
+
+    internal func streamForCompaction(
+        model: Model,
+        context: Context,
+        options: StreamOptions?
+    ) async throws -> AssistantMessageStream {
+        try await streamFn(model, context, options)
     }
 
     /// Queue a message to inject after the current assistant turn finishes.
@@ -398,7 +429,7 @@ extension Agent {
             userPromptSubmit: userPromptSubmit,
             convertToLlm: convertToLlm,
             transformContext: transformContext,
-            betweenTurns: betweenTurns
+            betweenTurns: builtInBetweenTurnsHook()
         )
     }
 
@@ -448,6 +479,71 @@ extension Agent {
         state.setStreamingMessage(nil)
         state.clearPendingToolCalls()
         for waiter in waiters { waiter.resume() }
+    }
+
+    private func builtInBetweenTurnsHook() -> BetweenTurnsHook? {
+        let userHook = betweenTurns
+        let autoCompact = autoCompact
+        guard userHook != nil || autoCompact?.threshold != nil else {
+            return nil
+        }
+
+        return { [weak self] context, cancellation in
+            guard let self else {
+                return await userHook?(context, cancellation)
+            }
+
+            var current = context
+            var replaced = false
+
+            if let autoCompact,
+               let threshold = autoCompact.threshold,
+               threshold > 0,
+               current.messages.count >= autoCompact.config.minMessages,
+               AgentContextCompactor.shouldCompact(
+                    messages: current.messages,
+                    model: self.state.model,
+                    threshold: threshold
+               ) {
+                let usage = AgentContextCompactor.currentUsage(
+                    messages: current.messages,
+                    model: self.state.model
+                )
+                await self.emitSynthetic(
+                    .compactStart(messagesCount: current.messages.count, usage: usage),
+                    cancellation: cancellation
+                )
+
+                self.state.messages = current.messages
+                let outcome = await AgentContextCompactor.compactAgent(
+                    agent: self,
+                    backgroundManager: autoCompact.backgroundManager,
+                    sessionId: self.sessionId,
+                    config: autoCompact.config,
+                    ignoreStreaming: true,
+                    cancellation: cancellation
+                )
+                await self.emitSynthetic(.compactEnd(outcome: outcome), cancellation: cancellation)
+
+                if case .compacted = outcome {
+                    current.messages = self.state.messages
+                    replaced = true
+                }
+            }
+
+            if let userHook, let replacement = await userHook(current, cancellation) {
+                current = replacement
+                replaced = true
+            }
+
+            return replaced ? current : nil
+        }
+    }
+
+    private func emitSynthetic(_ event: AgentEvent, cancellation: CancellationHandle?) async {
+        for listener in snapshotListeners() {
+            await listener(event, cancellation)
+        }
     }
 
     private func handleRunFailure(error: Error, aborted: Bool) async {

@@ -58,6 +58,7 @@ struct AgentInitTests {
         #expect(agent.state.streamingMessage == nil)
         #expect(agent.state.pendingToolCalls.isEmpty)
         #expect(agent.state.errorMessage == nil)
+        #expect(agent.autoCompact?.threshold == 0.75)
     }
 
     @Test("honours custom initial state")
@@ -72,6 +73,21 @@ struct AgentInitTests {
         ))
         #expect(agent.state.systemPrompt == "You are helpful.")
         #expect(agent.state.thinkingLevel == .low)
+    }
+
+    @Test("auto compact can be explicitly disabled")
+    func autoCompactCanBeDisabled() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: registration.getModel()),
+            autoCompact: nil
+        ))
+
+        if case .some = agent.autoCompact {
+            Issue.record("expected autoCompact to be disabled")
+        }
     }
 
     @Test("state setters do not emit events")
@@ -117,6 +133,7 @@ struct AgentInitTests {
         ))
 
         #expect(agent.sessionId == "stable-session")
+        #expect(agent.autoCompact?.threshold == 0.75)
     }
 }
 

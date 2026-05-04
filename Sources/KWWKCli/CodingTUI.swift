@@ -27,7 +27,8 @@ func runCodingTUIInternal(
         backgroundManager: bgManager,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
-        authResolver: authResolver
+        authResolver: authResolver,
+        autoCompactThreshold: autoCompactThreshold
     ))
     // Turn on extended thinking by default — otherwise reasoning-capable
     // providers never produce `[thinking]` blocks. The level is a user
@@ -174,81 +175,7 @@ func runCodingTUIInternal(
     )
     await statusBar.render()
 
-    // Auto-compact controller. Watches per-turn usage and summarizes
-    // the transcript when it approaches the model's contextWindow.
-    // The controller fires `performCompact` only on `agentEnd` so we
-    // never rewrite `agent.state.messages` while the loop is mid-flight.
-    let autoCompact = AutoCompactController(
-        agent: agent,
-        backgroundManager: bgManager,
-        sessionId: sessionId,
-        threshold: autoCompactThreshold,
-        onStatusChange: { status in
-            switch status {
-            case .compacting(let count):
-                statusBar.setCompacting(messageCount: count)
-                // Leave a visible trail in scrollback so history shows
-                // WHEN the compact started — the terminating boundary
-                // line in onCompactFinished pairs with this one to
-                // frame the compact block.
-                runner.tui.commit([
-                    "",
-                    Style.dimmed("  ◐ auto-compacting…"),
-                ])
-                runner.tui.requestRender()
-            case .idle:
-                statusBar.setMode(.idle)
-            }
-        },
-        onUsageChange: { usage in
-            statusBar.setCapacityHint(formatCapacityHint(
-                usage: usage,
-                threshold: autoCompactThreshold
-            ))
-            Task { @MainActor in
-                await statusBar.render()
-                runner.tui.requestRender()
-            }
-        },
-        onCompactFinished: { outcome in
-            switch outcome {
-            case .compacted(let n, let hasLedger):
-                // The start marker was already committed in onStatusChange
-                // when the compact began; just add the terminating
-                // boundary here so the pair frames the compact block.
-                runner.tui.commit(renderCompactBoundary(
-                    messagesCompacted: n,
-                    hasRunningTasksLedger: hasLedger,
-                    width: runner.terminal.width
-                ))
-            case .refusedAgentBusy:
-                runner.tui.commit([
-                    "",
-                    Style.error("  auto-compact: agent is busy; compact skipped"),
-                    "",
-                ])
-            case .refusedTooFewMessages:
-                break
-            case .failed(let msg):
-                runner.tui.commit([
-                    "",
-                    Style.error("  auto-compact failed: \(msg)"),
-                    "",
-                ])
-            }
-            runner.tui.requestRender()
-        }
-    )
-
-    // Install the between-turns compact hook. The agent loop calls this
-    // synchronously at each sub-turn boundary; if it returns a
-    // replacement context, the loop swaps in the summarized transcript
-    // before the next LLM request. User input typed during the compact
-    // lands in the steering queue via the `busy` branch below and
-    // drains at the next turnStart.
-    agent.betweenTurns = { context, _ in
-        await autoCompact.maybeCompactInline(context: context)
-    }
+    var isAutoCompacting = false
 
     // Keep the renderer's display mode in sync with the agent's state on
     // every event, so `/thinking show|hide` (which only mutates agent
@@ -278,13 +205,40 @@ func runCodingTUIInternal(
             case .agentStart:
                 statusBar.setMode(.streaming)
             case .agentEnd:
-                // Only flip to idle when no auto-compact took over.
-                // `observe(event:)` below runs synchronously-enough that
-                // its status-change callback beats this switch, so if
-                // a compact is about to fire the bar will read
-                // "auto-compacting…" on the next render.
-                if !autoCompact.isCompacting {
+                if !isAutoCompacting {
                     statusBar.setMode(.idle)
+                }
+            case .compactStart(let count, _):
+                isAutoCompacting = true
+                statusBar.setCompacting(messageCount: count)
+                runner.tui.commit([
+                    "",
+                    Style.dimmed("  ◐ auto-compacting…"),
+                ])
+            case .compactEnd(let outcome):
+                isAutoCompacting = false
+                statusBar.setMode(.idle)
+                switch outcome {
+                case .compacted(let n, let hasLedger):
+                    runner.tui.commit(renderCompactBoundary(
+                        messagesCompacted: n,
+                        hasRunningTasksLedger: hasLedger,
+                        width: runner.terminal.width
+                    ))
+                case .refusedAgentBusy:
+                    runner.tui.commit([
+                        "",
+                        Style.error("  auto-compact: agent is busy; compact skipped"),
+                        "",
+                    ])
+                case .refusedTooFewMessages:
+                    break
+                case .failed(let msg):
+                    runner.tui.commit([
+                        "",
+                        Style.error("  auto-compact failed: \(msg)"),
+                        "",
+                    ])
                 }
             case .streamRetry(let attempt, let delayMs, let reason):
                 statusBar.setRetrying(attempt: attempt, delayMs: delayMs, reason: reason)
@@ -299,11 +253,18 @@ func runCodingTUIInternal(
             // The agent loop drains the steering queue at turn
             // boundaries — refresh the panel on every event so a
             // queued prompt disappears as soon as it enters context.
+            let usage = AgentContextCompactor.currentUsage(
+                messages: agent.state.messages,
+                model: agent.state.model
+            )
+            statusBar.setCapacityHint(formatCapacityHint(
+                usage: usage,
+                threshold: autoCompactThreshold
+            ))
             refreshQueuePanel()
             layout.fitViewport(height: runner.terminal.height, width: runner.terminal.width)
             runner.tui.requestRender()
         }
-        await autoCompact.observe(event)
         await statusBar.render()
     }
 
@@ -365,7 +326,7 @@ func runCodingTUIInternal(
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
-            let busy = agent.state.isStreaming || autoCompact.isCompacting
+            let busy = agent.state.isStreaming || isAutoCompacting
 
             // Slash commands are idle-only. If the agent is mid-turn
             // we can't reliably run them (some mutate agent state, all

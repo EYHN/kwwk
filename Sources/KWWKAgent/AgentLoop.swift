@@ -206,9 +206,12 @@ public enum AgentLoop {
         // `run()` were already appended before we got here — they are part of
         // the "prior" context, not the "new" delta, which matches how the
         // original parallel-array version behaved).
-        let baseCount = currentContext.messages.count
+        var baseCount = currentContext.messages.count
         func delta() -> [Message] {
-            Array(currentContext.messages[baseCount...])
+            guard currentContext.messages.count >= baseCount else {
+                return currentContext.messages
+            }
+            return Array(currentContext.messages[baseCount...])
         }
 
         // Run-level telemetry accumulated into `AgentRunSummary` and
@@ -360,8 +363,13 @@ public enum AgentLoop {
                 // which is exactly what we want for "compact is a
                 // blocking state".
                 if let hook = config.betweenTurns {
+                    let beforeHookCount = currentContext.messages.count
                     if let replacement = await hook(currentContext, cancellation) {
                         currentContext = replacement
+                        if currentContext.messages.count < baseCount ||
+                           currentContext.messages.count < beforeHookCount {
+                            baseCount = 0
+                        }
                     }
                 }
 
