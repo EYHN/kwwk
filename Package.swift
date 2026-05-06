@@ -46,6 +46,10 @@ let package = Package(
             dependencies: ["KWWKAI", "KWWKAgent"],
             path: "Sources/KWWKCli"
         ),
+        .target(
+            name: "KWWKGenerateModelsCore",
+            path: "Scripts/GenerateModelsCore"
+        ),
         .executableTarget(
             name: "kwwk",
             dependencies: ["KWWKCli"],
@@ -53,11 +57,12 @@ let package = Package(
         ),
         .executableTarget(
             name: "kwwk-generate-models",
+            dependencies: ["KWWKGenerateModelsCore"],
             path: "Scripts/GenerateModels"
         ),
         .testTarget(
             name: "KWWKAITests",
-            dependencies: ["KWWKAI"],
+            dependencies: ["KWWKAI", "KWWKGenerateModelsCore"],
             path: "Tests/KWWKAITests"
         ),
         .testTarget(

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Access to pi-mono's curated catalog of ~840 models, bundled as a JSON
+/// Access to pi-mono's curated catalog of 900+ models, bundled as a JSON
 /// resource at `Resources/models.json`. Regenerate with:
 ///
 ///   swift run kwwk-generate-models \
