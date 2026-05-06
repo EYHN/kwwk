@@ -11,10 +11,13 @@ struct ModelsCatalogTests {
         #expect(providers.contains("anthropic"))
         #expect(providers.contains("openai"))
         #expect(providers.contains("google"))
+        #expect(providers.contains("google-vertex"))
         #expect(providers.contains("amazon-bedrock"))
+        #expect(!providers.contains("google-gemini-cli"))
+        #expect(!providers.contains("google-antigravity"))
 
         let total = ModelsCatalog.all.count
-        #expect(total >= 500)   // pi ships ~840; allow headroom for future trims
+        #expect(total >= 500)   // pi ships 900+; allow headroom for future trims
     }
 
     @Test("lookup returns a fully-decoded Model")

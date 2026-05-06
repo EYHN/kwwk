@@ -1,11 +1,10 @@
 import Foundation
 
-/// Access to pi-mono's curated catalog of ~840 models, bundled as a JSON
+/// Access to pi-mono's curated catalog of 900+ models, bundled as a JSON
 /// resource at `Resources/models.json`. Regenerate with:
 ///
-///   swift run kw-generate-models \
-///       /path/to/pi-mono/packages/ai/src/models.generated.ts \
-///       Sources/KWAI/Resources/models.json
+///   swift run kwwk-generate-models \
+///       /path/to/pi-mono/packages/ai/src/models.generated.ts
 ///
 /// Stays in-process cheap: the JSON is parsed once on first access and held
 /// in a `Model` dictionary keyed by provider + id.
