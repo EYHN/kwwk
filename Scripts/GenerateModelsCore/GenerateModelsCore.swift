@@ -2,15 +2,8 @@ import Foundation
 
 public enum GenerateModelsCore {
     public static let defaultOutputPath = "Sources/KWWKAI/Resources/models.json"
-    public static let defaultExcludedProviders: Set<String> = [
-        "google-antigravity",
-        "google-gemini-cli",
-    ]
 
-    public static func generate(
-        from raw: String,
-        excluding excludedProviders: Set<String> = defaultExcludedProviders
-    ) throws -> ModelGenerationResult {
+    public static func generate(from raw: String) throws -> ModelGenerationResult {
         let json = try convert(raw)
 
         guard let data = json.data(using: .utf8) else {
@@ -24,15 +17,8 @@ public enum GenerateModelsCore {
             let snippet = String(json.prefix(500))
             throw GenerateModelsCoreError.conversion("JSON parse failed: \(error)\nsnippet:\n\(snippet)")
         }
-        guard var root = parsed as? [String: Any] else {
+        guard let root = parsed as? [String: Any] else {
             throw GenerateModelsCoreError.conversion("top-level catalog is not an object")
-        }
-
-        var dropped: [DroppedProvider] = []
-        for provider in excludedProviders.sorted() {
-            if let models = root.removeValue(forKey: provider) as? [String: Any] {
-                dropped.append(DroppedProvider(provider: provider, count: models.count))
-            }
         }
 
         let outputData = try JSONSerialization.data(
@@ -40,7 +26,7 @@ public enum GenerateModelsCore {
             options: [.prettyPrinted, .sortedKeys]
         )
 
-        return ModelGenerationResult(outputData: outputData, root: root, dropped: dropped)
+        return ModelGenerationResult(outputData: outputData, root: root)
     }
 
     public static func convert(_ raw: String) throws -> String {
@@ -83,17 +69,6 @@ public enum GenerateModelsCore {
 public struct ModelGenerationResult {
     public let outputData: Data
     public let root: [String: Any]
-    public let dropped: [DroppedProvider]
-}
-
-public struct DroppedProvider: Equatable {
-    public let provider: String
-    public let count: Int
-
-    public init(provider: String, count: Int) {
-        self.provider = provider
-        self.count = count
-    }
 }
 
 public enum GenerateModelsCoreError: Error, CustomStringConvertible {

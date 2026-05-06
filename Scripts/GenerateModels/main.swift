@@ -13,8 +13,6 @@ import KWWKGenerateModelsCore
 ///
 ///   Sources/KWWKAI/Resources/models.json
 ///
-/// The Google Gemini CLI and Antigravity providers are intentionally omitted
-/// because KWWK does not ship those upstream subscription/OAuth surfaces.
 @main
 struct GenerateModels {
     static func main() throws {
@@ -35,7 +33,7 @@ struct GenerateModels {
     private static func run() throws {
         let options = try Options.parse(CommandLine.arguments.dropFirst())
         let raw = try String(contentsOf: URL(fileURLWithPath: options.inputPath), encoding: .utf8)
-        let result = try GenerateModelsCore.generate(from: raw, excluding: options.excludedProviders)
+        let result = try GenerateModelsCore.generate(from: raw)
         let outputURL = URL(fileURLWithPath: options.outputPath)
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),
@@ -46,16 +44,14 @@ struct GenerateModels {
         printSummary(
             outputPath: options.outputPath,
             outputBytes: result.outputData.count,
-            root: result.root,
-            dropped: result.dropped
+            root: result.root
         )
     }
 
     private static func printSummary(
         outputPath: String,
         outputBytes: Int,
-        root: [String: Any],
-        dropped: [DroppedProvider]
+        root: [String: Any]
     ) {
         let providers = root.keys.sorted()
         let totalModels = providers.reduce(0) { total, provider in
@@ -65,13 +61,6 @@ struct GenerateModels {
         print("generated \(outputPath) (\(outputBytes) bytes)")
         print("  providers: \(providers.count)")
         print("  models:    \(totalModels)")
-
-        if !dropped.isEmpty {
-            print("  dropped:")
-            for droppedProvider in dropped {
-                print("    \(droppedProvider.provider): \(droppedProvider.count) models")
-            }
-        }
 
         print("  by provider:")
         let width = providers.map(\.count).max() ?? 10
@@ -83,15 +72,13 @@ struct GenerateModels {
     }
 
     static let usage = """
-    usage: kwwk-generate-models <models.generated.ts> [output.json] [--include-filtered-google-providers]
+    usage: kwwk-generate-models <models.generated.ts> [output.json]
 
     arguments:
       models.generated.ts      pi-mono packages/ai/src/models.generated.ts
       output.json              optional output path; defaults to \(GenerateModelsCore.defaultOutputPath)
 
     options:
-      --include-filtered-google-providers
-                               keep google-gemini-cli and google-antigravity entries
       -h, --help               show this help
     """
 }
@@ -99,19 +86,14 @@ struct GenerateModels {
 private struct Options {
     var inputPath: String
     var outputPath: String
-    var excludedProviders: Set<String>
 
     static func parse(_ rawArguments: ArraySlice<String>) throws -> Options {
         var positional: [String] = []
-        var excluded = GenerateModelsCore.defaultExcludedProviders
 
         for argument in rawArguments {
             switch argument {
             case "-h", "--help":
                 throw GenerateError.help
-            case "--include-filtered-google-providers":
-                excluded.remove("google-antigravity")
-                excluded.remove("google-gemini-cli")
             default:
                 if argument.hasPrefix("-") {
                     throw GenerateError.usage("unknown option: \(argument)")
@@ -126,8 +108,7 @@ private struct Options {
 
         return Options(
             inputPath: positional[0],
-            outputPath: positional.count == 2 ? positional[1] : GenerateModelsCore.defaultOutputPath,
-            excludedProviders: excluded
+            outputPath: positional.count == 2 ? positional[1] : GenerateModelsCore.defaultOutputPath
         )
     }
 }

@@ -342,10 +342,9 @@ swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated
 swift test
 ```
 
-The generator writes `Sources/KWWKAI/Resources/models.json` by default
-and intentionally drops the upstream `google-gemini-cli` and
-`google-antigravity` provider groups, because kwwk does not ship those
-subscription/OAuth surfaces.
+The generator writes `Sources/KWWKAI/Resources/models.json` by default.
+The catalog tests assert unsupported Google Gemini CLI and Google
+Antigravity provider groups stay absent.
 
 ---
 

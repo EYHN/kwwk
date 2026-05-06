@@ -40,28 +40,12 @@ struct GenerateModelsCoreTests {
         #expect(model["contextWindow"] as? Int == 400_000)
     }
 
-    @Test("drops filtered Google provider groups by default")
-    func dropsFilteredGoogleProviders() throws {
+    @Test("preserves providers from the source catalog")
+    func preservesSourceProviders() throws {
         let raw = """
         export const MODELS = {
           "google": {},
           "google-vertex": {},
-          "google-gemini-cli": {
-            "gemini": {
-              id: "gemini",
-              name: "Gemini",
-              api: "google-gemini",
-              provider: "google-gemini-cli",
-            },
-          },
-          "google-antigravity": {
-            "ag": {
-              id: "ag",
-              name: "Antigravity",
-              api: "google-gemini",
-              provider: "google-antigravity",
-            },
-          },
         } as const;
         """
 
@@ -69,11 +53,6 @@ struct GenerateModelsCoreTests {
 
         #expect(result.root.keys.contains("google"))
         #expect(result.root.keys.contains("google-vertex"))
-        #expect(!result.root.keys.contains("google-gemini-cli"))
-        #expect(!result.root.keys.contains("google-antigravity"))
-        #expect(result.dropped == [
-            DroppedProvider(provider: "google-antigravity", count: 1),
-            DroppedProvider(provider: "google-gemini-cli", count: 1),
-        ])
+        #expect(result.root.count == 2)
     }
 }
