@@ -95,7 +95,7 @@ public enum ComputerUseAction {
                     metadata: metadata,
                     fresh: current
                 )
-                if !performPressActionIfAvailable(on: node, in: current) {
+                if !performDefaultAXActionIfAvailable(on: node, in: current) {
                     let point = try localPoint(node: node, in: current)
                     try clickAtLocalPoint(point, in: current)
                 }
@@ -462,17 +462,24 @@ public enum ComputerUseAction {
         try dispatcher.click(at: localPoint)
     }
 
-    private static func performPressActionIfAvailable(
+    private static func performDefaultAXActionIfAvailable(
         on node: RuntimeAXNode,
         in snapshot: RuntimeAppSnapshot
     ) -> Bool {
-        let pressAction = kAXPressAction as String
-        guard node.actions.contains(pressAction) else {
+        let preferredActions = if node.role == (kAXMenuBarItemRole as String) ||
+            node.role == (kAXMenuItemRole as String)
+        {
+            [kAXPressAction as String, "AXPick"]
+        } else {
+            [kAXPressAction as String]
+        }
+
+        guard let action = preferredActions.first(where: { node.actions.contains($0) }) else {
             return false
         }
-        FocusDebug.log("ax press start element=\(node.index): \(focusTargetDescription(snapshot))")
-        let succeeded = AXUIElementPerformAction(node.element, pressAction as CFString) == .success
-        FocusDebug.log("ax press end success=\(succeeded): \(focusTargetDescription(snapshot))")
+        FocusDebug.log("ax \(displayName(forAction: action)) start element=\(node.index): \(focusTargetDescription(snapshot))")
+        let succeeded = AXUIElementPerformAction(node.element, action as CFString) == .success
+        FocusDebug.log("ax \(displayName(forAction: action)) end success=\(succeeded): \(focusTargetDescription(snapshot))")
         return succeeded
     }
 

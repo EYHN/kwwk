@@ -1030,7 +1030,8 @@ enum ComputerUseCore {
                     from: menuBar,
                     focusedElement: focusedElement,
                     visibleFrame: cuFrame(menuBar) ?? windowMatch.frame,
-                    filterVisibleNodes: filterVisibleNodes
+                    filterVisibleNodes: filterVisibleNodes,
+                    maxDepth: 1
                 ),
                 startingAt: nodes.count
             ))
@@ -1297,7 +1298,8 @@ enum ComputerUseCore {
             let role = cuAttribute(element, name: kAXRoleAttribute as String) as String? ?? ""
             if role == (kAXMenuRole as String),
                let frame = cuFrame(element),
-               popupMenuHasItems(element) {
+               popupMenuHasItems(element),
+               isTransientPopupMenu(element) {
                 let candidate = PopupMenuCandidate(element: element, frame: frame)
                 if best == nil || menuItemCount(in: element) > menuItemCount(in: best!.element) {
                     best = candidate
@@ -1308,6 +1310,36 @@ enum ComputerUseCore {
         }
 
         return best
+    }
+
+    private static func isTransientPopupMenu(_ menu: AXUIElement) -> Bool {
+        var current: AXUIElement? = menu
+        var visited = Set<CFHashCode>()
+
+        while let element = current {
+            let identifier = CFHash(element)
+            if visited.contains(identifier) {
+                return false
+            }
+            visited.insert(identifier)
+
+            let role = cuAttribute(element, name: kAXRoleAttribute as String) as String? ?? ""
+            if role == (kAXMenuBarItemRole as String) ||
+                role == (kAXMenuItemRole as String) ||
+                role == (kAXPopUpButtonRole as String) ||
+                role == "AXMenuButton" {
+                return true
+            }
+
+            if role == "AXWebArea" ||
+                role == (kAXWindowRole as String) {
+                return false
+            }
+
+            current = cuAttribute(element, name: kAXParentAttribute as String) as AXUIElement?
+        }
+
+        return false
     }
 
     private static func activeMenuBarItemCandidate(in appElement: AXUIElement) -> PopupMenuCandidate? {
@@ -1381,7 +1413,8 @@ enum ComputerUseCore {
         from root: AXUIElement,
         focusedElement: AXUIElement?,
         visibleFrame: CGRect,
-        filterVisibleNodes: Bool
+        filterVisibleNodes: Bool,
+        maxDepth: Int = 64
     ) -> [RuntimeAXNode] {
         struct PendingNode {
             let element: AXUIElement
@@ -1404,7 +1437,6 @@ enum ComputerUseCore {
             let children: [PendingNode]
         }
 
-        let maxDepth = 64
         var visited = Set<CFHashCode>()
 
         func build(_ element: AXUIElement, depth: Int, visibleClip: CGRect) -> PendingNode? {

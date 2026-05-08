@@ -88,6 +88,26 @@ struct InProcessComputerUseBehaviorTests {
         try await verifyGlobalMenuBarClickReturnsMenuAXTree()
     }
 
+    @Test("Probe background global menu item can be picked")
+    func probeBackgroundGlobalMenuItemCanBePicked() async throws {
+        guard ProcessInfo.processInfo.environment["KWWK_CU_RUN_GUI_PROBE_TESTS"] == "1" else {
+            return
+        }
+        guard AXIsProcessTrusted() else {
+            Issue.record("Accessibility permission is required for GUI Probe tests.")
+            return
+        }
+        guard ProbeHarness.bundleExists("A"),
+              ProbeHarness.bundleExists("B"),
+              ProbeHarness.bundleExists("C")
+        else {
+            Issue.record("Probe apps are missing under /private/tmp/kwwk-activation-probe.")
+            return
+        }
+
+        try await verifyBackgroundGlobalMenuItemCanBePicked()
+    }
+
     @Test("Probe window menu button click returns menu AX tree")
     func probeWindowMenuButtonClickReturnsMenuAXTree() async throws {
         guard ProcessInfo.processInfo.environment["KWWK_CU_RUN_GUI_PROBE_TESTS"] == "1" else {
@@ -385,6 +405,47 @@ struct InProcessComputerUseBehaviorTests {
         }
 
         ProbeHarness.pump(0.35)
+        #expect(ProbeHarness.clicks("ProbeB") == baseline.clicks)
+    }
+
+    private func verifyBackgroundGlobalMenuItemCanBePicked() async throws {
+        let context = try ProbeHarness.reset()
+        let baseline = ProbeHarness.captureBaseline(context)
+        let session = ComputerUseSession()
+        defer { session.finish() }
+
+        let snapshot = try await getProbeBState(includeScreenshot: false)
+        #expect(snapshot.text.contains("Probe Tools"))
+        let toolsMenuIndex = try index(containingAll: ["Probe Tools", "Secondary Actions: Cancel, Pick"], in: snapshot.text)
+
+        let menuOutput = try await ComputerUseAgent.executeAction(
+            action: "click",
+            args: [
+                "snapshot_id": .string(try #require(snapshot.metadata?.id)),
+                "element_index": .int(toolsMenuIndex),
+                "include_screenshot_after": .bool(false),
+            ],
+            screenshotCompression: .foregroundDefault,
+            session: session
+        )
+
+        #expect(menuOutput.text.contains("Probe Tool One"))
+        let toolOneIndex = try index(containingAll: ["Probe Tool One"], in: menuOutput.text)
+        _ = try await ComputerUseAgent.executeAction(
+            action: "click",
+            args: [
+                "snapshot_id": .string(try #require(menuOutput.metadata?.id)),
+                "element_index": .int(toolOneIndex),
+                "include_screenshot_after": .bool(false),
+            ],
+            screenshotCompression: .foregroundDefault,
+            session: session
+        )
+
+        ProbeHarness.pump(0.35)
+        #expect(ProbeHarness.logText("ProbeB").contains("appMenuPicked title=Probe Tool One"))
+        #expect(ProbeHarness.stack(ids: context.ids) == baseline.stack)
+        #expect(ProbeHarness.frontmost() == baseline.frontmost)
         #expect(ProbeHarness.clicks("ProbeB") == baseline.clicks)
     }
 
