@@ -50,6 +50,17 @@ struct OpenAIResponsesTests {
 
     """
 
+    static let toolUseDoneArgumentsSSE = """
+    data: {"type":"response.created","response":{"id":"resp_4","status":"in_progress"}}
+
+    data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calc","arguments":""}}
+
+    data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"calc","arguments":"{\\"a\\":1,\\"b\\":2}"}}
+
+    data: {"type":"response.completed","response":{"id":"resp_4","status":"completed","usage":{"input_tokens":12,"output_tokens":8}}}
+
+    """
+
     static let reasoningSSE = """
     data: {"type":"response.created","response":{"id":"resp_3","status":"in_progress"}}
 
@@ -97,6 +108,29 @@ struct OpenAIResponsesTests {
     @Test("streams function_call with incremental arguments")
     func toolUse() async throws {
         let client = StubSSEClient(body: Self.toolUseSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "go"))]),
+            options: nil
+        )
+        var seenEnd = false
+        for await event in s {
+            if case .toolCallEnd(_, let call, _) = event {
+                #expect(call.id == "call_1")
+                #expect(call.name == "calc")
+                #expect(call.arguments == .object(["a": 1, "b": 2]))
+                seenEnd = true
+            }
+        }
+        let result = await s.result()
+        #expect(seenEnd)
+        #expect(result.stopReason == .toolUse)
+    }
+
+    @Test("reads function_call arguments from output_item.done")
+    func toolUseDoneArguments() async throws {
+        let client = StubSSEClient(body: Self.toolUseDoneArgumentsSSE)
         let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
         let s = provider.stream(
             model: Self.model,
