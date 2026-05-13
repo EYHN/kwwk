@@ -64,7 +64,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             return URL(string: "\(versioned)/chat/completions")
                 ?? fallback.appendingPathComponent("v1/chat/completions")
         }
-        self.authHeaderBuilder = authHeaderBuilder ?? { key in ["authorization": "Bearer \(key)"] }
+        self.authHeaderBuilder = authHeaderBuilder ?? { key in ["Authorization": bearerHeaderValue(key)] }
         self.bodyDecorator = bodyDecorator
         self.headersDecorator = headersDecorator
     }
@@ -115,9 +115,10 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 url: url, method: "POST", headers: headers, body: body
             )
             if response.statusCode >= 400 {
+                let bodyText = await Self.errorBodyPreview(from: stream)
                 let msg = Self.makeError(
                     api: api, model: model,
-                    text: "OpenAI returned status \(response.statusCode)"
+                    text: "OpenAI returned status \(response.statusCode)\(bodyText)"
                 )
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
@@ -388,6 +389,28 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             errorMessage: text,
             timestamp: Timestamp.now()
         )
+    }
+
+    private static func errorBodyPreview(
+        from stream: AsyncThrowingStream<UInt8, Error>,
+        limit: Int = 4096
+    ) async -> String {
+        var data = Data()
+        do {
+            for try await byte in stream {
+                data.append(byte)
+                if data.count >= limit {
+                    break
+                }
+            }
+        } catch {
+            return ": failed to read error body: \(error)"
+        }
+        guard !data.isEmpty else { return "" }
+        let text = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return "" }
+        return ": \(text)"
     }
 }
 

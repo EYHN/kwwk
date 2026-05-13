@@ -75,7 +75,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             }
             return components?.url ?? httpURL
         }
-        self.authHeaderBuilder = authHeaderBuilder ?? { key in ["authorization": "Bearer \(key)"] }
+        self.authHeaderBuilder = authHeaderBuilder ?? { key in ["Authorization": bearerHeaderValue(key)] }
     }
 
     public func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {

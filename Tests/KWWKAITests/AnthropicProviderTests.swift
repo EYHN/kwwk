@@ -216,7 +216,7 @@ struct AnthropicProviderTests {
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
         let headers = client.lastRequest?.headers ?? [:]
-        #expect(headers["authorization"] == "Bearer oauth-token")
+        #expect(headers["Authorization"] == "Bearer oauth-token")
         #expect(headers["x-api-key"] == nil)
         #expect(headers["anthropic-beta"] == "oauth-2025-04-20")
         #expect(headers["x-extra"] == "override")

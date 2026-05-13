@@ -101,7 +101,7 @@ struct OpenAICompletionsTests {
             options: StreamOptions(apiKey: "sk-override")
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
-        #expect(client.lastRequest?.headers["authorization"] == "Bearer sk-override")
+        #expect(client.lastRequest?.headers["Authorization"] == "Bearer sk-override")
     }
 
     @Test("resolved auth overrides apiKey and default key")
@@ -117,7 +117,7 @@ struct OpenAICompletionsTests {
             )
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
-        #expect(client.lastRequest?.headers["authorization"] == "Bearer sk-resolved")
+        #expect(client.lastRequest?.headers["Authorization"] == "Bearer sk-resolved")
     }
 
     @Test("encodes parallel_tool_calls=false + tool_choice at the root")

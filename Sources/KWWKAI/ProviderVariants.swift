@@ -152,7 +152,7 @@ public enum ProviderVariants {
         sessionToken: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
         integrationID: String = "vscode-chat",
-        api: String = "openai-completions",
+        api: String = "github-copilot-chat",
         baseURL: URL = URL(string: "https://api.githubcopilot.com")!
     ) -> OpenAICompletionsProvider {
         let baseString = baseURL.absoluteString.trimmedSlashes
