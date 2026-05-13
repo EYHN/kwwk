@@ -308,7 +308,7 @@ struct OpenAIResponsesTests {
         #expect(ws.connectCount == 1)
         #expect(http.lastRequest == nil)
         #expect(ws.lastURL?.absoluteString == "wss://api.openai.com/v1/responses")
-        #expect(ws.lastHeaders["authorization"] == "Bearer k")
+        #expect(ws.lastHeaders["Authorization"] == "Bearer k")
         #expect(ws.lastHeaders["OpenAI-Beta"] == "responses_websockets=2026-02-06")
 
         let payload = try Self.jsonObject(connection.sentTexts[0])

@@ -15,10 +15,18 @@ func applyResolvedAuth(
     case .none, .queryKey:
         break
     case .bearer:
-        merge(&headers, "authorization", "Bearer \(token)")
+        merge(&headers, "Authorization", bearerHeaderValue(token))
     case .apiKeyHeader(let name):
         merge(&headers, name, token)
     }
+}
+
+func bearerHeaderValue(_ token: String) -> String {
+    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.range(of: "Bearer ", options: [.anchored, .caseInsensitive]) != nil {
+        return trimmed
+    }
+    return "Bearer \(trimmed)"
 }
 
 func resolvedQueryKey(_ auth: ResolvedProviderAuth?, expectedName: String) -> String? {
