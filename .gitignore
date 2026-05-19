@@ -4,7 +4,6 @@
 xcuserdata/
 DerivedData/
 .swiftpm/
-Package.resolved
 *.xcodeproj
 .vscode/
 .claude/

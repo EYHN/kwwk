@@ -11,7 +11,7 @@ A Swift-native coding agent with two faces:
 ## Requirements
 
 - macOS 14+
-- Swift 6.0 toolchain (Xcode 16 or the matching `swift` toolchain)
+- Swift 6.1 toolchain (Xcode 16.3+ or the matching `swift` toolchain)
 
 ---
 
