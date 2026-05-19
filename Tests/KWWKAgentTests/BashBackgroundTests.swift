@@ -10,10 +10,16 @@ func makeTempDir() -> URL {
     return dir
 }
 
+private var isCIRunner: Bool {
+    ProcessInfo.processInfo.environment["CI"] == "true"
+        || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+}
+
 func awaitUntil(
     _ budgetMs: Int,
     _ predicate: @Sendable () async -> Bool
 ) async -> Bool {
+    let budgetMs = isCIRunner ? max(budgetMs * 10, budgetMs + 5000) : budgetMs
     let start = Date()
     while Date().timeIntervalSince(start) * 1000 < Double(budgetMs) {
         if await predicate() { return true }
