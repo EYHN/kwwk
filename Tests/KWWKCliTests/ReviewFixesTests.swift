@@ -134,7 +134,7 @@ struct CatalogProviderKeyTests {
 
 // MARK: - P2b: notification delivery order
 
-@Suite("BackgroundTaskManager serial delivery")
+@Suite("BackgroundTaskManager serial delivery", .serialized)
 struct NotificationOrderingTests {
 
     /// Spawn three tasks back-to-back with artificial per-task sleeps so

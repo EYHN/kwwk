@@ -28,7 +28,7 @@ func awaitUntil(
     return false
 }
 
-@Suite("BashBackgroundRunner")
+@Suite("BashBackgroundRunner", .serialized)
 struct BashBackgroundRunnerTests {
 
     @Test("runs a command, writes stdout to the output file and reports exit 0")
@@ -113,7 +113,7 @@ struct BashBackgroundRunnerTests {
     }
 }
 
-@Suite("Bash tool + background manager")
+@Suite("Bash tool + background manager", .serialized)
 struct BashToolBackgroundTests {
 
     @Test("run_in_background=true returns immediately with a task id")
@@ -291,7 +291,7 @@ struct BashToolBackgroundTests {
     }
 }
 
-@Suite("task_status tool")
+@Suite("task_status tool", .serialized)
 struct TaskStatusToolTests {
 
     @Test("list returns running tasks")

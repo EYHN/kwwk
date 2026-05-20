@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAgent
 @testable import KWWKAI
 
-@Suite("Agent + BackgroundTaskManager")
+@Suite("Agent + BackgroundTaskManager", .serialized)
 struct AgentBackgroundTests {
 
     @Test("background notification wakes an idle agent and shows up as a user message")

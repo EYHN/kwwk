@@ -7,7 +7,7 @@ import Testing
 /// but `TUIRunner` never invoked `flushOnTimeout`, so Esc-bound handlers
 /// (cancel generation, stop bg tasks) never fired. Fix: schedule a
 /// short-delay flush after every `ingest` and cancel it on the next input.
-@Suite("TUIRunner escape-flush")
+@Suite("TUIRunner escape-flush", .serialized)
 struct EscapeKeyFlushTests {
 
     @Test("standalone ESC reaches a keybinding after the flush delay")

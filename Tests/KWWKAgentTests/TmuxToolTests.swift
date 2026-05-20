@@ -20,7 +20,7 @@ private func makeSessionManager() -> TmuxSessionManager {
     )
 }
 
-@Suite("TmuxSessionManager")
+@Suite("TmuxSessionManager", .serialized)
 struct TmuxSessionManagerTests {
 
     @Test("availability probe reflects whether tmux is installed")
@@ -120,7 +120,7 @@ struct TmuxSessionManagerTests {
     }
 }
 
-@Suite("Tmux tool")
+@Suite("Tmux tool", .serialized)
 struct TmuxToolTests {
 
     @Test("createTmuxTool returns nil when tmux is unavailable")

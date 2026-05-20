@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAI
 @testable import KWWKAgent
 
-@Suite("wait_task tool")
+@Suite("wait_task tool", .serialized)
 struct WaitTaskToolTests {
 
     @Test("returns immediately when the task is already terminal")

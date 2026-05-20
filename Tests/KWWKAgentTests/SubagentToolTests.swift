@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAgent
 @testable import KWWKAI
 
-@Suite("Subagent tool")
+@Suite("Subagent tool", .serialized)
 struct SubagentToolTests {
     @Test("coding agent only exposes agent tool when subagents are configured")
     func agentToolIsConditional() async throws {

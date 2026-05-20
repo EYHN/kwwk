@@ -97,7 +97,7 @@ private func makeOutputDir() -> URL {
 
 // MARK: - Suites
 
-@Suite("BackgroundTaskManager")
+@Suite("BackgroundTaskManager", .serialized)
 struct BackgroundTaskManagerTests {
 
     @Test("spawn + complete enqueues a notification")
