@@ -175,7 +175,7 @@ func runCodingTUIInternal(
     )
     await statusBar.render()
 
-    var isAutoCompacting = false
+    let autoCompactState = CodingTUIAutoCompactState()
 
     // Keep the renderer's display mode in sync with the agent's state on
     // every event, so `/thinking show|hide` (which only mutates agent
@@ -205,18 +205,18 @@ func runCodingTUIInternal(
             case .agentStart:
                 statusBar.setMode(.streaming)
             case .agentEnd:
-                if !isAutoCompacting {
+                if !autoCompactState.isCompacting {
                     statusBar.setMode(.idle)
                 }
             case .compactStart(let count, _):
-                isAutoCompacting = true
+                autoCompactState.isCompacting = true
                 statusBar.setCompacting(messageCount: count)
                 runner.tui.commit([
                     "",
                     Style.dimmed("  ◐ auto-compacting…"),
                 ])
             case .compactEnd(let outcome):
-                isAutoCompacting = false
+                autoCompactState.isCompacting = false
                 statusBar.setMode(.idle)
                 switch outcome {
                 case .compacted(let n, let hasLedger):
@@ -326,7 +326,7 @@ func runCodingTUIInternal(
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
-            let busy = agent.state.isStreaming || isAutoCompacting
+            let busy = agent.state.isStreaming || autoCompactState.isCompacting
 
             // Slash commands are idle-only. If the agent is mid-turn
             // we can't reliably run them (some mutate agent state, all
@@ -518,6 +518,11 @@ func runCodingTUIInternal(
 }
 
 // MARK: - Helpers
+
+@MainActor
+private final class CodingTUIAutoCompactState {
+    var isCompacting = false
+}
 
 private func shortenPath(_ path: String, to maxLen: Int) -> String {
     if path.count <= maxLen { return path }
