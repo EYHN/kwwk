@@ -200,7 +200,14 @@ struct SpawnedBashProcess {
         guard inputFd >= 0 else { throw SpawnError.openDevNull }
         defer { close(inputFd) }
 
+        // Glibc imports these spawn handles as concrete structs, Darwin as
+        // optional opaque pointers — declare each per-platform so `&handle`
+        // matches the C function's pointee on both.
+        #if os(Linux)
+        var actions = posix_spawn_file_actions_t()
+        #else
         var actions: posix_spawn_file_actions_t? = nil
+        #endif
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
 
@@ -210,7 +217,11 @@ struct SpawnedBashProcess {
         try checkFileAction(posix_spawn_file_actions_addclose(&actions, inputFd))
         try checkFileAction(posix_spawn_file_actions_addclose(&actions, outputFd))
 
+        #if os(Linux)
+        var attr = posix_spawnattr_t()
+        #else
         var attr: posix_spawnattr_t? = nil
+        #endif
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
         let flags = Int16(POSIX_SPAWN_SETPGROUP)
@@ -237,8 +248,10 @@ struct SpawnedBashProcess {
                         path,
                         &actions,
                         &attr,
-                        argvBuffer.baseAddress,
-                        envBuffer.baseAddress
+                        // Non-optional on Glibc; both arrays always hold at
+                        // least their nil terminator, so the unwrap is safe.
+                        argvBuffer.baseAddress!,
+                        envBuffer.baseAddress!
                     )
                 }
             }
