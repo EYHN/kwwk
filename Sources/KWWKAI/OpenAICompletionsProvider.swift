@@ -55,6 +55,11 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         self.urlBuilder = urlBuilder ?? { model, _, fallback in
             var base = model.baseUrl.isEmpty ? fallback.absoluteString : model.baseUrl
             while base.hasSuffix("/") { base.removeLast() }
+            // Cloudflare catalog entries carry literal `{CLOUDFLARE_ACCOUNT_ID}`
+            // / `{CLOUDFLARE_GATEWAY_ID}` placeholders in `baseUrl`; expand them
+            // from the environment before building the request URL. No-op for
+            // every other provider (the tokens never appear in their baseUrls).
+            base = substituteCloudflarePlaceholders(in: base)
             // Tolerate catalog entries that bake `/v1` into baseUrl
             // (pi-mono's models.generated.ts does this for OpenAI).
             // Without this, the session baseUrl `https://api.openai.com`
@@ -717,4 +722,23 @@ final class OpenAICompletionsState: @unchecked Sendable {
         }
         return .object([:])
     }
+}
+
+/// Expand Cloudflare base-URL placeholders (`{CLOUDFLARE_ACCOUNT_ID}` /
+/// `{CLOUDFLARE_GATEWAY_ID}`) from a value source (defaults to the process
+/// environment). Mirrors pi's `resolveCloudflareBaseUrl`: the catalog stores
+/// the literal tokens in `model.baseUrl` and they are substituted at request
+/// time. Unknown/missing values collapse to the empty string.
+func substituteCloudflarePlaceholders(
+    in baseUrl: String,
+    value: (String) -> String? = { ProcessInfo.processInfo.environment[$0] }
+) -> String {
+    guard baseUrl.contains("{CLOUDFLARE_") else { return baseUrl }
+    var result = baseUrl
+    for token in ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"] {
+        let needle = "{\(token)}"
+        guard result.contains(needle) else { continue }
+        result = result.replacingOccurrences(of: needle, with: value(token) ?? "")
+    }
+    return result
 }

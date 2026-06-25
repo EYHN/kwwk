@@ -101,4 +101,84 @@ public enum EnvAPIKeys {
         if hasBedrockKeys(env: env) { out.append("amazon-bedrock") }
         return out
     }
+
+    /// Look up the first non-empty environment variable from `names`.
+    public static func firstValue(
+        of names: [String],
+        env: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        for name in names {
+            if let v = env[name], !v.trimmingCharacters(in: .whitespaces).isEmpty { return v }
+        }
+        return nil
+    }
+
+    // MARK: - Azure OpenAI (Responses wire)
+
+    /// Resolved Azure OpenAI configuration. The Responses API is hosted under a
+    /// resource-/endpoint-scoped URL with an `api-version` query parameter and
+    /// an `api-key` header.
+    public struct Azure: Sendable, Equatable {
+        public var apiKey: String
+        /// Base endpoint, normalized to `…/openai/v1` (no trailing slash).
+        public var baseURL: String
+        public var apiVersion: String
+        public init(apiKey: String, baseURL: String, apiVersion: String) {
+            self.apiKey = apiKey
+            self.baseURL = baseURL
+            self.apiVersion = apiVersion
+        }
+    }
+
+    public static let azureDefaultAPIVersion = "v1"
+
+    /// Resolve Azure config from the environment (nil when no API key). Endpoint
+    /// order: AZURE_OPENAI_BASE_URL > AZURE_OPENAI_ENDPOINT >
+    /// https://{AZURE_OPENAI_RESOURCE_NAME}.openai.azure.com.
+    public static func azure(env: [String: String] = ProcessInfo.processInfo.environment) -> Azure? {
+        guard let apiKey = firstValue(of: ["AZURE_OPENAI_API_KEY"], env: env) else { return nil }
+        let apiVersion = firstValue(of: ["AZURE_OPENAI_API_VERSION"], env: env) ?? azureDefaultAPIVersion
+        let rawBase: String?
+        if let explicit = firstValue(of: ["AZURE_OPENAI_BASE_URL", "AZURE_OPENAI_ENDPOINT"], env: env) {
+            rawBase = explicit
+        } else if let resource = firstValue(of: ["AZURE_OPENAI_RESOURCE_NAME"], env: env) {
+            rawBase = "https://\(resource).openai.azure.com"
+        } else {
+            rawBase = nil
+        }
+        guard let rawBase else { return nil }
+        return Azure(apiKey: apiKey, baseURL: normalizeAzureBaseURL(rawBase), apiVersion: apiVersion)
+    }
+
+    /// Ensure an Azure endpoint ends in `/openai/v1` (no trailing slash).
+    public static func normalizeAzureBaseURL(_ raw: String) -> String {
+        var base = raw.trimmingCharacters(in: .whitespaces)
+        while base.hasSuffix("/") { base.removeLast() }
+        if base.hasSuffix("/openai/v1") { return base }
+        if base.hasSuffix("/openai") { return base + "/v1" }
+        return base + "/openai/v1"
+    }
+
+    // MARK: - Cloudflare
+
+    public struct Cloudflare: Sendable, Equatable {
+        public var apiKey: String
+        public var accountId: String?
+        public var gatewayId: String?
+        public init(apiKey: String, accountId: String?, gatewayId: String?) {
+            self.apiKey = apiKey
+            self.accountId = accountId
+            self.gatewayId = gatewayId
+        }
+    }
+
+    /// Resolve Cloudflare credentials (nil when CLOUDFLARE_API_KEY absent).
+    public static func cloudflare(env: [String: String] = ProcessInfo.processInfo.environment) -> Cloudflare? {
+        guard let apiKey = firstValue(of: ["CLOUDFLARE_API_KEY"], env: env) else { return nil }
+        return Cloudflare(
+            apiKey: apiKey,
+            accountId: firstValue(of: ["CLOUDFLARE_ACCOUNT_ID"], env: env),
+            gatewayId: firstValue(of: ["CLOUDFLARE_GATEWAY_ID"], env: env)
+        )
+    }
 }

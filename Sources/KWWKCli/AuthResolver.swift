@@ -124,6 +124,20 @@ func resolveEnvAuth(modelOverride: String?) async -> ResolvedAuth? {
                 authResolver: nil
             )
         }
+        // Azure OpenAI / Cloudflare authenticate via a key plus extra config
+        // (endpoint / account+gateway ids) and ride bespoke ProviderVariants.
+        if provider == "azure-openai-responses" {
+            guard let azure = EnvAPIKeys.azure() else { continue }
+            return await registerAzureEnv(azure, modelOverride: forcedId)
+        }
+        if provider == "cloudflare-ai-gateway" {
+            guard let cf = EnvAPIKeys.cloudflare(), cf.accountId != nil, cf.gatewayId != nil else { continue }
+            return await registerCloudflareEnv(cf, gateway: true, modelOverride: forcedId)
+        }
+        if provider == "cloudflare-workers-ai" {
+            guard let cf = EnvAPIKeys.cloudflare(), cf.accountId != nil else { continue }
+            return await registerCloudflareEnv(cf, gateway: false, modelOverride: forcedId)
+        }
         guard let key = EnvAPIKeys.apiKey(for: provider), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
         guard await registerEnvProvider(for: model, apiKey: key) else { continue }
@@ -131,6 +145,48 @@ func resolveEnvAuth(modelOverride: String?) async -> ResolvedAuth? {
         return ResolvedAuth(model: model, modelLabel: label, authResolver: nil)
     }
     return nil
+}
+
+/// Register Azure OpenAI (Responses wire) from resolved env config.
+private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?) async -> ResolvedAuth {
+    let endpoint = URL(string: azure.baseURL) ?? URL(string: "https://example.openai.azure.com/openai/v1")!
+    await APIRegistry.shared.register(ProviderVariants.azureOpenAIResponsesV1(
+        endpoint: endpoint, apiVersion: azure.apiVersion, apiKey: azure.apiKey
+    ))
+    let modelId = modelOverride ?? "gpt-5"
+    let catalog = ModelsCatalog.model(provider: "azure-openai-responses", id: modelId)
+    let model = Model(
+        id: modelId, name: catalog?.name ?? modelId,
+        api: "azure-openai-responses", provider: "azure-openai-responses",
+        baseUrl: azure.baseURL, reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text, .image],
+        contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 16_384
+    )
+    return ResolvedAuth(model: model, modelLabel: "\(modelId) · Azure OpenAI (env)", authResolver: nil)
+}
+
+/// Register Cloudflare Workers AI / AI Gateway from resolved env config.
+private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, modelOverride: String?) async -> ResolvedAuth {
+    let providerId = gateway ? "cloudflare-ai-gateway" : "cloudflare-workers-ai"
+    if gateway {
+        await APIRegistry.shared.register(ProviderVariants.cloudflareAIGateway(apiKey: cf.apiKey))
+    } else {
+        await APIRegistry.shared.register(ProviderVariants.cloudflareWorkersAI(apiKey: cf.apiKey))
+    }
+    let fallbackBase = gateway
+        ? "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
+        : "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    let modelId = modelOverride ?? (gateway ? "claude-3.5-haiku" : "@cf/google/gemma-4-26b-a4b-it")
+    let catalog = ModelsCatalog.model(provider: providerId, id: modelId)
+    let model = Model(
+        id: modelId, name: catalog?.name ?? modelId,
+        api: catalog?.api ?? providerId, provider: providerId,
+        baseUrl: catalog?.baseUrl ?? fallbackBase, reasoning: catalog?.reasoning ?? false,
+        input: catalog?.input ?? [.text],
+        contextWindow: catalog?.contextWindow ?? 128_000, maxTokens: catalog?.maxTokens ?? 16_384
+    )
+    let label = gateway ? "Cloudflare AI Gateway" : "Cloudflare Workers AI"
+    return ResolvedAuth(model: model, modelLabel: "\(modelId) · \(label) (env)", authResolver: nil)
 }
 
 /// Derive the AWS region for a Bedrock model from its catalog baseUrl host

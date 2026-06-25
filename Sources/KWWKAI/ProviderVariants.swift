@@ -45,6 +45,92 @@ public enum ProviderVariants {
         )
     }
 
+    // MARK: - Azure OpenAI Responses (v1 surface)
+    //
+    // pi's azure-openai-responses provider speaks the `/openai/v1` surface
+    // rather than the older deployment-scoped path:
+    //
+    //   POST {endpoint}/openai/v1/responses?api-version={version}
+    //   api-key: {key}
+    //
+    // `endpoint` is the already-normalized base (see
+    // `EnvAPIKeys.normalizeAzureBaseURL`, which ensures the `…/openai/v1`
+    // suffix). This is what `AZURE_OPENAI_API_KEY` + endpoint env resolution
+    // wires up.
+    public static func azureOpenAIResponsesV1(
+        endpoint: URL,
+        apiVersion: String = EnvAPIKeys.azureDefaultAPIVersion,
+        apiKey: String? = nil,
+        api: String = "azure-openai-responses",
+        client: HTTPClient = URLSessionHTTPClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient()
+    ) -> OpenAIResponsesProvider {
+        let base = endpoint.absoluteString.trimmedSlashes
+        return OpenAIResponsesProvider(
+            api: api,
+            client: client,
+            webSocketClient: webSocketClient,
+            defaultBaseURL: endpoint,
+            defaultAPIKey: apiKey,
+            urlBuilder: { _, _, _ in
+                let urlString = "\(base)/responses?api-version=\(apiVersion)"
+                return URL(string: urlString) ?? endpoint
+            },
+            authHeaderBuilder: { key in ["api-key": key] }
+        )
+    }
+
+    // MARK: - Cloudflare Workers AI (Completions wire)
+    //
+    // Workers AI exposes an OpenAI-compatible /chat/completions endpoint under
+    // an account-scoped URL. The base carries a literal `{CLOUDFLARE_ACCOUNT_ID}`
+    // placeholder in the catalog; `OpenAICompletionsProvider`'s default
+    // urlBuilder substitutes it from the environment. Auth is a Bearer key.
+    public static func cloudflareWorkersAI(
+        apiKey: String? = nil,
+        api: String = "cloudflare-workers-ai",
+        baseURL: URL = URL(
+            string: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+        )!,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) -> OpenAICompletionsProvider {
+        OpenAICompletionsProvider(
+            api: api,
+            client: client,
+            defaultBaseURL: baseURL,
+            defaultAPIKey: apiKey,
+            authHeaderBuilder: { key in ["Authorization": bearerHeaderValue(key)] }
+        )
+    }
+
+    // MARK: - Cloudflare AI Gateway (Completions wire)
+    //
+    // The AI Gateway Unified API proxies OpenAI-compatible /chat/completions
+    // under a gateway-scoped URL with both `{CLOUDFLARE_ACCOUNT_ID}` and
+    // `{CLOUDFLARE_GATEWAY_ID}` placeholders. Unlike Workers AI, the gateway
+    // authenticates the *gateway itself* via a `cf-aig-authorization: Bearer …`
+    // header (the upstream provider key, if any, rides separately). pi sends
+    // the Cloudflare key on `cf-aig-authorization` and suppresses the normal
+    // `Authorization` header.
+    public static func cloudflareAIGateway(
+        apiKey: String? = nil,
+        api: String = "cloudflare-ai-gateway",
+        baseURL: URL = URL(
+            string: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
+        )!,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) -> OpenAICompletionsProvider {
+        OpenAICompletionsProvider(
+            api: api,
+            client: client,
+            defaultBaseURL: baseURL,
+            defaultAPIKey: apiKey,
+            authHeaderBuilder: { key in
+                ["cf-aig-authorization": "Bearer \(key.trimmingCharacters(in: .whitespacesAndNewlines))"]
+            }
+        )
+    }
+
     // MARK: - Anthropic OAuth
     //
     // Anthropic's OAuth tokens (used by Claude Code) ride on a Bearer header
