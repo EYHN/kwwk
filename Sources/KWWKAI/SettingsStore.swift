@@ -188,11 +188,12 @@ public enum ConfigValue {
             finished.signal()
         }
         if finished.wait(timeout: .now() + timeoutSeconds) == .timedOut {
-            process.terminate()
-            if finished.wait(timeout: .now() + 1) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = finished.wait(timeout: .now() + 1)
-            }
+            // SIGKILL directly — SIGTERM can be ignored by a busy loop, and a
+            // slow SIGTERM→SIGKILL escalation leaves the detached `waitUntilExit`
+            // thread blocked, which under parallel test execution starves the
+            // global queue and stalls unrelated work. SIGKILL reaps promptly.
+            kill(process.processIdentifier, SIGKILL)
+            _ = finished.wait(timeout: .now() + 2)
             return nil
         }
         try? outputHandle.synchronize()
