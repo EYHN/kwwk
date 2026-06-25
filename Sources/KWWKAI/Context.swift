@@ -108,6 +108,12 @@ public struct StreamOptions: Sendable {
     public var thinkingBudgets: ThinkingBudgets?
     public var cancellation: CancellationHandle?
 
+    /// Anthropic interleaved-thinking beta opt-in. `nil` ⇒ provider default
+    /// (treated as `true`); set `false` to suppress the
+    /// `interleaved-thinking-2025-05-14` beta header. Providers without an
+    /// analog ignore this.
+    public var interleavedThinking: Bool?
+
     /// Tool-use constraint. `nil` means provider default (usually `.auto`).
     public var toolChoice: ToolChoice?
 
@@ -138,6 +144,7 @@ public struct StreamOptions: Sendable {
         reasoning: ReasoningLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         cancellation: CancellationHandle? = nil,
+        interleavedThinking: Bool? = nil,
         toolChoice: ToolChoice? = nil,
         parallelToolCalls: Bool? = nil,
         verbose: Bool? = nil,
@@ -156,6 +163,7 @@ public struct StreamOptions: Sendable {
         self.reasoning = reasoning
         self.thinkingBudgets = thinkingBudgets
         self.cancellation = cancellation
+        self.interleavedThinking = interleavedThinking
         self.toolChoice = toolChoice
         self.parallelToolCalls = parallelToolCalls
         self.verbose = verbose

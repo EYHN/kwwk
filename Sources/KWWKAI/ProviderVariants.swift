@@ -140,19 +140,34 @@ public enum ProviderVariants {
     // Subscription-token requests must also identify as Claude Code via the
     // system prompt; otherwise the endpoint returns `rate_limit_error` up
     // front regardless of remaining quota.
+    /// Claude Code CLI version advertised on the OAuth identity headers. The
+    /// subscription endpoint stamps requests as Claude Code via `user-agent`
+    /// and `x-app`, plus a `claude-code-20250219` beta prefix.
+    public static let claudeCodeVersion = "2.1.75"
+
     public static func anthropicOAuth(
         accessToken: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
         apiVersion: String = "2023-06-01",
         beta: String = "oauth-2025-04-20"
     ) -> AnthropicProvider {
-        AnthropicProvider(
+        // pi parity (anthropic-messages.ts:853-873): the OAuth path prefixes
+        // `claude-code-20250219` ahead of the OAuth beta and sends Claude Code
+        // identity headers. Anthropic treats `anthropic-beta` as an unordered
+        // set, so the additional betas appended in `stream` (fine-grained /
+        // interleaved) may follow in any order.
+        let betaValue = "claude-code-20250219," + beta
+        return AnthropicProvider(
             api: "anthropic-messages",
             client: client,
             defaultBaseURL: URL(string: "https://api.anthropic.com")!,
             defaultAPIKey: accessToken,
             apiVersion: apiVersion,
-            extraHeaders: ["anthropic-beta": beta],
+            extraHeaders: [
+                "anthropic-beta": betaValue,
+                "user-agent": "claude-cli/\(claudeCodeVersion)",
+                "x-app": "cli",
+            ],
             authHeaderBuilder: { token in ["authorization": "Bearer \(token)"] },
             systemPromptPrefix: "You are Claude Code, Anthropic's official CLI for Claude."
         )

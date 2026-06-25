@@ -221,7 +221,10 @@ struct AnthropicProviderTests {
         let headers = client.lastRequest?.headers ?? [:]
         #expect(headers["Authorization"] == "Bearer oauth-token")
         #expect(headers["x-api-key"] == nil)
-        #expect(headers["anthropic-beta"] == "oauth-2025-04-20")
+        // The resolved-auth oauth beta is preserved; the interleaved-thinking
+        // beta (pi default) is appended to the same header rather than
+        // clobbering it.
+        #expect(headers["anthropic-beta"]?.contains("oauth-2025-04-20") == true)
         #expect(headers["x-extra"] == "override")
     }
 
@@ -380,5 +383,322 @@ struct AnthropicProviderTests {
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["thinking"] == nil)
         #expect(json?["temperature"] as? Double == 0.2)
+    }
+
+    // MARK: - pi parity helpers
+
+    static let reasoningModel = Model(
+        id: "claude-reason",
+        name: "Claude Reason",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+        reasoning: true,
+        input: [.text],
+        contextWindow: 200_000,
+        maxTokens: 1024
+    )
+
+    private static func decodeBody(_ client: StubSSEClient) -> [String: Any] {
+        let body = client.lastRequest?.body ?? Data()
+        return (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
+    }
+
+    // MARK: - Feature 1: redacted_thinking decode
+
+    private static let redactedThinkingSSE = """
+    event: message_start
+    data: {"type":"message_start","message":{"id":"msg_r","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":5,"output_tokens":0}}}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"ENC_ABC"}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":0}
+
+    event: message_delta
+    data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}
+
+    event: message_stop
+    data: {"type":"message_stop"}
+
+    """
+
+    @Test("redacted_thinking block decodes with [Reasoning redacted] + data + flag")
+    func redactedThinkingDecodes() async throws {
+        let client = StubSSEClient(body: Self.redactedThinkingSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let s = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        var types: [String] = []
+        for await event in s { types.append(event.type) }
+        let result = await s.result()
+        #expect(types.contains("thinking_start"))
+        #expect(types.contains("thinking_end"))
+        #expect(result.content == [.thinking(ThinkingContent(
+            thinking: "[Reasoning redacted]",
+            thinkingSignature: "ENC_ABC",
+            redacted: true))])
+    }
+
+    // MARK: - Feature 2: thinking disabled when reasoning off
+
+    @Test("thinking:{type:disabled} on reasoning model when reasoning is off")
+    func thinkingDisabledWhenReasoningOff() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.reasoningModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions()
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let json = Self.decodeBody(client)
+        #expect((json["thinking"] as? [String: Any])?["type"] as? String == "disabled")
+    }
+
+    @Test("thinking disabled is skipped when thinkingLevelMap pins off to null")
+    func thinkingDisabledSkippedWhenOffNull() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.reasoningModel
+        model.thinkingLevelMap = ["off": nil]
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions()
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let json = Self.decodeBody(client)
+        #expect(json["thinking"] == nil)
+    }
+
+    // MARK: - Feature 3: empty-signature / redacted encode
+
+    @Test("empty-signature thinking degrades to a text block by default")
+    func encodesEmptySignatureAsText() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [.thinking(ThinkingContent(thinking: "reasoned", thinkingSignature: nil))],
+            api: "anthropic-messages", provider: "anthropic", model: "claude-test"
+        )
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [
+                .user(UserMessage(text: "hi")),
+                .assistant(assistant),
+            ]),
+            options: StreamOptions(cacheRetention: CacheRetention.none)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let json = Self.decodeBody(client)
+        let messages = json["messages"] as? [[String: Any]]
+        let content = messages?.last?["content"] as? [[String: Any]]
+        #expect(content?.count == 1)
+        #expect(content?.first?["type"] as? String == "text")
+        #expect(content?.first?["text"] as? String == "reasoned")
+    }
+
+    @Test("empty-signature thinking kept as thinking when allowEmptySignature")
+    func encodesEmptySignatureAsThinkingWhenAllowed() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.sampleModel
+        var compat = ModelCompat()
+        compat.allowEmptySignature = true
+        model.compat = compat
+        let assistant = AssistantMessage(
+            content: [.thinking(ThinkingContent(thinking: "reasoned", thinkingSignature: nil))],
+            api: "anthropic-messages", provider: "anthropic", model: "claude-test"
+        )
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [
+                .user(UserMessage(text: "hi")),
+                .assistant(assistant),
+            ]),
+            options: StreamOptions(cacheRetention: CacheRetention.none)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let json = Self.decodeBody(client)
+        let messages = json["messages"] as? [[String: Any]]
+        let content = messages?.last?["content"] as? [[String: Any]]
+        #expect(content?.first?["type"] as? String == "thinking")
+        #expect(content?.first?["thinking"] as? String == "reasoned")
+        #expect(content?.first?["signature"] as? String == "")
+    }
+
+    @Test("redacted thinking re-encodes as a redacted_thinking block")
+    func encodesRedactedThinkingBack() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [.thinking(ThinkingContent(
+                thinking: "[Reasoning redacted]", thinkingSignature: "ENC", redacted: true))],
+            api: "anthropic-messages", provider: "anthropic", model: "claude-test"
+        )
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [
+                .user(UserMessage(text: "hi")),
+                .assistant(assistant),
+            ]),
+            options: StreamOptions(cacheRetention: CacheRetention.none)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let json = Self.decodeBody(client)
+        let messages = json["messages"] as? [[String: Any]]
+        let content = messages?.last?["content"] as? [[String: Any]]
+        #expect(content?.first?["type"] as? String == "redacted_thinking")
+        #expect(content?.first?["data"] as? String == "ENC")
+    }
+
+    // MARK: - Feature 4: beta headers + eager_input_streaming
+
+    @Test("interleaved-thinking beta sent by default")
+    func interleavedBetaSentByDefault() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.reasoningModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("interleaved-thinking-2025-05-14") == true)
+    }
+
+    @Test("interleaved-thinking beta skipped for adaptive-thinking models")
+    func interleavedBetaSkippedForAdaptive() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.reasoningModel
+        var compat = ModelCompat()
+        compat.forceAdaptiveThinking = true
+        model.compat = compat
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("interleaved-thinking") != true)
+    }
+
+    @Test("fine-grained beta + no eager flag when eager streaming unsupported")
+    func fineGrainedBetaWhenEagerUnsupported() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.sampleModel
+        var compat = ModelCompat()
+        compat.supportsEagerToolInputStreaming = false
+        model.compat = compat
+        let tool = Tool(name: "calc", description: "arithmetic", parameters: ["type": "object"])
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))], tools: [tool]),
+            options: StreamOptions(cacheRetention: CacheRetention.none)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("fine-grained-tool-streaming-2025-05-14") == true)
+        let json = Self.decodeBody(client)
+        let tools = json["tools"] as? [[String: Any]]
+        #expect(tools?.first?["eager_input_streaming"] == nil)
+    }
+
+    @Test("eager_input_streaming flag set + no fine-grained beta by default")
+    func eagerStreamingByDefault() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let tool = Tool(name: "calc", description: "arithmetic", parameters: ["type": "object"])
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))], tools: [tool]),
+            options: StreamOptions(cacheRetention: CacheRetention.none)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("fine-grained-tool-streaming") != true)
+        let json = Self.decodeBody(client)
+        let tools = json["tools"] as? [[String: Any]]
+        #expect(tools?.first?["eager_input_streaming"] as? Bool == true)
+    }
+
+    // MARK: - Feature 5: OAuth identity headers
+
+    @Test("OAuth variant sends Claude Code identity headers")
+    func oauthVariantSendsIdentityHeaders() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = ProviderVariants.anthropicOAuth(accessToken: "sk-ant-oat-x", client: client)
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let headers = client.lastRequest?.headers ?? [:]
+        #expect(headers["user-agent"] == "claude-cli/2.1.75")
+        #expect(headers["x-app"] == "cli")
+        #expect(headers["anthropic-beta"]?.contains("claude-code-20250219") == true)
+        #expect(headers["anthropic-beta"]?.contains("oauth-2025-04-20") == true)
+        #expect(headers["authorization"] == "Bearer sk-ant-oat-x")
+    }
+
+    @Test("api-key provider has no Claude Code identity headers")
+    func apiKeyProviderHasNoIdentityHeaders() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let headers = client.lastRequest?.headers ?? [:]
+        #expect(headers["x-app"] == nil)
+        #expect(headers["anthropic-beta"]?.contains("claude-code-20250219") != true)
+    }
+
+    // MARK: - Feature 6: 1h cache write + reasoning tokens
+
+    private static let usageSSE = """
+    event: message_start
+    data: {"type":"message_start","message":{"id":"msg_u","role":"assistant","content":[],"model":"claude-test","usage":{"input_tokens":100,"cache_creation_input_tokens":40,"cache_creation":{"ephemeral_1h_input_tokens":40}}}}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+    event: content_block_delta
+    data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":0}
+
+    event: message_delta
+    data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":20,"output_tokens_details":{"thinking_tokens":7}}}
+
+    event: message_stop
+    data: {"type":"message_stop"}
+
+    """
+
+    @Test("usage captures 1h cache-write and reasoning tokens without inflating total")
+    func usageCaptures1hCacheWriteAndReasoning() async throws {
+        let client = StubSSEClient(body: Self.usageSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let s = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        for await _ in s {}
+        let result = await s.result()
+        #expect(result.usage.cacheWrite1h == 40)
+        #expect(result.usage.reasoning == 7)
+        #expect(result.usage.output == 20)
+        #expect(result.usage.totalTokens == 160)
     }
 }

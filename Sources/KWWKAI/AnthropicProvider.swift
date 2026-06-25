@@ -106,17 +106,35 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         if let extra = options?.headers {
             for (k, v) in extra { headers[k] = v }
         }
-        // 1h prompt-cache TTL requires the extended-cache-ttl beta. Append it
-        // to any existing `anthropic-beta` value (e.g. the OAuth beta) rather
-        // than clobbering it.
+        // Append a beta flag to any existing `anthropic-beta` value (e.g. the
+        // OAuth `claude-code-20250219,oauth-2025-04-20` seed) rather than
+        // clobbering it. Anthropic treats `anthropic-beta` as an unordered set.
+        func appendBeta(_ name: String) {
+            if let existing = headers["anthropic-beta"], !existing.isEmpty {
+                if !existing.contains(name) { headers["anthropic-beta"] = existing + "," + name }
+            } else {
+                headers["anthropic-beta"] = name
+            }
+        }
+        // 1h prompt-cache TTL requires the extended-cache-ttl beta.
         if (options?.cacheRetention ?? .short) == .long,
            model.compat?.supportsLongCacheRetention != false {
-            let ttlBeta = "extended-cache-ttl-2025-04-11"
-            if let existing = headers["anthropic-beta"], !existing.isEmpty {
-                if !existing.contains(ttlBeta) { headers["anthropic-beta"] = existing + "," + ttlBeta }
-            } else {
-                headers["anthropic-beta"] = ttlBeta
-            }
+            appendBeta("extended-cache-ttl-2025-04-11")
+        }
+        // Fine-grained tool streaming beta is required only when eager tool
+        // input streaming is NOT supported and tools are present (pi inversion,
+        // anthropic-messages.ts:1182-1184).
+        let hasTools = !(context.tools?.isEmpty ?? true)
+        let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
+        if hasTools && !supportsEager {
+            appendBeta("fine-grained-tool-streaming-2025-05-14")
+        }
+        // Interleaved thinking beta, unless the model forces adaptive thinking
+        // or the caller opts out. pi defaults `interleavedThinking` to true.
+        let adaptive = model.compat?.forceAdaptiveThinking == true
+        let interleaved = options?.interleavedThinking ?? true
+        if interleaved && !adaptive {
+            appendBeta("interleaved-thinking-2025-05-14")
         }
 
         do {
@@ -197,7 +215,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                     switch blockType {
                     case "text":
                         out.push(.textStart(contentIndex: index, partial: state.snapshot()))
-                    case "thinking":
+                    case "thinking", "redacted_thinking":
                         out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
                     case "tool_use":
                         out.push(.toolCallStart(contentIndex: index, partial: state.snapshot()))
@@ -337,6 +355,17 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             thinkingEnabled = true
         } else {
             thinkingEnabled = false
+            // pi parity (anthropic-messages.ts:981-983): explicitly disable
+            // thinking on reasoning-capable models when reasoning is off,
+            // unless `thinkingLevelMap` pins `off` to null (meaning the model
+            // does not support an explicit off level).
+            let offUnsupported: Bool = {
+                guard let map = model.thinkingLevelMap, map.keys.contains("off") else { return false }
+                return map["off"]! == nil   // present-and-null => unsupported
+            }()
+            if model.reasoning, !offUnsupported {
+                root["thinking"] = ["type": "disabled"]
+            }
         }
         // Temperature is dropped when thinking is on (Messages API rejects any
         // value != 1) and whenever the model declares it unsupported (Opus 4.7+).
@@ -382,12 +411,15 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 root["system"] = userSystem
             }
         }
+        // pi default for `supportsEagerToolInputStreaming` is `true`.
+        let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
         if let tools = context.tools, !tools.isEmpty {
             var toolEntries = tools.map { tool -> [String: Any] in
                 var entry: [String: Any] = [
                     "name": tool.name,
                     "description": tool.description,
                 ]
+                if supportsEager { entry["eager_input_streaming"] = true }
                 if let params = anyFromJSONValue(tool.parameters) {
                     entry["input_schema"] = params
                 }
@@ -405,7 +437,9 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 root["tool_choice"] = toolChoice
             }
         }
-        var messages = context.messages.compactMap(encodeMessage)
+        // pi default for `allowEmptySignature` is `false`.
+        let allowEmptySig = model.compat?.allowEmptySignature == true
+        var messages = context.messages.compactMap { Self.encodeMessage($0, allowEmptySignature: allowEmptySig) }
         if let cc = cacheControl, !messages.isEmpty {
             applyCacheControl(cc, toLastBlockOf: &messages[messages.count - 1])
         }
@@ -466,7 +500,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         return out
     }
 
-    private static func encodeMessage(_ message: Message) -> [String: Any]? {
+    private static func encodeMessage(_ message: Message, allowEmptySignature: Bool) -> [String: Any]? {
         switch message {
         case .user(let u):
             let content = u.content.map { block -> [String: Any] in
@@ -492,9 +526,24 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 case .text(let t):
                     blocks.append(["type": "text", "text": t.text])
                 case .thinking(let th):
-                    var entry: [String: Any] = ["type": "thinking", "thinking": th.thinking]
-                    if let sig = th.thinkingSignature { entry["signature"] = sig }
-                    blocks.append(entry)
+                    // pi parity (anthropic-messages.ts:1072-1104).
+                    if th.redacted == true {
+                        blocks.append(["type": "redacted_thinking", "data": th.thinkingSignature ?? ""])
+                        break
+                    }
+                    if th.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
+                    let sig = th.thinkingSignature
+                    if sig == nil || sig!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if allowEmptySignature {
+                            blocks.append(["type": "thinking", "thinking": th.thinking, "signature": ""])
+                        } else {
+                            // The Messages API rejects a thinking block without a
+                            // valid signature; degrade to plain text instead.
+                            blocks.append(["type": "text", "text": th.thinking])
+                        }
+                    } else {
+                        blocks.append(["type": "thinking", "thinking": th.thinking, "signature": sig!])
+                    }
                 case .toolCall(let tc):
                     var entry: [String: Any] = [
                         "type": "tool_use",
@@ -585,6 +634,12 @@ final class AnthropicStreamState: @unchecked Sendable {
         if case .int(let v) = obj["output_tokens"] ?? .null { usage.output = v }
         if case .int(let v) = obj["cache_read_input_tokens"] ?? .null { usage.cacheRead = v }
         if case .int(let v) = obj["cache_creation_input_tokens"] ?? .null { usage.cacheWrite = v }
+        // pi parity: 1h cache-write subset (message_start) and reasoning tokens
+        // (message_delta). Reading both at every usage event is harmless.
+        if case .object(let cc) = obj["cache_creation"] ?? .null,
+           case .int(let v) = cc["ephemeral_1h_input_tokens"] ?? .null { usage.cacheWrite1h = v }
+        if case .object(let d) = obj["output_tokens_details"] ?? .null,
+           case .int(let v) = d["thinking_tokens"] ?? .null { usage.reasoning = v }
         usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
     }
 
@@ -594,6 +649,14 @@ final class AnthropicStreamState: @unchecked Sendable {
             switch type {
             case "text": blocks[index] = .text(TextContent(text: ""))
             case "thinking": blocks[index] = .thinking(ThinkingContent(thinking: ""))
+            case "redacted_thinking":
+                let data: String = {
+                    if case .string(let v) = raw["data"] ?? .null { return v } else { return "" }
+                }()
+                blocks[index] = .thinking(ThinkingContent(
+                    thinking: "[Reasoning redacted]",
+                    thinkingSignature: data,
+                    redacted: true))
             case "tool_use":
                 let id: String = {
                     if case .string(let v) = raw["id"] ?? .null { return v } else { return "" }
