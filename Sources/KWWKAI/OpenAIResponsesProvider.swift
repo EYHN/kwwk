@@ -659,6 +659,8 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         model: Model, context: Context, options: StreamOptions?,
         bodyOverrides: [String: JSONValue] = [:]
     ) throws -> OpenAIResponsesRequest {
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: JSONValue] = [
             "model": .string(model.id),
             "stream": .bool(true),

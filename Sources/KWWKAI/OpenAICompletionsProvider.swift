@@ -254,6 +254,8 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
     static func encodeBodyDict(
         model: Model, context: Context, options: StreamOptions?
     ) throws -> [String: Any] {
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: Any] = [
             "model": model.id,
             "stream": true,

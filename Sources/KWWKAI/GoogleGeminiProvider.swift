@@ -244,6 +244,8 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
     private static func encodeBody(
         model: Model, context: Context, options: StreamOptions?
     ) throws -> Data {
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: Any] = [
             "contents": encodeContents(context: context),
         ]

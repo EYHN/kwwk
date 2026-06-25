@@ -304,6 +304,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         options: StreamOptions?,
         systemPromptPrefix: String? = nil
     ) throws -> Data {
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: Any] = [
             "model": model.id,
             "stream": true,
