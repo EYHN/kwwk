@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAgent
 @testable import KWWKAI
 
-@Suite("Agent + BackgroundTaskManager")
+@Suite("Agent + BackgroundTaskManager", .serialized)
 struct AgentBackgroundTests {
 
     @Test("background notification wakes an idle agent and shows up as a user message")
@@ -44,7 +44,10 @@ struct AgentBackgroundTests {
                 return false
             }
         }
-        #expect(ok)
+        guard ok else {
+            Issue.record("timed out waiting for background notification in idle agent")
+            return
+        }
     }
 
     @Test("notifications delivered mid-turn are injected as steering at turn boundaries")
@@ -102,7 +105,10 @@ struct AgentBackgroundTests {
                 return false
             }
         }
-        #expect(ok)
+        guard ok else {
+            Issue.record("timed out waiting for mid-turn background notification")
+            return
+        }
     }
 
     @Test("abortAndKillBackgroundTasks drains the manager")

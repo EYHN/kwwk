@@ -97,7 +97,7 @@ private func makeOutputDir() -> URL {
 
 // MARK: - Suites
 
-@Suite("BackgroundTaskManager")
+@Suite("BackgroundTaskManager", .serialized)
 struct BackgroundTaskManagerTests {
 
     @Test("spawn + complete enqueues a notification")
@@ -119,9 +119,15 @@ struct BackgroundTaskManagerTests {
         _ = file
 
         let ok = await awaitUntil(2000) { await manager.hasNotifications(sessionId: "s1") }
-        #expect(ok)
+        guard ok else {
+            Issue.record("timed out waiting for task notification")
+            return
+        }
         let notifs = await manager.drainNotifications(sessionId: "s1")
-        #expect(notifs.count == 1)
+        guard notifs.count == 1 else {
+            Issue.record("expected exactly one notification, got \(notifs.count)")
+            return
+        }
         let notif = notifs[0]
         #expect(notif.taskId == taskId)
         #expect(notif.status == .completed)
@@ -167,7 +173,10 @@ struct BackgroundTaskManagerTests {
         #expect(snap2?.status == .killed)
 
         let ok = await awaitUntil(1000) { await manager.hasNotifications(sessionId: "s1") }
-        #expect(ok)
+        guard ok else {
+            Issue.record("timed out waiting for killed notification")
+            return
+        }
         let notifs = await manager.drainNotifications(sessionId: "s1")
         #expect(notifs.contains { $0.status == .killed && $0.taskId == taskId })
     }
@@ -201,19 +210,29 @@ struct BackgroundTaskManagerTests {
         _ = await manager.spawn(runner: FauxRunner(label: "a"), sessionId: "alpha")
         _ = await manager.spawn(runner: FauxRunner(label: "b"), sessionId: "beta")
 
-        _ = await awaitUntil(2000) {
+        let ready = await awaitUntil(2000) {
             let hasAlpha = await manager.hasNotifications(sessionId: "alpha")
             let hasBeta = await manager.hasNotifications(sessionId: "beta")
             return hasAlpha && hasBeta
         }
+        guard ready else {
+            Issue.record("timed out waiting for alpha and beta notifications")
+            return
+        }
 
         let alpha = await manager.drainNotifications(sessionId: "alpha")
-        #expect(alpha.count == 1)
+        guard alpha.count == 1 else {
+            Issue.record("expected one alpha notification, got \(alpha.count)")
+            return
+        }
         #expect(alpha[0].label == "a")
 
         // Alpha drain should not have touched beta.
         let beta = await manager.drainNotifications(sessionId: "beta")
-        #expect(beta.count == 1)
+        guard beta.count == 1 else {
+            Issue.record("expected one beta notification, got \(beta.count)")
+            return
+        }
         #expect(beta[0].label == "b")
     }
 
@@ -229,11 +248,18 @@ struct BackgroundTaskManagerTests {
         }
         _ = await manager.spawn(runner: FauxRunner(label: "sub"), sessionId: "s1")
 
-        _ = await awaitUntil(2000) {
+        let delivered = await awaitUntil(2000) {
             await received.count() >= 1
         }
+        guard delivered else {
+            Issue.record("timed out waiting for subscriber notification")
+            return
+        }
         let all = await received.all()
-        #expect(all.count == 1)
+        guard all.count == 1 else {
+            Issue.record("expected one subscriber notification, got \(all.count)")
+            return
+        }
         #expect(all[0].label == "sub")
 
         await handle.unsubscribe()
@@ -290,7 +316,11 @@ struct BackgroundTaskManagerTests {
         let ok = await awaitUntil(5000) {
             await manager.hasNotifications(sessionId: "s1")
         }
-        #expect(ok)
+        guard ok else {
+            Issue.record("timed out waiting for stalled notification")
+            try? await manager.kill(taskId)
+            return
+        }
         let notifs = await manager.drainNotifications(sessionId: "s1")
         #expect(notifs.contains { $0.stalled && $0.taskId == taskId })
 
@@ -337,7 +367,10 @@ struct BackgroundTaskManagerTests {
             let s = await manager.get(taskId)
             return s?.status == .completed
         }
-        #expect(ok)
+        guard ok else {
+            Issue.record("timed out waiting for adopted task completion")
+            return
+        }
         let snap = await manager.get(taskId)
         #expect(snap?.outcome?.summary == "done")
         if case .object(let obj) = snap?.outcome?.details ?? .null,
@@ -457,8 +490,15 @@ struct BackgroundTaskManagerTests {
             writeToFile: "hi\n"
         )
         _ = await manager.spawn(runner: runner, sessionId: "s1")
-        _ = await awaitUntil(1000) { await manager.hasNotifications(sessionId: "s1") }
-        let n = await manager.drainNotifications(sessionId: "s1").first!
+        let ok = await awaitUntil(1000) { await manager.hasNotifications(sessionId: "s1") }
+        guard ok else {
+            Issue.record("timed out waiting for notification")
+            return
+        }
+        guard let n = await manager.drainNotifications(sessionId: "s1").first else {
+            Issue.record("expected notification")
+            return
+        }
         let text = n.messageText()
         #expect(text.contains("<task-notification>"))
         #expect(text.contains("<kind>bash</kind>"))

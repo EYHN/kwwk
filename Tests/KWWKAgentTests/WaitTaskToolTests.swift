@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAI
 @testable import KWWKAgent
 
-@Suite("wait_task tool")
+@Suite("wait_task tool", .serialized)
 struct WaitTaskToolTests {
 
     @Test("returns immediately when the task is already terminal")
@@ -17,7 +17,10 @@ struct WaitTaskToolTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for task before fast-path wait")
+            return
+        }
 
         let tool = createWaitTaskTool(manager: manager, sessionId: "s1")
         let start = Date()
@@ -175,4 +178,3 @@ struct WaitTaskToolTests {
 }
 
 // MARK: - Helpers
-

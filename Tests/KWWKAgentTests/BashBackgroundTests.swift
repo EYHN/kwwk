@@ -28,7 +28,7 @@ func awaitUntil(
     return false
 }
 
-@Suite("BashBackgroundRunner")
+@Suite("BashBackgroundRunner", .serialized)
 struct BashBackgroundRunnerTests {
 
     @Test("runs a command, writes stdout to the output file and reports exit 0")
@@ -46,7 +46,10 @@ struct BashBackgroundRunnerTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for bash background runner")
+            return
+        }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .completed)
         if let outcome = snap?.outcome {
@@ -68,7 +71,10 @@ struct BashBackgroundRunnerTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for failing bash background runner")
+            return
+        }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .failed)
         #expect(snap?.outcome?.summary == "exit 3")
@@ -88,7 +94,10 @@ struct BashBackgroundRunnerTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for cancelled bash background runner")
+            return
+        }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .killed)
     }
@@ -107,13 +116,16 @@ struct BashBackgroundRunnerTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for bash environment propagation")
+            return
+        }
         let contents = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
         #expect(contents.contains("extraenv-works"))
     }
 }
 
-@Suite("Bash tool + background manager")
+@Suite("Bash tool + background manager", .serialized)
 struct BashToolBackgroundTests {
 
     @Test("run_in_background=true returns immediately with a task id")
@@ -155,7 +167,10 @@ struct BashToolBackgroundTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for explicit background command")
+            return
+        }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .completed)
     }
@@ -281,7 +296,10 @@ struct BashToolBackgroundTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for auto-backgrounded command")
+            return
+        }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .completed)
         if let file = snap?.outputFile {
@@ -291,7 +309,7 @@ struct BashToolBackgroundTests {
     }
 }
 
-@Suite("task_status tool")
+@Suite("task_status tool", .serialized)
 struct TaskStatusToolTests {
 
     @Test("list returns running tasks")
@@ -328,7 +346,10 @@ struct TaskStatusToolTests {
             let s = await manager.get(taskId)
             return s?.status != .running
         }
-        #expect(done)
+        guard done else {
+            Issue.record("timed out waiting for task before status lookup")
+            return
+        }
 
         let tool = createTaskStatusTool(manager: manager, sessionId: "s1")
         let result = try await tool.execute(
@@ -403,9 +424,13 @@ struct TaskStatusToolTests {
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let runner = BashBackgroundRunner(command: "echo done")
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
-        _ = await awaitUntil(3000) {
+        let done = await awaitUntil(3000) {
             let s = await manager.get(taskId)
             return s?.status != .running
+        }
+        guard done else {
+            Issue.record("timed out waiting for terminal task before kill")
+            return
         }
         let tool = createTaskStatusTool(manager: manager, sessionId: "s1")
         let result = try await tool.execute(
