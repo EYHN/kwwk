@@ -176,24 +176,24 @@ public enum ConfigValue {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
 
+        // Signal completion from `terminationHandler` (a callback fired when the
+        // child is reaped) rather than a thread blocked in `waitUntilExit()`.
+        // The latter can sit blocked for seconds after an external SIGKILL on
+        // some runners, and under parallel test execution a pile of those
+        // starves the global queue and stalls unrelated work.
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+
         do {
             try process.run()
         } catch {
             return nil
         }
 
-        let finished = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
-            process.waitUntilExit()
-            finished.signal()
-        }
         if finished.wait(timeout: .now() + timeoutSeconds) == .timedOut {
-            // SIGKILL directly — SIGTERM can be ignored by a busy loop, and a
-            // slow SIGTERM→SIGKILL escalation leaves the detached `waitUntilExit`
-            // thread blocked, which under parallel test execution starves the
-            // global queue and stalls unrelated work. SIGKILL reaps promptly.
+            // SIGKILL directly — SIGTERM can be ignored by a busy loop. Don't
+            // block waiting for the reap; the handler cleans up asynchronously.
             kill(process.processIdentifier, SIGKILL)
-            _ = finished.wait(timeout: .now() + 2)
             return nil
         }
         try? outputHandle.synchronize()

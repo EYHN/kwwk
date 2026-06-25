@@ -15,6 +15,22 @@ private var isCIRunner: Bool {
         || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
 }
 
+/// True when `pid` is no longer a live, running process: gone (`ESRCH`) or — on
+/// Linux — a zombie. When a SIGKILL'd orphan is reparented to an init that
+/// doesn't reap promptly (common in CI containers), `kill(pid, 0)` still
+/// succeeds even though the process is dead; a zombie counts as terminated.
+func processTerminated(_ pid: pid_t) -> Bool {
+    if kill(pid, 0) != 0 { return true }
+    #if os(Linux)
+    guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+          let close = stat.lastIndex(of: ")") else { return true }
+    let afterParen = stat[stat.index(after: close)...].drop(while: { $0 == " " })
+    return afterParen.first == "Z"
+    #else
+    return false
+    #endif
+}
+
 func awaitUntil(
     _ budgetMs: Int,
     _ predicate: @Sendable () async -> Bool
@@ -122,8 +138,9 @@ struct BashBackgroundRunnerTests {
         try? await manager.kill(taskId)
 
         // The grandchild must die (SIGTERM to the group, SIGKILL escalation).
+        // Accept a zombie as dead: CI containers may not reap the orphan.
         let reaped = await awaitUntil(5000) {
-            kill(grandchildPid, 0) != 0   // ESRCH => gone
+            processTerminated(grandchildPid)
         }
         #expect(reaped)
     }
