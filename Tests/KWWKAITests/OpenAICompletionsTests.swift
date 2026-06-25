@@ -399,4 +399,221 @@ struct OpenAICompletionsTests {
         // The signature value must never become a JSON field name.
         #expect(assistantEntry?["sig-xyz"] == nil)
     }
+
+    // MARK: - Feature 1: tool-result image forwarding
+
+    @Test("forwards tool-result images as a following user message (vision model)")
+    func toolResultImageForwarding() async throws {
+        let visionModel = Model(id: "gpt-4o", name: "GPT-4o", api: "openai-completions",
+            provider: "openai", baseUrl: "https://api.openai.com", reasoning: false,
+            input: [.text, .image], contextWindow: 128_000, maxTokens: 4096)
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let ctx = Context(messages: [
+            .assistant(AssistantMessage(content: [.toolCall(ToolCall(id: "call_1", name: "shot", arguments: .object([:])))],
+                api: "openai-completions", provider: "openai", model: "gpt-4o", stopReason: .toolUse)),
+            .toolResult(ToolResultMessage(toolCallId: "call_1", toolName: "shot",
+                content: [.image(ImageContent(data: "QUJD", mimeType: "image/png"))])),
+        ])
+        _ = provider.stream(model: visionModel, context: ctx, options: nil)
+        await Self.waitForRequest(client)
+        let body = try Self.decodeBody(client)
+        let messages = body["messages"] as! [[String: Any]]
+        let toolMsg = messages.first { $0["role"] as? String == "tool" }!
+        #expect(toolMsg["content"] as? String == "(see attached image)")
+        let userImg = messages.last!
+        #expect(userImg["role"] as? String == "user")
+        let parts = userImg["content"] as! [[String: Any]]
+        #expect((parts.first?["text"] as? String) == "Attached image(s) from tool result:")
+        #expect(parts.contains { ($0["type"] as? String) == "image_url" })
+    }
+
+    @Test("non-vision model drops tool-result images, no carrier user message")
+    func toolResultImageOmittedNonVision() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let ctx = Context(messages: [
+            .assistant(AssistantMessage(content: [.toolCall(ToolCall(id: "call_1", name: "shot", arguments: .object([:])))],
+                api: "openai-completions", provider: "openai", model: "gpt-4o-mini", stopReason: .toolUse)),
+            .toolResult(ToolResultMessage(toolCallId: "call_1", toolName: "shot",
+                content: [.image(ImageContent(data: "QUJD", mimeType: "image/png"))])),
+        ])
+        _ = provider.stream(model: Self.model, context: ctx, options: nil)
+        await Self.waitForRequest(client)
+        let messages = (try Self.decodeBody(client))["messages"] as! [[String: Any]]
+        #expect(!messages.contains { ($0["role"] as? String) == "user" && $0["content"] is [[String: Any]] })
+        let toolMsg = messages.first { $0["role"] as? String == "tool" }!
+        #expect((toolMsg["content"] as? String)?.contains("tool image omitted") == true)
+    }
+
+    // MARK: - Feature 2: encrypted reasoning round-trip
+
+    @Test("decodes encrypted reasoning_details into the matching tool call's thoughtSignature")
+    func reasoningDetailRoundTripDecode() async throws {
+        let sse = """
+        data: {"id":"c","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_x","type":"function","function":{"name":"f","arguments":"{}"}}]}}]}
+
+        data: {"id":"c","choices":[{"index":0,"delta":{"reasoning_details":[{"type":"reasoning.encrypted","id":"call_x","data":"ENC"}]}}]}
+
+        data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}
+
+        data: [DONE]
+
+        """
+        let client = StubSSEClient(body: sse)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let s = provider.stream(model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil)
+        let result = await s.result()
+        guard case .toolCall(let tc)? = result.content.first(where: {
+            if case .toolCall = $0 { return true }; return false }) else { Issue.record("no tool call"); return }
+        #expect(tc.id == "call_x")
+        let sig = tc.thoughtSignature ?? ""
+        #expect(sig.contains("\"data\":\"ENC\"") || sig.contains("reasoning.encrypted"))
+    }
+
+    @Test("re-emits reasoning_details on encoded tool_calls")
+    func reasoningDetailEncode() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let detail = "{\"type\":\"reasoning.encrypted\",\"id\":\"call_x\",\"data\":\"ENC\"}"
+        let ctx = Context(messages: [
+            .assistant(AssistantMessage(
+                content: [.toolCall(ToolCall(id: "call_x", name: "f", arguments: .object([:]), thoughtSignature: detail))],
+                api: "openai-completions", provider: "openai", model: "gpt-4o-mini", stopReason: .toolUse)),
+            .toolResult(ToolResultMessage(toolCallId: "call_x", toolName: "f", content: [.text(TextContent(text: "ok"))])),
+        ])
+        _ = provider.stream(model: Self.model, context: ctx, options: nil)
+        await Self.waitForRequest(client)
+        let messages = (try Self.decodeBody(client))["messages"] as! [[String: Any]]
+        let asst = messages.first { $0["role"] as? String == "assistant" }!
+        let rd = asst["reasoning_details"] as! [[String: Any]]
+        #expect((rd.first?["type"] as? String) == "reasoning.encrypted")
+        #expect((rd.first?["data"] as? String) == "ENC")
+    }
+
+    // MARK: - Feature 3: tool-call-id normalization
+
+    @Test("pipe-delimited tool-call id is split, sanitized, truncated; result id kept consistent")
+    func toolCallIdNormalization() async throws {
+        let longTail = String(repeating: "a/+=", count: 50)
+        let rawId = "call_ab+cd|\(longTail)"
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let ctx = Context(messages: [
+            .assistant(AssistantMessage(content: [.toolCall(ToolCall(id: rawId, name: "f", arguments: .object([:])))],
+                api: "openai-completions", provider: "openai", model: "some-other-model", stopReason: .toolUse)),
+            .toolResult(ToolResultMessage(toolCallId: rawId, toolName: "f", content: [.text(TextContent(text: "ok"))])),
+        ])
+        _ = provider.stream(model: Self.model, context: ctx, options: nil)
+        await Self.waitForRequest(client)
+        let messages = (try Self.decodeBody(client))["messages"] as! [[String: Any]]
+        let asst = messages.first { $0["role"] as? String == "assistant" }!
+        let calls = asst["tool_calls"] as! [[String: Any]]
+        let normId = calls.first!["id"] as! String
+        #expect(normId == "call_ab_cd")
+        #expect(normId.count <= 40)
+        let tool = messages.first { $0["role"] as? String == "tool" }!
+        #expect(tool["tool_call_id"] as? String == normId)
+    }
+
+    @Test("provider==openai truncates a >40-char non-piped id to 40")
+    func openaiTruncateId() async throws {
+        let rawId = String(repeating: "x", count: 60)
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let ctx = Context(messages: [
+            .assistant(AssistantMessage(content: [.toolCall(ToolCall(id: rawId, name: "f", arguments: .object([:])))],
+                api: "openai-completions", provider: "openai", model: "some-other-model", stopReason: .toolUse)),
+            .toolResult(ToolResultMessage(toolCallId: rawId, toolName: "f", content: [.text(TextContent(text: "ok"))])),
+        ])
+        _ = provider.stream(model: Self.model, context: ctx, options: nil)
+        await Self.waitForRequest(client)
+        let messages = (try Self.decodeBody(client))["messages"] as! [[String: Any]]
+        let calls = (messages.first { $0["role"] as? String == "assistant" }!)["tool_calls"] as! [[String: Any]]
+        #expect((calls.first!["id"] as! String).count == 40)
+    }
+
+    // MARK: - Feature 4: richer usage parsing
+
+    @Test("parses DeepSeek prompt_cache_hit_tokens, cache_write_tokens, reasoning_tokens")
+    func richUsageParsing() async throws {
+        let sse = """
+        data: {"id":"c","choices":[{"index":0,"delta":{"content":"hi"}}]}
+
+        data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":30,"prompt_tokens_details":{"cache_write_tokens":10},"completion_tokens_details":{"reasoning_tokens":7}}}
+
+        data: [DONE]
+
+        """
+        let client = StubSSEClient(body: sse)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let s = provider.stream(model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil)
+        let r = await s.result()
+        #expect(r.usage.cacheRead == 30)
+        #expect(r.usage.cacheWrite == 10)
+        #expect(r.usage.reasoning == 7)
+        #expect(r.usage.input == 60)
+        #expect(r.usage.output == 20)
+        #expect(r.usage.totalTokens == 120)
+    }
+
+    @Test("falls back to choice.usage when chunk.usage absent (Moonshot)")
+    func choiceUsageFallback() async throws {
+        let sse = """
+        data: {"id":"c","choices":[{"index":0,"delta":{"content":"hi"},"usage":{"prompt_tokens":8,"completion_tokens":4}}]}
+
+        data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop","usage":{"prompt_tokens":8,"completion_tokens":4}}]}
+
+        data: [DONE]
+
+        """
+        let client = StubSSEClient(body: sse)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let s = provider.stream(model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil)
+        let r = await s.result()
+        #expect(r.usage.input == 8)
+        #expect(r.usage.output == 4)
+    }
+
+    // MARK: - Feature 5: stream-end validation
+
+    @Test("throws when stream ends without finish_reason")
+    func missingFinishReason() async throws {
+        let sse = """
+        data: {"id":"c","choices":[{"index":0,"delta":{"content":"partial"}}]}
+
+        """
+        let client = StubSSEClient(body: sse)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let s = provider.stream(model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil)
+        var sawError = false
+        for await e in s { if case .error = e { sawError = true } }
+        let r = await s.result()
+        #expect(sawError)
+        #expect(r.stopReason == .error)
+        #expect(r.errorMessage == "Stream ended without finish_reason")
+    }
+
+    @Test("content_filter finish_reason surfaces as an error")
+    func contentFilterIsError() async throws {
+        let sse = """
+        data: {"id":"c","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":"content_filter"}]}
+
+        data: [DONE]
+
+        """
+        let client = StubSSEClient(body: sse)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let s = provider.stream(model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil)
+        var sawError = false
+        for await e in s { if case .error = e { sawError = true } }
+        let r = await s.result()
+        #expect(sawError)
+        #expect(r.stopReason == .error)
+    }
 }

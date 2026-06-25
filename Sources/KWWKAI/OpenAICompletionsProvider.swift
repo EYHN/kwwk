@@ -139,7 +139,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 out.end(msg)
                 return
             }
-            let state = OpenAICompletionsState(api: api, provider: model.provider, modelId: model.id)
+            let state = OpenAICompletionsState(api: api, provider: model.provider, modelId: model.id, model: model)
             state.signal = options?.cancellation
             try await drive(events: parseSSE(bytes: stream), out: out, state: state)
         } catch {
@@ -155,6 +155,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         state: OpenAICompletionsState
     ) async throws {
         var emittedStart = false
+        var hasFinishReason = false
         for try await sse in events {
             if state.signal?.isCancelled == true {
                 let aborted = state.asAborted()
@@ -164,6 +165,8 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             }
             // `[DONE]` sentinel ends the stream.
             if sse.data.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                state.finalizeStreamingBlocks(emit: { event in out.push(event) })
+                if validateAndFinish(out: out, state: state, hasFinishReason: hasFinishReason) { return }
                 let final = state.finalize()
                 out.push(.done(reason: final.stopReason, message: final))
                 out.end(final)
@@ -185,6 +188,13 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             guard case .array(let choices) = obj["choices"] ?? .null,
                   let first = choices.first,
                   case .object(let choice) = first else { continue }
+
+            // Moonshot reports usage on the choice rather than the chunk root.
+            if case .object(let usageObj) = obj["usage"] ?? .null {
+                _ = usageObj // already applied above; avoid double-apply
+            } else if case .object(let choiceUsage) = choice["usage"] ?? .null {
+                state.applyUsage(choiceUsage)
+            }
 
             if case .object(let delta) = choice["delta"] ?? .null {
                 // Text content delta.
@@ -256,18 +266,71 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                         }
                     }
                 }
+                // Encrypted reasoning details (OpenRouter / providers that round-trip
+                // opaque reasoning). Each `{type:"reasoning.encrypted", id, data}` is
+                // serialized verbatim and attached to the tool call with matching id.
+                if case .array(let details) = delta["reasoning_details"] ?? .null {
+                    for d in details {
+                        guard case .object(let detail) = d,
+                              case .string("reasoning.encrypted") = detail["type"] ?? .null,
+                              case .string(let id) = detail["id"] ?? .null, !id.isEmpty,
+                              case .string(let data) = detail["data"] ?? .null, !data.isEmpty else { continue }
+                        if let any = anyFromJSONValue(.object(detail)),
+                           let raw = try? JSONSerialization.data(withJSONObject: any, options: [.sortedKeys]),
+                           let serialized = String(data: raw, encoding: .utf8) {
+                            state.applyReasoningDetail(id: id, serialized: serialized)
+                        }
+                    }
+                }
             }
 
             if case .string(let reason) = choice["finish_reason"] ?? .null {
                 state.stopReason = Self.mapStopReason(reason)
+                if state.stopReason == .error, state.errorMessage == nil {
+                    state.errorMessage = "Provider finish_reason: \(reason)"
+                }
+                hasFinishReason = true
                 state.finalizeStreamingBlocks(emit: { event in out.push(event) })
             }
         }
 
         state.finalizeStreamingBlocks(emit: { event in out.push(event) })
+        if validateAndFinish(out: out, state: state, hasFinishReason: hasFinishReason) { return }
         let final = state.finalize()
         out.push(.done(reason: final.stopReason, message: final))
         out.end(final)
+    }
+
+    /// Post-stream validation mirroring pi's openai-completions end-of-stream
+    /// checks: aborted/error stop reasons and a missing `finish_reason` are
+    /// surfaced as error events rather than a silent successful completion.
+    /// Returns true if it emitted a terminal event (caller should return).
+    private func validateAndFinish(
+        out: AssistantMessageStream, state: OpenAICompletionsState, hasFinishReason: Bool
+    ) -> Bool {
+        if state.signal?.isCancelled == true || state.stopReason == .aborted {
+            let m = state.asAborted()
+            out.push(.error(reason: .aborted, error: m))
+            out.end(m)
+            return true
+        }
+        if state.stopReason == .error {
+            var m = state.finalize()
+            m.stopReason = .error
+            m.errorMessage = state.errorMessage ?? "Provider returned an error stop reason"
+            out.push(.error(reason: .error, error: m))
+            out.end(m)
+            return true
+        }
+        if !hasFinishReason {
+            var m = state.finalize()
+            m.stopReason = .error
+            m.errorMessage = "Stream ended without finish_reason"
+            out.push(.error(reason: .error, error: m))
+            out.end(m)
+            return true
+        }
+        return false
     }
 
     // MARK: - Encoding
@@ -579,7 +642,10 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             out.append(["role": role, "content": sys])
         }
         var lastRole: Role?
-        for message in context.messages {
+        let msgs = context.messages
+        var i = 0
+        while i < msgs.count {
+            let message = msgs[i]
             if compat.requiresAssistantAfterToolResult, lastRole == .toolResult, message.role == .user {
                 out.append(["role": "assistant", "content": "I have processed the tool results."])
             }
@@ -656,6 +722,20 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     ]
                 }
                 if !calls.isEmpty { entry["tool_calls"] = calls }
+                if !calls.isEmpty {
+                    // Re-emit encrypted reasoning details stored on tool calls'
+                    // thoughtSignature (serialized JSON of the detail object).
+                    let details: [Any] = a.content.compactMap { block -> Any? in
+                        guard case .toolCall(let tc) = block,
+                              let sig = tc.thoughtSignature, !sig.isEmpty,
+                              let data = sig.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data),
+                              let dict = obj as? [String: Any],
+                              (dict["type"] as? String) == "reasoning.encrypted" else { return nil }
+                        return dict
+                    }
+                    if !details.isEmpty { entry["reasoning_details"] = details }
+                }
                 if compat.requiresReasoningContentOnAssistantMessages, model.reasoning,
                    entry["reasoning_content"] == nil {
                     entry["reasoning_content"] = ""
@@ -668,25 +748,59 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     return content != nil
                 }()
                 if !hasContent && calls.isEmpty {
+                    i += 1
                     continue
                 }
                 out.append(entry)
                 lastRole = .assistant
-            case .toolResult(let tr):
-                let text = tr.content.compactMap { block -> String? in
-                    if case .text(let t) = block { return t.text } else { return nil }
-                }.joined(separator: "\n")
-                var entry: [String: Any] = [
-                    "role": "tool",
-                    "tool_call_id": tr.toolCallId,
-                    "content": text,
-                ]
-                if compat.requiresToolResultName, !tr.toolName.isEmpty {
-                    entry["name"] = tr.toolName
+            case .toolResult:
+                // Aggregate consecutive tool results so trailing tool-result
+                // images can be forwarded together as a single user carrier.
+                var imageParts: [[String: Any]] = []
+                var j = i
+                while j < msgs.count, case .toolResult(let tr) = msgs[j] {
+                    let text = tr.content.compactMap { block -> String? in
+                        if case .text(let t) = block { return t.text } else { return nil }
+                    }.joined(separator: "\n")
+                    let hasImages = tr.content.contains {
+                        if case .image = $0 { return true }; return false
+                    }
+                    var entry: [String: Any] = [
+                        "role": "tool",
+                        "tool_call_id": tr.toolCallId,
+                        "content": text.isEmpty ? "(see attached image)" : text,
+                    ]
+                    if compat.requiresToolResultName, !tr.toolName.isEmpty {
+                        entry["name"] = tr.toolName
+                    }
+                    out.append(entry)
+                    if hasImages, model.input.contains(.image) {
+                        for block in tr.content {
+                            if case .image(let img) = block {
+                                imageParts.append([
+                                    "type": "image_url",
+                                    "image_url": ["url": "data:\(img.mimeType);base64,\(img.data)"],
+                                ])
+                            }
+                        }
+                    }
+                    j += 1
                 }
-                out.append(entry)
-                lastRole = .toolResult
+                i = j
+                if !imageParts.isEmpty {
+                    if compat.requiresAssistantAfterToolResult {
+                        out.append(["role": "assistant", "content": "I have processed the tool results."])
+                    }
+                    var carrier: [[String: Any]] = [["type": "text", "text": "Attached image(s) from tool result:"]]
+                    carrier.append(contentsOf: imageParts)
+                    out.append(["role": "user", "content": carrier])
+                    lastRole = .user
+                } else {
+                    lastRole = .toolResult
+                }
+                continue
             }
+            i += 1
         }
         return out
     }
@@ -838,16 +952,18 @@ final class OpenAICompletionsState: @unchecked Sendable {
     let api: String
     let provider: String
     let modelId: String
+    let model: Model
     var signal: CancellationHandle?
 
     var responseId: String?
     var usage = Usage()
     var stopReason: StopReason = .stop
+    var errorMessage: String?
 
     enum Block {
         case text(TextContent)
         case thinking(ThinkingContent)
-        case toolUse(id: String, name: String, json: String)
+        case toolUse(id: String, name: String, json: String, thoughtSignature: String?)
     }
     private let lock = NSLock()
     private var blocks: [Int: Block] = [:]
@@ -856,12 +972,18 @@ final class OpenAICompletionsState: @unchecked Sendable {
     private var thinkingBlockIndex: Int?
     /// Map from OpenAI `tool_calls[i].index` → our content index.
     private var toolCallIndexMap: [Int: Int] = [:]
+    /// Map from a settled tool-call `id` → our content index. Used to attach
+    /// encrypted reasoning details, which arrive keyed by tool-call id.
+    private var toolCallContentIndexById: [String: Int] = [:]
+    /// Reasoning details that arrived before the matching tool-call id settled.
+    private var pendingReasoningById: [String: String] = [:]
     private var endedIndices: Set<Int> = []
 
-    init(api: String, provider: String, modelId: String) {
+    init(api: String, provider: String, modelId: String, model: Model) {
         self.api = api
         self.provider = provider
         self.modelId = modelId
+        self.model = model
     }
 
     // MARK: Block book-keeping
@@ -894,7 +1016,7 @@ final class OpenAICompletionsState: @unchecked Sendable {
             let idx = order.count
             toolCallIndexMap[rawIndex] = idx
             order.append(idx)
-            blocks[idx] = .toolUse(id: "", name: "", json: "")
+            blocks[idx] = .toolUse(id: "", name: "", json: "", thoughtSignature: nil)
             return (idx, true)
         }
     }
@@ -929,17 +1051,20 @@ final class OpenAICompletionsState: @unchecked Sendable {
     func updateToolCallID(rawIndex: Int, id: String) {
         lock.withLock {
             guard let contentIndex = toolCallIndexMap[rawIndex] else { return }
-            if case .toolUse(_, let name, let json) = blocks[contentIndex] {
-                blocks[contentIndex] = .toolUse(id: id, name: name, json: json)
+            if case .toolUse(_, let name, let json, let sig) = blocks[contentIndex] {
+                var newSig = sig
+                if let pending = pendingReasoningById.removeValue(forKey: id) { newSig = pending }
+                blocks[contentIndex] = .toolUse(id: id, name: name, json: json, thoughtSignature: newSig)
             }
+            toolCallContentIndexById[id] = contentIndex
         }
     }
 
     func updateToolCallName(rawIndex: Int, name: String) {
         lock.withLock {
             guard let contentIndex = toolCallIndexMap[rawIndex] else { return }
-            if case .toolUse(let id, _, let json) = blocks[contentIndex] {
-                blocks[contentIndex] = .toolUse(id: id, name: name, json: json)
+            if case .toolUse(let id, _, let json, let sig) = blocks[contentIndex] {
+                blocks[contentIndex] = .toolUse(id: id, name: name, json: json, thoughtSignature: sig)
             }
         }
     }
@@ -947,8 +1072,21 @@ final class OpenAICompletionsState: @unchecked Sendable {
     func appendToolCallArgs(rawIndex: Int, chunk: String) {
         lock.withLock {
             guard let contentIndex = toolCallIndexMap[rawIndex] else { return }
-            if case .toolUse(let id, let name, let json) = blocks[contentIndex] {
-                blocks[contentIndex] = .toolUse(id: id, name: name, json: json + chunk)
+            if case .toolUse(let id, let name, let json, let sig) = blocks[contentIndex] {
+                blocks[contentIndex] = .toolUse(id: id, name: name, json: json + chunk, thoughtSignature: sig)
+            }
+        }
+    }
+
+    /// Attach an encrypted reasoning detail (serialized JSON) to the tool call
+    /// with the matching id, or stash it as pending if the id has not settled.
+    func applyReasoningDetail(id: String, serialized: String) {
+        lock.withLock {
+            if let contentIndex = toolCallContentIndexById[id],
+               case .toolUse(let cid, let name, let json, _) = blocks[contentIndex] {
+                blocks[contentIndex] = .toolUse(id: cid, name: name, json: json, thoughtSignature: serialized)
+            } else {
+                pendingReasoningById[id] = serialized
             }
         }
     }
@@ -956,15 +1094,30 @@ final class OpenAICompletionsState: @unchecked Sendable {
     // MARK: Stream events
 
     func applyUsage(_ obj: [String: JSONValue]) {
-        if case .int(let v) = obj["prompt_tokens"] ?? .null { usage.input = v }
-        if case .int(let v) = obj["completion_tokens"] ?? .null { usage.output = v }
-        if case .object(let details) = obj["prompt_tokens_details"] ?? .null {
-            if case .int(let v) = details["cached_tokens"] ?? .null {
-                usage.cacheRead = v
-                usage.input = max(0, usage.input - v)
-            }
-        }
-        usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        func intOf(_ v: JSONValue?) -> Int? { if case .int(let n)? = v { return n }; return nil }
+        let prompt = intOf(obj["prompt_tokens"]) ?? 0
+        let promptDetails: [String: JSONValue] = {
+            if case .object(let d)? = obj["prompt_tokens_details"] { return d }
+            return [:]
+        }()
+        // DeepSeek exposes cache hits via `prompt_cache_hit_tokens` instead of
+        // `prompt_tokens_details.cached_tokens`.
+        let cacheRead = intOf(promptDetails["cached_tokens"]) ?? intOf(obj["prompt_cache_hit_tokens"]) ?? 0
+        let cacheWrite = intOf(promptDetails["cache_write_tokens"]) ?? 0
+        let output = intOf(obj["completion_tokens"]) ?? 0
+        let completionDetails: [String: JSONValue] = {
+            if case .object(let d)? = obj["completion_tokens_details"] { return d }
+            return [:]
+        }()
+        let reasoning = intOf(completionDetails["reasoning_tokens"]) ?? 0
+        let input = max(0, prompt - cacheRead - cacheWrite)
+        usage.input = input
+        usage.output = output
+        usage.cacheRead = cacheRead
+        usage.cacheWrite = cacheWrite
+        usage.reasoning = reasoning
+        usage.totalTokens = input + output + cacheRead + cacheWrite
+        usage.cost = calculateCost(model: model, usage: usage)
     }
 
     func snapshot() -> AssistantMessage {
@@ -974,9 +1127,9 @@ final class OpenAICompletionsState: @unchecked Sendable {
                     switch blocks[idx] {
                     case .text(let t): return .text(t)
                     case .thinking(let th): return .thinking(th)
-                    case .toolUse(let id, let name, let json):
+                    case .toolUse(let id, let name, let json, let sig):
                         let args = parseArguments(json)
-                        return .toolCall(ToolCall(id: id, name: name, arguments: args))
+                        return .toolCall(ToolCall(id: id, name: name, arguments: args, thoughtSignature: sig))
                     case .none: return nil
                     }
                 },
@@ -1004,8 +1157,8 @@ final class OpenAICompletionsState: @unchecked Sendable {
                 emit(.textEnd(contentIndex: idx, content: t.text, partial: partial))
             case .thinking(let th):
                 emit(.thinkingEnd(contentIndex: idx, content: th.thinking, partial: partial))
-            case .toolUse(let id, let name, let json):
-                let call = ToolCall(id: id, name: name, arguments: parseArguments(json))
+            case .toolUse(let id, let name, let json, let sig):
+                let call = ToolCall(id: id, name: name, arguments: parseArguments(json), thoughtSignature: sig)
                 emit(.toolCallEnd(contentIndex: idx, toolCall: call, partial: partial))
             }
             _ = lock.withLock { endedIndices.insert(idx) }

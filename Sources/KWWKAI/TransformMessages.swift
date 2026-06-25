@@ -20,6 +20,7 @@ public enum TransformMessages {
     public static func normalize(_ messages: [Message], model: Model) -> [Message] {
         var result = downgradeUnsupportedImages(messages, model: model)
         result = stripCrossModelThinking(result, model: model)
+        result = normalizeToolCallIds(result, model: model)
         result = sanitizeSurrogates(result)
         result = repairToolFlow(result)
         return result
@@ -129,6 +130,61 @@ public enum TransformMessages {
             }
             a.content = newContent
             return .assistant(a)
+        }
+    }
+
+    // MARK: - Tool-call id normalization
+
+    /// Normalize a single tool-call id the way pi's `normalizeToolCallId` does:
+    /// - Pipe-delimited ids (Responses-API origin) → take the segment before the
+    ///   first `|`, replace any char outside `[a-zA-Z0-9_-]` with `_`, truncate 40.
+    /// - Otherwise, for `openai` provider only, truncate to 40 chars.
+    /// - Otherwise pass through unchanged.
+    static func normalizeId(_ id: String, model: Model) -> String {
+        if let pipe = id.firstIndex(of: "|") {
+            let callId = String(id[..<pipe])
+            let sanitized = String(callId.map { c -> Character in
+                let isAllowed = (c.isASCII && c.isLetter)
+                    || (c.isASCII && c.isNumber)
+                    || c == "_" || c == "-"
+                return isAllowed ? c : "_"
+            })
+            return String(sanitized.prefix(40))
+        }
+        if model.provider == "openai" {
+            return id.count > 40 ? String(id.prefix(40)) : id
+        }
+        return id
+    }
+
+    /// Normalize tool-call ids on cross-model assistant turns and propagate the
+    /// rewrite to the corresponding tool-result messages via a shared id map.
+    /// Mirrors pi: only cross-model tool calls are rewritten.
+    public static func normalizeToolCallIds(_ messages: [Message], model: Model) -> [Message] {
+        var idMap: [String: String] = [:]
+        return messages.map { message in
+            switch message {
+            case .assistant(var a):
+                let isSameModel = a.provider == model.provider && a.api == model.api && a.model == model.id
+                if isSameModel { return message }
+                a.content = a.content.map { block in
+                    guard case .toolCall(var tc) = block else { return block }
+                    let newId = normalizeId(tc.id, model: model)
+                    if newId != tc.id {
+                        idMap[tc.id] = newId
+                        tc.id = newId
+                    }
+                    return .toolCall(tc)
+                }
+                return .assistant(a)
+            case .toolResult(var t):
+                if let mapped = idMap[t.toolCallId] {
+                    t.toolCallId = mapped
+                }
+                return .toolResult(t)
+            case .user:
+                return message
+            }
         }
     }
 
