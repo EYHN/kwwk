@@ -261,7 +261,9 @@ struct AnthropicProviderTests {
                 ],
                 tools: [tool]
             ),
-            options: nil
+            // Opt out of caching so this test asserts the bare block shape
+            // (string `system`); caching is covered separately below.
+            options: StreamOptions(cacheRetention: CacheRetention.none)
         )
         try? await Task.sleep(nanoseconds: 20_000_000)
 
@@ -272,6 +274,75 @@ struct AnthropicProviderTests {
         #expect((json?["messages"] as? [[String: Any]])?.count == 4)
         let tools = json?["tools"] as? [[String: Any]]
         #expect(tools?.first?["name"] as? String == "calc")
+    }
+
+    @Test("emits cache_control breakpoints on system, last tool, and final message by default")
+    func cacheControlDefault() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let tool = Tool(name: "calc", description: "arithmetic", parameters: ["type": "object"])
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(
+                systemPrompt: "Be concise.",
+                messages: [.user(UserMessage(text: "hi"))],
+                tools: [tool]
+            ),
+            options: nil // default retention = short
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+
+        // system is array-form with a cache_control marker on the last block.
+        let system = json?["system"] as? [[String: Any]]
+        #expect(system?.last?["cache_control"] as? [String: Any] != nil)
+        #expect((system?.last?["cache_control"] as? [String: Any])?["type"] as? String == "ephemeral")
+        // last tool definition carries a marker.
+        let tools = json?["tools"] as? [[String: Any]]
+        #expect(tools?.last?["cache_control"] as? [String: Any] != nil)
+        // final message's last content block carries a marker.
+        let messages = json?["messages"] as? [[String: Any]]
+        let lastContent = messages?.last?["content"] as? [[String: Any]]
+        #expect(lastContent?.last?["cache_control"] as? [String: Any] != nil)
+        // short retention => no ttl + no extended-cache beta header.
+        #expect((system?.last?["cache_control"] as? [String: Any])?["ttl"] == nil)
+        #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("extended-cache-ttl") != true)
+    }
+
+    @Test("long retention adds 1h ttl and the extended-cache beta header")
+    func cacheControlLong() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(systemPrompt: "S", messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(cacheRetention: .long)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        let system = json?["system"] as? [[String: Any]]
+        #expect((system?.last?["cache_control"] as? [String: Any])?["ttl"] as? String == "1h")
+        #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("extended-cache-ttl-2025-04-11") == true)
+    }
+
+    @Test("cacheRetention .none omits all cache_control markers")
+    func cacheControlOff() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(systemPrompt: "S", messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(cacheRetention: CacheRetention.none)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        #expect(json?["system"] as? String == "S")
+        let messages = json?["messages"] as? [[String: Any]]
+        let lastContent = messages?.last?["content"] as? [[String: Any]]
+        #expect(lastContent?.last?["cache_control"] == nil)
     }
 
     @Test("thinking block is emitted when reasoning level is set, temperature dropped")

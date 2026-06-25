@@ -703,6 +703,16 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         if let meta = options?.metadata {
             root["metadata"] = .object(meta)
         }
+        // Prompt caching: pin same-session requests to the same cache via
+        // `prompt_cache_key`, and opt into 24h retention on `.long` when the
+        // provider supports it. Skipped entirely on `.none`.
+        let retention = options?.cacheRetention ?? .short
+        if retention != .none, let sid = options?.sessionId, !sid.isEmpty {
+            root["prompt_cache_key"] = .string(sid)
+        }
+        if retention == .long, model.compat?.supportsLongCacheRetention != false {
+            root["prompt_cache_retention"] = .string("24h")
+        }
         // Apply vendor-specific overrides last so they win against defaults.
         for (key, value) in bodyOverrides {
             root[key] = value

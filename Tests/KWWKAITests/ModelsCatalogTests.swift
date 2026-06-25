@@ -44,6 +44,42 @@ struct ModelsCatalogTests {
         #expect(ModelsCatalog.models(for: "does-not-exist").isEmpty)
     }
 
+    @Test("decodes per-model compat blocks")
+    func compatDecoded() {
+        // pi ships `compat.forceAdaptiveThinking` on the Opus 4.6 family.
+        let opus = ModelsCatalog.models(for: "anthropic").first { $0.id.contains("opus-4-6") }
+        #expect(opus?.compat?.forceAdaptiveThinking == true)
+
+        // At least a meaningful number of models carry a compat block.
+        let withCompat = ModelsCatalog.all.filter { $0.compat != nil }
+        #expect(withCompat.count >= 100)
+    }
+
+    @Test("decodes thinkingLevelMap incl. explicit-null entries")
+    func thinkingLevelMapDecoded() {
+        // amazon-bedrock Opus 4.6 maps xhigh -> "max".
+        let bedrock = ModelsCatalog.models(for: "amazon-bedrock").first { $0.id.contains("opus-4-6") }
+        if let map = bedrock?.thinkingLevelMap, let xhigh = map["xhigh"] {
+            #expect(xhigh == "max")
+        }
+        let withMap = ModelsCatalog.all.filter { $0.thinkingLevelMap != nil }
+        #expect(withMap.count >= 100)
+    }
+
+    @Test("thinking-level helpers clamp and resolve via the map")
+    func thinkingHelpers() {
+        // A non-reasoning model only supports `.off`.
+        if let nonReasoning = ModelsCatalog.all.first(where: { !$0.reasoning }) {
+            #expect(supportedThinkingLevels(nonReasoning) == [.off])
+            #expect(resolveThinkingLevel(nonReasoning, .high) == nil)
+        }
+        // Bedrock Opus 4.6: requesting xhigh resolves to the mapped "max".
+        if let bedrock = ModelsCatalog.models(for: "amazon-bedrock").first(where: { $0.id.contains("opus-4-6") }),
+           bedrock.thinkingLevelMap?["xhigh"] != nil {
+            #expect(resolveThinkingLevel(bedrock, .xhigh) == "max")
+        }
+    }
+
     @Test("cost values are parsed as Doubles (per 1M tokens)")
     func costDecoded() {
         let models = ModelsCatalog.all.filter { $0.cost.input > 0 }

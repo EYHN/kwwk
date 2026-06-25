@@ -33,6 +33,13 @@ public struct Model: Codable, Sendable, Hashable {
     public var contextWindow: Int
     public var maxTokens: Int
     public var headers: [String: String]?
+    /// Per-API compatibility overrides (cache format, thinking format, store
+    /// support, etc.). nil = auto-detect from baseUrl / provider defaults.
+    public var compat: ModelCompat?
+    /// Maps pi thinking levels (off/minimal/low/medium/high/xhigh) to
+    /// provider/model-specific wire values. A `.some(nil)` entry marks a level
+    /// as unsupported; a missing key uses provider defaults.
+    public var thinkingLevelMap: [String: String?]?
 
     public init(
         id: String,
@@ -45,7 +52,9 @@ public struct Model: Codable, Sendable, Hashable {
         cost: ModelCost = .init(),
         contextWindow: Int = 128_000,
         maxTokens: Int = 16_384,
-        headers: [String: String]? = nil
+        headers: [String: String]? = nil,
+        compat: ModelCompat? = nil,
+        thinkingLevelMap: [String: String?]? = nil
     ) {
         self.id = id
         self.name = name ?? id
@@ -58,6 +67,8 @@ public struct Model: Codable, Sendable, Hashable {
         self.contextWindow = contextWindow
         self.maxTokens = maxTokens
         self.headers = headers
+        self.compat = compat
+        self.thinkingLevelMap = thinkingLevelMap
     }
 }
 

@@ -47,7 +47,10 @@ final class StdoutTerminal: Terminal, @unchecked Sendable {
         let id = UUID()
         lock.withLock { resizeHandlers[id] = handler }
         return { [weak self] in
-            self?.lock.withLock { self?.resizeHandlers.removeValue(forKey: id) }
+            guard let self else { return }
+            lock.withLock {
+                _ = resizeHandlers.removeValue(forKey: id)
+            }
         }
     }
 

@@ -106,6 +106,18 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         if let extra = options?.headers {
             for (k, v) in extra { headers[k] = v }
         }
+        // 1h prompt-cache TTL requires the extended-cache-ttl beta. Append it
+        // to any existing `anthropic-beta` value (e.g. the OAuth beta) rather
+        // than clobbering it.
+        if (options?.cacheRetention ?? .short) == .long,
+           model.compat?.supportsLongCacheRetention != false {
+            let ttlBeta = "extended-cache-ttl-2025-04-11"
+            if let existing = headers["anthropic-beta"], !existing.isEmpty {
+                if !existing.contains(ttlBeta) { headers["anthropic-beta"] = existing + "," + ttlBeta }
+            } else {
+                headers["anthropic-beta"] = ttlBeta
+            }
+        }
 
         do {
             let (response, stream) = try await client.stream(
@@ -304,18 +316,45 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         // else a sensible default per level). Temperature is deliberately
         // dropped in this branch — the Messages API rejects any value
         // other than 1.0 when thinking is enabled.
+        let adaptive = model.compat?.forceAdaptiveThinking == true
         let thinkingEnabled: Bool
         if let reasoning = options?.reasoning {
-            let budget = options?.thinkingBudgets?.budget(for: reasoning) ?? defaultThinkingBudget(for: reasoning)
-            root["thinking"] = [
-                "type": "enabled",
-                "budget_tokens": budget,
-            ]
+            if adaptive {
+                // Adaptive thinking (Opus 4.6/4.7/4.8, Fable 5): Claude decides
+                // when/how much to think; we only pass an effort level via
+                // `output_config`. `max` is Opus-4.6-only; 4.7+/Fable map xhigh.
+                root["thinking"] = ["type": "adaptive", "display": "summarized"]
+                root["output_config"] = ["effort": adaptiveEffort(model, reasoning)]
+            } else {
+                let budget = options?.thinkingBudgets?.budget(for: reasoning) ?? defaultThinkingBudget(for: reasoning)
+                root["thinking"] = [
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                ]
+            }
             thinkingEnabled = true
         } else {
             thinkingEnabled = false
         }
-        if !thinkingEnabled, let temp = options?.temperature { root["temperature"] = temp }
+        // Temperature is dropped when thinking is on (Messages API rejects any
+        // value != 1) and whenever the model declares it unsupported (Opus 4.7+).
+        let temperatureAllowed = model.compat?.supportsTemperature != false
+        if !thinkingEnabled, temperatureAllowed, let temp = options?.temperature { root["temperature"] = temp }
+
+        // Prompt caching: emit Anthropic-style `cache_control` breakpoints
+        // unless the caller opted out (`.none`). Default is short (5-min
+        // ephemeral); `.long` upgrades to a 1h TTL when the model supports it
+        // (the matching `anthropic-beta` header is added in `stream`). Markers
+        // go on the system prompt, the last tool definition, and the final
+        // message content block — pi's "anthropic" cache format.
+        let retention = options?.cacheRetention ?? .short
+        let cacheOn = retention != .none
+        let useLong = retention == .long && (model.compat?.supportsLongCacheRetention != false)
+        let cacheControl: [String: Any]? = cacheOn
+            ? (useLong ? ["type": "ephemeral", "ttl": "1h"] : ["type": "ephemeral"])
+            : nil
+        let cacheOnTools = cacheOn && (model.compat?.supportsCacheControlOnTools != false)
+
         // `system` encoding. When a `systemPromptPrefix` is set (Anthropic
         // OAuth / Claude Pro subscription) the endpoint rejects any shape
         // where the Claude Code identifier isn't a standalone leading
@@ -330,12 +369,19 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             if let userSystem {
                 blocks.append(["type": "text", "text": userSystem])
             }
+            if let cc = cacheControl, !blocks.isEmpty {
+                blocks[blocks.count - 1]["cache_control"] = cc
+            }
             root["system"] = blocks
         } else if let userSystem {
-            root["system"] = userSystem
+            if let cc = cacheControl {
+                root["system"] = [["type": "text", "text": userSystem, "cache_control": cc]]
+            } else {
+                root["system"] = userSystem
+            }
         }
         if let tools = context.tools, !tools.isEmpty {
-            root["tools"] = tools.map { tool -> [String: Any] in
+            var toolEntries = tools.map { tool -> [String: Any] in
                 var entry: [String: Any] = [
                     "name": tool.name,
                     "description": tool.description,
@@ -345,6 +391,10 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 }
                 return entry
             }
+            if cacheOnTools, let cc = cacheControl, !toolEntries.isEmpty {
+                toolEntries[toolEntries.count - 1]["cache_control"] = cc
+            }
+            root["tools"] = toolEntries
             // Anthropic folds the parallel-tool-call switch into `tool_choice`
             // via a `disable_parallel_tool_use` flag. The default remains
             // parallel-on, so we only emit the block when the caller picks a
@@ -353,14 +403,42 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 root["tool_choice"] = toolChoice
             }
         }
-        root["messages"] = context.messages.compactMap(encodeMessage)
+        var messages = context.messages.compactMap(encodeMessage)
+        if let cc = cacheControl, !messages.isEmpty {
+            applyCacheControl(cc, toLastBlockOf: &messages[messages.count - 1])
+        }
+        root["messages"] = messages
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    /// Attach a `cache_control` marker to the final content block of a message,
+    /// closing the cached prefix at the end of the conversation.
+    private static func applyCacheControl(_ cc: [String: Any], toLastBlockOf message: inout [String: Any]) {
+        guard var content = message["content"] as? [[String: Any]], !content.isEmpty else { return }
+        content[content.count - 1]["cache_control"] = cc
+        message["content"] = content
     }
 
     /// Fallback thinking budget per reasoning level when the caller didn't
     /// supply explicit `ThinkingBudgets`. Anthropic requires a minimum of
     /// 1024; these numbers are conservative enough to work across Claude
     /// 4.x Sonnet/Haiku/Opus without tripping per-model caps.
+    /// Map a reasoning level to an Anthropic adaptive-thinking effort, honoring
+    /// the per-model `thinkingLevelMap` (e.g. Opus 4.6 maps xhigh→"max"). Falls
+    /// back to pi's defaults: minimal/low→low, medium→medium, high/xhigh→high.
+    /// Valid efforts are low/medium/high/xhigh/max.
+    private static func adaptiveEffort(_ model: Model, _ reasoning: ReasoningLevel) -> String {
+        let level = ModelThinkingLevel(reasoning: reasoning)
+        if let map = model.thinkingLevelMap, let entry = map[level.rawValue], let mapped = entry {
+            return mapped
+        }
+        switch reasoning {
+        case .minimal, .low: return "low"
+        case .medium: return "medium"
+        case .high, .xhigh: return "high"
+        }
+    }
+
     private static func defaultThinkingBudget(for level: ReasoningLevel) -> Int {
         switch level {
         case .minimal: return 1024

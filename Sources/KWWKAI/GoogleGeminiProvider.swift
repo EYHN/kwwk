@@ -278,7 +278,12 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         }
         if let reasoning = options?.reasoning {
             var thinking: [String: Any] = ["includeThoughts": true]
-            if let budget = options?.thinkingBudgets?.budget(for: reasoning) {
+            let id = model.id.lowercased()
+            if usesThinkingLevel(id) {
+                // Gemini 3.x and Gemma 4 take a string `thinkingLevel`
+                // (MINIMAL/LOW/MEDIUM/HIGH) rather than an integer budget.
+                thinking["thinkingLevel"] = geminiThinkingLevel(reasoning, modelId: id)
+            } else if let budget = options?.thinkingBudgets?.budget(for: reasoning) {
                 thinking["thinkingBudget"] = budget
             }
             generationConfig["thinkingConfig"] = thinking
@@ -287,6 +292,45 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             root["generationConfig"] = generationConfig
         }
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    // MARK: - Thinking-level model detection (Gemini 3.x / Gemma 4)
+
+    private static func isGemini3Pro(_ id: String) -> Bool {
+        id.range(of: #"gemini-3(\.\d+)?-pro"#, options: .regularExpression) != nil
+    }
+    private static func isGemini3Flash(_ id: String) -> Bool {
+        id.range(of: #"gemini-3(\.\d+)?-flash"#, options: .regularExpression) != nil
+            || id == "gemini-flash-latest" || id == "gemini-flash-lite-latest"
+    }
+    private static func isGemma4(_ id: String) -> Bool {
+        id.range(of: #"gemma-?4"#, options: .regularExpression) != nil
+    }
+    private static func usesThinkingLevel(_ id: String) -> Bool {
+        isGemini3Pro(id) || isGemini3Flash(id) || isGemma4(id)
+    }
+
+    /// Map a reasoning level to a Gemini `thinkingLevel` string, mirroring pi's
+    /// per-family clamping (Gemini 3 Pro has no MINIMAL; Gemma 4 has no MEDIUM).
+    private static func geminiThinkingLevel(_ reasoning: ReasoningLevel, modelId id: String) -> String {
+        if isGemini3Pro(id) {
+            switch reasoning {
+            case .minimal, .low: return "LOW"
+            case .medium, .high, .xhigh: return "HIGH"
+            }
+        }
+        if isGemma4(id) {
+            switch reasoning {
+            case .minimal, .low: return "MINIMAL"
+            case .medium, .high, .xhigh: return "HIGH"
+            }
+        }
+        switch reasoning {
+        case .minimal: return "MINIMAL"
+        case .low: return "LOW"
+        case .medium: return "MEDIUM"
+        case .high, .xhigh: return "HIGH"
+        }
     }
 
     private static func encodeContents(context: Context) -> [[String: Any]] {

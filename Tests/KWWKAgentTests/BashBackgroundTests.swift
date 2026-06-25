@@ -93,6 +93,41 @@ struct BashBackgroundRunnerTests {
         #expect(snap?.status == .killed)
     }
 
+    @Test("cancellation kills grandchildren, not just the shell (no orphans)")
+    func cancelKillsGrandchild() async {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let pidFile = outputDir.appendingPathComponent("grandchild.pid")
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        // The shell backgrounds a grandchild `sleep`, records its pid, then
+        // blocks. Killing the task must reap the whole process group.
+        let runner = BashBackgroundRunner(
+            command: "sleep 30 & echo $! > \(pidFile.path); sleep 30"
+        )
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
+
+        // Wait for the grandchild pid to be recorded and confirm it's alive.
+        let started = await awaitUntil(3000) {
+            guard let s = try? String(contentsOf: pidFile, encoding: .utf8),
+                  let pid = pid_t(s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+            return kill(pid, 0) == 0
+        }
+        #expect(started)
+        let grandchildPid = pid_t(
+            (try? String(contentsOf: pidFile, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        ) ?? -1
+        #expect(grandchildPid > 0)
+
+        try? await manager.kill(taskId)
+
+        // The grandchild must die (SIGTERM to the group, SIGKILL escalation).
+        let reaped = await awaitUntil(5000) {
+            kill(grandchildPid, 0) != 0   // ESRCH => gone
+        }
+        #expect(reaped)
+    }
+
     @Test("extraEnv is propagated to the child process")
     func extraEnv() async {
         let outputDir = makeTempDir()

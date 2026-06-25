@@ -280,14 +280,125 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             if options?.parallelToolCalls == false {
                 root["parallel_tool_calls"] = false
             }
+            if resolveCompat(model).zaiToolStream {
+                root["tool_stream"] = true
+            }
         }
-        if let reasoning = options?.reasoning {
-            root["reasoning_effort"] = reasoning.rawValue
-        }
+        applyReasoning(&root, model: model, options: options, compat: resolveCompat(model))
         if let meta = options?.metadata, let any = anyFromJSONValue(.object(meta)) {
             root["metadata"] = any
         }
+        // Prompt caching: `prompt_cache_key` is an OpenAI-native field. Many
+        // third-party OpenAI-compatible backends (groq/deepseek/openrouter/…)
+        // reject unknown body fields, so only emit it for genuine OpenAI hosts
+        // (or when a compat block opts in).
+        let retention = options?.cacheRetention ?? .short
+        let cacheCapable = model.baseUrl.contains("openai.com") || model.compat?.cacheControlFormat != nil
+        if cacheCapable, retention != .none, let sid = options?.sessionId, !sid.isEmpty {
+            root["prompt_cache_key"] = sid
+            if retention == .long, model.compat?.supportsLongCacheRetention != false {
+                root["prompt_cache_retention"] = "24h"
+            }
+        }
         return root
+    }
+
+    // MARK: - Reasoning / thinking format
+
+    /// Subset of pi's resolved OpenAI-completions compat that the reasoning
+    /// encoder needs. Auto-detected from provider/baseUrl, then overlaid with
+    /// any explicit `model.compat`.
+    struct ResolvedCompletionsCompat {
+        var supportsReasoningEffort: Bool
+        var thinkingFormat: String
+        var zaiToolStream: Bool
+    }
+
+    static func resolveCompat(_ model: Model) -> ResolvedCompletionsCompat {
+        let url = model.baseUrl.lowercased()
+        let provider = model.provider
+        func has(_ s: String) -> Bool { url.contains(s) }
+        let isZai = provider == "zai" || provider == "zai-coding-cn" || has("api.z.ai") || has("bigmodel.cn")
+        let isTogether = provider == "together" || has("api.together.ai") || has("api.together.xyz")
+        let isMoonshot = provider == "moonshotai" || provider == "moonshotai-cn" || has("api.moonshot.")
+        let isOpenRouter = provider == "openrouter" || has("openrouter.ai")
+        let isNvidia = provider == "nvidia" || has("integrate.api.nvidia.com")
+        let isAntLing = provider == "ant-ling" || has("api.ant-ling.com")
+        let isDeepSeek = provider == "deepseek" || has("deepseek.com")
+        let isGrok = provider == "xai" || has("api.x.ai")
+        let isCfGateway = provider == "cloudflare-ai-gateway" || has("gateway.ai.cloudflare.com")
+
+        let detectedReasoningEffort = !isGrok && !isZai && !isMoonshot && !isTogether && !isCfGateway && !isNvidia && !isAntLing
+        let detectedFormat: String = isDeepSeek ? "deepseek"
+            : isZai ? "zai"
+            : isTogether ? "together"
+            : isAntLing ? "ant-ling"
+            : isOpenRouter ? "openrouter"
+            : "openai"
+
+        let c = model.compat
+        return ResolvedCompletionsCompat(
+            supportsReasoningEffort: c?.supportsReasoningEffort ?? detectedReasoningEffort,
+            thinkingFormat: c?.thinkingFormat ?? detectedFormat,
+            zaiToolStream: c?.zaiToolStream ?? false
+        )
+    }
+
+    /// Encode the reasoning/thinking request fields for the model's
+    /// `thinkingFormat`, honoring `thinkingLevelMap` remapping and clamping.
+    /// Ports pi's openai-completions reasoning branch.
+    static func applyReasoning(
+        _ root: inout [String: Any], model: Model, options: StreamOptions?, compat: ResolvedCompletionsCompat
+    ) {
+        guard model.reasoning else { return }
+
+        let requested: ModelThinkingLevel? = options?.reasoning.map {
+            clampThinkingLevel(model, ModelThinkingLevel(reasoning: $0))
+        }
+        let hasEffort: Bool = { if let r = requested, r != .off { return true }; return false }()
+        let level = requested ?? .off
+
+        // Wire value for a level: mapped string if present & non-null, else raw.
+        func wire(_ l: ModelThinkingLevel) -> String {
+            if let map = model.thinkingLevelMap, let entry = map[l.rawValue], let v = entry { return v }
+            return l.rawValue
+        }
+        let offEntry = model.thinkingLevelMap?["off"]            // absent / explicit-null / string
+        let offIsExplicitNull = (offEntry != nil && offEntry! == nil)
+        let offString: String? = { if let e = offEntry, let v = e { return v }; return nil }()
+
+        switch compat.thinkingFormat {
+        case "zai":
+            root["thinking"] = ["type": hasEffort ? "enabled" : "disabled"]
+            if hasEffort, compat.supportsReasoningEffort { root["reasoning_effort"] = wire(level) }
+        case "qwen":
+            root["enable_thinking"] = hasEffort
+        case "qwen-chat-template":
+            root["chat_template_kwargs"] = ["enable_thinking": hasEffort, "preserve_thinking": true]
+        case "deepseek":
+            if hasEffort { root["thinking"] = ["type": "enabled"] }
+            else if !offIsExplicitNull { root["thinking"] = ["type": "disabled"] }
+            if hasEffort, compat.supportsReasoningEffort { root["reasoning_effort"] = wire(level) }
+        case "openrouter":
+            if hasEffort { root["reasoning"] = ["effort": wire(level)] }
+            else if !offIsExplicitNull { root["reasoning"] = ["effort": offString ?? "none"] }
+        case "ant-ling":
+            if hasEffort, let map = model.thinkingLevelMap, let entry = map[level.rawValue], let v = entry {
+                root["reasoning"] = ["effort": v]
+            }
+        case "together":
+            root["reasoning"] = ["enabled": hasEffort]
+            if hasEffort, compat.supportsReasoningEffort { root["reasoning_effort"] = wire(level) }
+        case "string-thinking":
+            if hasEffort { root["thinking"] = wire(level) }
+            else if !offIsExplicitNull { root["thinking"] = offString ?? "none" }
+        default: // "openai"
+            if hasEffort, compat.supportsReasoningEffort {
+                root["reasoning_effort"] = wire(level)
+            } else if !hasEffort, compat.supportsReasoningEffort, let off = offString {
+                root["reasoning_effort"] = off
+            }
+        }
     }
 
     private static func encodeMessages(context: Context) -> [[String: Any]] {

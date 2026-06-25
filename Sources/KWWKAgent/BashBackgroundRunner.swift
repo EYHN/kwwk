@@ -183,7 +183,7 @@ final class BashProcessControl: @unchecked Sendable {
             _didCancel = true
             return self.pid
         }
-        if pid > 0 { kill(pid, SIGTERM) }
+        Self.killTreeWithEscalation(pid)
     }
 
     func timeoutAndTerminate() {
@@ -193,7 +193,33 @@ final class BashProcessControl: @unchecked Sendable {
             _didTimeOut = true
             return self.pid
         }
-        if pid > 0 { kill(pid, SIGTERM) }
+        Self.killTreeWithEscalation(pid)
+    }
+
+    /// Signal the whole process tree, then escalate to SIGKILL if it survives.
+    /// The spawned shell is its own process-group leader (Foundation `Process`
+    /// starts children in a fresh group), so signaling the group reaches every
+    /// descendant — `npm test` workers, background jobs — not just the shell.
+    /// Previously only the shell pid was signaled, orphaning grandchildren.
+    private static func killTreeWithEscalation(_ pid: pid_t) {
+        guard pid > 0 else { return }
+        killTree(pid, SIGTERM)
+        // Grace period, then SIGKILL anything still alive (harmless if gone).
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+            killTree(pid, SIGKILL)
+        }
+    }
+
+    /// Send `sig` to the process group when the pid is its own group leader
+    /// (safe: only descendants are hit); otherwise fall back to the single pid
+    /// so we never accidentally signal our own/parent's group.
+    private static func killTree(_ pid: pid_t, _ sig: Int32) {
+        guard pid > 0 else { return }
+        if getpgid(pid) == pid {
+            killpg(pid, sig)
+        } else {
+            kill(pid, sig)
+        }
     }
 }
 
