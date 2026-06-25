@@ -11,9 +11,14 @@ import FoundationNetworking
 public final class BedrockProvider: APIProvider, @unchecked Sendable {
     public let api: String
     public let client: HTTPClient
+    /// Fallback region used when neither the model ARN, the model `baseUrl`
+    /// host, nor `AWS_REGION`/`AWS_DEFAULT_REGION` pin a region.
     public let region: String
     public let credentialsProvider: @Sendable () async -> AWSSigV4.Credentials?
     public let service: String
+    /// Snapshot of the environment used for region/auth resolution. Captured at
+    /// init so tests can inject a deterministic environment.
+    let environment: [String: String]
 
     public init(
         api: String = "bedrock-converse-stream",
@@ -22,22 +27,29 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             ?? ProcessInfo.processInfo.environment["AWS_DEFAULT_REGION"]
             ?? "us-east-1",
         service: String = "bedrock",
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         credentialsProvider: (@Sendable () async -> AWSSigV4.Credentials?)? = nil
     ) {
         self.api = api
         self.client = client
         self.region = region
         self.service = service
+        self.environment = environment
         self.credentialsProvider = credentialsProvider ?? {
-            let env = ProcessInfo.processInfo.environment
-            guard let key = env["AWS_ACCESS_KEY_ID"],
-                  let secret = env["AWS_SECRET_ACCESS_KEY"] else { return nil }
-            return AWSSigV4.Credentials(
-                accessKeyId: key,
-                secretAccessKey: secret,
-                sessionToken: env["AWS_SESSION_TOKEN"]
-            )
+            // IAM static keys, then best-effort AWS_PROFILE shared-credentials.
+            if let creds = BedrockCredentials.fromEnv(environment) { return creds }
+            if let profile = environment["AWS_PROFILE"], !profile.isEmpty {
+                return BedrockCredentials.fromProfile(profile, env: environment)
+            }
+            return nil
         }
+    }
+
+    /// Bedrock API-key bearer token (`AWS_BEARER_TOKEN_BEDROCK`). When present we
+    /// send `Authorization: Bearer …` and skip SigV4 entirely.
+    var bearerToken: String? {
+        guard let token = environment["AWS_BEARER_TOKEN_BEDROCK"], !token.isEmpty else { return nil }
+        return token
     }
 
     public func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
@@ -52,14 +64,30 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         context: Context,
         options: StreamOptions?
     ) async {
-        guard let creds = await credentialsProvider() else {
-            let msg = Self.makeError(api: api, model: model, text: "AWS credentials unavailable")
-            out.push(.error(reason: .error, error: msg))
-            out.end(msg)
-            return
+        // Region: ARN-embedded > standard endpoint host > env > provider fallback.
+        let effectiveRegion = BedrockRegion.resolve(
+            modelId: model.id,
+            baseUrl: model.baseUrl,
+            env: environment,
+            fallback: region
+        )
+
+        let bearer = bearerToken
+        // SigV4 needs IAM creds; bearer-token auth does not.
+        let creds: AWSSigV4.Credentials?
+        if bearer != nil {
+            creds = nil
+        } else {
+            guard let resolved = await credentialsProvider() else {
+                let msg = Self.makeError(api: api, model: model, text: "AWS credentials unavailable")
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+                return
+            }
+            creds = resolved
         }
 
-        let host = "bedrock-runtime.\(region).amazonaws.com"
+        let host = "bedrock-runtime.\(effectiveRegion).amazonaws.com"
         let modelPath = model.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? model.id
         let path = "/model/\(modelPath)/converse-stream"
         guard let url = URL(string: "https://\(host)\(path)") else {
@@ -83,14 +111,20 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             "content-type": "application/json",
             "accept": "application/vnd.amazon.eventstream",
         ]
-        headers = AWSSigV4.signPOST(
-            url: url,
-            body: body,
-            region: region,
-            service: service,
-            credentials: creds,
-            extraHeaders: headers
-        )
+        if let bearer {
+            // Bedrock API-key auth: skip SigV4, send a bearer token.
+            headers["authorization"] = "Bearer \(bearer)"
+            headers["host"] = host
+        } else if let creds {
+            headers = AWSSigV4.signPOST(
+                url: url,
+                body: body,
+                region: effectiveRegion,
+                service: service,
+                credentials: creds,
+                extraHeaders: headers
+            )
+        }
         for (k, v) in options?.headers ?? [:] { headers[k] = v }
 
         do {
@@ -242,11 +276,20 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
     private static func encodeBody(
         model: Model, context: Context, options: StreamOptions?
     ) throws -> Data {
+        // Bedrock prompt caching: emit `cachePoint` blocks on the system prompt
+        // and the final message when the caller requested caching. `long`
+        // retention adds a 1h ttl, gated by the model's compat flag.
+        let retention = options?.cacheRetention ?? CacheRetention.none
+        let cachingEnabled = retention != .none
+        let cachePoint: [String: Any]? = cachingEnabled ? makeCachePoint(model: model, retention: retention) : nil
+
         var root: [String: Any] = [
-            "messages": encodeMessages(context: context),
+            "messages": encodeMessages(context: context, cachePoint: cachePoint),
         ]
         if let sys = context.systemPrompt, !sys.isEmpty {
-            root["system"] = [["text": sys]]
+            var system: [[String: Any]] = [["text": sys]]
+            if let cachePoint { system.append(cachePoint) }
+            root["system"] = system
         }
         var inference: [String: Any] = [:]
         if let t = options?.temperature { inference["temperature"] = t }
@@ -283,7 +326,19 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
-    private static func encodeMessages(context: Context) -> [[String: Any]] {
+    /// Builds the `cachePoint` content block. `{"cachePoint":{"type":"default"}}`,
+    /// plus a 1h ttl for long retention when the model's compat opts in.
+    private static func makeCachePoint(model: Model, retention: CacheRetention) -> [String: Any] {
+        var point: [String: Any] = ["type": "default"]
+        if retention == .long, model.compat?.supportsLongCacheRetention == true {
+            point["ttl"] = "1h"
+        }
+        return ["cachePoint": point]
+    }
+
+    private static func encodeMessages(
+        context: Context, cachePoint: [String: Any]? = nil
+    ) -> [[String: Any]] {
         var out: [[String: Any]] = []
         for message in context.messages {
             switch message {
@@ -363,6 +418,14 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 }
                 out.append(["role": "user", "content": [entry]])
             }
+        }
+        // Append a cache point to the last message so Bedrock caches the full
+        // prefix up to and including the latest turn.
+        if let cachePoint, var last = out.last,
+           var content = last["content"] as? [[String: Any]] {
+            content.append(cachePoint)
+            last["content"] = content
+            out[out.count - 1] = last
         }
         return out
     }
