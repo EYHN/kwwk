@@ -106,7 +106,6 @@ enum BashRunnerImpl {
         cancellation.onCancel { _ in control.terminate() }
 
         let status = spawned.wait()
-        control.markFinished()
 
         return BashProcessOutcome.from(
             status: status,
@@ -288,7 +287,6 @@ final class BashProcessControl: @unchecked Sendable {
     private var _terminated = false
     private var _didCancel = false
     private var _didTimeOut = false
-    private var _finished = false
 
     init(pid: pid_t) { self.pid = pid }
 
@@ -296,12 +294,6 @@ final class BashProcessControl: @unchecked Sendable {
 
     var didCancel: Bool { lock.withLock { _didCancel } }
     var didTimeOut: Bool { lock.withLock { _didTimeOut } }
-
-    /// Mark the child as reaped (`waitpid` returned). After this the pid/pgid can
-    /// be recycled by the OS, so any pending SIGKILL escalation must be
-    /// suppressed — otherwise the delayed `killpg` could hit an unrelated
-    /// process group that happens to inherit the recycled id.
-    func markFinished() { lock.withLock { _finished = true } }
 
     func terminate() {
         let pid: pid_t = lock.withLock {
@@ -323,28 +315,34 @@ final class BashProcessControl: @unchecked Sendable {
         escalate(pid)
     }
 
-    /// Signal the whole process group, then escalate to SIGKILL if it survives.
-    /// `SpawnedBashProcess` creates a fresh group whose id is the shell pid.
+    /// Signal the whole process group, then escalate to SIGKILL if anything
+    /// survives. `SpawnedBashProcess` puts the child in a fresh group whose id
+    /// equals the shell pid (`POSIX_SPAWN_SETPGROUP` with pgid 0), so signalling
+    /// that group also reaches backgrounded grandchildren.
     private func escalate(_ pid: pid_t) {
         guard pid > 0 else { return }
-        Self.killTree(pid, SIGTERM)
-        // Grace period, then SIGKILL anything still alive — but only if the child
-        // hasn't been reaped meanwhile, to avoid signalling a recycled pid/pgid.
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self, self.lock.withLock({ !self._finished }) else { return }
-            Self.killTree(pid, SIGKILL)
+        // Decide once, while the leader is alive, whether the child is its own
+        // group leader; if setpgroup didn't take, fall back to the single pid.
+        let isGroupLeader = getpgid(pid) == pid
+        Self.signal(pid, SIGTERM, group: isGroupLeader)
+        // Grace period, then SIGKILL survivors. A process-group id is not reused
+        // while the group still has members, so a delayed `killpg` is safe even
+        // after the leader was reaped; the `sig 0` existence check skips it once
+        // the group is empty (also avoids signalling a recycled id).
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+            if Self.signal(pid, 0, group: isGroupLeader) == 0 {
+                Self.signal(pid, SIGKILL, group: isGroupLeader)
+            }
         }
     }
 
-    /// Send `sig` to the spawned process group, falling back to the pid if the
-    /// process has already exited or the platform refuses the group lookup.
-    private static func killTree(_ pid: pid_t, _ sig: Int32) {
-        guard pid > 0 else { return }
-        if getpgid(pid) == pid {
-            killpg(pid, sig)
-        } else {
-            kill(pid, sig)
-        }
+    /// Send `sig` to the process group (`killpg`) or the single pid (`kill`).
+    /// Returns the syscall result (0 on success, used with `sig == 0` as an
+    /// existence probe).
+    @discardableResult
+    private static func signal(_ pid: pid_t, _ sig: Int32, group: Bool) -> Int32 {
+        guard pid > 0 else { return -1 }
+        return group ? killpg(pid, sig) : kill(pid, sig)
     }
 }
 
