@@ -58,28 +58,16 @@ public enum EnvAPIKeys {
         "opencode", "ant-ling",
     ]
 
-    /// Human-readable provider names (partial port of pi's
-    /// `BUILT_IN_PROVIDER_DISPLAY_NAMES`).
-    public static let displayNames: [String: String] = [
-        "anthropic": "Anthropic", "openai": "OpenAI", "google": "Google AI Studio",
-        "google-vertex": "Google Vertex", "azure-openai-responses": "Azure OpenAI",
-        "amazon-bedrock": "Amazon Bedrock", "github-copilot": "GitHub Copilot",
-        "openrouter": "OpenRouter", "deepseek": "DeepSeek", "groq": "Groq",
-        "xai": "xAI", "cerebras": "Cerebras", "together": "Together",
-        "fireworks": "Fireworks", "moonshotai": "Moonshot AI", "moonshotai-cn": "Moonshot AI",
-        "kimi-coding": "Kimi", "zai": "Z.AI", "zai-coding-cn": "Z.AI Coding",
-        "mistral": "Mistral", "minimax": "MiniMax", "minimax-cn": "MiniMax",
-        "nvidia": "NVIDIA", "huggingface": "Hugging Face",
-        "vercel-ai-gateway": "Vercel AI Gateway", "opencode": "OpenCode",
-        "opencode-go": "OpenCode", "ant-ling": "Ant Ling",
-        "cloudflare-workers-ai": "Cloudflare Workers AI",
-        "cloudflare-ai-gateway": "Cloudflare AI Gateway",
-        "xiaomi": "Xiaomi", "xiaomi-token-plan-cn": "Xiaomi", "xiaomi-token-plan-ams": "Xiaomi",
-        "xiaomi-token-plan-sgp": "Xiaomi",
-    ]
+    /// Human-readable provider names. The source of truth now lives in
+    /// `ProviderAttribution.displayNames` (full port of pi's
+    /// `BUILT_IN_PROVIDER_DISPLAY_NAMES`); this delegates so callers keep a
+    /// single map.
+    public static var displayNames: [String: String] {
+        ProviderAttribution.displayNames
+    }
 
     public static func displayName(for provider: String) -> String {
-        displayNames[provider] ?? provider
+        ProviderAttribution.getProviderDisplayName(provider)
     }
 
     /// The configured env vars (non-empty) that can authenticate `provider`.
