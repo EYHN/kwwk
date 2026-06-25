@@ -54,39 +54,60 @@ struct BedrockRegionTests {
         #expect(BedrockRegion.fromEndpointHost("") == nil)
     }
 
-    @Test("resolution order: ARN > endpoint host > env > fallback")
+    @Test("resolution order: ARN > configuredRegion (env) > endpoint host > us-east-1")
     func resolutionOrder() {
         // ARN wins over everything.
         #expect(BedrockRegion.resolve(
             modelId: "arn:aws:bedrock:eu-west-3:1:inference-profile/x",
             baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            env: ["AWS_REGION": "us-west-2"],
-            fallback: "us-east-1"
+            env: ["AWS_REGION": "us-west-2"]
         ) == "eu-west-3")
 
-        // Endpoint host wins over env when no ARN.
+        // configuredRegion (env) wins over a standard endpoint host (pi order).
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
             baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
-            env: ["AWS_REGION": "us-west-2"],
-            fallback: "us-east-1"
-        ) == "ap-south-1")
+            env: ["AWS_REGION": "us-west-2"]
+        ) == "us-west-2")
 
         // Env wins when no ARN / standard host.
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
             baseUrl: "https://proxy.internal",
-            env: ["AWS_DEFAULT_REGION": "sa-east-1"],
-            fallback: "us-east-1"
+            env: ["AWS_DEFAULT_REGION": "sa-east-1"]
         ) == "sa-east-1")
 
-        // Fallback when nothing pins a region.
+        // us-east-1 when nothing pins a region.
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
             baseUrl: nil,
-            env: [:],
-            fallback: "us-east-1"
+            env: [:]
         ) == "us-east-1")
+    }
+
+    @Test("configuredRegion (AWS_REGION) outranks a standard endpoint host")
+    func envOutranksEndpoint() {
+        #expect(BedrockRegion.resolve(
+            modelId: "anthropic.claude",
+            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            env: ["AWS_REGION": "us-west-2"]
+        ) == "us-west-2")
+    }
+
+    @Test("endpoint host used only when no configured region and no ambient profile")
+    func endpointOnlyWithoutConfigOrProfile() {
+        #expect(BedrockRegion.resolve(
+            modelId: "anthropic.claude",
+            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            env: [:]
+        ) == "ap-south-1")
+        // Ambient profile present -> endpoint host NOT used as override.
+        #expect(BedrockRegion.resolve(
+            modelId: "anthropic.claude",
+            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            env: ["AWS_PROFILE": "work"],
+            profileRegion: "eu-central-1"
+        ) == "eu-central-1")
     }
 }
 
@@ -163,6 +184,20 @@ struct BedrockCredentialsTests {
         #expect(creds?.accessKeyId == "FILEKEY")
         #expect(creds?.secretAccessKey == "FILESECRET")
         #expect(creds?.sessionToken == nil)
+    }
+
+    @Test("reads region from a named profile in AWS_CONFIG_FILE")
+    func profileRegionFromConfig() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bedrock-cfg-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("config")
+        try "[profile work]\nregion = eu-central-1\n".write(to: file, atomically: true, encoding: .utf8)
+        #expect(BedrockRegion.regionFromProfile(
+            "work", env: ["AWS_CONFIG_FILE": file.path]) == "eu-central-1")
+        #expect(BedrockRegion.regionFromProfile(
+            "missing", env: ["AWS_CONFIG_FILE": file.path]) == nil)
     }
 }
 
@@ -416,7 +451,9 @@ struct BedrockCacheAndAuthTests {
 
     @Test("thinking is injected for Claude models")
     func thinkingForClaude() async throws {
-        let client = await Self.send(model: Self.model, options: StreamOptions(reasoning: .high))
+        var m = Self.model
+        m.reasoning = true
+        let client = await Self.send(model: m, options: StreamOptions(reasoning: .high))
         let json = try Self.decode(client)
         let extras = json["additionalModelRequestFields"] as? [String: Any]
         let thinking = extras?["thinking"] as? [String: Any]
@@ -427,9 +464,138 @@ struct BedrockCacheAndAuthTests {
     func thinkingGatedForNonClaude() async throws {
         var nova = Self.model
         nova.id = "amazon.nova-pro-v1:0"
+        nova.reasoning = true
         let client = await Self.send(model: nova, options: StreamOptions(reasoning: .high))
         let json = try Self.decode(client)
         #expect(json["additionalModelRequestFields"] == nil)
+    }
+
+    @Test("thinking is NOT injected when model.reasoning is false")
+    func thinkingGatedOnModelReasoning() async throws {
+        // Self.model has reasoning = false by default.
+        let client = await Self.send(model: Self.model, options: StreamOptions(reasoning: .high))
+        let json = try Self.decode(client)
+        #expect(json["additionalModelRequestFields"] == nil)
+    }
+
+    @Test("non-adaptive Claude: enabled thinking with per-level default budget + interleaved beta")
+    func nonAdaptiveThinkingDefaults() async throws {
+        var m = Self.model              // claude-sonnet-4 (non-adaptive)
+        m.reasoning = true
+        let client = await Self.send(model: m, options: StreamOptions(reasoning: .medium))
+        let extras = try Self.decode(client)["additionalModelRequestFields"] as? [String: Any]
+        let thinking = extras?["thinking"] as? [String: Any]
+        #expect(thinking?["type"] as? String == "enabled")
+        #expect(thinking?["budget_tokens"] as? Int == 8192)        // medium default
+        #expect(thinking?["display"] as? String == "summarized")
+        #expect(extras?["anthropic_beta"] as? [String] == ["interleaved-thinking-2025-05-14"])
+    }
+
+    @Test("adaptive Claude: adaptive thinking + output_config effort, no budget/beta")
+    func adaptiveThinkingEffort() async throws {
+        var m = Self.model
+        m.id = "anthropic.claude-opus-4-8-v1:0"
+        m.name = "claude-opus-4-8"
+        m.reasoning = true
+        let client = await Self.send(model: m, options: StreamOptions(reasoning: .xhigh))
+        let extras = try Self.decode(client)["additionalModelRequestFields"] as? [String: Any]
+        let thinking = extras?["thinking"] as? [String: Any]
+        #expect(thinking?["type"] as? String == "adaptive")
+        #expect(thinking?["budget_tokens"] == nil)
+        let oc = extras?["output_config"] as? [String: Any]
+        #expect(oc?["effort"] as? String == "xhigh")              // opus-4-8 supports native xhigh
+        #expect(extras?["anthropic_beta"] == nil)
+    }
+
+    @Test("GovCloud target suppresses thinking.display")
+    func govCloudSuppressesDisplay() async throws {
+        var m = Self.model
+        m.id = "arn:aws-us-gov:bedrock:us-gov-west-1:1:inference-profile/anthropic.claude-sonnet-4"
+        m.reasoning = true
+        let client = await Self.send(model: m, options: StreamOptions(reasoning: .medium))
+        let extras = try Self.decode(client)["additionalModelRequestFields"] as? [String: Any]
+        let thinking = extras?["thinking"] as? [String: Any]
+        #expect(thinking?["display"] == nil)
+    }
+
+    /// Drives a stream against the given frames and returns the final message.
+    private static func drive(frames body: Data, env: [String: String] = [:]) async -> AssistantMessage? {
+        let client = ByteStubClient(body: body)
+        let provider = BedrockProvider(
+            client: client,
+            region: "us-east-1",
+            environment: env,
+            credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
+        )
+        let out = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        var final: AssistantMessage?
+        for await ev in out {
+            if case .done(_, let m) = ev { final = m }
+        }
+        return final
+    }
+
+    @Test("unknown stopReason maps to .error")
+    func stopReasonUnknownIsError() async throws {
+        let body = Self.frames([
+            ("messageStart", "{\"role\":\"assistant\"}"),
+            ("messageStop", "{\"stopReason\":\"banana\"}"),
+        ])
+        let final = await Self.drive(frames: body)
+        #expect(final?.stopReason == .error)
+    }
+
+    @Test("model_context_window_exceeded maps to .length")
+    func stopReasonContextWindowIsLength() async throws {
+        let body = Self.frames([
+            ("messageStart", "{\"role\":\"assistant\"}"),
+            ("messageStop", "{\"stopReason\":\"model_context_window_exceeded\"}"),
+        ])
+        let final = await Self.drive(frames: body)
+        #expect(final?.stopReason == .length)
+    }
+
+    @Test("totalTokens prefers upstream value")
+    func usagePrefersUpstreamTotal() async throws {
+        let body = Self.frames([
+            ("messageStart", "{\"role\":\"assistant\"}"),
+            ("metadata", "{\"usage\":{\"inputTokens\":10,\"outputTokens\":20,\"cacheReadInputTokens\":5,\"totalTokens\":99}}"),
+            ("messageStop", "{\"stopReason\":\"end_turn\"}"),
+        ])
+        let final = await Self.drive(frames: body)
+        #expect(final?.usage.totalTokens == 99)
+        #expect(final?.usage.cacheRead == 5)
+    }
+
+    @Test("totalTokens falls back to input+output, excluding cache")
+    func usageFallbackExcludesCache() async throws {
+        let body = Self.frames([
+            ("messageStart", "{\"role\":\"assistant\"}"),
+            ("metadata", "{\"usage\":{\"inputTokens\":10,\"outputTokens\":20,\"cacheReadInputTokens\":5,\"cacheWriteInputTokens\":7}}"),
+            ("messageStop", "{\"stopReason\":\"end_turn\"}"),
+        ])
+        let final = await Self.drive(frames: body)
+        #expect(final?.usage.totalTokens == 30)   // NOT 42
+    }
+
+    @Test("AWS_BEDROCK_SKIP_AUTH=1 overrides bearer and signs with dummy SigV4")
+    func skipAuthBeatsBearer() async throws {
+        let client = ByteStubClient(body: Self.endFrames())
+        let provider = BedrockProvider(
+            client: client, region: "us-east-1",
+            environment: ["AWS_BEARER_TOKEN_BEDROCK": "abc", "AWS_BEDROCK_SKIP_AUTH": "1"],
+            credentialsProvider: { nil })
+        _ = provider.stream(model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]), options: nil)
+        for _ in 0..<200 where client.lastRequest == nil { try? await Task.sleep(nanoseconds: 5_000_000) }
+        let h = client.lastRequest?.headers ?? [:]
+        #expect(h["authorization"]?.hasPrefix("Bearer") != true)   // not bearer
+        #expect(h["authorization"]?.contains("SignedHeaders=") == true)  // dummy SigV4
+        #expect(h["x-amz-date"] != nil)
     }
 
     @Test("custom headers are signed and reserved ones are dropped")

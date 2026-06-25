@@ -53,21 +53,48 @@ enum BedrockRegion {
         return nil
     }
 
-    /// Full resolution order matching pi: ARN-embedded region > standard
-    /// endpoint-host region > configured env region > provider fallback.
+    /// Full resolution order matching pi: ARN-embedded region >
+    /// configuredRegion (`AWS_REGION`/`AWS_DEFAULT_REGION`) > standard
+    /// endpoint-host region (only when `useExplicitEndpoint`) > profile region
+    /// (kwwk substitute for the SDK chain) > `us-east-1`.
     ///
-    /// `fallback` is the region the provider was constructed with (already
-    /// honors env / `us-east-1`), so this never returns nil.
+    /// `useExplicitEndpoint` is true when there is no endpoint region, OR when
+    /// there is neither a configured region nor an ambient `AWS_PROFILE`. This
+    /// keeps configuredRegion (env) ranked above the endpoint host, matching pi.
     static func resolve(
         modelId: String,
         baseUrl: String?,
         env: [String: String],
-        fallback: String
+        profileRegion: String? = nil
     ) -> String {
+        // 1. ARN-embedded region.
         if let arn = fromARN(modelId) { return arn }
-        if let host = fromEndpointHost(baseUrl) { return host }
-        if let envRegion = fromEnv(env) { return envRegion }
-        return fallback
+        // 2. configuredRegion (AWS_REGION / AWS_DEFAULT_REGION).
+        if let configured = fromEnv(env) { return configured }
+        // 3. endpoint-host region, only when useExplicitEndpoint.
+        let endpointRegion = fromEndpointHost(baseUrl)
+        let hasAmbientProfile = !(env["AWS_PROFILE"] ?? "").isEmpty
+        let useExplicitEndpoint = endpointRegion == nil
+            || (fromEnv(env) == nil && !hasAmbientProfile)
+        if let endpointRegion, useExplicitEndpoint { return endpointRegion }
+        // 4. profile region (kwwk reads it; pi leaves region unset for the SDK),
+        //    then us-east-1.
+        if hasAmbientProfile, let profileRegion, !profileRegion.isEmpty {
+            return profileRegion
+        }
+        return "us-east-1"
+    }
+
+    /// Region declared under a named profile in `~/.aws/config` (or
+    /// `$AWS_CONFIG_FILE`). pi delegates this to the AWS SDK shared-config chain;
+    /// kwwk reads the `region` key directly. Returns nil when absent.
+    static func regionFromProfile(_ profile: String, env: [String: String]) -> String? {
+        let path = env["AWS_CONFIG_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? (NSHomeDirectory() as NSString).appendingPathComponent(".aws/config")
+        guard let contents = try? String(contentsOfFile: path, encoding: .utf8),
+              let section = BedrockCredentials.iniSection(named: profile, in: contents),
+              let region = section["region"], !region.isEmpty else { return nil }
+        return region
     }
 
     /// A region token looks like `us-east-1`, `eu-west-3`, `ap-southeast-2`,
@@ -126,6 +153,11 @@ enum BedrockCredentials {
             sessionToken: (token?.isEmpty == false) ? token : nil
         )
     }
+
+    /// Dummy SigV4 credentials used when `AWS_BEDROCK_SKIP_AUTH=1` and no real
+    /// credentials are configured. Mirrors pi's skip-auth dummy creds.
+    static let dummy = AWSSigV4.Credentials(
+        accessKeyId: "dummy-access-key", secretAccessKey: "dummy-secret-key")
 
     /// Minimal INI parser: returns the key/value pairs under `[<name>]`.
     /// Exposed `internal` for unit tests.

@@ -228,9 +228,13 @@ struct BedrockProviderTests {
             ("messageStop", "{\"stopReason\":\"end_turn\"}"),
         ])
         let client = ByteStubClient(body: body)
+        // Region now resolves from the configured (env) region, not the
+        // vestigial `region` constructor arg, per pi precedence. Inject
+        // AWS_REGION so resolution is deterministic regardless of ambient env.
         let provider = BedrockProvider(
             client: client,
             region: "us-west-2",
+            environment: ["AWS_REGION": "us-west-2"],
             credentialsProvider: {
                 AWSSigV4.Credentials(accessKeyId: "AKID", secretAccessKey: "SECRET")
             }

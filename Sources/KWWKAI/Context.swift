@@ -34,6 +34,14 @@ public enum ReasoningLevel: String, Codable, Sendable, Hashable {
     case xhigh
 }
 
+/// Bedrock reasoning display mode for the `thinking.display` field. `summarized`
+/// is the default; `omitted` hides the reasoning trace. Suppressed entirely on
+/// GovCloud targets.
+public enum BedrockThinkingDisplay: String, Codable, Sendable, Hashable {
+    case summarized
+    case omitted
+}
+
 public struct ThinkingBudgets: Codable, Sendable, Hashable {
     public var minimal: Int?
     public var low: Int?
@@ -114,6 +122,11 @@ public struct StreamOptions: Sendable {
     /// analog ignore this.
     public var interleavedThinking: Bool?
 
+    /// Bedrock reasoning display mode (`thinking.display`). `nil` ⇒ provider
+    /// default (`summarized`). Suppressed on GovCloud targets. Providers without
+    /// an analog ignore this.
+    public var thinkingDisplay: BedrockThinkingDisplay?
+
     /// Tool-use constraint. `nil` means provider default (usually `.auto`).
     public var toolChoice: ToolChoice?
 
@@ -145,6 +158,7 @@ public struct StreamOptions: Sendable {
         thinkingBudgets: ThinkingBudgets? = nil,
         cancellation: CancellationHandle? = nil,
         interleavedThinking: Bool? = nil,
+        thinkingDisplay: BedrockThinkingDisplay? = nil,
         toolChoice: ToolChoice? = nil,
         parallelToolCalls: Bool? = nil,
         verbose: Bool? = nil,
@@ -164,6 +178,7 @@ public struct StreamOptions: Sendable {
         self.thinkingBudgets = thinkingBudgets
         self.cancellation = cancellation
         self.interleavedThinking = interleavedThinking
+        self.thinkingDisplay = thinkingDisplay
         self.toolChoice = toolChoice
         self.parallelToolCalls = parallelToolCalls
         self.verbose = verbose

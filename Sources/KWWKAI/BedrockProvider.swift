@@ -64,19 +64,31 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         context: Context,
         options: StreamOptions?
     ) async {
-        // Region: ARN-embedded > standard endpoint host > env > provider fallback.
+        // Region: ARN > configuredRegion (env) > endpoint host (gated) >
+        // profile region > us-east-1. (pi precedence ladder.)
+        let profileRegion: String? = {
+            guard let p = environment["AWS_PROFILE"], !p.isEmpty else { return nil }
+            return BedrockRegion.regionFromProfile(p, env: environment)
+        }()
         let effectiveRegion = BedrockRegion.resolve(
             modelId: model.id,
             baseUrl: model.baseUrl,
             env: environment,
-            fallback: region
+            profileRegion: profileRegion
         )
 
-        let bearer = bearerToken
-        // SigV4 needs IAM creds; bearer-token auth does not.
+        // Auth: bearer wins unless AWS_BEDROCK_SKIP_AUTH=1. With skip-auth set,
+        // sign with real env creds if present, else dummy SigV4. Otherwise SigV4
+        // needs real IAM creds. (pi `useBearerToken = bearer && !skipAuth`.)
+        let skipAuth = environment["AWS_BEDROCK_SKIP_AUTH"] == "1"
+        let rawBearer = bearerToken
+        let useBearer = rawBearer != nil && !skipAuth
+
         let creds: AWSSigV4.Credentials?
-        if bearer != nil {
+        if useBearer {
             creds = nil
+        } else if skipAuth {
+            creds = (await credentialsProvider()) ?? BedrockCredentials.dummy
         } else {
             guard let resolved = await credentialsProvider() else {
                 let msg = Self.makeError(api: api, model: model, text: "AWS credentials unavailable")
@@ -121,7 +133,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             if lk == "authorization" || lk == "host" || lk.hasPrefix("x-amz-") { continue }
             headers[k] = v
         }
-        if let bearer {
+        if useBearer, let bearer = rawBearer {
             // Bedrock API-key auth: skip SigV4, send a bearer token.
             headers["authorization"] = "Bearer \(bearer)"
             headers["host"] = host
@@ -328,16 +340,89 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         // Only Anthropic Claude models accept the `thinking` field via Bedrock
         // Converse; injecting it for Nova/Llama/Titan/etc. is a 400. (pi gates
         // this on `isAnthropicClaudeModel`.)
-        if let reasoning = options?.reasoning, isAnthropicClaudeModel(model) {
-            var extras: [String: Any] = ["thinking": ["type": "enabled"]]
-            if let budget = options?.thinkingBudgets?.budget(for: reasoning) {
-                var thinking = extras["thinking"] as? [String: Any] ?? [:]
-                thinking["budget_tokens"] = budget
-                extras["thinking"] = thinking
-            }
+        if let extras = buildAdditionalModelRequestFields(model: model, options: options, env: env) {
             root["additionalModelRequestFields"] = extras
         }
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    /// Lowercased id+name plus a normalized variant where runs of whitespace /
+    /// `.` / `_` / `:` collapse to a single `-` (so `claude-opus-4.8` matches
+    /// `opus-4-8`). Mirrors pi `getModelMatchCandidates`.
+    private static func modelMatchCandidates(_ model: Model) -> [String] {
+        [model.id, model.name].flatMap { value -> [String] in
+            let lower = value.lowercased()
+            let normalized = lower.replacingOccurrences(
+                of: "[\\s_.:]+", with: "-", options: .regularExpression)
+            return [lower, normalized]
+        }
+    }
+
+    private static func supportsAdaptiveThinking(_ model: Model) -> Bool {
+        let c = modelMatchCandidates(model)
+        return c.contains { $0.contains("opus-4-6") || $0.contains("opus-4-7")
+            || $0.contains("opus-4-8") || $0.contains("sonnet-4-6") || $0.contains("fable-5") }
+    }
+
+    private static func supportsNativeXhighEffort(_ model: Model) -> Bool {
+        let c = modelMatchCandidates(model)
+        return c.contains { $0.contains("opus-4-7") || $0.contains("opus-4-8") || $0.contains("fable-5") }
+    }
+
+    private static func mapThinkingLevelToEffort(_ model: Model, _ level: ReasoningLevel) -> String {
+        if level == .xhigh, supportsNativeXhighEffort(model) { return "xhigh" }
+        if let mapped = model.thinkingLevelMap?[level.rawValue], let m = mapped { return m }
+        switch level {
+        case .minimal, .low: return "low"
+        case .medium: return "medium"
+        case .high, .xhigh: return "high"
+        }
+    }
+
+    /// Whether the resolved Bedrock target is GovCloud (us-gov-*). pi uses the
+    /// configured region (option/AWS_REGION/AWS_DEFAULT_REGION); kwwk has no
+    /// option.region so it uses env region plus the model-id partition prefix.
+    private static func isGovCloudBedrockTarget(model: Model, env: [String: String]) -> Bool {
+        if let r = BedrockRegion.fromEnv(env)?.lowercased(), r.hasPrefix("us-gov-") { return true }
+        let id = model.id.lowercased()
+        return id.hasPrefix("us-gov.") || id.hasPrefix("arn:aws-us-gov:")
+    }
+
+    /// Builds `additionalModelRequestFields` for reasoning. Returns nil unless
+    /// the caller requested reasoning, the model declares `reasoning`, and it is
+    /// an Anthropic Claude model. Mirrors pi `buildAdditionalModelRequestFields`.
+    static func buildAdditionalModelRequestFields(
+        model: Model, options: StreamOptions?, env: [String: String]
+    ) -> [String: Any]? {
+        guard let reasoning = options?.reasoning, model.reasoning else { return nil }
+        guard isAnthropicClaudeModel(model) else { return nil }
+
+        let display: String? = isGovCloudBedrockTarget(model: model, env: env)
+            ? nil
+            : (options?.thinkingDisplay?.rawValue ?? "summarized")
+
+        var result: [String: Any]
+        if supportsAdaptiveThinking(model) {
+            var thinking: [String: Any] = ["type": "adaptive"]
+            if let display { thinking["display"] = display }
+            result = [
+                "thinking": thinking,
+                "output_config": ["effort": mapThinkingLevelToEffort(model, reasoning)],
+            ]
+        } else {
+            let defaults: [ReasoningLevel: Int] = [
+                .minimal: 1024, .low: 2048, .medium: 8192, .high: 16384, .xhigh: 16384,
+            ]
+            let budgetLevel: ReasoningLevel = reasoning == .xhigh ? .high : reasoning
+            let budget = options?.thinkingBudgets?.budget(for: budgetLevel) ?? defaults[reasoning]!
+            var thinking: [String: Any] = ["type": "enabled", "budget_tokens": budget]
+            if let display { thinking["display"] = display }
+            result = ["thinking": thinking]
+            if options?.interleavedThinking ?? true {
+                result["anthropic_beta"] = ["interleaved-thinking-2025-05-14"]
+            }
+        }
+        return result
     }
 
     /// Whether a Bedrock model is an Anthropic Claude model (plain id, regional
@@ -556,9 +641,9 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
     private static func mapStopReason(_ raw: String) -> StopReason {
         switch raw {
         case "end_turn", "stop_sequence": return .stop
-        case "max_tokens": return .length
+        case "max_tokens", "model_context_window_exceeded": return .length
         case "tool_use": return .toolUse
-        default: return .stop
+        default: return .error
         }
     }
 
@@ -701,7 +786,13 @@ final class BedrockStreamState: @unchecked Sendable {
         if case .int(let v) = obj["outputTokens"] ?? .null { usage.output = v }
         if case .int(let v) = obj["cacheReadInputTokens"] ?? .null { usage.cacheRead = v }
         if case .int(let v) = obj["cacheWriteInputTokens"] ?? .null { usage.cacheWrite = v }
-        usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        // pi: prefer the upstream totalTokens (truthy ⇒ > 0); else input+output,
+        // and do NOT sum cacheRead/cacheWrite into the total.
+        if case .int(let v) = obj["totalTokens"] ?? .null, v > 0 {
+            usage.totalTokens = v
+        } else {
+            usage.totalTokens = usage.input + usage.output
+        }
     }
 
     func snapshot() -> AssistantMessage {
