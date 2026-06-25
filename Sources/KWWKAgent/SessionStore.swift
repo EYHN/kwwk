@@ -379,7 +379,14 @@ public actor SessionStore {
             guard let info = try? info(at: url) else { continue }
             infos.append(info)
         }
-        infos.sort { $0.updatedAt > $1.updatedAt }
+        // Sort by updatedAt (mtime) descending. Filesystem mtime resolution
+        // can tie two sessions written in the same tick, so break ties with
+        // createdAt (millisecond, set at header creation) to keep ordering
+        // deterministic — otherwise "most recent for cwd" is non-deterministic.
+        infos.sort {
+            if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+            return $0.createdAt > $1.createdAt
+        }
         return infos
     }
 

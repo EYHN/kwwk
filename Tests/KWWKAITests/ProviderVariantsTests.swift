@@ -90,7 +90,14 @@ struct ProviderVariantsTests {
         try? await Task.sleep(nanoseconds: 20_000_000)
         let h = client.lastRequest?.headers ?? [:]
         #expect(h["authorization"] == "Bearer oauth-abc")
-        #expect(h["anthropic-beta"] == "oauth-2025-04-20")
+        // OAuth seeds `claude-code-20250219,oauth-2025-04-20`; the Anthropic
+        // provider then appends the default interleaved-thinking beta. The
+        // header is an unordered set, so assert membership rather than exact
+        // string equality.
+        let beta = h["anthropic-beta"] ?? ""
+        #expect(beta.contains("oauth-2025-04-20"))
+        #expect(beta.contains("claude-code-20250219"))
+        #expect(beta.contains("interleaved-thinking-2025-05-14"))
         #expect(h["x-api-key"] == nil)
     }
 
