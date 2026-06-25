@@ -277,6 +277,11 @@ func runCodingTUIInternal(
     // needs to be dismissed.
     let slashRegistry = SlashCommandRegistry()
     registerBuiltinSlashCommands(slashRegistry)
+    // User/project prompt-template commands (`.kwwk/commands/*.md`,
+    // `~/.kwwk/commands/*.md`). Registered after builtins so a custom file
+    // can't shadow a core command; their handlers render the template against
+    // the invocation args and submit it as an ordinary prompt.
+    CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd)
     let slashContext = SlashContext(
         agent: agent,
         modal: modal,
