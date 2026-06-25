@@ -19,7 +19,7 @@ let package = Package(
         // swift-crypto's `Crypto` module is source-compatible with Apple's
         // `CryptoKit` and ships on both Apple and Linux — one import, one
         // set of types, regardless of platform.
-        .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
         // SwiftNIO backs the OAuth callback server. Replaces the Apple
         // `Network.framework`-only implementation so the OAuth login flow
         // runs the same code on macOS and Linux.
