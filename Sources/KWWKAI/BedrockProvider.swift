@@ -99,7 +99,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
 
         let body: Data
         do {
-            body = try Self.encodeBody(model: model, context: context, options: options)
+            body = try Self.encodeBody(model: model, context: context, options: options, env: environment)
         } catch {
             let msg = Self.makeError(api: api, model: model, text: "Failed to encode request: \(error)")
             out.push(.error(reason: .error, error: msg))
@@ -273,18 +273,20 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
 
     // MARK: - Encoding
 
+    private static let emptyTextPlaceholder = "<empty>"
+
     private static func encodeBody(
-        model: Model, context: Context, options: StreamOptions?
+        model: Model, context: Context, options: StreamOptions?, env: [String: String] = [:]
     ) throws -> Data {
-        // Bedrock prompt caching: emit `cachePoint` blocks on the system prompt
-        // and the final message when the caller requested caching. `long`
-        // retention adds a 1h ttl, gated by the model's compat flag.
         let retention = options?.cacheRetention ?? CacheRetention.none
-        let cachingEnabled = retention != .none
-        let cachePoint: [String: Any]? = cachingEnabled ? makeCachePoint(model: model, retention: retention) : nil
+        let cachePoint: [String: Any]? = retention != .none && supportsPromptCaching(model: model, env: env)
+            ? makeCachePoint(retention: retention)
+            : nil
+        var context = context
+        context.messages = normalizeToolCallIds(TransformMessages.normalize(context.messages, model: model))
 
         var root: [String: Any] = [
-            "messages": encodeMessages(context: context, cachePoint: cachePoint),
+            "messages": encodeMessages(model: model, context: context, cachePoint: cachePoint),
         ]
         if let sys = context.systemPrompt, !sys.isEmpty {
             var system: [[String: Any]] = [["text": sys]]
@@ -327,27 +329,29 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
     }
 
     /// Builds the `cachePoint` content block. `{"cachePoint":{"type":"default"}}`,
-    /// plus a 1h ttl for long retention when the model's compat opts in.
-    private static func makeCachePoint(model: Model, retention: CacheRetention) -> [String: Any] {
+    /// plus a 1h ttl for long retention on Bedrock's cache-capable Claude models.
+    private static func makeCachePoint(retention: CacheRetention) -> [String: Any] {
         var point: [String: Any] = ["type": "default"]
-        if retention == .long, model.compat?.supportsLongCacheRetention == true {
+        if retention == .long {
             point["ttl"] = "1h"
         }
         return ["cachePoint": point]
     }
 
     private static func encodeMessages(
-        context: Context, cachePoint: [String: Any]? = nil
+        model: Model, context: Context, cachePoint: [String: Any]? = nil
     ) -> [[String: Any]] {
         var out: [[String: Any]] = []
-        for message in context.messages {
+        var index = 0
+        while index < context.messages.count {
+            let message = context.messages[index]
             switch message {
             case .user(let u):
                 var parts: [[String: Any]] = []
                 for block in u.content {
                     switch block {
                     case .text(let t):
-                        parts.append(["text": t.text])
+                        if let text = nonBlankText(t.text) { parts.append(text) }
                     case .image(let i):
                         parts.append([
                             "image": [
@@ -357,6 +361,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                         ])
                     }
                 }
+                if parts.isEmpty { parts.append(["text": emptyTextPlaceholder]) }
                 out.append(["role": "user", "content": parts])
 
             case .assistant(let a):
@@ -364,17 +369,30 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 for block in a.content {
                     switch block {
                     case .text(let t):
-                        if !t.text.isEmpty { parts.append(["text": t.text]) }
+                        if let text = nonBlankText(t.text) { parts.append(text) }
                     case .thinking(let th):
-                        if !th.thinking.isEmpty {
-                            parts.append([
-                                "reasoningContent": [
-                                    "reasoningText": [
-                                        "text": th.thinking,
-                                        "signature": th.thinkingSignature ?? "",
+                        if !th.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            let thinking = th.thinking
+                            if supportsThinkingSignature(model: model),
+                               let signature = th.thinkingSignature,
+                               !signature.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                parts.append([
+                                    "reasoningContent": [
+                                        "reasoningText": [
+                                            "text": thinking,
+                                            "signature": signature,
+                                        ],
                                     ],
-                                ],
-                            ])
+                                ])
+                            } else if supportsThinkingSignature(model: model) {
+                                parts.append(["text": thinking])
+                            } else {
+                                parts.append([
+                                    "reasoningContent": [
+                                        "reasoningText": ["text": thinking],
+                                    ],
+                                ])
+                            }
                         }
                     case .toolCall(let tc):
                         let input: Any = anyFromJSONValue(tc.arguments) ?? [String: Any]()
@@ -391,43 +409,109 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                     out.append(["role": "assistant", "content": parts])
                 }
 
-            case .toolResult(let tr):
+            case .toolResult:
                 var content: [[String: Any]] = []
-                for block in tr.content {
-                    switch block {
-                    case .text(let t): content.append(["text": t.text])
-                    case .image(let i):
-                        content.append([
-                            "image": [
-                                "format": imageFormat(i.mimeType),
-                                "source": ["bytes": i.data],
-                            ],
-                        ])
-                    }
+                var j = index
+                while j < context.messages.count {
+                    guard case .toolResult(let tr) = context.messages[j] else { break }
+                    content.append(makeToolResultEntry(tr))
+                    j += 1
                 }
-                var entry: [String: Any] = [
-                    "toolResult": [
-                        "toolUseId": tr.toolCallId,
-                        "content": content,
-                    ],
-                ]
-                if tr.isError {
-                    var inner = entry["toolResult"] as? [String: Any] ?? [:]
-                    inner["status"] = "error"
-                    entry["toolResult"] = inner
-                }
-                out.append(["role": "user", "content": [entry]])
+                out.append(["role": "user", "content": content])
+                index = j
+                continue
             }
+            index += 1
         }
-        // Append a cache point to the last message so Bedrock caches the full
-        // prefix up to and including the latest turn.
-        if let cachePoint, var last = out.last,
-           var content = last["content"] as? [[String: Any]] {
+        // Append a cache point to the last user message so Bedrock caches the
+        // full prefix up to and including the latest turn.
+        if let cachePoint,
+           let lastIndex = out.indices.reversed().first(where: { out[$0]["role"] as? String == "user" }),
+           var content = out[lastIndex]["content"] as? [[String: Any]] {
             content.append(cachePoint)
-            last["content"] = content
-            out[out.count - 1] = last
+            out[lastIndex]["content"] = content
         }
         return out
+    }
+
+    private static func makeToolResultEntry(_ tr: ToolResultMessage) -> [String: Any] {
+        var content: [[String: Any]] = []
+        for block in tr.content {
+            switch block {
+            case .text(let t):
+                if let text = nonBlankText(t.text) { content.append(text) }
+            case .image(let i):
+                content.append([
+                    "image": [
+                        "format": imageFormat(i.mimeType),
+                        "source": ["bytes": i.data],
+                    ],
+                ])
+            }
+        }
+        if content.isEmpty { content.append(["text": emptyTextPlaceholder]) }
+        let toolResult: [String: Any] = [
+            "toolUseId": tr.toolCallId,
+            "content": content,
+            "status": tr.isError ? "error" : "success",
+        ]
+        return ["toolResult": toolResult]
+    }
+
+    private static func nonBlankText(_ text: String) -> [String: Any]? {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : ["text": text]
+    }
+
+    private static func normalizeToolCallIds(_ messages: [Message]) -> [Message] {
+        var map: [String: String] = [:]
+        func normalize(_ id: String) -> String {
+            if let existing = map[id] { return existing }
+            let sanitized = id.map { ch -> Character in
+                if ch.isLetter || ch.isNumber || ch == "_" || ch == "-" { return ch }
+                return "_"
+            }
+            let value = String(sanitized.prefix(64))
+            let resolved = value.isEmpty ? "tool_use" : value
+            map[id] = resolved
+            return resolved
+        }
+
+        return messages.map { message in
+            switch message {
+            case .assistant(var a):
+                a.content = a.content.map { block in
+                    guard case .toolCall(var tc) = block else { return block }
+                    tc.id = normalize(tc.id)
+                    return .toolCall(tc)
+                }
+                return .assistant(a)
+            case .toolResult(var tr):
+                tr.toolCallId = normalize(tr.toolCallId)
+                return .toolResult(tr)
+            case .user:
+                return message
+            }
+        }
+    }
+
+    private static func supportsPromptCaching(model: Model, env: [String: String]) -> Bool {
+        let candidates = [model.id, model.name].map { $0.lowercased() }
+        guard candidates.contains(where: { $0.contains("claude") }) else {
+            return env["AWS_BEDROCK_FORCE_CACHE"] == "1"
+        }
+        return candidates.contains(where: {
+            $0.contains("-4-")
+                || $0.contains("claude-3-7-sonnet")
+                || $0.contains("claude-3-5-haiku")
+        })
+    }
+
+    private static func supportsThinkingSignature(model: Model) -> Bool {
+        [model.id, model.name].map { $0.lowercased() }.contains { value in
+            value.contains("anthropic.claude")
+                || value.contains("anthropic/claude")
+                || value.contains("claude")
+        }
     }
 
     private static func encodeToolChoice(_ choice: ToolChoice?) -> Any? {

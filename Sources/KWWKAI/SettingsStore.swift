@@ -2,6 +2,11 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 
 /// Resolves a single configuration string that may be a literal, an
 /// environment-variable template, or a `!`-prefixed shell command. Ported from
@@ -154,13 +159,20 @@ public enum ConfigValue {
 
     /// Run `command` via the user's shell, returning trimmed stdout (nil on
     /// failure, non-zero exit, or empty output). Mirrors pi's 10s timeout.
-    static func runCommand(_ command: String) -> String? {
+    static func runCommand(_ command: String, timeoutSeconds: TimeInterval = 10) -> String? {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/sh"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
         process.arguments = ["-c", command]
-        let pipe = Pipe()
-        process.standardOutput = pipe
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-config-shell-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        guard let outputHandle = try? FileHandle(forWritingTo: outputURL) else { return nil }
+        defer {
+            try? outputHandle.close()
+            try? FileManager.default.removeItem(at: outputURL)
+        }
+        process.standardOutput = outputHandle
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
 
@@ -170,8 +182,21 @@ public enum ConfigValue {
             return nil
         }
 
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let finished = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            process.waitUntilExit()
+            finished.signal()
+        }
+        if finished.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+            process.terminate()
+            if finished.wait(timeout: .now() + 1) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = finished.wait(timeout: .now() + 1)
+            }
+            return nil
+        }
+        try? outputHandle.synchronize()
+        let data = (try? Data(contentsOf: outputURL)) ?? Data()
         guard process.terminationStatus == 0 else { return nil }
         let output = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

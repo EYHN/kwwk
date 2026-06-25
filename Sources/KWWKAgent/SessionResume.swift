@@ -76,19 +76,26 @@ extension SessionStore {
             )
 
         case .id(let id):
-            guard let loaded = try? load(id: id) else {
+            guard SessionStore.isValidSessionId(id) else {
+                return ResolvedResume(sessionId: freshId)
+            }
+            do {
+                let loaded = try load(id: id)
+                return ResolvedResume(
+                    sessionId: loaded.header.id,
+                    messages: loaded.messages,
+                    model: loaded.model,
+                    thinkingLevel: loaded.thinkingLevel,
+                    persistedCount: loaded.messages.count,
+                    resumed: true
+                )
+            } catch SessionStoreError.notFound {
                 // Unknown id — create a new session under that id so the
                 // caller's intent (a stable, named session) is honored.
                 return ResolvedResume(sessionId: id)
+            } catch {
+                return ResolvedResume(sessionId: freshId)
             }
-            return ResolvedResume(
-                sessionId: loaded.header.id,
-                messages: loaded.messages,
-                model: loaded.model,
-                thinkingLevel: loaded.thinkingLevel,
-                persistedCount: loaded.messages.count,
-                resumed: true
-            )
         }
     }
 }

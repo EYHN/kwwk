@@ -185,12 +185,23 @@ public actor SessionStore {
         case invalidHeader(String)
         case unsupportedVersion(found: Int, expected: Int)
         case notFound(String)
+        case invalidId(String)
     }
 
     // MARK: - Paths
 
-    private func path(for id: String) -> URL {
-        directory.appendingPathComponent("\(id).jsonl")
+    public static func isValidSessionId(_ id: String) -> Bool {
+        guard let first = id.first, let last = id.last,
+              first.isLetter || first.isNumber,
+              last.isLetter || last.isNumber else { return false }
+        return id.allSatisfy { ch in
+            ch.isLetter || ch.isNumber || ch == "-" || ch == "_" || ch == "."
+        }
+    }
+
+    private func path(for id: String) throws -> URL {
+        guard Self.isValidSessionId(id) else { throw SessionStoreError.invalidId(id) }
+        return directory.appendingPathComponent("\(id).jsonl")
     }
 
     private func ensureDirectory() throws {
@@ -224,7 +235,7 @@ public actor SessionStore {
         let line = try Self.encoder.encode(header)
         var data = line
         data.append(0x0A)  // newline
-        try data.write(to: path(for: id), options: .atomic)
+        try data.write(to: try path(for: id), options: .atomic)
         return header
     }
 
@@ -237,7 +248,8 @@ public actor SessionStore {
         model: String? = nil,
         provider: String? = nil
     ) throws {
-        if !FileManager.default.fileExists(atPath: path(for: id).path) {
+        let url = try path(for: id)
+        if !FileManager.default.fileExists(atPath: url.path) {
             try create(id: id, cwd: cwd, model: model, provider: provider)
         }
         try appendEntry(id: id, .message(timestamp: Timestamp.now(), message: message))
@@ -273,7 +285,7 @@ public actor SessionStore {
     }
 
     private func appendEntry(id: String, _ entry: Entry) throws {
-        let url = path(for: id)
+        let url = try path(for: id)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw SessionStoreError.notFound(id)
         }
@@ -290,7 +302,7 @@ public actor SessionStore {
     /// Replay a session file into its header, full transcript, and latest
     /// metadata. Throws on a missing/invalid header or unsupported version.
     public func load(id: String) throws -> LoadedSession {
-        try load(at: path(for: id))
+        try load(at: try path(for: id))
     }
 
     public func load(at url: URL) throws -> LoadedSession {

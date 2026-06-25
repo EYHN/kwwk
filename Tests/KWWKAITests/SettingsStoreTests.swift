@@ -119,4 +119,12 @@ struct SettingsStoreTests {
         #expect(ConfigValue.resolve("!exit 1") == nil)
         #expect(ConfigValue.resolve("!true") == nil) // empty stdout -> nil
     }
+
+    @Test("shell command resolution times out")
+    func shellTimeout() {
+        let start = Date()
+        let output = ConfigValue.runCommand("while true; do :; done", timeoutSeconds: 0.05)
+        #expect(output == nil)
+        #expect(Date().timeIntervalSince(start) < 2)
+    }
 }

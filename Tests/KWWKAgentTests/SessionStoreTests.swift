@@ -108,6 +108,39 @@ struct SessionStoreTests {
         }
     }
 
+    @Test("session ids are validated before touching the filesystem")
+    func invalidSessionId() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        #expect(SessionStore.isValidSessionId("sess-ok_1.2"))
+        #expect(!SessionStore.isValidSessionId("../escape"))
+        #expect(!SessionStore.isValidSessionId("-leading"))
+        #expect(!SessionStore.isValidSessionId("trailing-"))
+
+        await #expect(throws: SessionStore.SessionStoreError.self) {
+            try await store.append(id: "../escape", cwd: "/w", message: userMsg("x"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("escape.jsonl").path))
+    }
+
+    @Test("resolveResume(.id) does not reuse or overwrite a corrupt target")
+    func corruptExplicitResumeFallsBackToFresh() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let id = "sess-corrupt"
+        let file = dir.appendingPathComponent("\(id).jsonl")
+        let raw = #"{"type":"session","version":999,"id":"sess-corrupt","cwd":"/w","createdAt":1}"# + "\n"
+        try raw.data(using: .utf8)!.write(to: file)
+
+        let resolved = await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh-session")
+        #expect(!resolved.resumed)
+        #expect(resolved.sessionId == "fresh-session")
+        #expect((try? String(contentsOf: file, encoding: .utf8)) == raw)
+    }
+
     @Test("list returns one info per session, newest activity first")
     func list() async throws {
         let (store, dir) = tempStore()

@@ -225,7 +225,10 @@ struct BedrockCacheAndAuthTests {
     }
 
     private static func send(
-        model: Model, options: StreamOptions?, env: [String: String] = [:]
+        model: Model,
+        options: StreamOptions?,
+        env: [String: String] = [:],
+        context: Context? = nil
     ) async -> ByteStubClient {
         let client = ByteStubClient(body: endFrames())
         let provider = BedrockProvider(
@@ -236,7 +239,7 @@ struct BedrockCacheAndAuthTests {
         )
         _ = provider.stream(
             model: model,
-            context: Context(systemPrompt: "Be concise.", messages: [.user(UserMessage(text: "hi"))]),
+            context: context ?? Context(systemPrompt: "Be concise.", messages: [.user(UserMessage(text: "hi"))]),
             options: options
         )
         for _ in 0..<200 where client.lastRequest == nil {
@@ -283,9 +286,8 @@ struct BedrockCacheAndAuthTests {
         #expect(msgCache.first?["ttl"] == nil)
     }
 
-    @Test("long retention adds 1h ttl only when compat opts in")
-    func longCacheTTLGated() async throws {
-        // Model without the compat flag: long behaves like short (no ttl).
+    @Test("long retention adds 1h ttl on cache-capable Claude models")
+    func longCacheTTL() async throws {
         let plain = await Self.send(
             model: Self.model,
             options: StreamOptions(cacheRetention: .long)
@@ -294,9 +296,8 @@ struct BedrockCacheAndAuthTests {
         let plainSys = (plainJSON["system"] as? [[String: Any]] ?? [])
             .compactMap { $0["cachePoint"] as? [String: Any] }
         #expect(plainSys.first?["type"] as? String == "default")
-        #expect(plainSys.first?["ttl"] == nil)
+        #expect(plainSys.first?["ttl"] as? String == "1h")
 
-        // Model with supportsLongCacheRetention: ttl is emitted.
         let long = await Self.send(
             model: Self.longCacheModel(),
             options: StreamOptions(cacheRetention: .long)
@@ -308,6 +309,75 @@ struct BedrockCacheAndAuthTests {
         let longMsg = ((longJSON["messages"] as? [[String: Any]] ?? []).last?["content"] as? [[String: Any]] ?? [])
             .compactMap { $0["cachePoint"] as? [String: Any] }
         #expect(longMsg.first?["ttl"] as? String == "1h")
+    }
+
+    @Test("cache points are gated to supported Claude models unless forced")
+    func promptCacheModelGate() async throws {
+        var nonClaude = Self.model
+        nonClaude.id = "cohere.command-r-plus-v1:0"
+        nonClaude.name = "Command R+"
+
+        let gated = await Self.send(
+            model: nonClaude,
+            options: StreamOptions(cacheRetention: .short)
+        )
+        let gatedJSON = try Self.decode(gated)
+        let gatedSystem = gatedJSON["system"] as? [[String: Any]] ?? []
+        #expect(gatedSystem.allSatisfy { $0["cachePoint"] == nil })
+        let gatedMessageContent = ((gatedJSON["messages"] as? [[String: Any]] ?? []).last?["content"] as? [[String: Any]]) ?? []
+        #expect(gatedMessageContent.allSatisfy { $0["cachePoint"] == nil })
+
+        let forced = await Self.send(
+            model: nonClaude,
+            options: StreamOptions(cacheRetention: .short),
+            env: ["AWS_BEDROCK_FORCE_CACHE": "1"]
+        )
+        let forcedJSON = try Self.decode(forced)
+        let forcedSystem = (forcedJSON["system"] as? [[String: Any]] ?? [])
+            .compactMap { $0["cachePoint"] as? [String: Any] }
+        #expect(forcedSystem.first?["type"] as? String == "default")
+    }
+
+    @Test("consecutive tool results are grouped into one user message")
+    func consecutiveToolResultsGrouped() async throws {
+        let assistant = AssistantMessage(
+            content: [
+                .toolCall(ToolCall(id: "call.1|raw", name: "first", arguments: ["x": 1])),
+                .toolCall(ToolCall(id: "call.2|raw", name: "second", arguments: ["y": 2])),
+            ],
+            api: "bedrock-converse-stream",
+            provider: "amazon-bedrock",
+            model: Self.model.id,
+            stopReason: .toolUse
+        )
+        let context = Context(messages: [
+            .user(UserMessage(text: "run tools")),
+            .assistant(assistant),
+            .toolResult(ToolResultMessage(
+                toolCallId: "call.1|raw",
+                toolName: "first",
+                content: [.text(TextContent(text: "one"))]
+            )),
+            .toolResult(ToolResultMessage(
+                toolCallId: "call.2|raw",
+                toolName: "second",
+                content: [.text(TextContent(text: "two"))],
+                isError: true
+            )),
+        ])
+        let client = await Self.send(model: Self.model, options: nil, context: context)
+        let json = try Self.decode(client)
+        let messages = json["messages"] as? [[String: Any]] ?? []
+        #expect(messages.count == 3)
+        #expect(messages.last?["role"] as? String == "user")
+        let content = messages.last?["content"] as? [[String: Any]] ?? []
+        #expect(content.count == 2)
+        let first = content.first?["toolResult"] as? [String: Any]
+        let second = content.last?["toolResult"] as? [String: Any]
+        #expect(first?["toolUseId"] as? String == "call_1_raw")
+        #expect(first?["status"] as? String == "success")
+        #expect(second?["toolUseId"] as? String == "call_2_raw")
+        #expect(second?["status"] as? String == "error")
     }
 
     @Test("bearer token auth sends Authorization: Bearer and skips SigV4")
