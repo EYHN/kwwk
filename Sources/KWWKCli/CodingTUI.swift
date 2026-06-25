@@ -15,11 +15,18 @@ func runCodingTUIInternal(
     builtinSubagents: BuiltinSubagentSelection = .all,
     authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
     autoCompactThreshold: Double? = 0.75,
-    thinkingLevel: ThinkingLevel = .medium
+    thinkingLevel: ThinkingLevel = .medium,
+    resume: SessionResume = .none
 ) async throws {
     // --- agent + background manager -------------------------------------
     let bgManager = BackgroundTaskManager()
-    let sessionId = UUID().uuidString
+
+    // Resolve session persistence up front: a fresh id by default, or a
+    // stored transcript when `--resume` / `--session` was passed.
+    let sessionStore = SessionStore()
+    let resolvedResume = await sessionStore.resolveResume(resume, cwd: cwd)
+    let sessionId = resolvedResume.sessionId
+
     let agent = await makeCodingAgent(CodingAgentConfig(
         model: model,
         cwd: cwd,
@@ -30,6 +37,27 @@ func runCodingTUIInternal(
         authResolver: authResolver,
         autoCompactThreshold: autoCompactThreshold
     ))
+
+    // Seed the transcript from disk when resuming so the model continues
+    // where it left off.
+    if !resolvedResume.messages.isEmpty {
+        agent.state.messages = resolvedResume.messages
+    }
+
+    // Persist the transcript as it grows.
+    let sessionRecorder = SessionRecorder(
+        store: sessionStore,
+        sessionId: sessionId,
+        cwd: cwd,
+        model: model.id,
+        provider: model.provider,
+        persistedCount: resolvedResume.persistedCount
+    )
+    if !resolvedResume.resumed {
+        await sessionRecorder.ensureCreated()
+    }
+    let unsubscribeSessionRecorder = sessionRecorder.attach(to: agent)
+    defer { unsubscribeSessionRecorder() }
     // Turn on extended thinking by default — otherwise reasoning-capable
     // providers never produce `[thinking]` blocks. The level is a user
     // intent: the agent loop filters it to `nil` when the live model
@@ -61,6 +89,12 @@ func runCodingTUIInternal(
     ]
     for line in bannerLines {
         runner.terminal.write(line + "\r\n")
+    }
+    if resolvedResume.resumed {
+        runner.terminal.write(
+            Style.dimmed("  ↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages")
+            + "\r\n\r\n"
+        )
     }
 
     layout.install(into: runner.tui)

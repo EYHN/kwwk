@@ -30,7 +30,8 @@ public enum KWWK {
         autoCompactThreshold: Double? = 0.75,
         thinkingLevel: ThinkingLevel = .medium,
         modelOverride: String? = nil,
-        context1m: Bool = false
+        context1m: Bool = false,
+        resume: SessionResume = .none
     ) async throws {
         let resolved = try await resolveAgentAuth(modelOverride: modelOverride, context1m: context1m)
         let workDir = cwd ?? FileManager.default.currentDirectoryPath
@@ -42,7 +43,8 @@ public enum KWWK {
             builtinSubagents: builtinSubagents,
             authResolver: resolved.authResolver,
             autoCompactThreshold: autoCompactThreshold,
-            thinkingLevel: thinkingLevel
+            thinkingLevel: thinkingLevel,
+            resume: resume
         )
     }
 
@@ -79,7 +81,8 @@ public enum KWWK {
         builtinSubagents: BuiltinSubagentSelection = .all,
         thinkingLevel: ThinkingLevel = .medium,
         modelOverride: String? = nil,
-        context1m: Bool = false
+        context1m: Bool = false,
+        resume: SessionResume = .none
     ) async throws -> Int32 {
         let workDir = cwd ?? FileManager.default.currentDirectoryPath
         return try await runHeadlessInternal(
@@ -89,7 +92,8 @@ public enum KWWK {
             builtinSubagents: builtinSubagents,
             thinkingLevel: thinkingLevel,
             modelOverride: modelOverride,
-            context1m: context1m
+            context1m: context1m,
+            resume: resume
         )
     }
 }

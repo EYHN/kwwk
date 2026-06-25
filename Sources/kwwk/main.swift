@@ -40,6 +40,8 @@ struct KwwkCLI {
         (args, context1m) = extractBoolFlag(args, "--context-1m")
         let builtinSubagents: BuiltinSubagentSelection
         (args, builtinSubagents) = extractBuiltinSubagents(args)
+        let resume: SessionResume
+        (args, resume) = extractResume(args)
 
         let subcommand = args.first
 
@@ -49,7 +51,8 @@ struct KwwkCLI {
                 builtinSubagents: builtinSubagents,
                 thinkingLevel: thinkingLevel,
                 modelOverride: modelOverride,
-                context1m: context1m
+                context1m: context1m,
+                resume: resume
             ) }
         case "login":
             await runOrExit { try await KWWK.runLogin() }
@@ -59,7 +62,8 @@ struct KwwkCLI {
                 thinkingLevel: thinkingLevel,
                 modelOverride: modelOverride,
                 context1m: context1m,
-                builtinSubagents: builtinSubagents
+                builtinSubagents: builtinSubagents,
+                resume: resume
             )
         case "-h", "--help":
             printUsage()
@@ -91,6 +95,12 @@ struct KwwkCLI {
           --subagents <list>          built-in subagents to enable:
                                       general,Explore,Plan,all, or none
           --no-subagents              disable built-in CLI subagents
+          --resume, --continue        resume the latest session for this
+                                      directory (replays its transcript)
+          --session <id>              resume (or create) a specific session id
+
+        Sessions are persisted to ~/.kwwk/sessions/<id>.jsonl as an
+        append-only log and replayed on resume.
 
         Credentials are read from the OAuth store at ~/.kwwk/oauth.json.
         Run `kwwk login` once to register a provider (OAuth subscription
@@ -159,6 +169,36 @@ struct KwwkCLI {
         return (out, seen)
     }
 
+    /// Pull session resume flags out of argv:
+    ///   `--resume` / `--continue` → latest session for the current cwd;
+    ///   `--session <id>`          → a specific session id.
+    /// Later flags win if more than one is present. Missing → `.none`.
+    static func extractResume(_ argv: [String]) -> ([String], SessionResume) {
+        var out: [String] = []
+        var resume: SessionResume = .none
+        var i = 0
+        while i < argv.count {
+            switch argv[i] {
+            case "--resume", "--continue":
+                resume = .latestForCwd
+                i += 1
+            case "--session":
+                guard i + 1 < argv.count else {
+                    FileHandle.standardError.write(Data(
+                        "kwwk: --session needs a session id\n".utf8
+                    ))
+                    Foundation.exit(2)
+                }
+                resume = .id(argv[i + 1])
+                i += 2
+            default:
+                out.append(argv[i])
+                i += 1
+            }
+        }
+        return (out, resume)
+    }
+
     /// Pull built-in subagent selection flags out of argv. `--subagents`
     /// accepts a comma-separated list; `--no-subagents` is equivalent to
     /// `--subagents none`. If both are present, the later flag wins.
@@ -208,7 +248,8 @@ struct KwwkCLI {
         thinkingLevel: ThinkingLevel,
         modelOverride: String?,
         context1m: Bool,
-        builtinSubagents: BuiltinSubagentSelection
+        builtinSubagents: BuiltinSubagentSelection,
+        resume: SessionResume = .none
     ) async {
         let prompt: String
         if rest.isEmpty || rest == ["-"] {
@@ -240,7 +281,8 @@ struct KwwkCLI {
                 builtinSubagents: builtinSubagents,
                 thinkingLevel: thinkingLevel,
                 modelOverride: modelOverride,
-                context1m: context1m
+                context1m: context1m,
+                resume: resume
             )
             Foundation.exit(code)
         } catch {

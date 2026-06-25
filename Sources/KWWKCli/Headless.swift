@@ -29,12 +29,19 @@ func runHeadlessInternal(
     thinkingLevel: ThinkingLevel = .medium,
     autoCompactThreshold: Double? = 0.75,
     modelOverride: String? = nil,
-    context1m: Bool = false
+    context1m: Bool = false,
+    resume: SessionResume = .none
 ) async throws -> Int32 {
     let resolved = try await resolveAgentAuth(modelOverride: modelOverride, context1m: context1m)
 
     let bgManager = BackgroundTaskManager()
-    let sessionId = UUID().uuidString
+
+    // Resolve session persistence: a fresh id by default, or a stored
+    // transcript when `--resume` / `--session` was passed.
+    let store = SessionStore()
+    let resolvedResume = await store.resolveResume(resume, cwd: cwd)
+    let sessionId = resolvedResume.sessionId
+
     let agent = await makeCodingAgent(CodingAgentConfig(
         model: resolved.model,
         cwd: cwd,
@@ -46,6 +53,28 @@ func runHeadlessInternal(
         autoCompactThreshold: autoCompactThreshold
     ))
     agent.state.thinkingLevel = thinkingLevel
+
+    // Seed the transcript from disk when resuming so the model continues
+    // where it left off.
+    if !resolvedResume.messages.isEmpty {
+        agent.state.messages = resolvedResume.messages
+    }
+
+    // Persist the transcript as it grows. `ensureCreated` writes the header
+    // for a brand-new session; resumed sessions already have one.
+    let recorder = SessionRecorder(
+        store: store,
+        sessionId: sessionId,
+        cwd: cwd,
+        model: resolved.model.id,
+        provider: resolved.model.provider,
+        persistedCount: resolvedResume.persistedCount
+    )
+    if !resolvedResume.resumed {
+        await recorder.ensureCreated()
+    }
+    let unsubscribeRecorder = recorder.attach(to: agent)
+    defer { unsubscribeRecorder() }
 
     // Shared mutable state carried out of the @Sendable listener. All
     // reads/writes go through the lock — listener callbacks can fire on
