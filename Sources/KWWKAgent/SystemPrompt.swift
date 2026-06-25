@@ -7,6 +7,10 @@ public struct SystemPromptOptions: Sendable {
     public var appendSystemPrompt: String?
     public var contextFiles: [(path: String, content: String)]
     public var skills: [String]
+    /// Discovered skills for progressive disclosure. When non-empty, an
+    /// `<available_skills>` XML block (name + description + location only) is
+    /// injected into the prompt; bodies are read on demand via the read tool.
+    public var availableSkills: [Skill]
     public var date: String?
 
     public init(
@@ -16,6 +20,7 @@ public struct SystemPromptOptions: Sendable {
         appendSystemPrompt: String? = nil,
         contextFiles: [(path: String, content: String)] = [],
         skills: [String] = [],
+        availableSkills: [Skill] = [],
         date: String? = nil
     ) {
         self.cwd = cwd
@@ -24,6 +29,7 @@ public struct SystemPromptOptions: Sendable {
         self.appendSystemPrompt = appendSystemPrompt
         self.contextFiles = contextFiles
         self.skills = skills
+        self.availableSkills = availableSkills
         self.date = date
     }
 }
@@ -64,6 +70,10 @@ public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
         if !options.skills.isEmpty {
             prompt += formatSkills(options.skills)
         }
+        let availableBlock = Skills.availableSkillsBlock(options.availableSkills)
+        if !availableBlock.isEmpty {
+            prompt += "\n\n" + availableBlock
+        }
         prompt += "\nCurrent date: \(date)\nCurrent working directory: \(normalizedCwd)"
         return prompt
     }
@@ -84,6 +94,10 @@ public func buildSystemPrompt(_ options: SystemPromptOptions) -> String {
     }
     if !options.skills.isEmpty {
         prompt += formatSkills(options.skills)
+    }
+    let availableBlock = Skills.availableSkillsBlock(options.availableSkills)
+    if !availableBlock.isEmpty {
+        prompt += "\n\n" + availableBlock
     }
     prompt += "\nCurrent date: \(date)\nCurrent working directory: \(normalizedCwd)"
     return prompt

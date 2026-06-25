@@ -152,7 +152,11 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         ))
     }
 
-    let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(cwd: cwd))
+    let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(
+        cwd: cwd,
+        contextFiles: loadProjectContextFiles(cwd: cwd),
+        availableSkills: Skills.discover(cwd: cwd).skills
+    ))
 
     let agent = Agent(options: AgentOptions(
         initialState: AgentInitialState(
@@ -214,4 +218,20 @@ internal func buildCodingToolList(
         tools.append(tmuxTool)
     }
     return tools
+}
+
+/// Load project context files (`AGENTS.md`, `CLAUDE.md`) from `cwd` if present.
+/// Returned in a stable order; missing or empty files are skipped. These are
+/// injected into the system prompt under `# Project Context`.
+internal func loadProjectContextFiles(cwd: String) -> [(path: String, content: String)] {
+    let candidates = ["AGENTS.md", "CLAUDE.md"]
+    var files: [(path: String, content: String)] = []
+    for name in candidates {
+        let full = (cwd as NSString).appendingPathComponent(name)
+        guard let content = try? String(contentsOfFile: full, encoding: .utf8) else { continue }
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { continue }
+        files.append((path: name, content: trimmed))
+    }
+    return files
 }
