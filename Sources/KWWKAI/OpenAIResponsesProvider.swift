@@ -670,6 +670,12 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             root["max_output_tokens"] = .int(maxTokens)
         }
         if let temp = options?.temperature { root["temperature"] = .double(temp) }
+        // Processing-tier pass-through (pi openai-responses.ts:253-255). Cost
+        // multipliers are computed downstream in AgentLoop, which has no
+        // service-tier awareness, so only the request field is ported here.
+        if let serviceTier = options?.serviceTier {
+            root["service_tier"] = .string(serviceTier.rawValue)
+        }
         if let sys = context.systemPrompt, !sys.isEmpty {
             root["instructions"] = .string(sys)
         }
@@ -690,25 +696,59 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 root["parallel_tool_calls"] = .bool(false)
             }
         }
-        if let reasoning = options?.reasoning {
-            // `summary: auto` opts into reasoning-summary deltas on the
-            // stream (`response.reasoning_summary_text.delta`). Without
-            // it, the endpoint still runs internal reasoning for the
-            // requested `effort`, but the reasoning block streams as
-            // start → end with no body — so the UI has nothing to show
-            // under `[thinking]`.
-            //
-            // Remap the effort through `thinkingLevelMap` (e.g. a model that
-            // aliases `xhigh`), matching pi, instead of sending the raw level.
-            let effort = resolveThinkingLevel(model, ModelThinkingLevel(reasoning: reasoning))
-                ?? reasoning.rawValue
-            root["reasoning"] = .object([
-                "effort": .string(effort),
-                "summary": .string("auto"),
-            ])
-            // Required so encrypted reasoning round-trips across turns when the
-            // response isn't persisted server-side (`store: false`).
-            root["include"] = .array([.string("reasoning.encrypted_content")])
+        // Reasoning, mirroring pi's three-way structure (openai-responses.ts
+        // :261-276). Only fires for reasoning-capable models. When an effort or
+        // summary is requested we emit the active branch; otherwise we emit a
+        // disabled `reasoning:{effort:off}` (unless the model maps `off` to
+        // explicit null, or the provider is github-copilot).
+        if model.reasoning {
+            let requestedLevel: ModelThinkingLevel? = options?.reasoning.map {
+                ModelThinkingLevel(reasoning: $0)
+            }
+            let hasEffort = requestedLevel != nil
+            let summary = options?.reasoningSummary
+            let hasSummary = summary != nil
+
+            if hasEffort || hasSummary {
+                // Remap the effort through `thinkingLevelMap` (e.g. a model that
+                // aliases `xhigh`), matching pi, instead of sending the raw
+                // level. Defaults to `medium` when only a summary was requested.
+                let effort: String = {
+                    if let lvl = requestedLevel {
+                        return resolveThinkingLevel(model, lvl) ?? lvl.rawValue
+                    }
+                    return "medium"
+                }()
+                var reasoning: [String: JSONValue] = ["effort": .string(effort)]
+                // `summary: auto` opts into reasoning-summary deltas on the
+                // stream (`response.reasoning_summary_text.delta`). `.omit`
+                // drops the key entirely so the reasoning block streams as
+                // start → end with no body.
+                switch summary {
+                case nil, .some(.auto): reasoning["summary"] = .string("auto")
+                case .some(.concise): reasoning["summary"] = .string("concise")
+                case .some(.detailed): reasoning["summary"] = .string("detailed")
+                case .some(.omit): break
+                }
+                root["reasoning"] = .object(reasoning)
+                // Required so encrypted reasoning round-trips across turns when
+                // the response isn't persisted server-side (`store: false`).
+                root["include"] = .array([.string("reasoning.encrypted_content")])
+            } else if model.provider != "github-copilot" {
+                // Disabled-reasoning branch. `thinkingLevelMap.off`:
+                // absent / explicit-null / string (matches Completions
+                // OpenAICompletionsProvider.swift:504-506). Explicit null means
+                // the model doesn't support a disabled state — omit entirely.
+                let offEntry = model.thinkingLevelMap?["off"]
+                let offIsExplicitNull = (offEntry != nil && offEntry! == nil)
+                if !offIsExplicitNull {
+                    let offString: String = {
+                        if let e = offEntry, let v = e { return v }
+                        return "none"
+                    }()
+                    root["reasoning"] = .object(["effort": .string(offString)])
+                }
+            }
         }
         if let meta = options?.metadata {
             root["metadata"] = .object(meta)
