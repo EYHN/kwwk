@@ -95,8 +95,10 @@ struct KwwkCLI {
           --subagents <list>          built-in subagents to enable:
                                       general,Explore,Plan,all, or none
           --no-subagents              disable built-in CLI subagents
-          --resume, --continue        resume the latest session for this
+          --continue                  resume the latest session for this
                                       directory (replays its transcript)
+          --resume                    interactively pick any session to resume
+                                      (across all projects)
           --session <id>              resume (or create) a specific session id
 
         Sessions are persisted to ~/.kwwk/sessions/<id>.jsonl as an
@@ -170,8 +172,9 @@ struct KwwkCLI {
     }
 
     /// Pull session resume flags out of argv:
-    ///   `--resume` / `--continue` → latest session for the current cwd;
-    ///   `--session <id>`          → a specific session id.
+    ///   `--continue`     → latest session for the current cwd;
+    ///   `--resume`       → interactively pick any session (all projects);
+    ///   `--session <id>` → a specific session id.
     /// Later flags win if more than one is present. Missing → `.none`.
     static func extractResume(_ argv: [String]) -> ([String], SessionResume) {
         var out: [String] = []
@@ -179,8 +182,11 @@ struct KwwkCLI {
         var i = 0
         while i < argv.count {
             switch argv[i] {
-            case "--resume", "--continue":
+            case "--continue":
                 resume = .latestForCwd
+                i += 1
+            case "--resume":
+                resume = .pickInteractive
                 i += 1
             case "--session":
                 guard i + 1 < argv.count else {
@@ -251,6 +257,15 @@ struct KwwkCLI {
         builtinSubagents: BuiltinSubagentSelection,
         resume: SessionResume = .none
     ) async {
+        // A picker can't run under -p (non-interactive). Use --session or
+        // --continue instead.
+        if resume == .pickInteractive {
+            FileHandle.standardError.write(Data(
+                "kwwk: --resume requires an interactive terminal; use --continue or --session <id> with -p\n".utf8
+            ))
+            Foundation.exit(2)
+        }
+
         let prompt: String
         if rest.isEmpty || rest == ["-"] {
             // Use fd 0 directly instead of `fileno(stdin)` — on Linux

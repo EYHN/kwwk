@@ -34,6 +34,57 @@ struct SettingsStoreTests {
         #expect(store.merged.telemetryOptOut == false)
     }
 
+    // MARK: corrupt-file handling + projectTrusted gating
+
+    @Test("malformed project file records an error and merges as empty")
+    func malformedProjectRecordsError() {
+        let dir = tempDir()
+        let g = dir.appendingPathComponent("global.json")
+        let p = dir.appendingPathComponent("project.json")
+        write(#"{"defaultModel":"g"}"#, to: g)
+        write("{ broken", to: p)
+        let store = SettingsStore.load(globalPath: g, projectPath: p, projectTrusted: true)
+        #expect(store.merged.defaultModel == "g")          // falls back to global
+        #expect(store.loadErrors.contains { $0.scope == .project })
+        #expect((try? String(contentsOf: p, encoding: .utf8)) == "{ broken")  // not rewritten
+    }
+
+    @Test("project settings are not loaded when project untrusted")
+    func untrustedSkipsProject() {
+        let dir = tempDir()
+        let g = dir.appendingPathComponent("global.json")
+        let p = dir.appendingPathComponent("project.json")
+        write(#"{"defaultModel":"g"}"#, to: g)
+        write(#"{"defaultModel":"p"}"#, to: p)
+        let store = SettingsStore.load(globalPath: g, projectPath: p, projectTrusted: false)
+        #expect(store.merged.defaultModel == "g")   // project "p" ignored
+        #expect(store.project == .empty)
+        #expect(store.loadErrors.isEmpty)           // untrusted skip is not an error
+    }
+
+    @Test("untrusted project does not even read a malformed project file")
+    func untrustedIgnoresMalformedProject() {
+        let dir = tempDir()
+        let g = dir.appendingPathComponent("global.json")
+        let p = dir.appendingPathComponent("project.json")
+        write(#"{"defaultModel":"g"}"#, to: g)
+        write("{ broken", to: p)
+        let store = SettingsStore.load(globalPath: g, projectPath: p, projectTrusted: false)
+        #expect(store.loadErrors.isEmpty)
+        #expect(store.project == .empty)
+    }
+
+    @Test("missing project file is not an error")
+    func missingProjectNoError() {
+        let dir = tempDir()
+        let g = dir.appendingPathComponent("global.json")
+        let p = dir.appendingPathComponent("does-not-exist.json")
+        write(#"{"defaultModel":"g"}"#, to: g)
+        let store = SettingsStore.load(globalPath: g, projectPath: p, projectTrusted: true)
+        #expect(store.loadErrors.isEmpty)
+        #expect(store.merged.defaultModel == "g")
+    }
+
     // MARK: deep-merge precedence
 
     @Test("project settings override global; unset keys fall through")

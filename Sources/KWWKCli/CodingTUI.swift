@@ -24,7 +24,19 @@ func runCodingTUIInternal(
     // Resolve session persistence up front: a fresh id by default, or a
     // stored transcript when `--resume` / `--session` was passed.
     let sessionStore = SessionStore()
-    let resolvedResume = await sessionStore.resolveResume(resume, cwd: cwd)
+    // `--resume` opens an interactive picker across all projects; resolve the
+    // user's choice to a concrete session id before loading. Cancelling exits
+    // cleanly (pi parity: "No session selected", exit 0).
+    var effectiveResume = resume
+    if resume == .pickInteractive {
+        if let chosen = await SessionPicker.choose(store: sessionStore) {
+            effectiveResume = .id(chosen)
+        } else {
+            FileHandle.standardError.write(Data("No session selected\n".utf8))
+            Foundation.exit(0)
+        }
+    }
+    let resolvedResume = await sessionStore.resolveResume(effectiveResume, cwd: cwd)
     let sessionId = resolvedResume.sessionId
 
     let agent = await makeCodingAgent(CodingAgentConfig(

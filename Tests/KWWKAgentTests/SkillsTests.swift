@@ -153,4 +153,58 @@ struct SkillsTests {
         #expect(prompt.contains("<available_skills>"))
         #expect(prompt.contains("<name>greeter</name>"))
     }
+
+    // MARK: - .gitignore honoring (pi parity)
+
+    private func writeSkill(_ name: String, under root: String) {
+        let dir = (root as NSString).appendingPathComponent(name)
+        let path = (dir as NSString).appendingPathComponent("SKILL.md")
+        write("""
+        ---
+        name: \(name)
+        description: Skill named \(name)
+        ---
+        Body for \(name).
+        """, to: path)
+    }
+
+    @Test("skill ignored by .gitignore in skills root is skipped")
+    func gitignoreSkipsSkill() {
+        let root = makeTempDir()
+        write("hidden-skill/\n", to: (root as NSString).appendingPathComponent(".gitignore"))
+        writeSkill("hidden-skill", under: root)
+        writeSkill("visible", under: root)
+
+        let (skills, _) = Skills.load(directories: [root])
+        #expect(skills.map(\.name).sorted() == ["visible"])
+    }
+
+    @Test("'!' negation re-includes a skill excluded by a broader pattern")
+    func ignoreNegationReincludes() {
+        let root = makeTempDir()
+        write("*\n!keep/\n", to: (root as NSString).appendingPathComponent(".gitignore"))
+        writeSkill("keep", under: root)
+        writeSkill("drop", under: root)
+
+        let (skills, _) = Skills.load(directories: [root])
+        #expect(skills.map(\.name) == ["keep"])
+    }
+
+    @Test("prefixIgnorePattern ports pi rules")
+    func prefixIgnorePatternRules() {
+        #expect(IgnoreMatcher.prefixIgnorePattern("\\#literal", prefix: "sub/") == "sub/#literal")
+        #expect(IgnoreMatcher.prefixIgnorePattern("!/foo", prefix: "sub/") == "!sub/foo")
+        #expect(IgnoreMatcher.prefixIgnorePattern("# comment", prefix: "") == nil)
+        #expect(IgnoreMatcher.prefixIgnorePattern("  ", prefix: "") == nil)
+        #expect(IgnoreMatcher.prefixIgnorePattern("name", prefix: "") == "name")
+    }
+
+    @Test("a *.ext pattern matches at any depth")
+    func ignoreFloatingGlob() {
+        let m = IgnoreMatcher()
+        m.add(["*.tmp"])
+        #expect(m.ignores("foo.tmp"))
+        #expect(m.ignores("a/b/foo.tmp"))
+        #expect(!m.ignores("foo.md"))
+    }
 }

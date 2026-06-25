@@ -204,6 +204,28 @@ public enum ConfigValue {
     }
 }
 
+/// Which configuration scope a settings file belongs to.
+public enum SettingsScope: String, Sendable, Equatable {
+    case global
+    case project
+}
+
+/// Recorded (not swallowed) error from loading a malformed settings file.
+/// Mirrors pi's `globalSettingsLoadError` / `projectSettingsLoadError`: a
+/// malformed file is treated as empty for the merge, but the error is surfaced
+/// so a host can warn — and a future writer can refuse to overwrite that scope.
+public struct SettingsLoadError: Error, Sendable, Equatable {
+    public let scope: SettingsScope
+    public let path: String
+    public let message: String
+
+    public init(scope: SettingsScope, path: String, message: String) {
+        self.scope = scope
+        self.path = path
+        self.message = message
+    }
+}
+
 /// Loads and deep-merges kwwk settings from a global and a project file. Ported
 /// from pi's `settings-manager.ts`: the global `~/.kwwk/settings.json` is the
 /// base, and a project `./.kwwk/settings.json` is layered on top (project wins).
@@ -219,11 +241,27 @@ public struct SettingsStore: Sendable {
     public let global: Settings
     /// The project settings as loaded (empty defaults when absent).
     public let project: Settings
+    /// Whether the project scope was trusted at load time. When false, the
+    /// project file is not read at all (pi parity) and `project == .empty`.
+    public let projectTrusted: Bool
+    /// Errors recorded while loading malformed files. Empty on a clean load.
+    /// A future settings writer MUST check this before overwriting a scope:
+    /// refuse to write `project` when `loadErrors.contains { $0.scope == .project }`
+    /// (mirrors pi's `saveProjectSettings` guard), and likewise for `global`.
+    public let loadErrors: [SettingsLoadError]
 
-    public init(merged: Settings, global: Settings, project: Settings) {
+    public init(
+        merged: Settings,
+        global: Settings,
+        project: Settings,
+        projectTrusted: Bool = true,
+        loadErrors: [SettingsLoadError] = []
+    ) {
         self.merged = merged
         self.global = global
         self.project = project
+        self.projectTrusted = projectTrusted
+        self.loadErrors = loadErrors
     }
 
     /// Default global settings path: `~/.kwwk/settings.json`.
@@ -244,23 +282,68 @@ public struct SettingsStore: Sendable {
     }
 
     /// Load + deep-merge from explicit file URLs. Missing files yield empty
-    /// defaults rather than throwing. A malformed file is treated as empty.
-    public static func load(globalPath: URL, projectPath: URL?) -> SettingsStore {
-        let global = loadFile(globalPath) ?? .empty
-        let project = projectPath.flatMap(loadFile) ?? .empty
+    /// defaults rather than throwing. A malformed file is treated as empty for
+    /// the merge but its error is recorded in `loadErrors` (not silently
+    /// dropped). When `projectTrusted` is false the project file is skipped
+    /// entirely (pi parity) — `project == .empty` and no error.
+    public static func load(
+        globalPath: URL,
+        projectPath: URL?,
+        projectTrusted: Bool = true
+    ) -> SettingsStore {
+        var loadErrors: [SettingsLoadError] = []
+
+        let (global, globalErr) = loadFileChecked(globalPath, scope: .global)
+        if let globalErr { loadErrors.append(globalErr) }
+
+        let project: Settings
+        if projectTrusted, let projectPath {
+            let (p, projErr) = loadFileChecked(projectPath, scope: .project)
+            project = p
+            if let projErr { loadErrors.append(projErr) }
+        } else {
+            project = .empty
+        }
+
         let merged = deepMerge(base: global, overrides: project)
-        return SettingsStore(merged: merged, global: global, project: project)
+        return SettingsStore(
+            merged: merged,
+            global: global,
+            project: project,
+            projectTrusted: projectTrusted,
+            loadErrors: loadErrors
+        )
     }
 
     /// Convenience: load from the default `~/.kwwk` global path and the project
     /// `.kwwk` directory under `cwd`.
     public static func load(
-        cwd: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        cwd: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
+        projectTrusted: Bool = true
     ) -> SettingsStore {
-        load(globalPath: defaultGlobalPath(), projectPath: projectPath(cwd: cwd))
+        load(
+            globalPath: defaultGlobalPath(),
+            projectPath: projectPath(cwd: cwd),
+            projectTrusted: projectTrusted
+        )
+    }
+
+    /// Decode a single settings file. Returns `(.empty, nil)` for a missing or
+    /// unreadable file (ok), and `(.empty, error)` for a malformed file — the
+    /// missing-vs-malformed distinction pi makes and the old `loadFile` lost.
+    static func loadFileChecked(_ url: URL, scope: SettingsScope)
+        -> (Settings, SettingsLoadError?) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return (.empty, nil) }
+        guard let data = try? Data(contentsOf: url) else { return (.empty, nil) }
+        do {
+            return (try JSONDecoder().decode(Settings.self, from: data), nil)
+        } catch {
+            return (.empty, SettingsLoadError(scope: scope, path: url.path, message: "\(error)"))
+        }
     }
 
     /// Decode a single settings file, or nil if missing/unreadable/malformed.
+    /// Retained for backward compatibility; prefer `loadFileChecked`.
     static func loadFile(_ url: URL) -> Settings? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONDecoder().decode(Settings.self, from: data)

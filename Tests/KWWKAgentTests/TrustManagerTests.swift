@@ -87,6 +87,42 @@ struct TrustManagerTests {
         #expect(mgr.isTrusted(project) == false)
     }
 
+    @Test("missing trust.json reads as empty, no error")
+    func missingIsEmpty() throws {
+        let (mgr, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(mgr.decision("/some/dir") == nil)
+        #expect(try mgr.decisionChecked("/some/dir") == nil)
+    }
+
+    @Test("malformed trust.json surfaces an error and does not clobber decisions")
+    func malformedSurfaces() throws {
+        let (mgr, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try "{ not json".write(to: mgr.storeURL, atomically: true, encoding: .utf8)
+
+        #expect(throws: TrustStoreError.self) { try mgr.decisionChecked("/x") }
+        // Write must refuse to clobber a malformed file.
+        #expect(throws: TrustStoreError.self) { try mgr.trustChecked("/x") }
+        // Original corrupt bytes still on disk.
+        #expect(try String(contentsOf: mgr.storeURL, encoding: .utf8) == "{ not json")
+        // Non-throwing API fails safe (untrusted) and records the error.
+        #expect(mgr.decision("/x") == nil)
+        #expect(mgr.isTrusted("/x") == false)
+        #expect(mgr.lastLoadError != nil)
+    }
+
+    @Test("null value in store is treated as no-decision, not an error")
+    func nullValueOk() throws {
+        let (mgr, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try #"{"/a": null, "/b": true}"#.write(to: mgr.storeURL, atomically: true, encoding: .utf8)
+        #expect(try mgr.decisionChecked("/a") == nil)
+        #expect(try mgr.decisionChecked("/b") == true)
+    }
+
     @Test("requiresPrompt true only when project has trust-requiring resources")
     func requiresPrompt() throws {
         let (mgr, dir) = tempStore()

@@ -58,9 +58,189 @@ public struct SkillDiagnostic: Sendable, Equatable {
     }
 }
 
+/// Minimal gitignore-style matcher: ordered rules, last match wins, `!`
+/// negation, dir-only patterns end in `/`. Ports pi's use of the `ignore` npm
+/// package over the subset of patterns skill authors actually use
+/// (`name`, `dir/`, `*.ext`, `**/x`, `!negate`). A `final class` so the same
+/// instance threads through recursion exactly like pi's shared matcher object.
+final class IgnoreMatcher {
+    private struct Rule {
+        let regex: NSRegularExpression
+        let negated: Bool
+        let dirOnly: Bool
+    }
+    private var rules: [Rule] = []
+
+    /// Add raw gitignore patterns (already prefix-adjusted). Each becomes one
+    /// ordered rule; invalid patterns are skipped.
+    func add(_ patterns: [String]) {
+        for raw in patterns {
+            var pattern = raw
+            var negated = false
+            if pattern.hasPrefix("!") {
+                negated = true
+                pattern.removeFirst()
+            }
+            var dirOnly = false
+            if pattern.hasSuffix("/") {
+                dirOnly = true
+                pattern.removeLast()
+            }
+            guard !pattern.isEmpty else { continue }
+            guard let regex = IgnoreMatcher.compile(pattern) else { continue }
+            rules.append(Rule(regex: regex, negated: negated, dirOnly: dirOnly))
+        }
+    }
+
+    /// Whether `relPath` (POSIX, relative to the root dir) is ignored. Dir
+    /// queries pass a trailing `/`. Later rules override earlier ones.
+    func ignores(_ relPath: String) -> Bool {
+        let isDir = relPath.hasSuffix("/")
+        let path = isDir ? String(relPath.dropLast()) : relPath
+        var matched = false
+        for rule in rules {
+            // A dir-only rule matches the directory itself and everything under
+            // it. For a non-dir query, test the path's ancestor segments too so
+            // a re-included directory (`!keep/`) also re-includes its contents
+            // (gitignore parity).
+            let target: String
+            if rule.dirOnly {
+                if isDir {
+                    target = path
+                } else if let slash = path.lastIndex(of: "/") {
+                    target = String(path[..<slash])     // parent dir of a file
+                } else {
+                    continue                              // top-level file, no dir match
+                }
+            } else {
+                target = path
+            }
+            let ns = target as NSString
+            if rule.regex.firstMatch(in: target, range: NSRange(location: 0, length: ns.length)) != nil {
+                matched = !rule.negated
+            }
+        }
+        return matched
+    }
+
+    /// Translate a gitignore glob into an anchored regex. Supports `*` (not
+    /// crossing `/`), `**` (crossing `/`), `?`, leading-`/` anchoring vs.
+    /// floating (a pattern without a slash matches at any depth).
+    private static func compile(_ pattern: String) -> NSRegularExpression? {
+        var p = pattern
+        // A leading slash anchors to the root; otherwise the pattern floats.
+        let anchored = p.hasPrefix("/")
+        if anchored { p.removeFirst() }
+        // gitignore: a pattern containing a (non-trailing) slash is anchored to
+        // root; a pattern with no slash matches at any depth.
+        let hasInnerSlash = p.contains("/")
+
+        var regex = ""
+        let chars = Array(p)
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            switch c {
+            case "*":
+                if i + 1 < chars.count && chars[i + 1] == "*" {
+                    // `**` — match across path separators.
+                    // Consume a following `/` so `**/x` also matches `x`.
+                    if i + 2 < chars.count && chars[i + 2] == "/" {
+                        regex += "(?:.*/)?"
+                        i += 3
+                    } else {
+                        regex += ".*"
+                        i += 2
+                    }
+                    continue
+                }
+                regex += "[^/]*"
+                i += 1
+            case "?":
+                regex += "[^/]"
+                i += 1
+            default:
+                regex += NSRegularExpression.escapedPattern(for: String(c))
+                i += 1
+            }
+        }
+
+        // Build the full anchored pattern.
+        let prefix: String
+        if anchored || hasInnerSlash {
+            prefix = "^"
+        } else {
+            // Floating: match at any depth.
+            prefix = "^(?:.*/)?"
+        }
+        // Allow matching a directory and everything beneath it.
+        let suffix = "(?:/.*)?$"
+        return try? NSRegularExpression(pattern: prefix + regex + suffix)
+    }
+
+    // MARK: - pi ports
+
+    /// Names of ignore files honored during discovery (pi `IGNORE_FILE_NAMES`).
+    static let ignoreFileNames = [".gitignore", ".ignore", ".fdignore"]
+
+    /// Port of pi's `prefixIgnorePattern`: trim, drop comments/empties, handle
+    /// `!`/`\!` and `\#`, strip a leading `/`, then prepend `prefix` (the dir's
+    /// path relative to the root, with a trailing `/`). Returns nil to drop.
+    static func prefixIgnorePattern(_ line: String, prefix: String) -> String? {
+        var pattern = line.trimmingCharacters(in: .whitespaces)
+        if pattern.isEmpty { return nil }
+        // Comment unless it starts with `\#`.
+        if pattern.hasPrefix("#") { return nil }
+        if pattern.hasPrefix("\\#") { pattern.removeFirst() }  // literal '#'
+
+        var negated = false
+        if pattern.hasPrefix("!") {
+            negated = true
+            pattern.removeFirst()
+        } else if pattern.hasPrefix("\\!") {
+            pattern.removeFirst()                              // literal '!'
+        }
+
+        if pattern.hasPrefix("/") { pattern.removeFirst() }    // anchor to dir root
+
+        pattern = prefix + pattern
+        return negated ? "!" + pattern : pattern
+    }
+
+    /// Read the ignore files in `dir` and add their rules to `matcher`.
+    static func addIgnoreRules(into matcher: IgnoreMatcher, dir: String, rootDir: String) {
+        let prefix = Skills.ignoreRelativePath(rootDir, dir)
+        for name in ignoreFileNames {
+            let path = (dir as NSString).appendingPathComponent(name)
+            guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            let normalized = raw
+                .replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+            let patterns = normalized
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .compactMap { prefixIgnorePattern(String($0), prefix: prefix) }
+            matcher.add(patterns)
+        }
+    }
+}
+
 public enum Skills {
     private static let maxNameLength = 64
     private static let maxDescriptionLength = 1024
+
+    /// Path of `path` relative to `root`, with a trailing `/` for non-root dirs.
+    /// Ports pi's `relativeEnvPath` (equal → "", has-prefix → suffix+"/",
+    /// else strip leading "/"). Returns "" for the root itself.
+    static func ignoreRelativePath(_ root: String, _ path: String) -> String {
+        if path == root { return "" }
+        let rootWithSlash = root.hasSuffix("/") ? root : root + "/"
+        if path.hasPrefix(rootWithSlash) {
+            return String(path.dropFirst(rootWithSlash.count)) + "/"
+        }
+        var p = path
+        if p.hasPrefix("/") { p.removeFirst() }
+        return p + "/"
+    }
 
     /// Default skill directories, in precedence order: project-local `.kwwk`,
     /// the user-global `~/.kwwk`, and a `.claude/skills` directory if the
@@ -96,7 +276,14 @@ public enum Skills {
         for dir in directories {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: dir, isDirectory: &isDir), isDir.boolValue else { continue }
-            let result = loadFromDirectory(dir, includeRootFiles: true)
+            // Fresh matcher per root dir; rootDir == dir so prefixes are
+            // relative to each root (pi parity).
+            let result = loadFromDirectory(
+                dir,
+                includeRootFiles: true,
+                ignore: IgnoreMatcher(),
+                rootDir: dir
+            )
             for skill in result.skills where seenNames.insert(skill.name).inserted {
                 skills.append(skill)
             }
@@ -107,23 +294,33 @@ public enum Skills {
 
     private static func loadFromDirectory(
         _ dir: String,
-        includeRootFiles: Bool
+        includeRootFiles: Bool,
+        ignore: IgnoreMatcher,
+        rootDir: String
     ) -> (skills: [Skill], diagnostics: [SkillDiagnostic]) {
         var skills: [Skill] = []
         var diagnostics: [SkillDiagnostic] = []
         let fm = FileManager.default
 
+        // Add this dir's ignore files before considering its entries.
+        IgnoreMatcher.addIgnoreRules(into: ignore, dir: dir, rootDir: rootDir)
+
         guard let entries = try? fm.contentsOfDirectory(atPath: dir).sorted() else {
             return (skills, diagnostics)
         }
 
-        // A directory containing SKILL.md is itself a skill; don't descend further.
+        // A directory containing a non-ignored SKILL.md is itself a skill; don't
+        // descend further. If SKILL.md is ignored, fall through to the general
+        // loop (pi parity).
         if entries.contains("SKILL.md") {
             let full = (dir as NSString).appendingPathComponent("SKILL.md")
-            let r = loadFromFile(full)
-            if let s = r.skill { skills.append(s) }
-            diagnostics.append(contentsOf: r.diagnostics)
-            return (skills, diagnostics)
+            let rel = ignoreRelativePath(rootDir, dir) + "SKILL.md"
+            if !ignore.ignores(rel) {
+                let r = loadFromFile(full)
+                if let s = r.skill { skills.append(s) }
+                diagnostics.append(contentsOf: r.diagnostics)
+                return (skills, diagnostics)
+            }
         }
 
         for entry in entries {
@@ -132,8 +329,17 @@ public enum Skills {
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: full, isDirectory: &isDir) else { continue }
 
+            let baseRel = ignoreRelativePath(rootDir, dir) + entry
+            let ignorePath = isDir.boolValue ? baseRel + "/" : baseRel
+            if ignore.ignores(ignorePath) { continue }
+
             if isDir.boolValue {
-                let r = loadFromDirectory(full, includeRootFiles: false)
+                let r = loadFromDirectory(
+                    full,
+                    includeRootFiles: false,
+                    ignore: ignore,
+                    rootDir: rootDir
+                )
                 skills.append(contentsOf: r.skills)
                 diagnostics.append(contentsOf: r.diagnostics)
             } else if includeRootFiles && entry.hasSuffix(".md") {

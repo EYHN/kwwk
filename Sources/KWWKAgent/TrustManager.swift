@@ -13,9 +13,24 @@ import Foundation
 /// user the first time an untrusted project is opened) is left to the CLI as a
 /// follow-up — see `TrustManager.requiresPrompt(for:)` for the predicate a host
 /// would use to decide whether to ask.
+/// Error surfaced when the trust store on disk is present but unreadable as a
+/// valid `{ "<path>": true|false|null }` map. Mirrors pi's `readTrustFile`
+/// throw behavior: a malformed store must NOT be silently treated as empty,
+/// because that would drop every previously-saved decision and re-prompt the
+/// user (and risk clobbering the file on the next write).
+public enum TrustStoreError: Error, Equatable {
+    case malformed(path: String, message: String)
+}
+
 public final class TrustManager {
     /// Location of the JSON store. Defaults to `~/.kwwk/trust.json`.
     public let storeURL: URL
+
+    /// The error from the most recent load, if the store was malformed. The
+    /// convenience (non-throwing) API fails safe and records the error here so
+    /// a CLI host can surface a one-line warning instead of silently behaving
+    /// as untrusted.
+    public private(set) var lastLoadError: TrustStoreError?
 
     public init(storeURL: URL? = nil) {
         if let storeURL {
@@ -41,43 +56,66 @@ public final class TrustManager {
     /// untrusted. Unknown directories (no entry anywhere up the chain) are
     /// untrusted.
     public func isTrusted(_ cwd: String) -> Bool {
-        nearestDecision(for: cwd) == true
+        decision(cwd) == true
     }
 
     /// The nearest explicit decision for `cwd`, or `nil` when no ancestor has an
     /// entry. Distinguishes "explicitly untrusted" (`false`) from "never
-    /// decided" (`nil`) so a host can decide whether to prompt.
+    /// decided" (`nil`) so a host can decide whether to prompt. Fails safe: a
+    /// malformed store returns `nil` (re-prompt) and records `lastLoadError`,
+    /// never silently auto-trusts.
     public func decision(_ cwd: String) -> Bool? {
-        nearestDecision(for: cwd)
+        (try? decisionChecked(cwd)) ?? nil
+    }
+
+    /// The nearest explicit decision for `cwd`, surfacing a malformed store as a
+    /// thrown `TrustStoreError` (so saved decisions are never silently dropped).
+    public func decisionChecked(_ cwd: String) throws -> Bool? {
+        let data = try readChecked()
+        return nearest(in: data, for: cwd)
     }
 
     /// Persist `cwd` as trusted.
     public func trust(_ cwd: String) {
-        set(cwd, decision: true)
+        try? set(cwd, decision: true)
     }
 
     /// Persist `cwd` as explicitly untrusted.
     public func distrust(_ cwd: String) {
-        set(cwd, decision: false)
+        try? set(cwd, decision: false)
+    }
+
+    /// Persist `cwd` as trusted, surfacing a malformed-store error (the write is
+    /// refused so the corrupt file is never clobbered). pi parity.
+    public func trustChecked(_ cwd: String) throws {
+        try set(cwd, decision: true)
     }
 
     /// Remove any explicit decision for `cwd` (it reverts to inheriting from an
     /// ancestor, or to untrusted).
     public func forget(_ cwd: String) {
-        var data = read()
-        data.removeValue(forKey: TrustManager.normalize(cwd))
-        write(data)
+        try? mutate { $0.removeValue(forKey: TrustManager.normalize(cwd)) }
     }
 
     /// Set (or clear, when `decision == nil`) the stored decision for `cwd`.
-    public func set(_ cwd: String, decision: Bool?) {
-        var data = read()
+    /// Reads-before-write through the checked loader so a malformed file is not
+    /// overwritten (mirrors pi); throws `TrustStoreError` in that case.
+    public func set(_ cwd: String, decision: Bool?) throws {
         let key = TrustManager.normalize(cwd)
-        if let decision {
-            data[key] = decision
-        } else {
-            data.removeValue(forKey: key)
+        try mutate { data in
+            if let decision {
+                data[key] = decision
+            } else {
+                data.removeValue(forKey: key)
+            }
         }
+    }
+
+    /// Read-modify-write helper. Reads through the checked loader (so a corrupt
+    /// store throws and is never clobbered), applies `f`, then writes.
+    private func mutate(_ f: (inout [String: Bool]) -> Void) throws {
+        var data = try readChecked()
+        f(&data)
         write(data)
     }
 
@@ -116,17 +154,43 @@ public final class TrustManager {
 
     // MARK: - Storage
 
-    private func read() -> [String: Bool] {
-        guard let data = try? Data(contentsOf: storeURL) else { return [:] }
-        // The on-disk shape is `{ "/abs/path": true|false }`. `null` values
-        // (pi writes them transiently) are treated as "no decision" → dropped.
-        guard let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+    /// Read the store, distinguishing "missing" (→ empty, ok) from "malformed"
+    /// (→ throws `TrustStoreError`). Mirrors pi's `readTrustFile`: a corrupt file
+    /// must not collapse to `{}`. Records `lastLoadError` as a side-effect so the
+    /// non-throwing API can surface it.
+    private func readChecked() throws -> [String: Bool] {
+        // Missing / unreadable file → empty, ok (matches pi missing→{}).
+        guard FileManager.default.fileExists(atPath: storeURL.path) else {
+            lastLoadError = nil
             return [:]
+        }
+        guard let data = try? Data(contentsOf: storeURL) else {
+            lastLoadError = nil
+            return [:]
+        }
+        func fail(_ message: String) -> TrustStoreError {
+            let err = TrustStoreError.malformed(path: storeURL.path, message: message)
+            lastLoadError = err
+            return err
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) else {
+            throw fail("invalid JSON")
+        }
+        // Arrays / scalars are not a valid store shape.
+        guard let raw = obj as? [String: Any] else {
+            throw fail("expected an object")
         }
         var out: [String: Bool] = [:]
         for (key, value) in raw {
-            if let b = value as? Bool { out[key] = b }
+            if let b = value as? Bool {
+                out[key] = b
+            } else if value is NSNull {
+                continue                       // pi allows null (= no decision)
+            } else {
+                throw fail("value for \"\(key)\" must be true, false, or null")
+            }
         }
+        lastLoadError = nil
         return out
     }
 
@@ -152,10 +216,9 @@ public final class TrustManager {
 
     // MARK: - Lookup helpers
 
-    /// Walk from `cwd` up to the filesystem root, returning the decision of the
-    /// nearest directory with an explicit entry.
-    private func nearestDecision(for cwd: String) -> Bool? {
-        let data = read()
+    /// Walk from `cwd` up to the filesystem root within `data`, returning the
+    /// decision of the nearest directory with an explicit entry.
+    private func nearest(in data: [String: Bool], for cwd: String) -> Bool? {
         var current = TrustManager.normalize(cwd)
         while true {
             if let value = data[current] { return value }

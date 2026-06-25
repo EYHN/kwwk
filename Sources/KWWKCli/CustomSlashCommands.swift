@@ -16,8 +16,18 @@ import KWWKAgent
 struct PromptTemplateCommand: Equatable {
     let name: String
     let description: String
+    /// Optional argument hint from frontmatter `argument-hint:` (e.g. `<path>`).
+    /// Only set when present and non-empty (pi parity).
+    let argumentHint: String?
     /// Raw template body (frontmatter stripped).
     let body: String
+
+    init(name: String, description: String, argumentHint: String? = nil, body: String) {
+        self.name = name
+        self.description = description
+        self.argumentHint = argumentHint
+        self.body = body
+    }
 
     /// Render the template against a raw argument string. The string is split
     /// shell-style (single/double quotes group, whitespace separates) before
@@ -134,20 +144,22 @@ enum PromptTemplate {
     // MARK: - Frontmatter
 
     /// Split optional leading YAML frontmatter (a `---` fenced block) from the
-    /// markdown body. We only need the `description:` line, so this is a minimal
-    /// key/value reader rather than a full YAML parser. Returns the parsed
-    /// `description` (if any) and the trimmed body.
-    static func splitFrontmatter(_ raw: String) -> (description: String?, body: String) {
+    /// markdown body. We only need the `description:` and `argument-hint:` lines,
+    /// so this is a minimal key/value reader rather than a full YAML parser.
+    /// Returns the parsed `description`/`argumentHint` (if any) and the trimmed
+    /// body.
+    static func splitFrontmatter(_ raw: String)
+        -> (description: String?, argumentHint: String?, body: String) {
         let normalized = raw
             .replacingOccurrences(of: "\r\n", with: "\n")
             .replacingOccurrences(of: "\r", with: "\n")
         guard normalized.hasPrefix("---") else {
-            return (nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
+            return (nil, nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         // Find the closing fence: a line that is exactly `---` after the opener.
         let afterOpener = normalized.dropFirst(3)
         guard let closeRange = afterOpener.range(of: "\n---") else {
-            return (nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
+            return (nil, nil, normalized.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         let yaml = String(afterOpener[afterOpener.startIndex..<closeRange.lowerBound])
         // Body starts after the closing `---` line.
@@ -155,20 +167,25 @@ enum PromptTemplate {
         if body.hasPrefix("---") { body.removeFirst(3) }
         body = body.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // Strip a `key:` prefix (case-insensitively) and unquote the value.
+        func value(of key: String, in line: String) -> String? {
+            guard line.lowercased().hasPrefix(key.lowercased()) else { return nil }
+            var v = String(line.dropFirst(key.count)).trimmingCharacters(in: .whitespaces)
+            if (v.hasPrefix("\"") && v.hasSuffix("\"") && v.count >= 2)
+                || (v.hasPrefix("'") && v.hasSuffix("'") && v.count >= 2) {
+                v = String(v.dropFirst().dropLast())
+            }
+            return v
+        }
+
         var description: String?
+        var argumentHint: String?
         for line in yaml.split(separator: "\n", omittingEmptySubsequences: true) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.lowercased().hasPrefix("description:") else { continue }
-            var value = String(trimmed.dropFirst("description:".count))
-                .trimmingCharacters(in: .whitespaces)
-            if (value.hasPrefix("\"") && value.hasSuffix("\"") && value.count >= 2)
-                || (value.hasPrefix("'") && value.hasSuffix("'") && value.count >= 2) {
-                value = String(value.dropFirst().dropLast())
-            }
-            description = value
-            break
+            if let v = value(of: "description:", in: trimmed) { description = v }
+            else if let v = value(of: "argument-hint:", in: trimmed) { argumentHint = v }
         }
-        return (description, body)
+        return (description, argumentHint, body)
     }
 
     /// Build a `PromptTemplateCommand` from a file's raw content. The command
@@ -176,7 +193,7 @@ enum PromptTemplate {
     /// frontmatter `description` is present, the first non-empty body line is
     /// used (truncated), matching pi.
     static func makeCommand(name: String, rawContent: String) -> PromptTemplateCommand {
-        let (descFromFm, body) = splitFrontmatter(rawContent)
+        let (descFromFm, hintFromFm, body) = splitFrontmatter(rawContent)
         var description = descFromFm ?? ""
         if description.isEmpty {
             if let first = body.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) })
@@ -184,7 +201,14 @@ enum PromptTemplate {
                 description = first.count > 60 ? String(first.prefix(60)) + "..." : first
             }
         }
-        return PromptTemplateCommand(name: name, description: description, body: body)
+        // pi only sets argumentHint when present and non-empty.
+        let argumentHint = (hintFromFm?.isEmpty == false) ? hintFromFm : nil
+        return PromptTemplateCommand(
+            name: name,
+            description: description,
+            argumentHint: argumentHint,
+            body: body
+        )
     }
 }
 
@@ -233,11 +257,15 @@ enum CustomSlashCommandLoader {
         for cmd in discovered {
             if registry.find(cmd.name) != nil { continue }
             let template = cmd
+            let baseDesc = cmd.description.isEmpty
+                ? "Custom prompt command"
+                : cmd.description
+            // Surface the argument hint inline so autocomplete shows expected
+            // args (SlashCommand has no dedicated hint field).
+            let desc = cmd.argumentHint.map { "\($0) — \(baseDesc)" } ?? baseDesc
             registry.register(SlashCommand(
                 name: cmd.name,
-                description: cmd.description.isEmpty
-                    ? "Custom prompt command"
-                    : cmd.description,
+                description: desc,
                 handler: { ctx, args in
                     let rendered = template.render(args: args)
                     let agent = ctx.agent

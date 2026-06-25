@@ -11,7 +11,13 @@ public enum SessionResume: Sendable, Hashable {
     case none
     /// Resume the most-recently-active session whose `cwd` matches the run's
     /// working directory. Falls back to a fresh session if none exist.
+    /// Backs `--continue`.
     case latestForCwd
+    /// Interactively pick any session across all projects. Backs `--resume`.
+    /// The agent layer cannot run a TUI, so `resolveResume` degrades this to a
+    /// fresh session; the CLI layer resolves the user's pick to `.id(...)`
+    /// before calling `resolveResume`.
+    case pickInteractive
     /// Resume a specific session by id.
     case id(String)
 }
@@ -59,6 +65,11 @@ extension SessionStore {
     ) async -> ResolvedResume {
         switch resume {
         case .none:
+            return ResolvedResume(sessionId: freshId)
+
+        case .pickInteractive:
+            // No UI at this layer: degrade to a fresh session. Interactive
+            // callers resolve the user's pick to `.id(...)` before getting here.
             return ResolvedResume(sessionId: freshId)
 
         case .latestForCwd:

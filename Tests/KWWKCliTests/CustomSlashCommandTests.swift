@@ -96,6 +96,27 @@ struct PromptTemplateDiscoveryTests {
         #expect(cmd.body == "Please summarize $1.")
     }
 
+    @Test("argument-hint is parsed from frontmatter and exposed")
+    func argumentHintParsed() {
+        let raw = """
+        ---
+        description: "Summarize a file"
+        argument-hint: <path>
+        ---
+        Please summarize $1.
+        """
+        let cmd = PromptTemplate.makeCommand(name: "summarize", rawContent: raw)
+        #expect(cmd.argumentHint == "<path>")
+        #expect(cmd.description == "Summarize a file")
+        #expect(cmd.body == "Please summarize $1.")
+    }
+
+    @Test("missing argument-hint yields nil, not empty string")
+    func argumentHintAbsent() {
+        let cmd = PromptTemplate.makeCommand(name: "greet", rawContent: "Say hi to $1.")
+        #expect(cmd.argumentHint == nil)
+    }
+
     @Test("no frontmatter falls back to first body line as description")
     func noFrontmatter() {
         let cmd = PromptTemplate.makeCommand(
