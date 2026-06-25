@@ -339,4 +339,64 @@ struct OpenAICompletionsTests {
         let userCache = userContent?.first?["cache_control"] as? [String: Any]
         #expect(userCache?["ttl"] as? String == "1h")
     }
+
+    @Test("anthropic cache_control endpoint does not also emit prompt_cache_key")
+    func anthropicCacheExcludesNativeCache() async throws {
+        var model = Self.model
+        model.provider = "openrouter"
+        model.baseUrl = "https://openrouter.ai/api"
+        var compat = ModelCompat()
+        compat.cacheControlFormat = "anthropic"
+        compat.supportsLongCacheRetention = true
+        model.compat = compat
+
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(cacheRetention: .long, sessionId: "sess-123")
+        )
+        await Self.waitForRequest(client)
+        let json = try Self.decodeBody(client)
+        // anthropic cache_control applied …
+        let messages = json["messages"] as? [[String: Any]]
+        let userContent = messages?.last?["content"] as? [[String: Any]]
+        #expect(userContent?.first?["cache_control"] != nil)
+        // … but the conflicting OpenAI-native fields are NOT mixed in.
+        #expect(json["prompt_cache_key"] == nil)
+        #expect(json["prompt_cache_retention"] == nil)
+    }
+
+    @Test("assistant thinking round-trips as reasoning_content, not a signature key")
+    func thinkingRoundTripsAsReasoningContent() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [
+                .thinking(ThinkingContent(thinking: "deduced", thinkingSignature: "sig-xyz")),
+                .text(TextContent(text: "answer")),
+            ],
+            api: "openai-completions",
+            provider: "openai",
+            model: "gpt-4o-mini",
+            stopReason: .stop
+        )
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [
+                .user(UserMessage(text: "q")),
+                .assistant(assistant),
+                .user(UserMessage(text: "follow up")),
+            ]),
+            options: nil
+        )
+        await Self.waitForRequest(client)
+        let json = try Self.decodeBody(client)
+        let messages = json["messages"] as? [[String: Any]] ?? []
+        let assistantEntry = messages.first { ($0["role"] as? String) == "assistant" }
+        #expect(assistantEntry?["reasoning_content"] as? String == "deduced")
+        // The signature value must never become a JSON field name.
+        #expect(assistantEntry?["sig-xyz"] == nil)
+    }
 }

@@ -66,34 +66,44 @@ enum PromptTemplate {
         return args
     }
 
-    /// Substitute `$1`/`$@`/`$ARGUMENTS`/`${@:N}`/`${@:N:L}` placeholders.
+    /// Substitute `${N:-default}`/`${@:N}`/`${@:N:L}`/`$@`/`$ARGUMENTS`/`$N`
+    /// placeholders in a single left-to-right pass, matching pi: substituted
+    /// text is never re-scanned, so an arg value containing `$@`/`$1` can't be
+    /// expanded a second time.
     static func substitute(_ content: String, args: [String]) -> String {
-        var result = content
-
-        // `${@:N}` and `${@:N:L}` — handle the slice form before the bare
-        // numeric `$1` form so the `{...}` syntax isn't half-consumed.
-        result = replace(in: result, pattern: #"\$\{@:(\d+)(?::(\d+))?\}"#) { groups in
-            guard let start1 = Int(groups[1]) else { return "" }
-            let start = max(0, start1 - 1)
-            if start >= args.count { return "" }
-            if groups.count > 2, !groups[2].isEmpty, let len = Int(groups[2]) {
-                let end = min(args.count, start + max(0, len))
-                return args[start..<end].joined(separator: " ")
-            }
-            return args[start...].joined(separator: " ")
-        }
-
-        // `$1`, `$2`, …
-        result = replace(in: result, pattern: #"\$(\d+)"#) { groups in
-            guard let n = Int(groups[1]), n >= 1, n <= args.count else { return "" }
+        let all = args.joined(separator: " ")
+        // Treat a missing OR empty positional as absent for the `${N:-default}`
+        // form (pi semantics).
+        func positionalOrNil(_ n: Int) -> String? {
+            guard n >= 1, n <= args.count, !args[n - 1].isEmpty else { return nil }
             return args[n - 1]
         }
-
-        // `$@` and `$ARGUMENTS` — all args, space-joined.
-        let all = args.joined(separator: " ")
-        result = result.replacingOccurrences(of: "$ARGUMENTS", with: all)
-        result = result.replacingOccurrences(of: "$@", with: all)
-        return result
+        // Alternatives, ordered most-specific first: ${N:-default}, ${@:N:L},
+        // $ARGUMENTS/$@, $N.
+        let pattern = #"\$\{(\d+):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@)|\$(\d+)"#
+        return replace(in: content, pattern: pattern) { g in
+            // ${N:-default}
+            if !g[1].isEmpty, let n = Int(g[1]) {
+                return positionalOrNil(n) ?? g[2]
+            }
+            // ${@:N} / ${@:N:L}
+            if !g[3].isEmpty, let start1 = Int(g[3]) {
+                let start = max(0, start1 - 1)
+                if start >= args.count { return "" }
+                if !g[4].isEmpty, let len = Int(g[4]) {
+                    let end = min(args.count, start + max(0, len))
+                    return args[start..<end].joined(separator: " ")
+                }
+                return args[start...].joined(separator: " ")
+            }
+            // $ARGUMENTS / $@
+            if !g[5].isEmpty { return all }
+            // $N (out-of-range → empty string)
+            if !g[6].isEmpty, let n = Int(g[6]), n >= 1, n <= args.count {
+                return args[n - 1]
+            }
+            return ""
+        }
     }
 
     /// Regex replace where the closure receives capture groups (index 0 is the
@@ -184,13 +194,19 @@ enum CustomSlashCommandLoader {
     /// Discover commands from project (`<cwd>/.kwwk/commands`) and user
     /// (`~/.kwwk/commands`) directories. Project entries win on name collisions
     /// (loaded last). Non-`.md` files and unreadable files are skipped.
-    static func discover(cwd: String) -> [PromptTemplateCommand] {
+    ///
+    /// Project-local commands are loaded only when `includeProject` is true. The
+    /// caller gates this on `TrustManager.isTrusted(cwd)` so an untrusted project
+    /// can't inject a `.kwwk/commands/*.md` whose template is silently submitted
+    /// to the model. User-level commands are always loaded.
+    static func discover(cwd: String, includeProject: Bool = true) -> [PromptTemplateCommand] {
         var byName: [String: PromptTemplateCommand] = [:]
         // User dir first, project dir second so project overrides user.
         let userDir = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".kwwk/commands")
         let projectDir = (cwd as NSString).appendingPathComponent(".kwwk/commands")
-        for dir in [userDir, projectDir] {
+        let dirs = includeProject ? [userDir, projectDir] : [userDir]
+        for dir in dirs {
             for cmd in loadFromDirectory(dir) {
                 byName[cmd.name] = cmd
             }
@@ -209,9 +225,10 @@ enum CustomSlashCommandLoader {
     static func register(
         into registry: SlashCommandRegistry,
         cwd: String,
+        trustProject: Bool = true,
         commands: [PromptTemplateCommand]? = nil
     ) -> [PromptTemplateCommand] {
-        let discovered = commands ?? discover(cwd: cwd)
+        let discovered = commands ?? discover(cwd: cwd, includeProject: trustProject)
         var registered: [PromptTemplateCommand] = []
         for cmd in discovered {
             if registry.find(cmd.name) != nil { continue }

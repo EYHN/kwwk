@@ -111,6 +111,16 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             "content-type": "application/json",
             "accept": "application/vnd.amazon.eventstream",
         ]
+        // Merge caller-supplied headers BEFORE signing so SigV4 covers them, and
+        // drop reserved headers that would corrupt the signature or routing.
+        // Previously these were applied after signing, leaving them unsigned and
+        // able to clobber `authorization`/`host`. (pi signs custom headers and
+        // strips `x-amz-*`/`authorization`/`host`.)
+        for (k, v) in options?.headers ?? [:] {
+            let lk = k.lowercased()
+            if lk == "authorization" || lk == "host" || lk.hasPrefix("x-amz-") { continue }
+            headers[k] = v
+        }
         if let bearer {
             // Bedrock API-key auth: skip SigV4, send a bearer token.
             headers["authorization"] = "Bearer \(bearer)"
@@ -125,7 +135,6 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 extraHeaders: headers
             )
         }
-        for (k, v) in options?.headers ?? [:] { headers[k] = v }
 
         do {
             let (response, stream) = try await client.stream(
@@ -316,7 +325,10 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             }
             root["toolConfig"] = toolConfig
         }
-        if let reasoning = options?.reasoning {
+        // Only Anthropic Claude models accept the `thinking` field via Bedrock
+        // Converse; injecting it for Nova/Llama/Titan/etc. is a 400. (pi gates
+        // this on `isAnthropicClaudeModel`.)
+        if let reasoning = options?.reasoning, isAnthropicClaudeModel(model) {
             var extras: [String: Any] = ["thinking": ["type": "enabled"]]
             if let budget = options?.thinkingBudgets?.budget(for: reasoning) {
                 var thinking = extras["thinking"] as? [String: Any] ?? [:]
@@ -326,6 +338,13 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             root["additionalModelRequestFields"] = extras
         }
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    /// Whether a Bedrock model is an Anthropic Claude model (plain id, regional
+    /// `us.`/`eu.`/`apac.` prefix, or inference-profile ARN all carry the name).
+    private static func isAnthropicClaudeModel(_ model: Model) -> Bool {
+        let id = model.id.lowercased()
+        return id.contains("claude") || id.contains("anthropic")
     }
 
     /// Builds the `cachePoint` content block. `{"cachePoint":{"type":"default"}}`,

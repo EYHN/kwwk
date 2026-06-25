@@ -84,7 +84,10 @@ public final class MistralConversationsProvider: APIProvider, @unchecked Sendabl
     /// Ported from pi `deriveMistralToolCallId`: keep an already-valid 9-char
     /// alphanumeric id as-is; otherwise hash a (seed[:attempt]) to 9 chars.
     static func derive(_ id: String, attempt: Int) -> String {
-        let normalized = String(id.filter { $0.isLetter || $0.isNumber })
+        // ASCII alphanumerics only, matching pi's `[^a-zA-Z0-9]` strip — Swift's
+        // `isLetter`/`isNumber` would keep Unicode letters/digits that Mistral
+        // rejects in a tool-call id.
+        let normalized = String(id.filter { $0.isASCII && ($0.isLetter || $0.isNumber) })
         if attempt == 0, normalized.count == toolCallIdLength { return normalized }
         let seedBase = normalized.isEmpty ? id : normalized
         let seed = attempt == 0 ? seedBase : "\(seedBase):\(attempt)"

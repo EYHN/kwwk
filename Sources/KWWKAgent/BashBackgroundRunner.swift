@@ -106,6 +106,7 @@ enum BashRunnerImpl {
         cancellation.onCancel { _ in control.terminate() }
 
         let status = spawned.wait()
+        control.markFinished()
 
         return BashProcessOutcome.from(
             status: status,
@@ -274,6 +275,7 @@ final class BashProcessControl: @unchecked Sendable {
     private var _terminated = false
     private var _didCancel = false
     private var _didTimeOut = false
+    private var _finished = false
 
     init(pid: pid_t) { self.pid = pid }
 
@@ -282,6 +284,12 @@ final class BashProcessControl: @unchecked Sendable {
     var didCancel: Bool { lock.withLock { _didCancel } }
     var didTimeOut: Bool { lock.withLock { _didTimeOut } }
 
+    /// Mark the child as reaped (`waitpid` returned). After this the pid/pgid can
+    /// be recycled by the OS, so any pending SIGKILL escalation must be
+    /// suppressed — otherwise the delayed `killpg` could hit an unrelated
+    /// process group that happens to inherit the recycled id.
+    func markFinished() { lock.withLock { _finished = true } }
+
     func terminate() {
         let pid: pid_t = lock.withLock {
             if _terminated { return 0 }
@@ -289,7 +297,7 @@ final class BashProcessControl: @unchecked Sendable {
             _didCancel = true
             return self.pid
         }
-        Self.killTreeWithEscalation(pid)
+        escalate(pid)
     }
 
     func timeoutAndTerminate() {
@@ -299,17 +307,19 @@ final class BashProcessControl: @unchecked Sendable {
             _didTimeOut = true
             return self.pid
         }
-        Self.killTreeWithEscalation(pid)
+        escalate(pid)
     }
 
     /// Signal the whole process group, then escalate to SIGKILL if it survives.
     /// `SpawnedBashProcess` creates a fresh group whose id is the shell pid.
-    private static func killTreeWithEscalation(_ pid: pid_t) {
+    private func escalate(_ pid: pid_t) {
         guard pid > 0 else { return }
-        killTree(pid, SIGTERM)
-        // Grace period, then SIGKILL anything still alive (harmless if gone).
-        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
-            killTree(pid, SIGKILL)
+        Self.killTree(pid, SIGTERM)
+        // Grace period, then SIGKILL anything still alive — but only if the child
+        // hasn't been reaped meanwhile, to avoid signalling a recycled pid/pgid.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            guard let self, self.lock.withLock({ !self._finished }) else { return }
+            Self.killTree(pid, SIGKILL)
         }
     }
 

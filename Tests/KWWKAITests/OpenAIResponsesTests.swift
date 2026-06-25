@@ -223,12 +223,32 @@ struct OpenAIResponsesTests {
         #expect(json?["tool_choice"] as? String == "required")
         let reasoning = json?["reasoning"] as? [String: Any]
         #expect(reasoning?["effort"] as? String == "medium")
+        // store defaults to false (pi parity), and reasoning requests opt into
+        // encrypted-reasoning round-tripping.
+        #expect(json?["store"] as? Bool == false)
+        #expect(json?["include"] as? [String] == ["reasoning.encrypted_content"])
         let input = json?["input"] as? [[String: Any]]
         #expect(input?.first?["type"] as? String == "message")
         #expect(input?.first?["role"] as? String == "user")
         let tools = json?["tools"] as? [[String: Any]]
         #expect(tools?.first?["type"] as? String == "function")
         #expect(tools?.first?["name"] as? String == "calc")
+    }
+
+    @Test("prompt_cache_key is clamped to 64 chars")
+    func cacheKeyClamped() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let longId = String(repeating: "x", count: 100)
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: longId)
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        #expect((json?["prompt_cache_key"] as? String)?.count == 64)
     }
 
     @Test("represents tool_result as function_call_output in the input array")

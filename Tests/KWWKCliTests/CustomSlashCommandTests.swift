@@ -46,6 +46,21 @@ struct PromptTemplateSubstitutionTests {
         #expect(PromptTemplate.substitute("x=${@:5}", args: args) == "x=")
     }
 
+    @Test("${N:-default} uses default when arg missing or empty")
+    func defaultValue() {
+        #expect(PromptTemplate.substitute("m=${2:-fallback}", args: ["only"]) == "m=fallback")
+        #expect(PromptTemplate.substitute("m=${1:-fallback}", args: ["given"]) == "m=given")
+        #expect(PromptTemplate.substitute("m=${1:-fallback}", args: [""]) == "m=fallback")
+    }
+
+    @Test("substituted arg values are not re-expanded")
+    func noReentrantExpansion() {
+        // An arg whose value is literally `$@` must not get expanded again.
+        let args = PromptTemplate.parseArgs(#""$@" tail"#)
+        let out = PromptTemplate.substitute("$1 then $@", args: args)
+        #expect(out == "$@ then $@ tail")
+    }
+
     @Test("quoted args group whitespace")
     func quotedArgs() {
         let args = PromptTemplate.parseArgs(#"  "hello world"  'foo bar' baz "#)
@@ -107,5 +122,24 @@ struct PromptTemplateDiscoveryTests {
         #expect(loaded.count == 1)
         #expect(loaded.first?.name == "alpha")
         #expect(loaded.first?.render(args: "thing") == "Do thing")
+    }
+
+    @Test("discover skips project-local commands when project is untrusted")
+    func discoverGatesProjectOnTrust() throws {
+        let cwd = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-proj-\(UUID().uuidString.prefix(8))")
+        let cmds = cwd.appendingPathComponent(".kwwk/commands")
+        try FileManager.default.createDirectory(at: cmds, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: cwd) }
+        // Unique name so it can't collide with a real ~/.kwwk/commands entry.
+        let name = "proj\(UUID().uuidString.prefix(6))"
+        try "Run $1".write(to: cmds.appendingPathComponent("\(name).md"),
+                           atomically: true, encoding: .utf8)
+
+        let trusted = CustomSlashCommandLoader.discover(cwd: cwd.path, includeProject: true)
+        #expect(trusted.contains { $0.name == name })
+
+        let untrusted = CustomSlashCommandLoader.discover(cwd: cwd.path, includeProject: false)
+        #expect(!untrusted.contains { $0.name == name })
     }
 }

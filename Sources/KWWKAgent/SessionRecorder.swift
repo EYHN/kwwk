@@ -22,6 +22,9 @@ public final class SessionRecorder: @unchecked Sendable {
     private let lock = NSLock()
     /// Number of transcript messages already flushed to disk.
     private var persistedCount: Int
+    /// Tail of the serialized append chain. Each flush enqueues its write after
+    /// the previous one so concurrent events can't reorder the on-disk JSONL.
+    private var appendChain: Task<Void, Never>?
 
     /// - Parameters:
     ///   - persistedCount: messages already on disk (non-zero when resuming an
@@ -65,19 +68,33 @@ public final class SessionRecorder: @unchecked Sendable {
 
     /// Append any transcript messages not yet on disk.
     public func flush(messages: [Message]) async {
-        let tail: [Message] = lock.withLock {
-            guard messages.count > persistedCount else { return [] }
-            let slice = Array(messages[persistedCount...])
+        // Extract the new tail AND enqueue its append under a single lock so the
+        // slice order and the write order are decided together. The append task
+        // awaits the previous one, guaranteeing FIFO on-disk ordering even when
+        // `messageEnd`/`turnEnd` fire concurrently.
+        let work: Task<Void, Never>? = lock.withLock {
+            guard messages.count > persistedCount else { return nil }
+            let tail = Array(messages[persistedCount...])
             persistedCount = messages.count
-            return slice
+            let previous = appendChain
+            let store = self.store
+            let sessionId = self.sessionId
+            let cwd = self.cwd
+            let model = self.model
+            let provider = self.provider
+            let next = Task<Void, Never> {
+                await previous?.value
+                try? await store.append(
+                    id: sessionId,
+                    cwd: cwd,
+                    messages: tail,
+                    model: model,
+                    provider: provider
+                )
+            }
+            appendChain = next
+            return next
         }
-        guard !tail.isEmpty else { return }
-        try? await store.append(
-            id: sessionId,
-            cwd: cwd,
-            messages: tail,
-            model: model,
-            provider: provider
-        )
+        await work?.value
     }
 }

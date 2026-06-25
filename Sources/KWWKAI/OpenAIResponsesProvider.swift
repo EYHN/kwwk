@@ -697,10 +697,18 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             // requested `effort`, but the reasoning block streams as
             // start → end with no body — so the UI has nothing to show
             // under `[thinking]`.
+            //
+            // Remap the effort through `thinkingLevelMap` (e.g. a model that
+            // aliases `xhigh`), matching pi, instead of sending the raw level.
+            let effort = resolveThinkingLevel(model, ModelThinkingLevel(reasoning: reasoning))
+                ?? reasoning.rawValue
             root["reasoning"] = .object([
-                "effort": .string(reasoning.rawValue),
+                "effort": .string(effort),
                 "summary": .string("auto"),
             ])
+            // Required so encrypted reasoning round-trips across turns when the
+            // response isn't persisted server-side (`store: false`).
+            root["include"] = .array([.string("reasoning.encrypted_content")])
         }
         if let meta = options?.metadata {
             root["metadata"] = .object(meta)
@@ -709,12 +717,17 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         // `prompt_cache_key`, and opt into 24h retention on `.long` when the
         // provider supports it. Skipped entirely on `.none`.
         let retention = options?.cacheRetention ?? .short
-        if retention != .none, let sid = options?.sessionId, !sid.isEmpty {
+        if retention != .none,
+           let sid = OpenAICompletionsProvider.clampOpenAIPromptCacheKey(options?.sessionId) {
             root["prompt_cache_key"] = .string(sid)
         }
         if retention == .long, model.compat?.supportsLongCacheRetention != false {
             root["prompt_cache_retention"] = .string("24h")
         }
+        // Don't persist responses server-side — kwwk replays the full input each
+        // turn, and ChatGPT/Codex proxies reject `store: true`. Matches pi.
+        // Placed before overrides so callers can still opt back in.
+        if root["store"] == nil { root["store"] = .bool(false) }
         // Apply vendor-specific overrides last so they win against defaults.
         for (key, value) in bodyOverrides {
             root[key] = value

@@ -200,19 +200,25 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     state.appendText(index: index, text: text)
                     out.push(.textDelta(contentIndex: index, delta: text, partial: state.snapshot()))
                 }
-                // Reasoning content delta (provider-specific key).
-                let reasoning: String? = {
-                    if case .string(let r) = delta["reasoning"] ?? .null { return r }
-                    if case .string(let r) = delta["reasoning_content"] ?? .null { return r }
+                // Reasoning content delta (provider-specific key). Probe in pi's
+                // order — `reasoning_content` (DeepSeek/chutes) first, then
+                // `reasoning` (OpenRouter), then `reasoning_text`. The matched
+                // field name is stashed as the thinking block's signature so the
+                // encoder can round-trip prior reasoning under the same key.
+                let reasoningField: (field: String, text: String)? = {
+                    if case .string(let r) = delta["reasoning_content"] ?? .null { return ("reasoning_content", r) }
+                    if case .string(let r) = delta["reasoning"] ?? .null { return ("reasoning", r) }
+                    if case .string(let r) = delta["reasoning_text"] ?? .null { return ("reasoning_text", r) }
                     return nil
                 }()
-                if let reasoning, !reasoning.isEmpty {
+                if let (field, reasoning) = reasoningField, !reasoning.isEmpty {
                     let (index, firstSeen) = state.noteThinkingBlock()
                     if !emittedStart {
                         out.push(.start(partial: state.snapshot()))
                         emittedStart = true
                     }
                     if firstSeen {
+                        state.setThinkingSignature(index: index, signature: field)
                         out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
                     }
                     state.appendThinking(index: index, text: reasoning)
@@ -316,8 +322,13 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             root["messages"] = messages
             if let tools { root["tools"] = tools }
         }
-        let openAINativeCache = model.baseUrl.contains("api.openai.com")
-            || (retention == .long && compat.supportsLongCacheRetention)
+        // OpenAI-style `prompt_cache_key`/`prompt_cache_retention` must not be
+        // mixed onto an endpoint that already took Anthropic `cache_control`
+        // (e.g. OpenRouter `anthropic/*`) — those are different, conflicting wire
+        // shapes. Only apply native cache when we did NOT apply the anthropic one.
+        let openAINativeCache = compat.cacheControlFormat != "anthropic"
+            && (model.baseUrl.contains("api.openai.com")
+                || (retention == .long && compat.supportsLongCacheRetention))
         if openAINativeCache, retention != .none,
            let sid = clampOpenAIPromptCacheKey(options?.sessionId) {
             root["prompt_cache_key"] = sid
@@ -620,7 +631,11 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                         ? (compat.requiresAssistantAfterToolResult ? "" : NSNull())
                         : textBody
                     if let signature = thinkingBlocks.first?.thinkingSignature, !signature.isEmpty {
-                        entry[signature] = thinkingBlocks.map(\.thinking).joined(separator: "\n")
+                        // Round-trip prior reasoning under the same field the
+                        // stream decoder reads it from (`reasoning_content`).
+                        // Using the signature *value* as the key produced a
+                        // bogus JSON field and dropped the reasoning text.
+                        entry["reasoning_content"] = thinkingBlocks.map(\.thinking).joined(separator: "\n")
                     }
                 }
                 let calls = a.content.compactMap { block -> [String: Any]? in
@@ -771,9 +786,12 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
 
     private static func mapStopReason(_ raw: String) -> StopReason {
         switch raw {
-        case "stop": return .stop
-        case "length": return .length
+        case "stop", "end": return .stop
+        case "length", "max_tokens": return .length
         case "tool_calls", "function_call": return .toolUse
+        // pi surfaces these as errors rather than a clean stop so the agent
+        // doesn't treat a filtered/aborted turn as a successful completion.
+        case "content_filter", "network_error": return .error
         default: return .stop
         }
     }
@@ -894,6 +912,15 @@ final class OpenAICompletionsState: @unchecked Sendable {
         lock.withLock {
             if case .thinking(var th) = blocks[index] {
                 th.thinking += text
+                blocks[index] = .thinking(th)
+            }
+        }
+    }
+
+    func setThinkingSignature(index: Int, signature: String) {
+        lock.withLock {
+            if case .thinking(var th) = blocks[index], th.thinkingSignature == nil {
+                th.thinkingSignature = signature
                 blocks[index] = .thinking(th)
             }
         }

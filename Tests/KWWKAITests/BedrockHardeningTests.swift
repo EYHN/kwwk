@@ -413,4 +413,46 @@ struct BedrockCacheAndAuthTests {
         let url = client.lastRequest?.url.absoluteString ?? ""
         #expect(url.contains("bedrock-runtime.eu-west-1.amazonaws.com"))
     }
+
+    @Test("thinking is injected for Claude models")
+    func thinkingForClaude() async throws {
+        let client = await Self.send(model: Self.model, options: StreamOptions(reasoning: .high))
+        let json = try Self.decode(client)
+        let extras = json["additionalModelRequestFields"] as? [String: Any]
+        let thinking = extras?["thinking"] as? [String: Any]
+        #expect(thinking?["type"] as? String == "enabled")
+    }
+
+    @Test("thinking is NOT injected for non-Claude models")
+    func thinkingGatedForNonClaude() async throws {
+        var nova = Self.model
+        nova.id = "amazon.nova-pro-v1:0"
+        let client = await Self.send(model: nova, options: StreamOptions(reasoning: .high))
+        let json = try Self.decode(client)
+        #expect(json["additionalModelRequestFields"] == nil)
+    }
+
+    @Test("custom headers are signed and reserved ones are dropped")
+    func customHeadersSigned() async throws {
+        let client = await Self.send(
+            model: Self.model,
+            options: StreamOptions(headers: [
+                "x-custom": "v1",
+                "authorization": "attacker",
+                "host": "evil.example",
+                "x-amz-date": "tampered",
+            ])
+        )
+        let h = client.lastRequest?.headers ?? [:]
+        // Custom header survives and is part of the (signed) set.
+        #expect(h["x-custom"] == "v1")
+        // Reserved headers can't be clobbered by the caller.
+        #expect(h["authorization"] != "attacker")
+        #expect(h["host"] != "evil.example")
+        #expect(h["x-amz-date"] != "tampered")
+        // The signature must cover our custom header.
+        let signed = h["authorization"] ?? ""
+        #expect(signed.contains("SignedHeaders="))
+        #expect(signed.contains("x-custom"))
+    }
 }

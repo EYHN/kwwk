@@ -177,13 +177,23 @@ private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, m
         ? "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
         : "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
     let modelId = modelOverride ?? (gateway ? "claude-3.5-haiku" : "@cf/google/gemma-4-26b-a4b-it")
-    let catalog = ModelsCatalog.model(provider: providerId, id: modelId)
+    // The provider is registered under `providerId`, and `APIRegistry` dispatches
+    // by `model.api` — so the model's `api` MUST equal `providerId`, otherwise the
+    // request is routed to a generic provider (e.g. `openai-completions`) that
+    // lacks the account-scoped base URL, `{CLOUDFLARE_*}` substitution and key.
+    //
+    // Workers AI catalog entries are themselves openai-completions models, so we
+    // borrow their metadata. AI Gateway catalog entries describe the *native*
+    // (e.g. anthropic) wire whose baseUrl doesn't match the openai-compat gateway
+    // endpoint, so we ignore the catalog there and use the compat fallback base.
+    let catalog = gateway ? nil : ModelsCatalog.model(provider: providerId, id: modelId)
     let model = Model(
         id: modelId, name: catalog?.name ?? modelId,
-        api: catalog?.api ?? providerId, provider: providerId,
+        api: providerId, provider: providerId,
         baseUrl: catalog?.baseUrl ?? fallbackBase, reasoning: catalog?.reasoning ?? false,
         input: catalog?.input ?? [.text],
-        contextWindow: catalog?.contextWindow ?? 128_000, maxTokens: catalog?.maxTokens ?? 16_384
+        contextWindow: catalog?.contextWindow ?? 128_000, maxTokens: catalog?.maxTokens ?? 16_384,
+        compat: catalog?.compat, thinkingLevelMap: catalog?.thinkingLevelMap
     )
     let label = gateway ? "Cloudflare AI Gateway" : "Cloudflare Workers AI"
     return ResolvedAuth(model: model, modelLabel: "\(modelId) · \(label) (env)", authResolver: nil)
