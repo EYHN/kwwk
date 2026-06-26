@@ -80,8 +80,8 @@ public struct AgentOptions: Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
-    /// Automatic context compaction is enabled by default. Pass nil to
-    /// disable it for agents that need full transcript retention.
+    /// Automatic context compaction. Disabled by default so SDK callers do
+    /// not trigger extra model calls or transcript rewrites unless requested.
     public var autoCompact: AgentAutoCompactOptions?
     public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
@@ -103,7 +103,7 @@ public struct AgentOptions: Sendable {
         convertToLlm: ConvertToLlmHook? = nil,
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
-        autoCompact: AgentAutoCompactOptions? = AgentAutoCompactOptions(),
+        autoCompact: AgentAutoCompactOptions? = nil,
         authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil
     ) {
         self.initialState = initialState
@@ -161,6 +161,7 @@ public final class Agent: @unchecked Sendable {
 
     private let steeringQueue: PendingMessageQueue
     private let followUpQueue: PendingMessageQueue
+    internal let backgroundAttachmentList = AgentBackgroundAttachmentList()
 
     public convenience init(
         initialState: AgentInitialState,

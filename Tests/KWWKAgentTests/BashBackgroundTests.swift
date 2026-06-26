@@ -55,7 +55,8 @@ struct BashBackgroundRunnerTests {
         let runner = BashBackgroundRunner(
             command: "echo hello-bg-runner",
             workDir: nil,
-            description: "echo test"
+            description: "echo test",
+            environment: testBashEnvironment
         )
         let (taskId, file) = await manager.spawn(runner: runner, sessionId: "s1")
         let done = await awaitUntil(3000) {
@@ -81,7 +82,7 @@ struct BashBackgroundRunnerTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "exit 3")
+        let runner = BashBackgroundRunner(command: "exit 3", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner)
         let done = await awaitUntil(3000) {
             let s = await manager.get(taskId)
@@ -101,7 +102,7 @@ struct BashBackgroundRunnerTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "sleep 30")
+        let runner = BashBackgroundRunner(command: "sleep 30", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         // Allow process to start.
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -127,7 +128,8 @@ struct BashBackgroundRunnerTests {
         // The shell backgrounds a grandchild `sleep`, records its pid, then
         // blocks. Killing the task must reap the whole process group.
         let runner = BashBackgroundRunner(
-            command: "sleep 30 & echo $! > \(pidFile.path); sleep 30"
+            command: "sleep 30 & echo $! > \(pidFile.path); sleep 30",
+            environment: testBashEnvironment
         )
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
 
@@ -161,6 +163,7 @@ struct BashBackgroundRunnerTests {
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let runner = BashBackgroundRunner(
             command: "echo $KW_BGTEST_VAR",
+            environment: testBashEnvironment,
             extraEnv: ["KW_BGTEST_VAR": "extraenv-works"]
         )
         let (taskId, file) = await manager.spawn(runner: runner, sessionId: "s1")
@@ -188,6 +191,7 @@ struct BashToolBackgroundTests {
         defer { try? FileManager.default.removeItem(at: cwdDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            environment: testBashEnvironment,
             manager: manager,
             sessionId: "s1"
         ))
@@ -235,6 +239,7 @@ struct BashToolBackgroundTests {
         defer { try? FileManager.default.removeItem(at: cwdDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            environment: testBashEnvironment,
             defaultTimeoutSeconds: 30,
             manager: manager,
             sessionId: "s1",
@@ -264,7 +269,10 @@ struct BashToolBackgroundTests {
         let cwdDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: cwdDir) }
         let manager = BackgroundTaskManager(outputDir: makeTempDir())
-        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(manager: manager))
+        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            environment: testBashEnvironment,
+            manager: manager
+        ))
         await #expect(throws: Error.self) {
             _ = try await tool.execute(
                 "call-1",
@@ -283,6 +291,7 @@ struct BashToolBackgroundTests {
         let manager = BackgroundTaskManager(outputDir: outputDir)
         // Soft default 2s, cap 3s. A request for 9999s should be clamped to 3s.
         let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            environment: testBashEnvironment,
             defaultTimeoutSeconds: 2,
             maxTimeoutSeconds: 3,
             manager: manager,
@@ -315,6 +324,7 @@ struct BashToolBackgroundTests {
         defer { try? FileManager.default.removeItem(at: cwdDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            environment: testBashEnvironment,
             defaultTimeoutSeconds: 1,      // soft timeout = 1s
             manager: manager,
             sessionId: "sF",
@@ -370,7 +380,7 @@ struct TaskStatusToolTests {
             .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "sleep 10")
+        let runner = BashBackgroundRunner(command: "sleep 10", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         try? await Task.sleep(nanoseconds: 50_000_000)
 
@@ -392,7 +402,7 @@ struct TaskStatusToolTests {
             .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "echo hi")
+        let runner = BashBackgroundRunner(command: "echo hi", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         let done = await awaitUntil(3000) {
             let s = await manager.get(taskId)
@@ -420,7 +430,7 @@ struct TaskStatusToolTests {
             .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "sleep 30")
+        let runner = BashBackgroundRunner(command: "sleep 30", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         try? await Task.sleep(nanoseconds: 50_000_000)
 
@@ -474,7 +484,7 @@ struct TaskStatusToolTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "echo done")
+        let runner = BashBackgroundRunner(command: "echo done", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         let done = await awaitUntil(3000) {
             let s = await manager.get(taskId)
@@ -519,7 +529,7 @@ struct TaskStatusToolTests {
             .appendingPathComponent("kw-bgstatus-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "echo hi")
+        let runner = BashBackgroundRunner(command: "echo hi", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "sA")
         _ = await awaitUntil(3000) {
             let s = await manager.get(taskId)

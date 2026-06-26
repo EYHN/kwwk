@@ -168,6 +168,7 @@ struct BedrockProviderTests {
         let provider = BedrockProvider(
             client: client,
             region: "us-east-1",
+            resolveProfileFiles: false,
             credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
         )
         let s = provider.stream(
@@ -200,6 +201,7 @@ struct BedrockProviderTests {
         let provider = BedrockProvider(
             client: client,
             region: "us-east-1",
+            resolveProfileFiles: false,
             credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
         )
         let s = provider.stream(
@@ -235,6 +237,7 @@ struct BedrockProviderTests {
             client: client,
             region: "us-west-2",
             environment: ["AWS_REGION": "us-west-2"],
+            resolveProfileFiles: false,
             credentialsProvider: {
                 AWSSigV4.Credentials(accessKeyId: "AKID", secretAccessKey: "SECRET")
             }
@@ -266,6 +269,7 @@ struct BedrockProviderTests {
         let provider = BedrockProvider(
             client: client,
             region: "us-east-1",
+            resolveProfileFiles: false,
             credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
         )
         _ = provider.stream(
@@ -313,6 +317,7 @@ struct BedrockProviderTests {
         let provider = BedrockProvider(
             client: client,
             region: "us-east-1",
+            resolveProfileFiles: false,
             credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
         )
         let s = provider.stream(

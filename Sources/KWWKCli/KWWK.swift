@@ -12,12 +12,15 @@ public enum KWWK {
     /// current working directory).
     ///
     /// Credentials are resolved automatically from the OAuth store
-    /// (`~/.kwwk/oauth.json`). Throws `AuthResolveError.noCredentials`
-    /// with a message pointing at `kwwk login` if none are configured.
+    /// (`~/.kwwk/oauth.json`) and then supported API-key environment
+    /// variables. Throws `AuthResolveError.noCredentials` with a message
+    /// pointing at `kwwk login` if none are configured.
     ///
     /// `tools` controls which coding tools the agent is given. Default is
-    /// `.all` — read/write/edit/bash/grep/find/ls/task_status/wait_task +
-    /// optional tmux. Pass `.readOnly` for a sandboxed reviewer-style agent.
+    /// `.all` — read/write/edit/bash/grep/find/ls/task_status/wait_task.
+    /// Pass `.readOnly` for a sandboxed reviewer-style agent. If `tools`
+    /// contains `.tmux`, this CLI wrapper resolves `tmux` from `PATH` and
+    /// passes the explicit executable path into the SDK.
     ///
     /// `autoCompactThreshold` fires a silent `/compact` (summarize the
     /// transcript → replace with a recap) once the turn's reported
@@ -70,10 +73,10 @@ public enum KWWK {
     ///     one-line message to stderr;
     ///   - returns `0` on a clean stop, `1` on error / aborted / length-capped.
     ///
-    /// Credentials are resolved the same way as `runCodingTUI` (from the
-    /// OAuth store at `~/.kwwk/oauth.json`). Throws
-    /// `AuthResolveError.noCredentials` with a hint pointing at `kwwk login`
-    /// if none are configured.
+    /// Credentials are resolved the same way as `runCodingTUI`: the OAuth
+    /// store at `~/.kwwk/oauth.json` first, then supported API-key
+    /// environment variables. Throws `AuthResolveError.noCredentials` with
+    /// a hint pointing at `kwwk login` if none are configured.
     public static func runHeadless(
         prompt: String,
         cwd: String? = nil,

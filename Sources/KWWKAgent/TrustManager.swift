@@ -4,10 +4,9 @@ import Foundation
 ///
 /// A project directory is "trusted" once the user has opted in to loading its
 /// project-local configuration (`.kwwk/commands`, custom prompts, etc.). The
-/// decision is persisted in `~/.kwwk/trust.json`, a flat map of
-/// `absolute-dir → bool`. A directory inherits the decision of the nearest
-/// ancestor that has an explicit entry, so trusting a parent folder once trusts
-/// every project beneath it.
+/// decision can be persisted in a JSON file, a flat map of `absolute-dir →
+/// bool`. `TrustManager()` is disabled/empty and does not touch disk; the CLI
+/// opts into `~/.kwwk/trust.json` via `defaultStoreURL()`.
 ///
 /// This type only exposes the storage + check API. UI wiring (prompting the
 /// user the first time an untrusted project is opened) is left to the CLI as a
@@ -23,8 +22,9 @@ public enum TrustStoreError: Error, Equatable {
 }
 
 public final class TrustManager {
-    /// Location of the JSON store. Defaults to `~/.kwwk/trust.json`.
+    /// Location of the JSON store when persistence is enabled.
     public let storeURL: URL
+    public let isPersistent: Bool
 
     /// The error from the most recent load, if the store was malformed. The
     /// convenience (non-throwing) API fails safe and records the error here so
@@ -35,18 +35,25 @@ public final class TrustManager {
     public init(storeURL: URL? = nil) {
         if let storeURL {
             self.storeURL = storeURL
+            self.isPersistent = true
         } else {
-            let home: URL = {
-                #if targetEnvironment(macCatalyst) || os(iOS)
-                return URL(fileURLWithPath: NSHomeDirectory())
-                #else
-                return FileManager.default.homeDirectoryForCurrentUser
-                #endif
-            }()
-            self.storeURL = home
-                .appendingPathComponent(".kwwk")
-                .appendingPathComponent("trust.json")
+            self.storeURL = URL(fileURLWithPath: "/dev/null")
+            self.isPersistent = false
         }
+    }
+
+    /// CLI-compatible trust store path: `~/.kwwk/trust.json`.
+    public static func defaultStoreURL() -> URL {
+        let home: URL = {
+            #if targetEnvironment(macCatalyst) || os(iOS)
+            return URL(fileURLWithPath: NSHomeDirectory())
+            #else
+            return FileManager.default.homeDirectoryForCurrentUser
+            #endif
+        }()
+        return home
+            .appendingPathComponent(".kwwk")
+            .appendingPathComponent("trust.json")
     }
 
     // MARK: - Public API
@@ -159,6 +166,10 @@ public final class TrustManager {
     /// must not collapse to `{}`. Records `lastLoadError` as a side-effect so the
     /// non-throwing API can surface it.
     private func readChecked() throws -> [String: Bool] {
+        guard isPersistent else {
+            lastLoadError = nil
+            return [:]
+        }
         // Missing / unreadable file → empty, ok (matches pi missing→{}).
         guard FileManager.default.fileExists(atPath: storeURL.path) else {
             lastLoadError = nil
@@ -195,6 +206,7 @@ public final class TrustManager {
     }
 
     private func write(_ data: [String: Bool]) {
+        guard isPersistent else { return }
         let dir = storeURL.deletingLastPathComponent()
         try? FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true

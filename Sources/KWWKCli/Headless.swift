@@ -15,8 +15,8 @@ import KWWKAgent
 ///     silent non-zero exit;
 ///   - exit code is `0` when the model reached a clean stop, `1` otherwise.
 ///
-/// Credentials are resolved from the OAuth store exactly like
-/// `runCodingTUIInternal` — whichever provider `kwwk login` last wrote wins.
+/// Credentials are resolved exactly like `runCodingTUIInternal`: the CLI checks
+/// `~/.kwwk/oauth.json` first, then supported API-key environment variables.
 ///
 /// `@MainActor` matches the TUI entry point. The runtime impact is zero:
 /// `kwwk -p` is one-shot and the main actor isn't serving UI work.
@@ -38,19 +38,28 @@ func runHeadlessInternal(
 
     // Resolve session persistence: a fresh id by default, or a stored
     // transcript when `--resume` / `--session` was passed.
-    let store = SessionStore()
+    let store = SessionStore(directory: SessionStore.defaultDirectory())
     let resolvedResume = await store.resolveResume(resume, cwd: cwd)
     let sessionId = resolvedResume.sessionId
 
+    let environment = ProcessInfo.processInfo.environment
+    let tmuxManager = tools.contains(.tmux)
+        ? try cliTmuxManager(environment: environment)
+        : nil
     let agent = await makeCodingAgent(CodingAgentConfig(
         model: resolved.model,
         cwd: cwd,
         tools: tools,
+        contextFiles: loadProjectContextFiles(cwd: cwd),
+        skillDirectories: Skills.defaultDirectories(cwd: cwd, includeUserDirectory: true),
         backgroundManager: bgManager,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
         authResolver: resolved.authResolver,
-        autoCompactThreshold: autoCompactThreshold
+        autoCompactThreshold: autoCompactThreshold,
+        bashEnvironment: environment,
+        bashShellPath: cliShellPath(environment: environment),
+        tmuxManager: tmuxManager
     ))
     agent.state.thinkingLevel = thinkingLevel
 
@@ -124,6 +133,7 @@ func runHeadlessInternal(
         try await agent.prompt(text)
     } catch {
         await agent.closeSession()
+        await tmuxManager?.teardown()
         let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         writeStderr("kwwk: \(msg)\n")
         return 1
@@ -131,6 +141,7 @@ func runHeadlessInternal(
 
     let stop = box.lock.withLock { box.finalStopReason }
     await agent.closeSession()
+    await tmuxManager?.teardown()
     return stop == .stop ? 0 : 1
 }
 

@@ -242,16 +242,24 @@ public enum Skills {
         return p + "/"
     }
 
-    /// Default skill directories, in precedence order: project-local `.kwwk`,
-    /// the user-global `~/.kwwk`, and a `.claude/skills` directory if the
-    /// project uses one. Missing directories are skipped.
-    public static func defaultDirectories(cwd: String) -> [String] {
+    /// Default skill directories, in precedence order. User-global
+    /// `~/.kwwk/skills` is opt-in so library callers do not read user config
+    /// unless requested.
+    public static func defaultDirectories(
+        cwd: String,
+        includeUserDirectory: Bool = false
+    ) -> [String] {
         let cwdNS = cwd as NSString
         var dirs: [String] = [
             cwdNS.appendingPathComponent(".kwwk/skills"),
-            (NSHomeDirectory() as NSString).appendingPathComponent(".kwwk/skills"),
             cwdNS.appendingPathComponent(".claude/skills"),
         ]
+        if includeUserDirectory {
+            dirs.insert(
+                (NSHomeDirectory() as NSString).appendingPathComponent(".kwwk/skills"),
+                at: 1
+            )
+        }
         // De-dup while preserving order (e.g. cwd == home edge case).
         var seen: Set<String> = []
         dirs = dirs.filter { seen.insert($0).inserted }
@@ -259,8 +267,11 @@ public enum Skills {
     }
 
     /// Discover skills from the default directories for `cwd`.
-    public static func discover(cwd: String) -> (skills: [Skill], diagnostics: [SkillDiagnostic]) {
-        load(directories: defaultDirectories(cwd: cwd))
+    public static func discover(
+        cwd: String,
+        includeUserDirectory: Bool = false
+    ) -> (skills: [Skill], diagnostics: [SkillDiagnostic]) {
+        load(directories: defaultDirectories(cwd: cwd, includeUserDirectory: includeUserDirectory))
     }
 
     /// Load skills from the given directories. Each directory is walked

@@ -53,7 +53,7 @@ func resolveAgentAuth(
     modelOverride: String? = nil,
     context1m: Bool = false
 ) async throws -> ResolvedAuth {
-    let store = OAuthStore()
+    let store = OAuthStore(url: OAuthStore.defaultURL())
     let all = await store.all()
 
     // Pick the single entry. If the store somehow holds multiple (legacy
@@ -87,7 +87,10 @@ func resolveAgentAuth(
     // matching pi. An exported OPENROUTER_API_KEY / GROQ_API_KEY / etc. (or
     // ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY) runs kwwk without
     // an interactive `kwwk login`.
-    if let env = await resolveEnvAuth(modelOverride: modelOverride) {
+    if let env = await resolveEnvAuth(
+        modelOverride: modelOverride,
+        environment: ProcessInfo.processInfo.environment
+    ) {
         return env
     }
 
@@ -98,7 +101,10 @@ func resolveAgentAuth(
 /// `provider/model` override; otherwise scans providers in priority order and
 /// uses the first one whose env key is set and whose wire protocol kwwk can
 /// already speak. Returns nil when nothing is configured / supported.
-func resolveEnvAuth(modelOverride: String?) async -> ResolvedAuth? {
+func resolveEnvAuth(
+    modelOverride: String?,
+    environment: [String: String]
+) async -> ResolvedAuth? {
     // Split an explicit `provider/model` override.
     var forcedProvider: String?
     var forcedId: String? = modelOverride
@@ -110,14 +116,19 @@ func resolveEnvAuth(modelOverride: String?) async -> ResolvedAuth? {
         }
     }
 
-    let candidates: [String] = forcedProvider.map { [$0] } ?? EnvAPIKeys.configuredProviders()
+    let candidates: [String] = forcedProvider.map { [$0] }
+        ?? EnvAPIKeys.configuredProviders(env: environment)
     for provider in candidates {
         // Amazon Bedrock authenticates via ambient AWS credentials, not a
         // single API key — register the SigV4-backed BedrockProvider directly.
         if provider == "amazon-bedrock" {
-            guard EnvAPIKeys.hasBedrockKeys() else { continue }
+            guard EnvAPIKeys.hasBedrockKeys(env: environment) else { continue }
             guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
-            await APIRegistry.shared.register(BedrockProvider(region: bedrockRegion(for: model)))
+            await APIRegistry.shared.register(BedrockProvider(
+                region: bedrockRegion(for: model, environment: environment),
+                environment: environment,
+                resolveProfileFiles: true
+            ))
             return ResolvedAuth(
                 model: model,
                 modelLabel: "\(model.id) · Amazon Bedrock (env)",
@@ -127,18 +138,20 @@ func resolveEnvAuth(modelOverride: String?) async -> ResolvedAuth? {
         // Azure OpenAI / Cloudflare authenticate via a key plus extra config
         // (endpoint / account+gateway ids) and ride bespoke ProviderVariants.
         if provider == "azure-openai-responses" {
-            guard let azure = EnvAPIKeys.azure() else { continue }
+            guard let azure = EnvAPIKeys.azure(env: environment) else { continue }
             return await registerAzureEnv(azure, modelOverride: forcedId)
         }
         if provider == "cloudflare-ai-gateway" {
-            guard let cf = EnvAPIKeys.cloudflare(), cf.accountId != nil, cf.gatewayId != nil else { continue }
+            guard let cf = EnvAPIKeys.cloudflare(env: environment),
+                  cf.accountId != nil,
+                  cf.gatewayId != nil else { continue }
             return await registerCloudflareEnv(cf, gateway: true, modelOverride: forcedId)
         }
         if provider == "cloudflare-workers-ai" {
-            guard let cf = EnvAPIKeys.cloudflare(), cf.accountId != nil else { continue }
+            guard let cf = EnvAPIKeys.cloudflare(env: environment), cf.accountId != nil else { continue }
             return await registerCloudflareEnv(cf, gateway: false, modelOverride: forcedId)
         }
-        guard let key = EnvAPIKeys.apiKey(for: provider), !key.isEmpty else { continue }
+        guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
         guard await registerEnvProvider(for: model, apiKey: key) else { continue }
         let label = "\(model.id) · \(EnvAPIKeys.displayName(for: provider)) (env)"
@@ -169,9 +182,16 @@ private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?)
 private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, modelOverride: String?) async -> ResolvedAuth {
     let providerId = gateway ? "cloudflare-ai-gateway" : "cloudflare-workers-ai"
     if gateway {
-        await APIRegistry.shared.register(ProviderVariants.cloudflareAIGateway(apiKey: cf.apiKey))
+        await APIRegistry.shared.register(ProviderVariants.cloudflareAIGateway(
+            apiKey: cf.apiKey,
+            accountId: cf.accountId,
+            gatewayId: cf.gatewayId
+        ))
     } else {
-        await APIRegistry.shared.register(ProviderVariants.cloudflareWorkersAI(apiKey: cf.apiKey))
+        await APIRegistry.shared.register(ProviderVariants.cloudflareWorkersAI(
+            apiKey: cf.apiKey,
+            accountId: cf.accountId
+        ))
     }
     let fallbackBase = gateway
         ? "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
@@ -202,15 +222,15 @@ private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, m
 /// Derive the AWS region for a Bedrock model from its catalog baseUrl host
 /// (`bedrock-runtime.<region>.amazonaws.com`), falling back to AWS_REGION /
 /// us-east-1. Keeps EU/APAC-hosted models from being misrouted to us-east-1.
-private func bedrockRegion(for model: Model) -> String {
+private func bedrockRegion(for model: Model, environment: [String: String]) -> String {
     if let host = URL(string: model.baseUrl)?.host {
         let parts = host.split(separator: ".")
         if parts.count >= 3, parts[0] == "bedrock-runtime" {
             return String(parts[1])
         }
     }
-    return ProcessInfo.processInfo.environment["AWS_REGION"]
-        ?? ProcessInfo.processInfo.environment["AWS_DEFAULT_REGION"]
+    return environment["AWS_REGION"]
+        ?? environment["AWS_DEFAULT_REGION"]
         ?? "us-east-1"
 }
 

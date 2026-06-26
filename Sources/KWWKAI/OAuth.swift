@@ -80,32 +80,41 @@ public enum OAuthError: Error, LocalizedError {
 
 // MARK: - Credential store
 
-/// Persists credentials on disk. Default location is `~/.kwwk/oauth.json` —
-/// compatible with pi's `~/.pi/agent/oauth.json` schema so users can migrate
-/// by copying the file across.
+/// Persists credentials on disk when initialized with an explicit URL.
+/// `OAuthStore()` is an in-memory empty store; the CLI opts into
+/// `~/.kwwk/oauth.json` via `defaultURL()`.
 public actor OAuthStore {
     public let url: URL
+    public let isPersistent: Bool
     private var credentials: [String: OAuthCredentials]
 
     public init(url: URL? = nil) {
         if let url {
             self.url = url
+            self.isPersistent = true
         } else {
-            let home: URL = {
-                #if targetEnvironment(macCatalyst) || os(iOS)
-                return URL(fileURLWithPath: NSHomeDirectory())
-                #else
-                return FileManager.default.homeDirectoryForCurrentUser
-                #endif
-            }()
-            self.url = home.appendingPathComponent(".kwwk").appendingPathComponent("oauth.json")
+            self.url = URL(fileURLWithPath: "/dev/null")
+            self.isPersistent = false
         }
-        if let data = try? Data(contentsOf: self.url),
+        if isPersistent,
+           let data = try? Data(contentsOf: self.url),
            let decoded = try? JSONDecoder().decode([String: OAuthCredentials].self, from: data) {
             self.credentials = decoded
         } else {
             self.credentials = [:]
         }
+    }
+
+    /// CLI-compatible OAuth store path: `~/.kwwk/oauth.json`.
+    public static func defaultURL() -> URL {
+        let home: URL = {
+            #if targetEnvironment(macCatalyst) || os(iOS)
+            return URL(fileURLWithPath: NSHomeDirectory())
+            #else
+            return FileManager.default.homeDirectoryForCurrentUser
+            #endif
+        }()
+        return home.appendingPathComponent(".kwwk").appendingPathComponent("oauth.json")
     }
 
     public func all() -> [String: OAuthCredentials] { credentials }
@@ -130,6 +139,7 @@ public actor OAuthStore {
     }
 
     private func persist() throws {
+        guard isPersistent else { return }
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]

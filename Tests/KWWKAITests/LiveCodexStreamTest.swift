@@ -25,7 +25,7 @@ struct LiveCodexStreamTests {
         guard let entry = json["openai-codex"] as? [String: Any] else { return }
         _ = entry
 
-        let store = OAuthStore()
+        let store = OAuthStore(url: OAuthStore.defaultURL())
         let manager = OAuthManager(store: store)
         let accessToken = try await manager.apiKey(for: "openai-codex")
         let refreshed = await store.get("openai-codex")
@@ -97,7 +97,7 @@ struct LiveCodexStreamTests {
 
         // Refresh the access token so we have a fresh one before the
         // stream call. The manager also stashes the `accountId` JWT claim.
-        let store = OAuthStore()
+        let store = OAuthStore(url: OAuthStore.defaultURL())
         let manager = OAuthManager(store: store)
         let accessToken: String
         do {

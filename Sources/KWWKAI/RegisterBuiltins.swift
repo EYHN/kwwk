@@ -10,7 +10,7 @@ import FoundationNetworking
 /// ```swift
 /// await registerBuiltins(
 ///     anthropic: env["ANTHROPIC_API_KEY"],
-///     openai: env["OPENAI_API_KEY"],
+///     openaiResponses: env["OPENAI_API_KEY"],
 ///     google: env["GOOGLE_API_KEY"]
 /// )
 /// ```
@@ -19,11 +19,10 @@ import FoundationNetworking
 /// callers can `APIRegistry.shared.unregisterSource("kw-builtins")` in tests.
 @discardableResult
 public func registerBuiltins(
-    anthropic: String? = ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"],
-    openaiCompletions: String? = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
-    openaiResponses: String? = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
-    google: String? = ProcessInfo.processInfo.environment["GOOGLE_API_KEY"]
-        ?? ProcessInfo.processInfo.environment["GEMINI_API_KEY"],
+    anthropic: String? = nil,
+    openaiCompletions: String? = nil,
+    openaiResponses: String? = nil,
+    google: String? = nil,
     sourceId: String = "kw-builtins",
     client: HTTPClient = URLSessionHTTPClient()
 ) async -> [String] {
@@ -49,6 +48,25 @@ public func registerBuiltins(
         registered.append(provider.api)
     }
     return registered
+}
+
+/// CLI-style convenience that explicitly registers built-ins from a supplied
+/// environment snapshot. Library callers should prefer `registerBuiltins(...)`
+/// and pass credentials directly.
+@discardableResult
+public func registerBuiltinsFromEnvironment(
+    env: [String: String],
+    sourceId: String = "kw-builtins",
+    client: HTTPClient = URLSessionHTTPClient()
+) async -> [String] {
+    await registerBuiltins(
+        anthropic: env["ANTHROPIC_API_KEY"],
+        openaiCompletions: env["OPENAI_API_KEY"],
+        openaiResponses: env["OPENAI_API_KEY"],
+        google: env["GOOGLE_API_KEY"] ?? env["GEMINI_API_KEY"],
+        sourceId: sourceId,
+        client: client
+    )
 }
 
 // MARK: - Model catalog (curated, not exhaustive)

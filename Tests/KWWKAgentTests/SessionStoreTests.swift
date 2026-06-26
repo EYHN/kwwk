@@ -34,6 +34,16 @@ struct SessionStoreTests {
         ))
     }
 
+    @Test("default store is disabled and does not touch disk")
+    func defaultStoreDisabled() async throws {
+        let store = SessionStore()
+        #expect(await store.isPersistent == false)
+        #expect(await store.list().isEmpty)
+        await #expect(throws: SessionStore.SessionStoreError.self) {
+            _ = try await store.create(id: "disabled", cwd: "/tmp")
+        }
+    }
+
     @Test("round-trip: append then load preserves order and content")
     func roundTrip() async throws {
         let (store, dir) = tempStore()

@@ -1,7 +1,9 @@
 import Foundation
 import KWWKAI
 
-/// Append-only JSONL session persistence under `~/.kwwk/sessions/<id>.jsonl`.
+/// Append-only JSONL session persistence. `SessionStore()` is disabled and
+/// does not touch disk; the CLI opts into `~/.kwwk/sessions` via
+/// `defaultDirectory()`.
 ///
 /// Mirrors pi's `packages/agent/src/harness/session` storage in spirit but
 /// keeps a flat append-only log instead of pi's branching entry tree: each
@@ -25,24 +27,32 @@ public actor SessionStore {
     /// non-backward-compatible way; `load` rejects unknown versions.
     public static let version = 1
 
-    /// Directory holding `<id>.jsonl` files. Defaults to `~/.kwwk/sessions`.
+    /// Directory holding `<id>.jsonl` files when persistence is enabled.
     public let directory: URL
+    public let isPersistent: Bool
 
     public init(directory: URL? = nil) {
         if let directory {
             self.directory = directory
+            self.isPersistent = true
         } else {
-            let home: URL = {
-                #if targetEnvironment(macCatalyst) || os(iOS)
-                return URL(fileURLWithPath: NSHomeDirectory())
-                #else
-                return FileManager.default.homeDirectoryForCurrentUser
-                #endif
-            }()
-            self.directory = home
-                .appendingPathComponent(".kwwk")
-                .appendingPathComponent("sessions")
+            self.directory = URL(fileURLWithPath: "/dev/null")
+            self.isPersistent = false
         }
+    }
+
+    /// CLI-compatible session directory: `~/.kwwk/sessions`.
+    public static func defaultDirectory() -> URL {
+        let home: URL = {
+            #if targetEnvironment(macCatalyst) || os(iOS)
+            return URL(fileURLWithPath: NSHomeDirectory())
+            #else
+            return FileManager.default.homeDirectoryForCurrentUser
+            #endif
+        }()
+        return home
+            .appendingPathComponent(".kwwk")
+            .appendingPathComponent("sessions")
     }
 
     // MARK: - Entry model
@@ -186,6 +196,7 @@ public actor SessionStore {
         case unsupportedVersion(found: Int, expected: Int)
         case notFound(String)
         case invalidId(String)
+        case storageDisabled
     }
 
     // MARK: - Paths
@@ -200,11 +211,13 @@ public actor SessionStore {
     }
 
     private func path(for id: String) throws -> URL {
+        guard isPersistent else { throw SessionStoreError.storageDisabled }
         guard Self.isValidSessionId(id) else { throw SessionStoreError.invalidId(id) }
         return directory.appendingPathComponent("\(id).jsonl")
     }
 
     private func ensureDirectory() throws {
+        guard isPersistent else { throw SessionStoreError.storageDisabled }
         try FileManager.default.createDirectory(
             at: directory,
             withIntermediateDirectories: true
@@ -365,6 +378,7 @@ public actor SessionStore {
     /// All sessions on disk, newest activity first. Unreadable / malformed
     /// files are skipped rather than aborting the listing.
     public func list() -> [SessionInfo] {
+        guard isPersistent else { return [] }
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: directory,

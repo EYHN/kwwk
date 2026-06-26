@@ -3,7 +3,9 @@ import KWWKAI
 
 public struct LSToolOptions: Sendable {
     public var operations: LSOperations
-    public init(operations: LSOperations = LocalLSOperations()) {
+    public init(
+        operations: LSOperations = LocalLSOperations()
+    ) {
         self.operations = operations
     }
 }
@@ -55,12 +57,12 @@ public func createLSTool(cwd: String, options: LSToolOptions = .init()) -> Agent
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
-            let path: String = {
-                if case .object(let obj) = args, case .string(let p) = obj["path"] ?? .null {
-                    return PathUtils.resolveToCwd(p, cwd: cwd)
-                }
-                return cwd
-            }()
+            let path: String
+            if case .object(let obj) = args, case .string(let p) = obj["path"] ?? .null {
+                path = PathUtils.resolveToCwd(p, cwd: cwd)
+            } else {
+                path = cwd
+            }
             let limit: Int? = {
                 if case .object(let obj) = args {
                     if case .int(let v) = obj["limit"] ?? .null { return v }

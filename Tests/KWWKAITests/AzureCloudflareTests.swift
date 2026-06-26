@@ -170,14 +170,18 @@ struct AzureCloudflareTests {
     @Test("Workers AI variant substitutes account id placeholder into request URL")
     func workersAIURLSubstitution() async throws {
         let client = StubSSEClient(body: Self.openaiCompletionsSSE)
-        let provider = ProviderVariants.cloudflareWorkersAI(apiKey: "cf-key", client: client)
+        let provider = ProviderVariants.cloudflareWorkersAI(
+            apiKey: "cf-key",
+            accountId: "acctABC",
+            client: client
+        )
         // model.baseUrl carries the literal placeholder; urlBuilder must expand it.
         let model = Model(
             id: "@cf/x/y",
             name: "y",
             api: "cloudflare-workers-ai",
             provider: "cloudflare-workers-ai",
-            baseUrl: "https://api.cloudflare.com/client/v4/accounts/acctABC/ai/v1"
+            baseUrl: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
         )
         _ = provider.stream(
             model: model,

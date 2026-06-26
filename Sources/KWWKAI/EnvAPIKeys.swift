@@ -71,14 +71,14 @@ public enum EnvAPIKeys {
     }
 
     /// The configured env vars (non-empty) that can authenticate `provider`.
-    public static func foundEnvVars(for provider: String, env: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+    public static func foundEnvVars(for provider: String, env: [String: String] = [:]) -> [String] {
         guard let candidates = envVars[provider] else { return [] }
         return candidates.filter { (env[$0]?.isEmpty == false) }
     }
 
     /// The API key for `provider` from env, or nil. Does not cover OAuth-only
     /// providers' bearer tokens beyond the env-key form.
-    public static func apiKey(for provider: String, env: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+    public static func apiKey(for provider: String, env: [String: String] = [:]) -> String? {
         if let first = foundEnvVars(for: provider, env: env).first {
             return env[first]
         }
@@ -88,14 +88,14 @@ public enum EnvAPIKeys {
     /// Whether ambient AWS credentials that `BedrockProvider` can actually use
     /// (long-term IAM keys) are present. Profile/bearer/ECS/web-identity are
     /// recognized for reachability but not yet consumed by the SigV4 path.
-    public static func hasBedrockKeys(env: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+    public static func hasBedrockKeys(env: [String: String] = [:]) -> Bool {
         (env["AWS_ACCESS_KEY_ID"]?.isEmpty == false) && (env["AWS_SECRET_ACCESS_KEY"]?.isEmpty == false)
     }
 
     /// Every provider that currently has a usable env key configured, in scan
     /// priority order (then alphabetical for the rest). Amazon Bedrock is
     /// appended when ambient AWS credentials are present.
-    public static func configuredProviders(env: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+    public static func configuredProviders(env: [String: String] = [:]) -> [String] {
         let ranked = scanPriority + envVars.keys.filter { !scanPriority.contains($0) }.sorted()
         var out = ranked.filter { !foundEnvVars(for: $0, env: env).isEmpty }
         if hasBedrockKeys(env: env) { out.append("amazon-bedrock") }
@@ -105,7 +105,7 @@ public enum EnvAPIKeys {
     /// Look up the first non-empty environment variable from `names`.
     public static func firstValue(
         of names: [String],
-        env: [String: String] = ProcessInfo.processInfo.environment
+        env: [String: String] = [:]
     ) -> String? {
         for name in names {
             if let v = env[name], !v.trimmingCharacters(in: .whitespaces).isEmpty { return v }
@@ -135,7 +135,7 @@ public enum EnvAPIKeys {
     /// Resolve Azure config from the environment (nil when no API key). Endpoint
     /// order: AZURE_OPENAI_BASE_URL > AZURE_OPENAI_ENDPOINT >
     /// https://{AZURE_OPENAI_RESOURCE_NAME}.openai.azure.com.
-    public static func azure(env: [String: String] = ProcessInfo.processInfo.environment) -> Azure? {
+    public static func azure(env: [String: String] = [:]) -> Azure? {
         guard let apiKey = firstValue(of: ["AZURE_OPENAI_API_KEY"], env: env) else { return nil }
         let apiVersion = firstValue(of: ["AZURE_OPENAI_API_VERSION"], env: env) ?? azureDefaultAPIVersion
         let rawBase: String?
@@ -173,7 +173,7 @@ public enum EnvAPIKeys {
     }
 
     /// Resolve Cloudflare credentials (nil when CLOUDFLARE_API_KEY absent).
-    public static func cloudflare(env: [String: String] = ProcessInfo.processInfo.environment) -> Cloudflare? {
+    public static func cloudflare(env: [String: String] = [:]) -> Cloudflare? {
         guard let apiKey = firstValue(of: ["CLOUDFLARE_API_KEY"], env: env) else { return nil }
         return Cloudflare(
             apiKey: apiKey,

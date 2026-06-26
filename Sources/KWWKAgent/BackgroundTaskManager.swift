@@ -9,7 +9,7 @@ import KWWKAI
 ///
 ///   let manager = BackgroundTaskManager()
 ///   let (taskId, outputFile) = await manager.spawn(
-///       runner: BashBackgroundRunner(command: "npm install"),
+///       runner: BashBackgroundRunner(command: "npm install", environment: env),
 ///       sessionId: "sess-1"
 ///   )
 ///   // … later, agent receives a `<task-notification>` user message when
@@ -82,21 +82,12 @@ public actor BackgroundTaskManager {
         if let dir = outputDir {
             self.outputDir = dir
         } else {
-            // `/tmp/kwwk-bg-<pid>`. Rationale:
-            //   - `/tmp` so these per-session scratch files don't end up in
-            //     the user's home backup / iCloud sync.
-            //   - `-<pid>` so concurrent `kwwk` processes don't interleave
-            //     output files in the same directory (would race on
-            //     `fg_<uuid>.log` allocation and make `list(taskId:)`
-            //     ambiguous across sessions).
-            //   - Foreground adopt path reuses this directory too
-            //     (see `allocateForegroundOutputFile` in BashTool.swift),
-            //     so both bg spawns and fg-flipped commands land here.
-            let pid = ProcessInfo.processInfo.processIdentifier
-            self.outputDir = URL(
-                fileURLWithPath: "/tmp/kwwk-bg-\(pid)",
-                isDirectory: true
-            )
+            // Per-manager private scratch directory under the system temp dir.
+            // Foreground adopt path reuses this directory too (see
+            // `allocateForegroundOutputFile` in BashTool.swift), so both bg
+            // spawns and fg-flipped commands land here.
+            self.outputDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-bg-\(UUID().uuidString)", isDirectory: true)
         }
     }
 
@@ -318,7 +309,8 @@ public actor BackgroundTaskManager {
     ) -> (String, URL) {
         try? FileManager.default.createDirectory(
             at: outputDir,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
         var taskId: String
         repeat {
@@ -329,7 +321,11 @@ public actor BackgroundTaskManager {
             file = preset
         } else {
             file = outputDir.appendingPathComponent("\(taskId).log")
-            FileManager.default.createFile(atPath: file.path, contents: nil)
+            FileManager.default.createFile(
+                atPath: file.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+            )
         }
         tasks[taskId] = Entry(
             spec: spec,

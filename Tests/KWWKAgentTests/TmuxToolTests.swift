@@ -3,11 +3,23 @@ import Testing
 @testable import KWWKAgent
 @testable import KWWKAI
 
-/// Tmux tests are gated on `tmux` being installed on PATH. When it isn't,
+/// Tmux tests explicitly resolve `tmux` from PATH. When it isn't,
 /// every test quietly returns — the bash + background path doesn't depend on
 /// tmux so this shouldn't block CI on machines without it.
+private func resolvedTmuxPath() -> String? {
+    let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    for dir in path.split(separator: ":").map(String.init) {
+        let candidate = "\(dir)/tmux"
+        if FileManager.default.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+    return nil
+}
+
 private func tmuxAvailable() async -> Bool {
-    await TmuxSessionManager().isAvailable
+    guard let tmuxPath = resolvedTmuxPath() else { return false }
+    return await TmuxSessionManager(tmuxPath: tmuxPath).isAvailable
 }
 
 private func makeSessionManager() -> TmuxSessionManager {
@@ -15,6 +27,7 @@ private func makeSessionManager() -> TmuxSessionManager {
     // collide with `duplicate session: kw`.
     let id = UUID().uuidString.prefix(8)
     return TmuxSessionManager(
+        tmuxPath: resolvedTmuxPath()!,
         socketName: "kw-test-\(id)",
         sessionName: "t\(id)"
     )
@@ -127,7 +140,10 @@ struct TmuxToolTests {
     func gatedByAvailability() async {
         // Simulate by passing a manager with a bogus path.
         let bogus = TmuxSessionManager(tmuxPath: "/definitely-not-a-real-path/tmux-nope")
-        let tool = await createTmuxTool(manager: bogus)
+        let tool = await createTmuxTool(
+            manager: bogus,
+            cwd: FileManager.default.currentDirectoryPath
+        )
         #expect(tool == nil)
     }
 
@@ -137,7 +153,12 @@ struct TmuxToolTests {
         // host; we reach directly into a tool with a real manager only if
         // tmux is available.
         guard await tmuxAvailable() else { return }
-        guard let tool = await createTmuxTool() else { return }
+        let manager = makeSessionManager()
+        defer { Task { await manager.teardown() } }
+        guard let tool = await createTmuxTool(
+            manager: manager,
+            cwd: FileManager.default.currentDirectoryPath
+        ) else { return }
         await #expect(throws: Error.self) {
             _ = try await tool.execute(
                 "call-1",
@@ -150,7 +171,12 @@ struct TmuxToolTests {
     @Test("start without command throws")
     func startMissingCommand() async throws {
         guard await tmuxAvailable() else { return }
-        guard let tool = await createTmuxTool() else { return }
+        let manager = makeSessionManager()
+        defer { Task { await manager.teardown() } }
+        guard let tool = await createTmuxTool(
+            manager: manager,
+            cwd: FileManager.default.currentDirectoryPath
+        ) else { return }
         await #expect(throws: Error.self) {
             _ = try await tool.execute(
                 "call-1",
@@ -165,7 +191,10 @@ struct TmuxToolTests {
         guard await tmuxAvailable() else { return }
         let manager = makeSessionManager()
         defer { Task { await manager.teardown() } }
-        guard let tool = await createTmuxTool(manager: manager) else { return }
+        guard let tool = await createTmuxTool(
+            manager: manager,
+            cwd: FileManager.default.currentDirectoryPath
+        ) else { return }
         let result = try await tool.execute(
             "call-1",
             .object(["action": .string("list")]),
@@ -181,7 +210,10 @@ struct TmuxToolTests {
         guard await tmuxAvailable() else { return }
         let manager = makeSessionManager()
         defer { Task { await manager.teardown() } }
-        guard let tool = await createTmuxTool(manager: manager) else {
+        guard let tool = await createTmuxTool(
+            manager: manager,
+            cwd: FileManager.default.currentDirectoryPath
+        ) else {
             Issue.record("tmux available but tool factory returned nil")
             return
         }
@@ -234,6 +266,7 @@ struct TmuxToolTests {
         let bgManager = BackgroundTaskManager(outputDir: outputDir)
         guard let tool = await createTmuxTool(
             manager: tmuxMgr,
+            cwd: outputDir.path,
             bgManager: bgManager,
             sessionId: "s1"
         ) else {
@@ -266,6 +299,7 @@ struct TmuxToolTests {
         let bgManager = BackgroundTaskManager(outputDir: outputDir)
         guard let tool = await createTmuxTool(
             manager: tmuxMgr,
+            cwd: outputDir.path,
             bgManager: bgManager,
             sessionId: "s1"
         ) else { return }
@@ -315,6 +349,7 @@ struct TmuxToolTests {
         let bgManager = BackgroundTaskManager(outputDir: outputDir)
         guard let tmuxTool = await createTmuxTool(
             manager: tmuxMgr,
+            cwd: outputDir.path,
             bgManager: bgManager,
             sessionId: "s1"
         ) else { return }

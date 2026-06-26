@@ -1,18 +1,10 @@
 import Foundation
 import KWWKAI
 
-/// Platform default for the bash tool's shell path: `/bin/zsh` on macOS
-/// (matches the user's interactive environment), `/bin/bash` on everything
-/// else — zsh is rarely preinstalled on sandbox Linux images, and
-/// `Process.executableURL` surfaces "file doesn't exist" if we point at a
-/// missing binary.
-public let kwwkDefaultShellPath: String = {
-    #if os(macOS)
-    return "/bin/zsh"
-    #else
-    return "/bin/bash"
-    #endif
-}()
+/// SDK-safe default shell for command execution. CLI entry points may override
+/// this with the user's configured shell after explicitly opting into CLI
+/// ambient behavior.
+public let kwwkDefaultShellPath = "/bin/sh"
 
 public struct BashToolOptions: Sendable {
     /// Legacy pipe-based executor used when `manager` is nil. Tests can
@@ -33,12 +25,15 @@ public struct BashToolOptions: Sendable {
     /// Hard ceiling for background-task runtime (seconds). Passed to the
     /// Manager so even runaway processes eventually get cancelled.
     public var hardTimeoutSeconds: Int
-    /// Shell for the `-lc <command>` invocation (used by file-based paths;
+    /// Shell for the `-c <command>` invocation (used by file-based paths;
     /// the `operations` executor may use its own shell).
     public var shellPath: String
+    /// Exact environment passed to spawned shell processes.
+    public var environment: [String: String]
 
     public init(
-        operations: BashOperations = LocalBashOperations(),
+        environment: [String: String],
+        operations: BashOperations? = nil,
         defaultTimeoutSeconds: Int = 120,
         maxTimeoutSeconds: Int = 600,
         manager: BackgroundTaskManager? = nil,
@@ -47,7 +42,10 @@ public struct BashToolOptions: Sendable {
         hardTimeoutSeconds: Int = 1800,
         shellPath: String = kwwkDefaultShellPath
     ) {
-        self.operations = operations
+        self.operations = operations ?? LocalBashOperations(
+            shellPath: shellPath,
+            environment: environment
+        )
         self.defaultTimeoutSeconds = defaultTimeoutSeconds
         self.maxTimeoutSeconds = maxTimeoutSeconds
         self.manager = manager
@@ -55,16 +53,23 @@ public struct BashToolOptions: Sendable {
         self.autoBackgroundOnTimeout = autoBackgroundOnTimeout
         self.hardTimeoutSeconds = hardTimeoutSeconds
         self.shellPath = shellPath
+        self.environment = environment
     }
 }
 
 public struct LocalBashOperations: BashOperations {
     public let cwd: String?
     public let shellPath: String
+    public let environment: [String: String]
 
-    public init(cwd: String? = nil, shellPath: String = kwwkDefaultShellPath) {
+    public init(
+        cwd: String? = nil,
+        shellPath: String = kwwkDefaultShellPath,
+        environment: [String: String]
+    ) {
         self.cwd = cwd
         self.shellPath = shellPath
+        self.environment = environment
     }
 
     public func execute(
@@ -74,7 +79,8 @@ public struct LocalBashOperations: BashOperations {
     ) async throws -> BashExecutionResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-lc", command]
+        process.arguments = ["-c", command]
+        process.environment = environment
         if let cwd {
             process.currentDirectoryURL = URL(fileURLWithPath: cwd)
         }
@@ -139,11 +145,15 @@ private func readAll(_ handle: FileHandle) -> String {
     return String(data: data, encoding: .utf8) ?? ""
 }
 
-public func createBashTool(cwd: String, options: BashToolOptions = .init()) -> AgentTool {
+public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
     let hasManager = options.manager != nil
     let ops: BashOperations = {
         if let local = options.operations as? LocalBashOperations, local.cwd == nil {
-            return LocalBashOperations(cwd: cwd, shellPath: local.shellPath)
+            return LocalBashOperations(
+                cwd: cwd,
+                shellPath: local.shellPath,
+                environment: options.environment
+            )
         }
         return options.operations
     }()
@@ -155,6 +165,7 @@ public func createBashTool(cwd: String, options: BashToolOptions = .init()) -> A
     let autoBg = options.autoBackgroundOnTimeout
     let hardTimeoutSec = options.hardTimeoutSeconds
     let shellPath = options.shellPath
+    let environment = options.environment
 
     return AgentTool(
         name: "bash",
@@ -184,6 +195,7 @@ public func createBashTool(cwd: String, options: BashToolOptions = .init()) -> A
                     sessionId: sessionId,
                     cwd: cwd,
                     shellPath: shellPath,
+                    environment: environment,
                     hardTimeoutSeconds: hardTimeoutSec
                 )
             }
@@ -194,6 +206,7 @@ public func createBashTool(cwd: String, options: BashToolOptions = .init()) -> A
                     sessionId: sessionId,
                     cwd: cwd,
                     shellPath: shellPath,
+                    environment: environment,
                     hardTimeoutSeconds: hardTimeoutSec,
                     cancellation: cancellation
                 )
@@ -305,6 +318,7 @@ private func runBashInBackground(
     sessionId: String?,
     cwd: String,
     shellPath: String,
+    environment: [String: String],
     hardTimeoutSeconds: Int
 ) async -> AgentToolResult {
     let runner = BashBackgroundRunner(
@@ -313,7 +327,8 @@ private func runBashInBackground(
         description: input.description,
         hardTimeoutSeconds: hardTimeoutSeconds,
         shellPath: shellPath,
-        label: input.description ?? bashShortLabel(input.command)
+        label: input.description ?? bashShortLabel(input.command),
+        environment: environment
     )
     let (taskId, outputFile) = await manager.spawn(
         runner: runner,
@@ -343,6 +358,7 @@ private func runBashForegroundWithFlip(
     sessionId: String?,
     cwd: String,
     shellPath: String,
+    environment: [String: String],
     hardTimeoutSeconds: Int,
     cancellation: CancellationHandle?
 ) async throws -> AgentToolResult {
@@ -350,7 +366,8 @@ private func runBashForegroundWithFlip(
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: shellPath)
-    process.arguments = ["-lc", input.command]
+    process.arguments = ["-c", input.command]
+    process.environment = environment
     process.currentDirectoryURL = URL(fileURLWithPath: cwd)
 
     guard let writeHandle = try? FileHandle(forWritingTo: outputFile) else {
@@ -551,12 +568,16 @@ extension BackgroundTaskManager {
     fileprivate func allocateForegroundOutputFile() -> URL {
         try? FileManager.default.createDirectory(
             at: outputDir,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
         let id = "fg_\(UUID().uuidString.prefix(8))"
         let url = outputDir.appendingPathComponent("\(id).log")
-        FileManager.default.createFile(atPath: url.path, contents: nil)
+        FileManager.default.createFile(
+            atPath: url.path,
+            contents: nil,
+            attributes: [.posixPermissions: 0o600]
+        )
         return url
     }
 }
-

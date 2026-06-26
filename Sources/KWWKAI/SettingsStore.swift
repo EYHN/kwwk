@@ -9,12 +9,14 @@ import Darwin
 #endif
 
 /// Resolves a single configuration string that may be a literal, an
-/// environment-variable template, or a `!`-prefixed shell command. Ported from
-/// pi's `coding-agent/src/core/resolve-config-value.ts`.
+/// environment-variable template, or, when explicitly enabled, a `!`-prefixed
+/// shell command. Ported from pi's
+/// `coding-agent/src/core/resolve-config-value.ts`.
 ///
 /// Resolution rules (matching pi):
-/// - A value beginning with `!` runs the remainder as a shell command and uses
-///   its trimmed stdout. (empty stdout → nil).
+/// - A value beginning with `!` runs the remainder as a shell command only
+///   when `allowCommands` is true, and uses its trimmed stdout. (empty stdout
+///   → nil). Command execution is disabled unless callers opt in.
 /// - Otherwise the value is a template: `$NAME` or `${NAME}` interpolate the
 ///   named environment variable. A missing variable makes the whole template
 ///   resolve to nil.
@@ -144,26 +146,35 @@ public enum ConfigValue {
     }
 
     /// Resolve `config` to its concrete value. Returns nil when an env var is
-    /// missing or a shell command fails / produces empty output.
+    /// missing, when a command reference is not explicitly allowed, or when an
+    /// allowed shell command fails / produces empty output.
     public static func resolve(
         _ config: String,
-        env: Env = ProcessInfo.processInfo.environment
+        env: Env,
+        allowCommands: Bool,
+        shell: String = "/bin/sh"
     ) -> String? {
         switch parseReference(config) {
         case .command(let command):
-            return runCommand(String(command.dropFirst()))
+            guard allowCommands else { return nil }
+            return runCommand(String(command.dropFirst()), shell: shell, environment: env)
         case .template(let parts):
             return resolveTemplate(parts, env)
         }
     }
 
-    /// Run `command` via the user's shell, returning trimmed stdout (nil on
+    /// Run `command` via the configured shell, returning trimmed stdout (nil on
     /// failure, non-zero exit, or empty output). Mirrors pi's 10s timeout.
-    static func runCommand(_ command: String, timeoutSeconds: TimeInterval = 10) -> String? {
-        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/sh"
+    static func runCommand(
+        _ command: String,
+        timeoutSeconds: TimeInterval = 10,
+        shell: String = "/bin/sh",
+        environment: Env = [:]
+    ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
         process.arguments = ["-c", command]
+        process.environment = environment
         let outputURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("kwwk-config-shell-\(UUID().uuidString)")
         FileManager.default.createFile(atPath: outputURL.path, contents: nil)
@@ -227,9 +238,11 @@ public struct SettingsLoadError: Error, Sendable, Equatable {
     }
 }
 
-/// Loads and deep-merges kwwk settings from a global and a project file. Ported
-/// from pi's `settings-manager.ts`: the global `~/.kwwk/settings.json` is the
-/// base, and a project `./.kwwk/settings.json` is layered on top (project wins).
+/// Loads and deep-merges kwwk settings from explicit file paths. The
+/// path-based API supports the CLI-style global `~/.kwwk/settings.json` base
+/// plus a project `./.kwwk/settings.json` override. The convenience
+/// `load(cwd:)` reads neither project nor global settings unless those layers
+/// are explicitly requested.
 public struct SettingsStore: Sendable {
     /// Directory name used for both the global (`~/.kwwk`) and project
     /// (`./.kwwk`) config locations.
@@ -255,7 +268,7 @@ public struct SettingsStore: Sendable {
         merged: Settings,
         global: Settings,
         project: Settings,
-        projectTrusted: Bool = true,
+        projectTrusted: Bool,
         loadErrors: [SettingsLoadError] = []
     ) {
         self.merged = merged
@@ -290,7 +303,7 @@ public struct SettingsStore: Sendable {
     public static func load(
         globalPath: URL,
         projectPath: URL?,
-        projectTrusted: Bool = true
+        projectTrusted: Bool
     ) -> SettingsStore {
         var loadErrors: [SettingsLoadError] = []
 
@@ -316,16 +329,50 @@ public struct SettingsStore: Sendable {
         )
     }
 
-    /// Convenience: load from the default `~/.kwwk` global path and the project
-    /// `.kwwk` directory under `cwd`.
+    /// Convenience: load from settings locations under `cwd` and, when
+    /// requested, the CLI-style global `~/.kwwk/settings.json` layer. Both
+    /// layers are opt-in so SDK callers do not get behavior from the process
+    /// current directory or the user's home directory by default.
     public static func load(
-        cwd: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true),
-        projectTrusted: Bool = true
+        cwd: URL,
+        includeGlobal: Bool,
+        includeProject: Bool,
+        projectTrusted: Bool
     ) -> SettingsStore {
-        load(
-            globalPath: defaultGlobalPath(),
-            projectPath: projectPath(cwd: cwd),
-            projectTrusted: projectTrusted
+        let projectPath = projectPath(cwd: cwd)
+        if includeGlobal {
+            return load(
+                globalPath: defaultGlobalPath(),
+                projectPath: includeProject ? projectPath : nil,
+                projectTrusted: projectTrusted
+            )
+        }
+
+        guard includeProject else {
+            return SettingsStore(
+                merged: .empty,
+                global: .empty,
+                project: .empty,
+                projectTrusted: projectTrusted,
+                loadErrors: []
+            )
+        }
+
+        var loadErrors: [SettingsLoadError] = []
+        let project: Settings
+        if projectTrusted {
+            let (p, projErr) = loadFileChecked(projectPath, scope: .project)
+            project = p
+            if let projErr { loadErrors.append(projErr) }
+        } else {
+            project = .empty
+        }
+        return SettingsStore(
+            merged: project,
+            global: .empty,
+            project: project,
+            projectTrusted: projectTrusted,
+            loadErrors: loadErrors
         )
     }
 

@@ -3,7 +3,9 @@ import KWWKAI
 
 public struct FindToolOptions: Sendable {
     public var operations: FindOperations
-    public init(operations: FindOperations = LocalFindOperations()) {
+    public init(
+        operations: FindOperations = LocalFindOperations()
+    ) {
         self.operations = operations
     }
 }
@@ -38,10 +40,12 @@ public func createFindTool(cwd: String, options: FindToolOptions = .init()) -> A
                   case .string(let pattern) = obj["pattern"] ?? .null else {
                 throw CodingToolError.invalidArgument("find: `pattern` is required")
             }
-            let root: String = {
-                if case .string(let p) = obj["path"] ?? .null { return PathUtils.resolveToCwd(p, cwd: cwd) }
-                return cwd
-            }()
+            let root: String
+            if case .string(let p) = obj["path"] ?? .null {
+                root = PathUtils.resolveToCwd(p, cwd: cwd)
+            } else {
+                root = cwd
+            }
             let limit: Int? = {
                 if case .int(let v) = obj["limit"] ?? .null { return v }
                 if case .double(let v) = obj["limit"] ?? .null { return Int(v) }
