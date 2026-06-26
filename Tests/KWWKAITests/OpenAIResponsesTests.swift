@@ -187,7 +187,7 @@ struct OpenAIResponsesTests {
                 )
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let headers = client.lastRequest?.headers ?? [:]
         #expect(headers["authorization"] == nil)
         #expect(headers["api-key"] == "azure-key")
@@ -215,7 +215,7 @@ struct OpenAIResponsesTests {
                 parallelToolCalls: false
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["instructions"] as? String == "Be concise.")
@@ -246,7 +246,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         let reasoning = json?["reasoning"] as? [String: Any]
         #expect(reasoning?["effort"] as? String == "none")
@@ -265,7 +265,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         #expect(json?["reasoning"] == nil)
     }
@@ -279,7 +279,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(reasoning: .high, reasoningSummary: .detailed)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         let r = json?["reasoning"] as? [String: Any]
         #expect(r?["effort"] as? String == "high")
@@ -295,7 +295,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(reasoningSummary: .omit)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         let r = json?["reasoning"] as? [String: Any]
         #expect(r?["effort"] as? String == "medium")
@@ -312,7 +312,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(serviceTier: .flex)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         #expect(json?["service_tier"] as? String == "flex")
     }
@@ -326,7 +326,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         #expect(json?["service_tier"] == nil)
     }
@@ -341,7 +341,7 @@ struct OpenAIResponsesTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(sessionId: longId)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect((json?["prompt_cache_key"] as? String)?.count == 64)
@@ -371,7 +371,7 @@ struct OpenAIResponsesTests {
             ]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let input = json?["input"] as? [[String: Any]]

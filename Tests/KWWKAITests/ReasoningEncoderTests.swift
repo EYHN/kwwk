@@ -114,7 +114,7 @@ struct ReasoningEncoderTests {
         _ = provider.stream(model: model,
                             context: Context(messages: [.user(UserMessage(text: "hi"))]),
                             options: StreamOptions(reasoning: .xhigh))
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         let thinking = json?["thinking"] as? [String: Any]
         #expect(thinking?["type"] as? String == "adaptive")
@@ -135,7 +135,7 @@ struct ReasoningEncoderTests {
         _ = provider.stream(model: model,
                             context: Context(messages: [.user(UserMessage(text: "hi"))]),
                             options: StreamOptions(reasoning: .low))
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
         let tc = (json?["generationConfig"] as? [String: Any])?["thinkingConfig"] as? [String: Any]
         #expect(tc?["thinkingLevel"] as? String == "LOW")

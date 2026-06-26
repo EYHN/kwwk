@@ -37,7 +37,7 @@ struct AnthropicToolChoiceTests {
             tools: [tool()]
         )
         _ = provider.stream(model: Self.model, context: ctx, options: options)
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         return (try? JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
     }

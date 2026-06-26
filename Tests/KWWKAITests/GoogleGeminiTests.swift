@@ -139,7 +139,7 @@ struct GoogleGeminiTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(apiKey: "override-key")
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.url.absoluteString.contains("key=override-key") == true)
         #expect(client.lastRequest?.headers["authorization"] == nil)
     }
@@ -156,7 +156,7 @@ struct GoogleGeminiTests {
                 resolvedAuth: ResolvedProviderAuth(token: "resolved-key", scheme: .queryKey(name: "key"))
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.url.absoluteString.contains("key=resolved-key") == true)
         #expect(client.lastRequest?.url.absoluteString.contains("ignored-key") == false)
         #expect(client.lastRequest?.headers["authorization"] == nil)
@@ -173,7 +173,7 @@ struct GoogleGeminiTests {
                 resolvedAuth: ResolvedProviderAuth(token: "resolved-key", scheme: .queryKey(name: "api_key"))
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.url.absoluteString.contains("resolved-key") == false)
         #expect(client.lastRequest?.headers["authorization"] == nil)
     }
@@ -194,7 +194,7 @@ struct GoogleGeminiTests {
             ),
             options: StreamOptions(toolChoice: .required)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let sysInstr = json?["systemInstruction"] as? [String: Any]

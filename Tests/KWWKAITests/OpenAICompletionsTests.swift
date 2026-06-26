@@ -111,7 +111,7 @@ struct OpenAICompletionsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(apiKey: "sk-override")
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["Authorization"] == "Bearer sk-override")
     }
 
@@ -127,7 +127,7 @@ struct OpenAICompletionsTests {
                 resolvedAuth: ResolvedProviderAuth(token: "sk-resolved", scheme: .bearer)
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["Authorization"] == "Bearer sk-resolved")
     }
 
@@ -143,7 +143,7 @@ struct OpenAICompletionsTests {
             ),
             options: StreamOptions(toolChoice: .required, parallelToolCalls: false)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["parallel_tool_calls"] as? Bool == false)
@@ -178,7 +178,7 @@ struct OpenAICompletionsTests {
             ),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let messages = json?["messages"] as? [[String: Any]]

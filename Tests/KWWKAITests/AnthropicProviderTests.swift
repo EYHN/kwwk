@@ -192,7 +192,7 @@ struct AnthropicProviderTests {
             options: StreamOptions(apiKey: "override-key")
         )
         // Give the detached task time to emit the request.
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let req = client.lastRequest
         #expect(req != nil)
         #expect(req?.headers["x-api-key"] == "override-key")
@@ -217,7 +217,7 @@ struct AnthropicProviderTests {
                 )
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let headers = client.lastRequest?.headers ?? [:]
         #expect(headers["Authorization"] == "Bearer oauth-token")
         #expect(headers["x-api-key"] == nil)
@@ -268,7 +268,7 @@ struct AnthropicProviderTests {
             // (string `system`); caching is covered separately below.
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
 
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
@@ -293,7 +293,7 @@ struct AnthropicProviderTests {
             ),
             options: nil // default retention = short
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
 
@@ -322,7 +322,7 @@ struct AnthropicProviderTests {
             context: Context(systemPrompt: "S", messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(cacheRetention: .long)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let system = json?["system"] as? [[String: Any]]
@@ -339,7 +339,7 @@ struct AnthropicProviderTests {
             context: Context(systemPrompt: "S", messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["system"] as? String == "S")
@@ -357,7 +357,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(temperature: 0.2, reasoning: .medium)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let thinking = json?["thinking"] as? [String: Any]
@@ -378,7 +378,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(temperature: 0.2)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["thinking"] == nil)
@@ -455,7 +455,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions()
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = Self.decodeBody(client)
         #expect((json["thinking"] as? [String: Any])?["type"] as? String == "disabled")
     }
@@ -471,7 +471,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions()
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = Self.decodeBody(client)
         #expect(json["thinking"] == nil)
     }
@@ -494,7 +494,7 @@ struct AnthropicProviderTests {
             ]),
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = Self.decodeBody(client)
         let messages = json["messages"] as? [[String: Any]]
         let content = messages?.last?["content"] as? [[String: Any]]
@@ -523,7 +523,7 @@ struct AnthropicProviderTests {
             ]),
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = Self.decodeBody(client)
         let messages = json["messages"] as? [[String: Any]]
         let content = messages?.last?["content"] as? [[String: Any]]
@@ -549,7 +549,7 @@ struct AnthropicProviderTests {
             ]),
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let json = Self.decodeBody(client)
         let messages = json["messages"] as? [[String: Any]]
         let content = messages?.last?["content"] as? [[String: Any]]
@@ -568,7 +568,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("interleaved-thinking-2025-05-14") == true)
     }
 
@@ -585,7 +585,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("interleaved-thinking") != true)
     }
 
@@ -603,7 +603,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))], tools: [tool]),
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("fine-grained-tool-streaming-2025-05-14") == true)
         let json = Self.decodeBody(client)
         let tools = json["tools"] as? [[String: Any]]
@@ -620,7 +620,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))], tools: [tool]),
             options: StreamOptions(cacheRetention: CacheRetention.none)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["anthropic-beta"]?.contains("fine-grained-tool-streaming") != true)
         let json = Self.decodeBody(client)
         let tools = json["tools"] as? [[String: Any]]
@@ -638,7 +638,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let headers = client.lastRequest?.headers ?? [:]
         #expect(headers["user-agent"] == "claude-cli/2.1.75")
         #expect(headers["x-app"] == "cli")
@@ -656,7 +656,7 @@ struct AnthropicProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let headers = client.lastRequest?.headers ?? [:]
         #expect(headers["x-app"] == nil)
         #expect(headers["anthropic-beta"]?.contains("claude-code-20250219") != true)

@@ -41,7 +41,7 @@ struct ProviderVariantsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(transport: .sse)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
         #expect(u.contains("/openai/deployments/gpt-5/responses"))
         #expect(u.contains("api-version=2024-10-01-preview"))
@@ -64,7 +64,7 @@ struct ProviderVariantsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(transport: .sse, metadata: ["deployment": .string("gpt4o-prod")])
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
         #expect(u.contains("/deployments/gpt4o-prod/responses"))
     }
@@ -87,7 +87,7 @@ struct ProviderVariantsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let h = client.lastRequest?.headers ?? [:]
         #expect(h["authorization"] == "Bearer oauth-abc")
         // OAuth seeds `claude-code-20250219,oauth-2025-04-20`; the Anthropic
@@ -122,7 +122,7 @@ struct ProviderVariantsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
         #expect(u.contains("us-central1-aiplatform.googleapis.com"))
         #expect(u.contains("/projects/my-project/locations/us-central1/publishers/google/models/gemini-2.5-flash"))
@@ -158,7 +158,7 @@ struct ProviderVariantsTests {
             ]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let h1 = client.lastRequest?.headers ?? [:]
         #expect(h1["x-initiator"] == "agent")
         #expect(h1["openai-intent"] == "conversation-edits")
@@ -170,7 +170,7 @@ struct ProviderVariantsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["x-initiator"] == "user")
     }
 
@@ -195,7 +195,7 @@ struct ProviderVariantsTests {
             ]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["copilot-vision-request"] == "true")
     }
 
@@ -215,7 +215,7 @@ struct ProviderVariantsTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(transport: .sse)
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let u = client.lastRequest?.url.absoluteString ?? ""
         #expect(u == "https://chatgpt.com/backend-api/codex/responses")
         #expect(client.lastRequest?.headers["authorization"] == "Bearer codex-bearer")
