@@ -244,7 +244,9 @@ struct BedrockProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        for _ in 0..<400 where client.lastRequest == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
         let h = client.lastRequest?.headers ?? [:]
         #expect(h["authorization"]?.contains("AWS4-HMAC-SHA256") == true)
         #expect(h["authorization"]?.contains("us-west-2/bedrock/aws4_request") == true)
@@ -282,7 +284,9 @@ struct BedrockProviderTests {
                 toolChoice: .required
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        for _ in 0..<400 where client.lastRequest == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
         let sent = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: sent) as? [String: Any]
         let systemParts = json?["system"] as? [[String: Any]]
