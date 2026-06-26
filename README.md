@@ -339,7 +339,7 @@ flow via `KWWKAI.OAuth` / `OAuthLogin` — the same code path the CLI's
 
 ```sh
 swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts
-swift test
+Scripts/test.sh
 ```
 
 The generator writes `Sources/KWWKAI/Resources/models.json` by default.
@@ -356,8 +356,11 @@ Antigravity provider groups stay absent.
 - `Sources/kwwk` — the executable entry point
 - `Tests/` — XCTest suites for each module
 
+Use the test script instead of bare `swift test`; it runs isolated suites in
+parallel and keeps process/tmux suites serialized.
+
 ```sh
-swift test
+Scripts/test.sh
 ```
 
 ## A note on OAuth client IDs
