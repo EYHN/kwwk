@@ -15,11 +15,30 @@ func runCodingTUIInternal(
     builtinSubagents: BuiltinSubagentSelection = .all,
     authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
     autoCompactThreshold: Double? = 0.75,
-    thinkingLevel: ThinkingLevel = .medium
+    thinkingLevel: ThinkingLevel = .medium,
+    resume: SessionResume = .none
 ) async throws {
     // --- agent + background manager -------------------------------------
     let bgManager = BackgroundTaskManager()
-    let sessionId = UUID().uuidString
+
+    // Resolve session persistence up front: a fresh id by default, or a
+    // stored transcript when `--resume` / `--session` was passed.
+    let sessionStore = SessionStore()
+    // `--resume` opens an interactive picker across all projects; resolve the
+    // user's choice to a concrete session id before loading. Cancelling exits
+    // cleanly (pi parity: "No session selected", exit 0).
+    var effectiveResume = resume
+    if resume == .pickInteractive {
+        if let chosen = await SessionPicker.choose(store: sessionStore) {
+            effectiveResume = .id(chosen)
+        } else {
+            FileHandle.standardError.write(Data("No session selected\n".utf8))
+            Foundation.exit(0)
+        }
+    }
+    let resolvedResume = await sessionStore.resolveResume(effectiveResume, cwd: cwd)
+    let sessionId = resolvedResume.sessionId
+
     let agent = await makeCodingAgent(CodingAgentConfig(
         model: model,
         cwd: cwd,
@@ -30,6 +49,27 @@ func runCodingTUIInternal(
         authResolver: authResolver,
         autoCompactThreshold: autoCompactThreshold
     ))
+
+    // Seed the transcript from disk when resuming so the model continues
+    // where it left off.
+    if !resolvedResume.messages.isEmpty {
+        agent.state.messages = resolvedResume.messages
+    }
+
+    // Persist the transcript as it grows.
+    let sessionRecorder = SessionRecorder(
+        store: sessionStore,
+        sessionId: sessionId,
+        cwd: cwd,
+        model: model.id,
+        provider: model.provider,
+        persistedCount: resolvedResume.persistedCount
+    )
+    if !resolvedResume.resumed {
+        await sessionRecorder.ensureCreated()
+    }
+    let unsubscribeSessionRecorder = sessionRecorder.attach(to: agent)
+    defer { unsubscribeSessionRecorder() }
     // Turn on extended thinking by default — otherwise reasoning-capable
     // providers never produce `[thinking]` blocks. The level is a user
     // intent: the agent loop filters it to `nil` when the live model
@@ -61,6 +101,12 @@ func runCodingTUIInternal(
     ]
     for line in bannerLines {
         runner.terminal.write(line + "\r\n")
+    }
+    if resolvedResume.resumed {
+        runner.terminal.write(
+            Style.dimmed("  ↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages")
+            + "\r\n\r\n"
+        )
     }
 
     layout.install(into: runner.tui)
@@ -277,6 +323,14 @@ func runCodingTUIInternal(
     // needs to be dismissed.
     let slashRegistry = SlashCommandRegistry()
     registerBuiltinSlashCommands(slashRegistry)
+    // User/project prompt-template commands (`.kwwk/commands/*.md`,
+    // `~/.kwwk/commands/*.md`). Registered after builtins so a custom file
+    // can't shadow a core command; their handlers render the template against
+    // the invocation args and submit it as an ordinary prompt. Project-local
+    // commands are loaded only when the project is trusted — an untrusted
+    // checkout must not be able to inject a template that gets sent to the model.
+    let projectTrusted = TrustManager().isTrusted(cwd)
+    CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd, trustProject: projectTrusted)
     let slashContext = SlashContext(
         agent: agent,
         modal: modal,

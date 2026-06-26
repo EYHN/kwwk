@@ -106,6 +106,36 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         if let extra = options?.headers {
             for (k, v) in extra { headers[k] = v }
         }
+        // Append a beta flag to any existing `anthropic-beta` value (e.g. the
+        // OAuth `claude-code-20250219,oauth-2025-04-20` seed) rather than
+        // clobbering it. Anthropic treats `anthropic-beta` as an unordered set.
+        func appendBeta(_ name: String) {
+            if let existing = headers["anthropic-beta"], !existing.isEmpty {
+                if !existing.contains(name) { headers["anthropic-beta"] = existing + "," + name }
+            } else {
+                headers["anthropic-beta"] = name
+            }
+        }
+        // 1h prompt-cache TTL requires the extended-cache-ttl beta.
+        if (options?.cacheRetention ?? .short) == .long,
+           model.compat?.supportsLongCacheRetention != false {
+            appendBeta("extended-cache-ttl-2025-04-11")
+        }
+        // Fine-grained tool streaming beta is required only when eager tool
+        // input streaming is NOT supported and tools are present (pi inversion,
+        // anthropic-messages.ts:1182-1184).
+        let hasTools = !(context.tools?.isEmpty ?? true)
+        let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
+        if hasTools && !supportsEager {
+            appendBeta("fine-grained-tool-streaming-2025-05-14")
+        }
+        // Interleaved thinking beta, unless the model forces adaptive thinking
+        // or the caller opts out. pi defaults `interleavedThinking` to true.
+        let adaptive = model.compat?.forceAdaptiveThinking == true
+        let interleaved = options?.interleavedThinking ?? true
+        if interleaved && !adaptive {
+            appendBeta("interleaved-thinking-2025-05-14")
+        }
 
         do {
             let (response, stream) = try await client.stream(
@@ -185,7 +215,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                     switch blockType {
                     case "text":
                         out.push(.textStart(contentIndex: index, partial: state.snapshot()))
-                    case "thinking":
+                    case "thinking", "redacted_thinking":
                         out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
                     case "tool_use":
                         out.push(.toolCallStart(contentIndex: index, partial: state.snapshot()))
@@ -292,6 +322,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         options: StreamOptions?,
         systemPromptPrefix: String? = nil
     ) throws -> Data {
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: Any] = [
             "model": model.id,
             "stream": true,
@@ -304,18 +336,56 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         // else a sensible default per level). Temperature is deliberately
         // dropped in this branch — the Messages API rejects any value
         // other than 1.0 when thinking is enabled.
+        let adaptive = model.compat?.forceAdaptiveThinking == true
         let thinkingEnabled: Bool
         if let reasoning = options?.reasoning {
-            let budget = options?.thinkingBudgets?.budget(for: reasoning) ?? defaultThinkingBudget(for: reasoning)
-            root["thinking"] = [
-                "type": "enabled",
-                "budget_tokens": budget,
-            ]
+            if adaptive {
+                // Adaptive thinking (Opus 4.6/4.7/4.8, Fable 5): Claude decides
+                // when/how much to think; we only pass an effort level via
+                // `output_config`. `max` is Opus-4.6-only; 4.7+/Fable map xhigh.
+                root["thinking"] = ["type": "adaptive", "display": "summarized"]
+                root["output_config"] = ["effort": adaptiveEffort(model, reasoning)]
+            } else {
+                let budget = options?.thinkingBudgets?.budget(for: reasoning) ?? defaultThinkingBudget(for: reasoning)
+                root["thinking"] = [
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                ]
+            }
             thinkingEnabled = true
         } else {
             thinkingEnabled = false
+            // pi parity (anthropic-messages.ts:981-983): explicitly disable
+            // thinking on reasoning-capable models when reasoning is off,
+            // unless `thinkingLevelMap` pins `off` to null (meaning the model
+            // does not support an explicit off level).
+            let offUnsupported: Bool = {
+                guard let map = model.thinkingLevelMap, map.keys.contains("off") else { return false }
+                return map["off"]! == nil   // present-and-null => unsupported
+            }()
+            if model.reasoning, !offUnsupported {
+                root["thinking"] = ["type": "disabled"]
+            }
         }
-        if !thinkingEnabled, let temp = options?.temperature { root["temperature"] = temp }
+        // Temperature is dropped when thinking is on (Messages API rejects any
+        // value != 1) and whenever the model declares it unsupported (Opus 4.7+).
+        let temperatureAllowed = model.compat?.supportsTemperature != false
+        if !thinkingEnabled, temperatureAllowed, let temp = options?.temperature { root["temperature"] = temp }
+
+        // Prompt caching: emit Anthropic-style `cache_control` breakpoints
+        // unless the caller opted out (`.none`). Default is short (5-min
+        // ephemeral); `.long` upgrades to a 1h TTL when the model supports it
+        // (the matching `anthropic-beta` header is added in `stream`). Markers
+        // go on the system prompt, the last tool definition, and the final
+        // message content block — pi's "anthropic" cache format.
+        let retention = options?.cacheRetention ?? .short
+        let cacheOn = retention != .none
+        let useLong = retention == .long && (model.compat?.supportsLongCacheRetention != false)
+        let cacheControl: [String: Any]? = cacheOn
+            ? (useLong ? ["type": "ephemeral", "ttl": "1h"] : ["type": "ephemeral"])
+            : nil
+        let cacheOnTools = cacheOn && (model.compat?.supportsCacheControlOnTools != false)
+
         // `system` encoding. When a `systemPromptPrefix` is set (Anthropic
         // OAuth / Claude Pro subscription) the endpoint rejects any shape
         // where the Claude Code identifier isn't a standalone leading
@@ -330,21 +400,35 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             if let userSystem {
                 blocks.append(["type": "text", "text": userSystem])
             }
+            if let cc = cacheControl, !blocks.isEmpty {
+                blocks[blocks.count - 1]["cache_control"] = cc
+            }
             root["system"] = blocks
         } else if let userSystem {
-            root["system"] = userSystem
+            if let cc = cacheControl {
+                root["system"] = [["type": "text", "text": userSystem, "cache_control": cc]]
+            } else {
+                root["system"] = userSystem
+            }
         }
+        // pi default for `supportsEagerToolInputStreaming` is `true`.
+        let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
         if let tools = context.tools, !tools.isEmpty {
-            root["tools"] = tools.map { tool -> [String: Any] in
+            var toolEntries = tools.map { tool -> [String: Any] in
                 var entry: [String: Any] = [
                     "name": tool.name,
                     "description": tool.description,
                 ]
+                if supportsEager { entry["eager_input_streaming"] = true }
                 if let params = anyFromJSONValue(tool.parameters) {
                     entry["input_schema"] = params
                 }
                 return entry
             }
+            if cacheOnTools, let cc = cacheControl, !toolEntries.isEmpty {
+                toolEntries[toolEntries.count - 1]["cache_control"] = cc
+            }
+            root["tools"] = toolEntries
             // Anthropic folds the parallel-tool-call switch into `tool_choice`
             // via a `disable_parallel_tool_use` flag. The default remains
             // parallel-on, so we only emit the block when the caller picks a
@@ -353,14 +437,44 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 root["tool_choice"] = toolChoice
             }
         }
-        root["messages"] = context.messages.compactMap(encodeMessage)
+        // pi default for `allowEmptySignature` is `false`.
+        let allowEmptySig = model.compat?.allowEmptySignature == true
+        var messages = context.messages.compactMap { Self.encodeMessage($0, allowEmptySignature: allowEmptySig) }
+        if let cc = cacheControl, !messages.isEmpty {
+            applyCacheControl(cc, toLastBlockOf: &messages[messages.count - 1])
+        }
+        root["messages"] = messages
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    /// Attach a `cache_control` marker to the final content block of a message,
+    /// closing the cached prefix at the end of the conversation.
+    private static func applyCacheControl(_ cc: [String: Any], toLastBlockOf message: inout [String: Any]) {
+        guard var content = message["content"] as? [[String: Any]], !content.isEmpty else { return }
+        content[content.count - 1]["cache_control"] = cc
+        message["content"] = content
     }
 
     /// Fallback thinking budget per reasoning level when the caller didn't
     /// supply explicit `ThinkingBudgets`. Anthropic requires a minimum of
     /// 1024; these numbers are conservative enough to work across Claude
     /// 4.x Sonnet/Haiku/Opus without tripping per-model caps.
+    /// Map a reasoning level to an Anthropic adaptive-thinking effort, honoring
+    /// the per-model `thinkingLevelMap` (e.g. Opus 4.6 maps xhigh→"max"). Falls
+    /// back to pi's defaults: minimal/low→low, medium→medium, high/xhigh→high.
+    /// Valid efforts are low/medium/high/xhigh/max.
+    private static func adaptiveEffort(_ model: Model, _ reasoning: ReasoningLevel) -> String {
+        let level = ModelThinkingLevel(reasoning: reasoning)
+        if let map = model.thinkingLevelMap, let entry = map[level.rawValue], let mapped = entry {
+            return mapped
+        }
+        switch reasoning {
+        case .minimal, .low: return "low"
+        case .medium: return "medium"
+        case .high, .xhigh: return "high"
+        }
+    }
+
     private static func defaultThinkingBudget(for level: ReasoningLevel) -> Int {
         switch level {
         case .minimal: return 1024
@@ -386,7 +500,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         return out
     }
 
-    private static func encodeMessage(_ message: Message) -> [String: Any]? {
+    private static func encodeMessage(_ message: Message, allowEmptySignature: Bool) -> [String: Any]? {
         switch message {
         case .user(let u):
             let content = u.content.map { block -> [String: Any] in
@@ -412,9 +526,24 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 case .text(let t):
                     blocks.append(["type": "text", "text": t.text])
                 case .thinking(let th):
-                    var entry: [String: Any] = ["type": "thinking", "thinking": th.thinking]
-                    if let sig = th.thinkingSignature { entry["signature"] = sig }
-                    blocks.append(entry)
+                    // pi parity (anthropic-messages.ts:1072-1104).
+                    if th.redacted == true {
+                        blocks.append(["type": "redacted_thinking", "data": th.thinkingSignature ?? ""])
+                        break
+                    }
+                    if th.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
+                    let sig = th.thinkingSignature
+                    if sig == nil || sig!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        if allowEmptySignature {
+                            blocks.append(["type": "thinking", "thinking": th.thinking, "signature": ""])
+                        } else {
+                            // The Messages API rejects a thinking block without a
+                            // valid signature; degrade to plain text instead.
+                            blocks.append(["type": "text", "text": th.thinking])
+                        }
+                    } else {
+                        blocks.append(["type": "thinking", "thinking": th.thinking, "signature": sig!])
+                    }
                 case .toolCall(let tc):
                     var entry: [String: Any] = [
                         "type": "tool_use",
@@ -505,6 +634,12 @@ final class AnthropicStreamState: @unchecked Sendable {
         if case .int(let v) = obj["output_tokens"] ?? .null { usage.output = v }
         if case .int(let v) = obj["cache_read_input_tokens"] ?? .null { usage.cacheRead = v }
         if case .int(let v) = obj["cache_creation_input_tokens"] ?? .null { usage.cacheWrite = v }
+        // pi parity: 1h cache-write subset (message_start) and reasoning tokens
+        // (message_delta). Reading both at every usage event is harmless.
+        if case .object(let cc) = obj["cache_creation"] ?? .null,
+           case .int(let v) = cc["ephemeral_1h_input_tokens"] ?? .null { usage.cacheWrite1h = v }
+        if case .object(let d) = obj["output_tokens_details"] ?? .null,
+           case .int(let v) = d["thinking_tokens"] ?? .null { usage.reasoning = v }
         usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
     }
 
@@ -514,6 +649,14 @@ final class AnthropicStreamState: @unchecked Sendable {
             switch type {
             case "text": blocks[index] = .text(TextContent(text: ""))
             case "thinking": blocks[index] = .thinking(ThinkingContent(thinking: ""))
+            case "redacted_thinking":
+                let data: String = {
+                    if case .string(let v) = raw["data"] ?? .null { return v } else { return "" }
+                }()
+                blocks[index] = .thinking(ThinkingContent(
+                    thinking: "[Reasoning redacted]",
+                    thinkingSignature: data,
+                    redacted: true))
             case "tool_use":
                 let id: String = {
                     if case .string(let v) = raw["id"] ?? .null { return v } else { return "" }

@@ -34,6 +34,34 @@ public enum ReasoningLevel: String, Codable, Sendable, Hashable {
     case xhigh
 }
 
+/// OpenAI Responses reasoning-summary verbosity. `nil` (field absent) ⇒
+/// provider default (`auto`); `.omit` drops the `summary` key entirely so the
+/// endpoint streams reasoning start/end with no summary body.
+public enum ReasoningSummary: String, Codable, Sendable, Hashable {
+    case auto
+    case concise
+    case detailed
+    case omit
+}
+
+/// OpenAI Responses processing tier. `nil` (field absent) ⇒ provider default.
+/// pi additionally allows `null`; in Swift `nil` already means "field absent".
+public enum ServiceTier: String, Codable, Sendable, Hashable {
+    case auto
+    case `default`
+    case flex
+    case scale
+    case priority
+}
+
+/// Bedrock reasoning display mode for the `thinking.display` field. `summarized`
+/// is the default; `omitted` hides the reasoning trace. Suppressed entirely on
+/// GovCloud targets.
+public enum BedrockThinkingDisplay: String, Codable, Sendable, Hashable {
+    case summarized
+    case omitted
+}
+
 public struct ThinkingBudgets: Codable, Sendable, Hashable {
     public var minimal: Int?
     public var low: Int?
@@ -108,6 +136,26 @@ public struct StreamOptions: Sendable {
     public var thinkingBudgets: ThinkingBudgets?
     public var cancellation: CancellationHandle?
 
+    /// OpenAI Responses reasoning-summary verbosity (`auto`/`concise`/`detailed`,
+    /// or `.omit` to drop the field). `nil` ⇒ provider default (`auto`).
+    /// Providers without an analog ignore this.
+    public var reasoningSummary: ReasoningSummary?
+
+    /// OpenAI Responses `service_tier` pass-through (`flex`/`priority`/etc.).
+    /// `nil` ⇒ field absent. Providers without an analog ignore this.
+    public var serviceTier: ServiceTier?
+
+    /// Anthropic interleaved-thinking beta opt-in. `nil` ⇒ provider default
+    /// (treated as `true`); set `false` to suppress the
+    /// `interleaved-thinking-2025-05-14` beta header. Providers without an
+    /// analog ignore this.
+    public var interleavedThinking: Bool?
+
+    /// Bedrock reasoning display mode (`thinking.display`). `nil` ⇒ provider
+    /// default (`summarized`). Suppressed on GovCloud targets. Providers without
+    /// an analog ignore this.
+    public var thinkingDisplay: BedrockThinkingDisplay?
+
     /// Tool-use constraint. `nil` means provider default (usually `.auto`).
     public var toolChoice: ToolChoice?
 
@@ -138,6 +186,10 @@ public struct StreamOptions: Sendable {
         reasoning: ReasoningLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         cancellation: CancellationHandle? = nil,
+        reasoningSummary: ReasoningSummary? = nil,
+        serviceTier: ServiceTier? = nil,
+        interleavedThinking: Bool? = nil,
+        thinkingDisplay: BedrockThinkingDisplay? = nil,
         toolChoice: ToolChoice? = nil,
         parallelToolCalls: Bool? = nil,
         verbose: Bool? = nil,
@@ -156,6 +208,10 @@ public struct StreamOptions: Sendable {
         self.reasoning = reasoning
         self.thinkingBudgets = thinkingBudgets
         self.cancellation = cancellation
+        self.reasoningSummary = reasoningSummary
+        self.serviceTier = serviceTier
+        self.interleavedThinking = interleavedThinking
+        self.thinkingDisplay = thinkingDisplay
         self.toolChoice = toolChoice
         self.parallelToolCalls = parallelToolCalls
         self.verbose = verbose

@@ -55,9 +55,9 @@ public enum ModelsCatalog {
         return out
     }
 
-    /// Hand-written decoder matching the fields pi emits. We intentionally
-    /// ignore provider-specific `compat` blocks (used by some OpenAI-compat
-    /// backends) since kw's providers don't consume them yet.
+    /// Hand-written decoder matching the fields pi emits, including the
+    /// per-model `compat` block and `thinkingLevelMap` consumed by the provider
+    /// encoders for reasoning/caching/request shaping.
     private static func decode(_ dict: [String: Any]) -> Model? {
         guard let id = dict["id"] as? String,
               let name = dict["name"] as? String,
@@ -81,6 +81,30 @@ public enum ModelsCatalog {
         }
 
         let headers = dict["headers"] as? [String: String]
+
+        // compat: re-serialize the sub-object and run it through JSONDecoder so
+        // the flattened ModelCompat picks up whichever per-API fields are present.
+        var compat: ModelCompat?
+        if let compatDict = dict["compat"] as? [String: Any],
+           let compatData = try? JSONSerialization.data(withJSONObject: compatDict) {
+            compat = try? JSONDecoder().decode(ModelCompat.self, from: compatData)
+        }
+
+        // thinkingLevelMap: preserve the present-with-null distinction (null =>
+        // level explicitly unsupported) that JSONSerialization surfaces as NSNull.
+        var thinkingLevelMap: [String: String?]?
+        if let mapDict = dict["thinkingLevelMap"] as? [String: Any] {
+            var parsed: [String: String?] = [:]
+            for (level, value) in mapDict {
+                if value is NSNull {
+                    parsed[level] = .some(nil)
+                } else if let s = value as? String {
+                    parsed[level] = .some(s)
+                }
+            }
+            if !parsed.isEmpty { thinkingLevelMap = parsed }
+        }
+
         return Model(
             id: id,
             name: name,
@@ -92,7 +116,9 @@ public enum ModelsCatalog {
             cost: cost,
             contextWindow: contextWindow,
             maxTokens: maxTokens,
-            headers: headers
+            headers: headers,
+            compat: compat,
+            thinkingLevelMap: thinkingLevelMap
         )
     }
 

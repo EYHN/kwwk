@@ -55,6 +55,11 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         self.urlBuilder = urlBuilder ?? { model, _, fallback in
             var base = model.baseUrl.isEmpty ? fallback.absoluteString : model.baseUrl
             while base.hasSuffix("/") { base.removeLast() }
+            // Cloudflare catalog entries carry literal `{CLOUDFLARE_ACCOUNT_ID}`
+            // / `{CLOUDFLARE_GATEWAY_ID}` placeholders in `baseUrl`; expand them
+            // from the environment before building the request URL. No-op for
+            // every other provider (the tokens never appear in their baseUrls).
+            base = substituteCloudflarePlaceholders(in: base)
             // Tolerate catalog entries that bake `/v1` into baseUrl
             // (pi-mono's models.generated.ts does this for OpenAI).
             // Without this, the session baseUrl `https://api.openai.com`
@@ -101,11 +106,21 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             "content-type": "application/json",
             "accept": "text/event-stream",
         ]
+        for (k, v) in model.headers ?? [:] { headers[k] = v }
         for (k, v) in extraHeaders { headers[k] = v }
         if let auth = options?.resolvedAuth {
             applyResolvedAuth(auth, to: &headers)
         } else if let key = options?.apiKey ?? defaultAPIKey {
             for (k, v) in authHeaderBuilder(key) { headers[k] = v }
+        }
+        let compat = Self.resolveCompat(model)
+        let retention = options?.cacheRetention ?? .short
+        if retention != .none,
+           let sid = options?.sessionId, !sid.isEmpty,
+           compat.sendSessionAffinityHeaders {
+            headers["session_id"] = sid
+            headers["x-client-request-id"] = sid
+            headers["x-session-affinity"] = sid
         }
         headersDecorator?(&headers, model, context, options)
         for (k, v) in options?.headers ?? [:] { headers[k] = v }
@@ -124,7 +139,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 out.end(msg)
                 return
             }
-            let state = OpenAICompletionsState(api: api, provider: model.provider, modelId: model.id)
+            let state = OpenAICompletionsState(api: api, provider: model.provider, modelId: model.id, model: model)
             state.signal = options?.cancellation
             try await drive(events: parseSSE(bytes: stream), out: out, state: state)
         } catch {
@@ -140,6 +155,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         state: OpenAICompletionsState
     ) async throws {
         var emittedStart = false
+        var hasFinishReason = false
         for try await sse in events {
             if state.signal?.isCancelled == true {
                 let aborted = state.asAborted()
@@ -149,6 +165,8 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             }
             // `[DONE]` sentinel ends the stream.
             if sse.data.trimmingCharacters(in: .whitespaces) == "[DONE]" {
+                state.finalizeStreamingBlocks(emit: { event in out.push(event) })
+                if validateAndFinish(out: out, state: state, hasFinishReason: hasFinishReason) { return }
                 let final = state.finalize()
                 out.push(.done(reason: final.stopReason, message: final))
                 out.end(final)
@@ -171,6 +189,13 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                   let first = choices.first,
                   case .object(let choice) = first else { continue }
 
+            // Moonshot reports usage on the choice rather than the chunk root.
+            if case .object(let usageObj) = obj["usage"] ?? .null {
+                _ = usageObj // already applied above; avoid double-apply
+            } else if case .object(let choiceUsage) = choice["usage"] ?? .null {
+                state.applyUsage(choiceUsage)
+            }
+
             if case .object(let delta) = choice["delta"] ?? .null {
                 // Text content delta.
                 if case .string(let text) = delta["content"] ?? .null, !text.isEmpty {
@@ -185,19 +210,25 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     state.appendText(index: index, text: text)
                     out.push(.textDelta(contentIndex: index, delta: text, partial: state.snapshot()))
                 }
-                // Reasoning content delta (provider-specific key).
-                let reasoning: String? = {
-                    if case .string(let r) = delta["reasoning"] ?? .null { return r }
-                    if case .string(let r) = delta["reasoning_content"] ?? .null { return r }
+                // Reasoning content delta (provider-specific key). Probe in pi's
+                // order — `reasoning_content` (DeepSeek/chutes) first, then
+                // `reasoning` (OpenRouter), then `reasoning_text`. The matched
+                // field name is stashed as the thinking block's signature so the
+                // encoder can round-trip prior reasoning under the same key.
+                let reasoningField: (field: String, text: String)? = {
+                    if case .string(let r) = delta["reasoning_content"] ?? .null { return ("reasoning_content", r) }
+                    if case .string(let r) = delta["reasoning"] ?? .null { return ("reasoning", r) }
+                    if case .string(let r) = delta["reasoning_text"] ?? .null { return ("reasoning_text", r) }
                     return nil
                 }()
-                if let reasoning, !reasoning.isEmpty {
+                if let (field, reasoning) = reasoningField, !reasoning.isEmpty {
                     let (index, firstSeen) = state.noteThinkingBlock()
                     if !emittedStart {
                         out.push(.start(partial: state.snapshot()))
                         emittedStart = true
                     }
                     if firstSeen {
+                        state.setThinkingSignature(index: index, signature: field)
                         out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
                     }
                     state.appendThinking(index: index, text: reasoning)
@@ -235,18 +266,71 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                         }
                     }
                 }
+                // Encrypted reasoning details (OpenRouter / providers that round-trip
+                // opaque reasoning). Each `{type:"reasoning.encrypted", id, data}` is
+                // serialized verbatim and attached to the tool call with matching id.
+                if case .array(let details) = delta["reasoning_details"] ?? .null {
+                    for d in details {
+                        guard case .object(let detail) = d,
+                              case .string("reasoning.encrypted") = detail["type"] ?? .null,
+                              case .string(let id) = detail["id"] ?? .null, !id.isEmpty,
+                              case .string(let data) = detail["data"] ?? .null, !data.isEmpty else { continue }
+                        if let any = anyFromJSONValue(.object(detail)),
+                           let raw = try? JSONSerialization.data(withJSONObject: any, options: [.sortedKeys]),
+                           let serialized = String(data: raw, encoding: .utf8) {
+                            state.applyReasoningDetail(id: id, serialized: serialized)
+                        }
+                    }
+                }
             }
 
             if case .string(let reason) = choice["finish_reason"] ?? .null {
                 state.stopReason = Self.mapStopReason(reason)
+                if state.stopReason == .error, state.errorMessage == nil {
+                    state.errorMessage = "Provider finish_reason: \(reason)"
+                }
+                hasFinishReason = true
                 state.finalizeStreamingBlocks(emit: { event in out.push(event) })
             }
         }
 
         state.finalizeStreamingBlocks(emit: { event in out.push(event) })
+        if validateAndFinish(out: out, state: state, hasFinishReason: hasFinishReason) { return }
         let final = state.finalize()
         out.push(.done(reason: final.stopReason, message: final))
         out.end(final)
+    }
+
+    /// Post-stream validation mirroring pi's openai-completions end-of-stream
+    /// checks: aborted/error stop reasons and a missing `finish_reason` are
+    /// surfaced as error events rather than a silent successful completion.
+    /// Returns true if it emitted a terminal event (caller should return).
+    private func validateAndFinish(
+        out: AssistantMessageStream, state: OpenAICompletionsState, hasFinishReason: Bool
+    ) -> Bool {
+        if state.signal?.isCancelled == true || state.stopReason == .aborted {
+            let m = state.asAborted()
+            out.push(.error(reason: .aborted, error: m))
+            out.end(m)
+            return true
+        }
+        if state.stopReason == .error {
+            var m = state.finalize()
+            m.stopReason = .error
+            m.errorMessage = state.errorMessage ?? "Provider returned an error stop reason"
+            out.push(.error(reason: .error, error: m))
+            out.end(m)
+            return true
+        }
+        if !hasFinishReason {
+            var m = state.finalize()
+            m.stopReason = .error
+            m.errorMessage = "Stream ended without finish_reason"
+            out.push(.error(reason: .error, error: m))
+            out.end(m)
+            return true
+        }
+        return false
     }
 
     // MARK: - Encoding
@@ -254,48 +338,317 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
     static func encodeBodyDict(
         model: Model, context: Context, options: StreamOptions?
     ) throws -> [String: Any] {
+        let compat = resolveCompat(model)
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: Any] = [
             "model": model.id,
             "stream": true,
-            "messages": encodeMessages(context: context),
+            "messages": encodeMessages(model: model, context: context, compat: compat),
         ]
+        if compat.supportsUsageInStreaming {
+            root["stream_options"] = ["include_usage": true]
+        }
+        if compat.supportsStore {
+            root["store"] = false
+        }
         if let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil) {
-            root["max_tokens"] = maxTokens
+            root[compat.maxTokensField] = maxTokens
         }
         if let temp = options?.temperature { root["temperature"] = temp }
+        var toolEntries: [[String: Any]]?
         if let tools = context.tools, !tools.isEmpty {
-            root["tools"] = tools.map { tool -> [String: Any] in
-                var fn: [String: Any] = [
-                    "name": tool.name,
-                    "description": tool.description,
-                ]
-                if let params = anyFromJSONValue(tool.parameters) {
-                    fn["parameters"] = params
-                }
-                return ["type": "function", "function": fn]
-            }
+            toolEntries = encodeTools(tools, compat: compat)
+            root["tools"] = toolEntries
             if let choice = encodeToolChoice(options?.toolChoice) {
                 root["tool_choice"] = choice
             }
             if options?.parallelToolCalls == false {
                 root["parallel_tool_calls"] = false
             }
+            if compat.zaiToolStream {
+                root["tool_stream"] = true
+            }
+        } else if hasToolHistory(context.messages) {
+            root["tools"] = [[String: Any]]()
         }
-        if let reasoning = options?.reasoning {
-            root["reasoning_effort"] = reasoning.rawValue
-        }
+        applyReasoning(&root, model: model, options: options, compat: compat)
+        applyRouting(&root, compat: compat)
         if let meta = options?.metadata, let any = anyFromJSONValue(.object(meta)) {
             root["metadata"] = any
+        }
+        let retention = options?.cacheRetention ?? .short
+        if let cacheControl = compatCacheControl(compat: compat, retention: retention) {
+            var messages = root["messages"] as? [[String: Any]] ?? []
+            var tools = root["tools"] as? [[String: Any]]
+            applyAnthropicCacheControl(cacheControl, messages: &messages, tools: &tools)
+            root["messages"] = messages
+            if let tools { root["tools"] = tools }
+        }
+        // OpenAI-style `prompt_cache_key`/`prompt_cache_retention` must not be
+        // mixed onto an endpoint that already took Anthropic `cache_control`
+        // (e.g. OpenRouter `anthropic/*`) — those are different, conflicting wire
+        // shapes. Only apply native cache when we did NOT apply the anthropic one.
+        let openAINativeCache = compat.cacheControlFormat != "anthropic"
+            && (model.baseUrl.contains("api.openai.com")
+                || (retention == .long && compat.supportsLongCacheRetention))
+        if openAINativeCache, retention != .none,
+           let sid = clampOpenAIPromptCacheKey(options?.sessionId) {
+            root["prompt_cache_key"] = sid
+            if retention == .long, compat.supportsLongCacheRetention {
+                root["prompt_cache_retention"] = "24h"
+            }
         }
         return root
     }
 
-    private static func encodeMessages(context: Context) -> [[String: Any]] {
+    // MARK: - Reasoning / thinking format
+
+    /// Subset of pi's resolved OpenAI-completions compat that the reasoning
+    /// encoder needs. Auto-detected from provider/baseUrl, then overlaid with
+    /// any explicit `model.compat`.
+    struct ResolvedCompletionsCompat {
+        var supportsStore: Bool
+        var supportsDeveloperRole: Bool
+        var supportsReasoningEffort: Bool
+        var supportsUsageInStreaming: Bool
+        var maxTokensField: String
+        var requiresToolResultName: Bool
+        var requiresAssistantAfterToolResult: Bool
+        var requiresThinkingAsText: Bool
+        var requiresReasoningContentOnAssistantMessages: Bool
+        var thinkingFormat: String
+        var chatTemplateKwargs: [String: JSONValue]
+        var openRouterRouting: JSONValue?
+        var vercelGatewayRouting: JSONValue?
+        var zaiToolStream: Bool
+        var supportsStrictMode: Bool
+        var cacheControlFormat: String?
+        var sendSessionAffinityHeaders: Bool
+        var supportsLongCacheRetention: Bool
+    }
+
+    static func resolveCompat(_ model: Model) -> ResolvedCompletionsCompat {
+        let url = model.baseUrl.lowercased()
+        let provider = model.provider
+        func has(_ s: String) -> Bool { url.contains(s) }
+        let isZai = provider == "zai" || provider == "zai-coding-cn" || has("api.z.ai") || has("bigmodel.cn")
+        let isTogether = provider == "together" || has("api.together.ai") || has("api.together.xyz")
+        let isMoonshot = provider == "moonshotai" || provider == "moonshotai-cn" || has("api.moonshot.")
+        let isOpenRouter = provider == "openrouter" || has("openrouter.ai")
+        let isCloudflareWorkers = provider == "cloudflare-workers-ai" || has("api.cloudflare.com")
+        let isNvidia = provider == "nvidia" || has("integrate.api.nvidia.com")
+        let isAntLing = provider == "ant-ling" || has("api.ant-ling.com")
+        let isDeepSeek = provider == "deepseek" || has("deepseek.com")
+        let isGrok = provider == "xai" || has("api.x.ai")
+        let isCfGateway = provider == "cloudflare-ai-gateway" || has("gateway.ai.cloudflare.com")
+        let isCerebras = provider == "cerebras" || has("cerebras.ai")
+        let isChutes = has("chutes.ai")
+        let isOpencode = provider == "opencode" || has("opencode.ai")
+        let isNonStandard = isNvidia || isCerebras || isGrok || isTogether || isChutes
+            || isDeepSeek || isZai || isMoonshot || isOpencode || isCloudflareWorkers
+            || isCfGateway || isAntLing
+        let openRouterDeveloperRole = isOpenRouter && (model.id.hasPrefix("anthropic/") || model.id.hasPrefix("openai/"))
+        let useMaxTokens = isChutes || isMoonshot || isCfGateway || isTogether || isNvidia || isAntLing
+
+        let detectedReasoningEffort = !isGrok && !isZai && !isMoonshot && !isTogether && !isCfGateway && !isNvidia && !isAntLing
+        let detectedFormat: String = isDeepSeek ? "deepseek"
+            : isZai ? "zai"
+            : isTogether ? "together"
+            : isAntLing ? "ant-ling"
+            : isOpenRouter ? "openrouter"
+            : "openai"
+
+        let c = model.compat
+        return ResolvedCompletionsCompat(
+            supportsStore: c?.supportsStore ?? !isNonStandard,
+            supportsDeveloperRole: c?.supportsDeveloperRole ?? (openRouterDeveloperRole || (!isNonStandard && !isOpenRouter)),
+            supportsReasoningEffort: c?.supportsReasoningEffort ?? detectedReasoningEffort,
+            supportsUsageInStreaming: c?.supportsUsageInStreaming ?? true,
+            maxTokensField: c?.maxTokensField ?? (useMaxTokens ? "max_tokens" : "max_completion_tokens"),
+            requiresToolResultName: c?.requiresToolResultName ?? false,
+            requiresAssistantAfterToolResult: c?.requiresAssistantAfterToolResult ?? false,
+            requiresThinkingAsText: c?.requiresThinkingAsText ?? false,
+            requiresReasoningContentOnAssistantMessages: c?.requiresReasoningContentOnAssistantMessages ?? isDeepSeek,
+            thinkingFormat: c?.thinkingFormat ?? detectedFormat,
+            chatTemplateKwargs: jsonObject(c?.chatTemplateKwargs) ?? [:],
+            openRouterRouting: c?.openRouterRouting,
+            vercelGatewayRouting: c?.vercelGatewayRouting,
+            zaiToolStream: c?.zaiToolStream ?? false,
+            supportsStrictMode: c?.supportsStrictMode ?? (!isMoonshot && !isTogether && !isCfGateway && !isNvidia),
+            cacheControlFormat: c?.cacheControlFormat ?? ((provider == "openrouter" && model.id.hasPrefix("anthropic/")) ? "anthropic" : nil),
+            sendSessionAffinityHeaders: c?.sendSessionAffinityHeaders ?? false,
+            supportsLongCacheRetention: c?.supportsLongCacheRetention ?? !(isTogether || isCloudflareWorkers || isCfGateway || isNvidia || isAntLing)
+        )
+    }
+
+    /// Encode the reasoning/thinking request fields for the model's
+    /// `thinkingFormat`, honoring `thinkingLevelMap` remapping and clamping.
+    /// Ports pi's openai-completions reasoning branch.
+    static func applyReasoning(
+        _ root: inout [String: Any], model: Model, options: StreamOptions?, compat: ResolvedCompletionsCompat
+    ) {
+        guard model.reasoning else { return }
+
+        let requested: ModelThinkingLevel? = options?.reasoning.map {
+            clampThinkingLevel(model, ModelThinkingLevel(reasoning: $0))
+        }
+        let hasEffort: Bool = { if let r = requested, r != .off { return true }; return false }()
+        let level = requested ?? .off
+
+        // Wire value for a level: mapped string if present & non-null, else raw.
+        func wire(_ l: ModelThinkingLevel) -> String {
+            if let map = model.thinkingLevelMap, let entry = map[l.rawValue], let v = entry { return v }
+            return l.rawValue
+        }
+        let offEntry = model.thinkingLevelMap?["off"]            // absent / explicit-null / string
+        let offIsExplicitNull = (offEntry != nil && offEntry! == nil)
+        let offString: String? = { if let e = offEntry, let v = e { return v }; return nil }()
+
+        switch compat.thinkingFormat {
+        case "zai":
+            root["thinking"] = ["type": hasEffort ? "enabled" : "disabled"]
+            if hasEffort, compat.supportsReasoningEffort { root["reasoning_effort"] = wire(level) }
+        case "qwen":
+            root["enable_thinking"] = hasEffort
+        case "qwen-chat-template":
+            root["chat_template_kwargs"] = ["enable_thinking": hasEffort, "preserve_thinking": true]
+        case "chat-template":
+            if let kwargs = buildChatTemplateKwargs(
+                model: model,
+                requestedLevel: level,
+                hasEffort: hasEffort,
+                compat: compat
+            ) {
+                root["chat_template_kwargs"] = kwargs
+            }
+        case "deepseek":
+            if hasEffort { root["thinking"] = ["type": "enabled"] }
+            else if !offIsExplicitNull { root["thinking"] = ["type": "disabled"] }
+            if hasEffort, compat.supportsReasoningEffort { root["reasoning_effort"] = wire(level) }
+        case "openrouter":
+            if hasEffort { root["reasoning"] = ["effort": wire(level)] }
+            else if !offIsExplicitNull { root["reasoning"] = ["effort": offString ?? "none"] }
+        case "ant-ling":
+            if hasEffort, let map = model.thinkingLevelMap, let entry = map[level.rawValue], let v = entry {
+                root["reasoning"] = ["effort": v]
+            }
+        case "together":
+            root["reasoning"] = ["enabled": hasEffort]
+            if hasEffort, compat.supportsReasoningEffort { root["reasoning_effort"] = wire(level) }
+        case "string-thinking":
+            if hasEffort { root["thinking"] = wire(level) }
+            else if !offIsExplicitNull { root["thinking"] = offString ?? "none" }
+        default: // "openai"
+            if hasEffort, compat.supportsReasoningEffort {
+                root["reasoning_effort"] = wire(level)
+            } else if !hasEffort, compat.supportsReasoningEffort, let off = offString {
+                root["reasoning_effort"] = off
+            }
+        }
+    }
+
+    private static func buildChatTemplateKwargs(
+        model: Model,
+        requestedLevel: ModelThinkingLevel,
+        hasEffort: Bool,
+        compat: ResolvedCompletionsCompat
+    ) -> [String: Any]? {
+        var kwargs: [String: Any] = [:]
+        for (key, value) in compat.chatTemplateKwargs {
+            guard let resolved = resolveChatTemplateKwarg(
+                value,
+                model: model,
+                requestedLevel: requestedLevel,
+                hasEffort: hasEffort
+            ) else { continue }
+            kwargs[key] = anyFromJSONValue(resolved) ?? NSNull()
+        }
+        return kwargs.isEmpty ? nil : kwargs
+    }
+
+    private static func resolveChatTemplateKwarg(
+        _ value: JSONValue,
+        model: Model,
+        requestedLevel: ModelThinkingLevel,
+        hasEffort: Bool
+    ) -> JSONValue? {
+        guard case .object(let object) = value else { return value }
+        guard case .string(let variable)? = object["$var"] else { return value }
+        if case .bool(true)? = object["omitWhenOff"], !hasEffort {
+            return nil
+        }
+        switch variable {
+        case "thinking.enabled":
+            return .bool(hasEffort)
+        case "thinking.effort":
+            if hasEffort {
+                return thinkingMapValue(model, requestedLevel.rawValue, fallback: requestedLevel.rawValue)
+            }
+            return thinkingMapValue(model, "off", fallback: nil)
+        default:
+            return nil
+        }
+    }
+
+    private static func thinkingMapValue(
+        _ model: Model,
+        _ key: String,
+        fallback: String?
+    ) -> JSONValue? {
+        if let map = model.thinkingLevelMap, map.keys.contains(key) {
+            guard let value = map[key] ?? nil else { return nil }
+            return .string(value)
+        }
+        return fallback.map(JSONValue.string)
+    }
+
+    private static func applyRouting(_ root: inout [String: Any], compat: ResolvedCompletionsCompat) {
+        if let routing = compat.openRouterRouting,
+           let object = jsonObject(routing),
+           !object.isEmpty,
+           let any = anyFromJSONValue(.object(object)) {
+            root["provider"] = any
+        }
+        if let routing = compat.vercelGatewayRouting,
+           let gateway = vercelGatewayOptions(routing) {
+            root["providerOptions"] = ["gateway": gateway]
+        }
+    }
+
+    private static func vercelGatewayOptions(_ routing: JSONValue) -> [String: Any]? {
+        guard case .object(let object) = routing else { return nil }
+        var gateway: [String: Any] = [:]
+        if let only = object["only"], let any = anyFromJSONValue(only) {
+            gateway["only"] = any
+        }
+        if let order = object["order"], let any = anyFromJSONValue(order) {
+            gateway["order"] = any
+        }
+        return gateway.isEmpty ? nil : gateway
+    }
+
+    private static func jsonObject(_ value: JSONValue?) -> [String: JSONValue]? {
+        guard case .object(let object)? = value else { return nil }
+        return object
+    }
+
+    private static func encodeMessages(
+        model: Model, context: Context, compat: ResolvedCompletionsCompat
+    ) -> [[String: Any]] {
         var out: [[String: Any]] = []
         if let sys = context.systemPrompt, !sys.isEmpty {
-            out.append(["role": "system", "content": sys])
+            let role = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system"
+            out.append(["role": role, "content": sys])
         }
-        for message in context.messages {
+        var lastRole: Role?
+        let msgs = context.messages
+        var i = 0
+        while i < msgs.count {
+            let message = msgs[i]
+            if compat.requiresAssistantAfterToolResult, lastRole == .toolResult, message.role == .user {
+                out.append(["role": "assistant", "content": "I have processed the tool results."])
+            }
             switch message {
             case .user(let u):
                 let strings = u.content.compactMap { block -> String? in
@@ -319,12 +672,38 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     }
                     out.append(["role": "user", "content": parts])
                 }
+                lastRole = .user
             case .assistant(let a):
                 var entry: [String: Any] = ["role": "assistant"]
-                let textBody = a.content.compactMap { block -> String? in
-                    if case .text(let t) = block { return t.text } else { return nil }
-                }.joined()
-                entry["content"] = textBody.isEmpty ? NSNull() : textBody
+                let textBlocks = a.content.compactMap { block -> TextContent? in
+                    if case .text(let t) = block, !t.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return t
+                    }
+                    return nil
+                }
+                let thinkingBlocks = a.content.compactMap { block -> ThinkingContent? in
+                    if case .thinking(let t) = block, !t.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        return t
+                    }
+                    return nil
+                }
+                let textBody = textBlocks.map(\.text).joined()
+                if compat.requiresThinkingAsText, !thinkingBlocks.isEmpty {
+                    var parts = thinkingBlocks.map { ["type": "text", "text": $0.thinking] }
+                    parts.append(contentsOf: textBlocks.map { ["type": "text", "text": $0.text] })
+                    entry["content"] = parts
+                } else {
+                    entry["content"] = textBody.isEmpty
+                        ? (compat.requiresAssistantAfterToolResult ? "" : NSNull())
+                        : textBody
+                    if let signature = thinkingBlocks.first?.thinkingSignature, !signature.isEmpty {
+                        // Round-trip prior reasoning under the same field the
+                        // stream decoder reads it from (`reasoning_content`).
+                        // Using the signature *value* as the key produced a
+                        // bogus JSON field and dropped the reasoning text.
+                        entry["reasoning_content"] = thinkingBlocks.map(\.thinking).joined(separator: "\n")
+                    }
+                }
                 let calls = a.content.compactMap { block -> [String: Any]? in
                     guard case .toolCall(let tc) = block else { return nil }
                     let argsString: String = {
@@ -343,19 +722,169 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                     ]
                 }
                 if !calls.isEmpty { entry["tool_calls"] = calls }
+                if !calls.isEmpty {
+                    // Re-emit encrypted reasoning details stored on tool calls'
+                    // thoughtSignature (serialized JSON of the detail object).
+                    let details: [Any] = a.content.compactMap { block -> Any? in
+                        guard case .toolCall(let tc) = block,
+                              let sig = tc.thoughtSignature, !sig.isEmpty,
+                              let data = sig.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data),
+                              let dict = obj as? [String: Any],
+                              (dict["type"] as? String) == "reasoning.encrypted" else { return nil }
+                        return dict
+                    }
+                    if !details.isEmpty { entry["reasoning_details"] = details }
+                }
+                if compat.requiresReasoningContentOnAssistantMessages, model.reasoning,
+                   entry["reasoning_content"] == nil {
+                    entry["reasoning_content"] = ""
+                }
+                let content = entry["content"]
+                let hasContent: Bool = {
+                    if content is NSNull { return false }
+                    if let s = content as? String { return !s.isEmpty }
+                    if let arr = content as? [[String: Any]] { return !arr.isEmpty }
+                    return content != nil
+                }()
+                if !hasContent && calls.isEmpty {
+                    i += 1
+                    continue
+                }
                 out.append(entry)
-            case .toolResult(let tr):
-                let text = tr.content.compactMap { block -> String? in
-                    if case .text(let t) = block { return t.text } else { return nil }
-                }.joined(separator: "\n")
-                out.append([
-                    "role": "tool",
-                    "tool_call_id": tr.toolCallId,
-                    "content": text,
-                ])
+                lastRole = .assistant
+            case .toolResult:
+                // Aggregate consecutive tool results so trailing tool-result
+                // images can be forwarded together as a single user carrier.
+                var imageParts: [[String: Any]] = []
+                var j = i
+                while j < msgs.count, case .toolResult(let tr) = msgs[j] {
+                    let text = tr.content.compactMap { block -> String? in
+                        if case .text(let t) = block { return t.text } else { return nil }
+                    }.joined(separator: "\n")
+                    let hasImages = tr.content.contains {
+                        if case .image = $0 { return true }; return false
+                    }
+                    var entry: [String: Any] = [
+                        "role": "tool",
+                        "tool_call_id": tr.toolCallId,
+                        "content": text.isEmpty ? "(see attached image)" : text,
+                    ]
+                    if compat.requiresToolResultName, !tr.toolName.isEmpty {
+                        entry["name"] = tr.toolName
+                    }
+                    out.append(entry)
+                    if hasImages, model.input.contains(.image) {
+                        for block in tr.content {
+                            if case .image(let img) = block {
+                                imageParts.append([
+                                    "type": "image_url",
+                                    "image_url": ["url": "data:\(img.mimeType);base64,\(img.data)"],
+                                ])
+                            }
+                        }
+                    }
+                    j += 1
+                }
+                i = j
+                if !imageParts.isEmpty {
+                    if compat.requiresAssistantAfterToolResult {
+                        out.append(["role": "assistant", "content": "I have processed the tool results."])
+                    }
+                    var carrier: [[String: Any]] = [["type": "text", "text": "Attached image(s) from tool result:"]]
+                    carrier.append(contentsOf: imageParts)
+                    out.append(["role": "user", "content": carrier])
+                    lastRole = .user
+                } else {
+                    lastRole = .toolResult
+                }
+                continue
             }
+            i += 1
         }
         return out
+    }
+
+    private static func encodeTools(_ tools: [Tool], compat: ResolvedCompletionsCompat) -> [[String: Any]] {
+        tools.map { tool -> [String: Any] in
+            var fn: [String: Any] = [
+                "name": tool.name,
+                "description": tool.description,
+            ]
+            if let params = anyFromJSONValue(tool.parameters) {
+                fn["parameters"] = params
+            }
+            if compat.supportsStrictMode {
+                fn["strict"] = false
+            }
+            return ["type": "function", "function": fn]
+        }
+    }
+
+    private static func hasToolHistory(_ messages: [Message]) -> Bool {
+        messages.contains { message in
+            switch message {
+            case .toolResult:
+                return true
+            case .assistant(let a):
+                return a.content.contains { if case .toolCall = $0 { return true }; return false }
+            case .user:
+                return false
+            }
+        }
+    }
+
+    private static func compatCacheControl(
+        compat: ResolvedCompletionsCompat, retention: CacheRetention
+    ) -> [String: Any]? {
+        guard compat.cacheControlFormat == "anthropic", retention != .none else { return nil }
+        if retention == .long, compat.supportsLongCacheRetention {
+            return ["type": "ephemeral", "ttl": "1h"]
+        }
+        return ["type": "ephemeral"]
+    }
+
+    private static func applyAnthropicCacheControl(
+        _ cacheControl: [String: Any],
+        messages: inout [[String: Any]],
+        tools: inout [[String: Any]]?
+    ) {
+        for index in messages.indices {
+            guard ["system", "developer"].contains(messages[index]["role"] as? String) else { continue }
+            if addCacheControl(cacheControl, toTextContentOf: &messages[index]) { break }
+        }
+        if var toolEntries = tools, !toolEntries.isEmpty {
+            toolEntries[toolEntries.count - 1]["cache_control"] = cacheControl
+            tools = toolEntries
+        }
+        for index in messages.indices.reversed() {
+            guard ["user", "assistant"].contains(messages[index]["role"] as? String) else { continue }
+            if addCacheControl(cacheControl, toTextContentOf: &messages[index]) { break }
+        }
+    }
+
+    @discardableResult
+    private static func addCacheControl(
+        _ cacheControl: [String: Any], toTextContentOf message: inout [String: Any]
+    ) -> Bool {
+        if let text = message["content"] as? String, !text.isEmpty {
+            message["content"] = [["type": "text", "text": text, "cache_control": cacheControl]]
+            return true
+        }
+        guard var parts = message["content"] as? [[String: Any]] else { return false }
+        for index in parts.indices.reversed() where parts[index]["type"] as? String == "text" {
+            parts[index]["cache_control"] = cacheControl
+            message["content"] = parts
+            return true
+        }
+        return false
+    }
+
+    static func clampOpenAIPromptCacheKey(_ key: String?) -> String? {
+        guard let key, !key.isEmpty else { return nil }
+        let chars = Array(key)
+        if chars.count <= 64 { return key }
+        return String(chars.prefix(64))
     }
 
     private static func encodeToolChoice(_ choice: ToolChoice?) -> Any? {
@@ -371,9 +900,12 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
 
     private static func mapStopReason(_ raw: String) -> StopReason {
         switch raw {
-        case "stop": return .stop
-        case "length": return .length
+        case "stop", "end": return .stop
+        case "length", "max_tokens": return .length
         case "tool_calls", "function_call": return .toolUse
+        // pi surfaces these as errors rather than a clean stop so the agent
+        // doesn't treat a filtered/aborted turn as a successful completion.
+        case "content_filter", "network_error": return .error
         default: return .stop
         }
     }
@@ -420,16 +952,18 @@ final class OpenAICompletionsState: @unchecked Sendable {
     let api: String
     let provider: String
     let modelId: String
+    let model: Model
     var signal: CancellationHandle?
 
     var responseId: String?
     var usage = Usage()
     var stopReason: StopReason = .stop
+    var errorMessage: String?
 
     enum Block {
         case text(TextContent)
         case thinking(ThinkingContent)
-        case toolUse(id: String, name: String, json: String)
+        case toolUse(id: String, name: String, json: String, thoughtSignature: String?)
     }
     private let lock = NSLock()
     private var blocks: [Int: Block] = [:]
@@ -438,12 +972,18 @@ final class OpenAICompletionsState: @unchecked Sendable {
     private var thinkingBlockIndex: Int?
     /// Map from OpenAI `tool_calls[i].index` → our content index.
     private var toolCallIndexMap: [Int: Int] = [:]
+    /// Map from a settled tool-call `id` → our content index. Used to attach
+    /// encrypted reasoning details, which arrive keyed by tool-call id.
+    private var toolCallContentIndexById: [String: Int] = [:]
+    /// Reasoning details that arrived before the matching tool-call id settled.
+    private var pendingReasoningById: [String: String] = [:]
     private var endedIndices: Set<Int> = []
 
-    init(api: String, provider: String, modelId: String) {
+    init(api: String, provider: String, modelId: String, model: Model) {
         self.api = api
         self.provider = provider
         self.modelId = modelId
+        self.model = model
     }
 
     // MARK: Block book-keeping
@@ -476,7 +1016,7 @@ final class OpenAICompletionsState: @unchecked Sendable {
             let idx = order.count
             toolCallIndexMap[rawIndex] = idx
             order.append(idx)
-            blocks[idx] = .toolUse(id: "", name: "", json: "")
+            blocks[idx] = .toolUse(id: "", name: "", json: "", thoughtSignature: nil)
             return (idx, true)
         }
     }
@@ -499,20 +1039,32 @@ final class OpenAICompletionsState: @unchecked Sendable {
         }
     }
 
+    func setThinkingSignature(index: Int, signature: String) {
+        lock.withLock {
+            if case .thinking(var th) = blocks[index], th.thinkingSignature == nil {
+                th.thinkingSignature = signature
+                blocks[index] = .thinking(th)
+            }
+        }
+    }
+
     func updateToolCallID(rawIndex: Int, id: String) {
         lock.withLock {
             guard let contentIndex = toolCallIndexMap[rawIndex] else { return }
-            if case .toolUse(_, let name, let json) = blocks[contentIndex] {
-                blocks[contentIndex] = .toolUse(id: id, name: name, json: json)
+            if case .toolUse(_, let name, let json, let sig) = blocks[contentIndex] {
+                var newSig = sig
+                if let pending = pendingReasoningById.removeValue(forKey: id) { newSig = pending }
+                blocks[contentIndex] = .toolUse(id: id, name: name, json: json, thoughtSignature: newSig)
             }
+            toolCallContentIndexById[id] = contentIndex
         }
     }
 
     func updateToolCallName(rawIndex: Int, name: String) {
         lock.withLock {
             guard let contentIndex = toolCallIndexMap[rawIndex] else { return }
-            if case .toolUse(let id, _, let json) = blocks[contentIndex] {
-                blocks[contentIndex] = .toolUse(id: id, name: name, json: json)
+            if case .toolUse(let id, _, let json, let sig) = blocks[contentIndex] {
+                blocks[contentIndex] = .toolUse(id: id, name: name, json: json, thoughtSignature: sig)
             }
         }
     }
@@ -520,8 +1072,21 @@ final class OpenAICompletionsState: @unchecked Sendable {
     func appendToolCallArgs(rawIndex: Int, chunk: String) {
         lock.withLock {
             guard let contentIndex = toolCallIndexMap[rawIndex] else { return }
-            if case .toolUse(let id, let name, let json) = blocks[contentIndex] {
-                blocks[contentIndex] = .toolUse(id: id, name: name, json: json + chunk)
+            if case .toolUse(let id, let name, let json, let sig) = blocks[contentIndex] {
+                blocks[contentIndex] = .toolUse(id: id, name: name, json: json + chunk, thoughtSignature: sig)
+            }
+        }
+    }
+
+    /// Attach an encrypted reasoning detail (serialized JSON) to the tool call
+    /// with the matching id, or stash it as pending if the id has not settled.
+    func applyReasoningDetail(id: String, serialized: String) {
+        lock.withLock {
+            if let contentIndex = toolCallContentIndexById[id],
+               case .toolUse(let cid, let name, let json, _) = blocks[contentIndex] {
+                blocks[contentIndex] = .toolUse(id: cid, name: name, json: json, thoughtSignature: serialized)
+            } else {
+                pendingReasoningById[id] = serialized
             }
         }
     }
@@ -529,15 +1094,30 @@ final class OpenAICompletionsState: @unchecked Sendable {
     // MARK: Stream events
 
     func applyUsage(_ obj: [String: JSONValue]) {
-        if case .int(let v) = obj["prompt_tokens"] ?? .null { usage.input = v }
-        if case .int(let v) = obj["completion_tokens"] ?? .null { usage.output = v }
-        if case .object(let details) = obj["prompt_tokens_details"] ?? .null {
-            if case .int(let v) = details["cached_tokens"] ?? .null {
-                usage.cacheRead = v
-                usage.input = max(0, usage.input - v)
-            }
-        }
-        usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        func intOf(_ v: JSONValue?) -> Int? { if case .int(let n)? = v { return n }; return nil }
+        let prompt = intOf(obj["prompt_tokens"]) ?? 0
+        let promptDetails: [String: JSONValue] = {
+            if case .object(let d)? = obj["prompt_tokens_details"] { return d }
+            return [:]
+        }()
+        // DeepSeek exposes cache hits via `prompt_cache_hit_tokens` instead of
+        // `prompt_tokens_details.cached_tokens`.
+        let cacheRead = intOf(promptDetails["cached_tokens"]) ?? intOf(obj["prompt_cache_hit_tokens"]) ?? 0
+        let cacheWrite = intOf(promptDetails["cache_write_tokens"]) ?? 0
+        let output = intOf(obj["completion_tokens"]) ?? 0
+        let completionDetails: [String: JSONValue] = {
+            if case .object(let d)? = obj["completion_tokens_details"] { return d }
+            return [:]
+        }()
+        let reasoning = intOf(completionDetails["reasoning_tokens"]) ?? 0
+        let input = max(0, prompt - cacheRead - cacheWrite)
+        usage.input = input
+        usage.output = output
+        usage.cacheRead = cacheRead
+        usage.cacheWrite = cacheWrite
+        usage.reasoning = reasoning
+        usage.totalTokens = input + output + cacheRead + cacheWrite
+        usage.cost = calculateCost(model: model, usage: usage)
     }
 
     func snapshot() -> AssistantMessage {
@@ -547,9 +1127,9 @@ final class OpenAICompletionsState: @unchecked Sendable {
                     switch blocks[idx] {
                     case .text(let t): return .text(t)
                     case .thinking(let th): return .thinking(th)
-                    case .toolUse(let id, let name, let json):
+                    case .toolUse(let id, let name, let json, let sig):
                         let args = parseArguments(json)
-                        return .toolCall(ToolCall(id: id, name: name, arguments: args))
+                        return .toolCall(ToolCall(id: id, name: name, arguments: args, thoughtSignature: sig))
                     case .none: return nil
                     }
                 },
@@ -577,8 +1157,8 @@ final class OpenAICompletionsState: @unchecked Sendable {
                 emit(.textEnd(contentIndex: idx, content: t.text, partial: partial))
             case .thinking(let th):
                 emit(.thinkingEnd(contentIndex: idx, content: th.thinking, partial: partial))
-            case .toolUse(let id, let name, let json):
-                let call = ToolCall(id: id, name: name, arguments: parseArguments(json))
+            case .toolUse(let id, let name, let json, let sig):
+                let call = ToolCall(id: id, name: name, arguments: parseArguments(json), thoughtSignature: sig)
                 emit(.toolCallEnd(contentIndex: idx, toolCall: call, partial: partial))
             }
             _ = lock.withLock { endedIndices.insert(idx) }
@@ -604,4 +1184,23 @@ final class OpenAICompletionsState: @unchecked Sendable {
         }
         return .object([:])
     }
+}
+
+/// Expand Cloudflare base-URL placeholders (`{CLOUDFLARE_ACCOUNT_ID}` /
+/// `{CLOUDFLARE_GATEWAY_ID}`) from a value source (defaults to the process
+/// environment). Mirrors pi's `resolveCloudflareBaseUrl`: the catalog stores
+/// the literal tokens in `model.baseUrl` and they are substituted at request
+/// time. Unknown/missing values collapse to the empty string.
+func substituteCloudflarePlaceholders(
+    in baseUrl: String,
+    value: (String) -> String? = { ProcessInfo.processInfo.environment[$0] }
+) -> String {
+    guard baseUrl.contains("{CLOUDFLARE_") else { return baseUrl }
+    var result = baseUrl
+    for token in ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"] {
+        let needle = "{\(token)}"
+        guard result.contains(needle) else { continue }
+        result = result.replacingOccurrences(of: needle, with: value(token) ?? "")
+    }
+    return result
 }

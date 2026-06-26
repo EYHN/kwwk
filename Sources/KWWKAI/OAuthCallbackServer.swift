@@ -58,8 +58,9 @@ public final class OAuthCallbackServer: @unchecked Sendable {
             .serverChannelOption(ChannelOptions.backlog, value: 4)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { [weak self] child in
-                child.pipeline.configureHTTPServerPipeline(withErrorHandling: true).flatMap {
-                    child.pipeline.addHandler(CallbackHandler(server: self))
+                let server = self
+                return child.pipeline.configureHTTPServerPipeline(withErrorHandling: true).flatMap {
+                    child.pipeline.addHandler(CallbackHandler(server: server))
                 }
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
@@ -165,7 +166,7 @@ public final class OAuthCallbackServer: @unchecked Sendable {
 /// NIO handler installed at the end of the HTTP server pipeline. Reads the
 /// request head, derives the callback parameters, writes back a small HTML
 /// page, and hands the parameters (or error) to the `OAuthCallbackServer`.
-private final class CallbackHandler: ChannelInboundHandler {
+private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
@@ -231,10 +232,9 @@ private final class CallbackHandler: ChannelInboundHandler {
         buffer.writeBytes(bodyBytes)
         context.write(wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
 
-        let endPromise = context.eventLoop.makePromise(of: Void.self)
-        context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: endPromise)
-        endPromise.futureResult.whenComplete { _ in
-            context.close(promise: nil)
+        let channel = context.channel
+        context.writeAndFlush(wrapOutboundOut(.end(nil))).whenComplete { _ in
+            channel.close(promise: nil)
         }
     }
 

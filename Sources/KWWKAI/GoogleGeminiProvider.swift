@@ -168,6 +168,11 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                         if case .bool(let v) = p["thought"] ?? .null { return v } else { return false }
                     }()
 
+                    let partSignature: String? = {
+                        if case .string(let s) = p["thoughtSignature"] ?? .null { return s }
+                        return nil
+                    }()
+
                     if case .string(let text) = p["text"] ?? .null, !text.isEmpty {
                         if !emittedStart {
                             out.push(.start(partial: state.snapshot()))
@@ -179,6 +184,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                                 out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
                             }
                             state.appendThinking(index: index, text: text)
+                            state.setThinkingSignature(index: index, sig: partSignature)
                             out.push(.thinkingDelta(contentIndex: index, delta: text, partial: state.snapshot()))
                         } else {
                             let (index, firstSeen) = state.noteTextBlock()
@@ -186,6 +192,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                                 out.push(.textStart(contentIndex: index, partial: state.snapshot()))
                             }
                             state.appendText(index: index, text: text)
+                            state.setTextSignature(index: index, sig: partSignature)
                             out.push(.textDelta(contentIndex: index, delta: text, partial: state.snapshot()))
                         }
                     }
@@ -244,8 +251,10 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
     private static func encodeBody(
         model: Model, context: Context, options: StreamOptions?
     ) throws -> Data {
+        var context = context
+        context.messages = TransformMessages.normalize(context.messages, model: model)
         var root: [String: Any] = [
-            "contents": encodeContents(context: context),
+            "contents": encodeContents(context: context, model: model),
         ]
         if let sys = context.systemPrompt, !sys.isEmpty {
             root["systemInstruction"] = [
@@ -278,10 +287,26 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         }
         if let reasoning = options?.reasoning {
             var thinking: [String: Any] = ["includeThoughts": true]
-            if let budget = options?.thinkingBudgets?.budget(for: reasoning) {
-                thinking["thinkingBudget"] = budget
+            let id = model.id.lowercased()
+            if usesThinkingLevel(id) {
+                // Gemini 3.x and Gemma 4 take a string `thinkingLevel`
+                // (MINIMAL/LOW/MEDIUM/HIGH) rather than an integer budget.
+                thinking["thinkingLevel"] = geminiThinkingLevel(reasoning, modelId: id)
+            } else {
+                // Gemini 2.x integer budget. Always emit (per-level table for
+                // 2.5 models, -1 dynamic fallback otherwise) to match pi's
+                // getGoogleBudget.
+                thinking["thinkingBudget"] = googleBudget(
+                    modelId: model.id,
+                    reasoning: reasoning,
+                    customBudgets: options?.thinkingBudgets
+                )
             }
             generationConfig["thinkingConfig"] = thinking
+        } else if model.reasoning {
+            // Reasoning-capable model with reasoning OFF: explicitly disable
+            // thinking, mirroring pi's getDisabledThinkingConfig.
+            generationConfig["thinkingConfig"] = disabledThinkingConfig(model.id)
         }
         if !generationConfig.isEmpty {
             root["generationConfig"] = generationConfig
@@ -289,7 +314,115 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
 
-    private static func encodeContents(context: Context) -> [[String: Any]] {
+    // MARK: - Thinking-level model detection (Gemini 3.x / Gemma 4)
+
+    private static func isGemini3Pro(_ id: String) -> Bool {
+        id.range(of: #"gemini-3(\.\d+)?-pro"#, options: .regularExpression) != nil
+    }
+    private static func isGemini3Flash(_ id: String) -> Bool {
+        id.range(of: #"gemini-3(\.\d+)?-flash"#, options: .regularExpression) != nil
+            || id == "gemini-flash-latest" || id == "gemini-flash-lite-latest"
+    }
+    private static func isGemma4(_ id: String) -> Bool {
+        id.range(of: #"gemma-?4"#, options: .regularExpression) != nil
+    }
+    private static func usesThinkingLevel(_ id: String) -> Bool {
+        isGemini3Pro(id) || isGemini3Flash(id) || isGemma4(id)
+    }
+
+    /// Map a reasoning level to a Gemini `thinkingLevel` string, mirroring pi's
+    /// per-family clamping (Gemini 3 Pro has no MINIMAL; Gemma 4 has no MEDIUM).
+    private static func geminiThinkingLevel(_ reasoning: ReasoningLevel, modelId id: String) -> String {
+        if isGemini3Pro(id) {
+            switch reasoning {
+            case .minimal, .low: return "LOW"
+            case .medium, .high, .xhigh: return "HIGH"
+            }
+        }
+        if isGemma4(id) {
+            switch reasoning {
+            case .minimal, .low: return "MINIMAL"
+            case .medium, .high, .xhigh: return "HIGH"
+            }
+        }
+        switch reasoning {
+        case .minimal: return "MINIMAL"
+        case .low: return "LOW"
+        case .medium: return "MEDIUM"
+        case .high, .xhigh: return "HIGH"
+        }
+    }
+
+    /// Default per-level thinking budgets for Gemini 2.5 models, mirroring pi's
+    /// getGoogleBudget. Returns -1 (dynamic) when no table matches. A custom
+    /// `thinkingBudgets` table always wins.
+    private static func googleBudget(
+        modelId: String,
+        reasoning: ReasoningLevel,
+        customBudgets: ThinkingBudgets?
+    ) -> Int {
+        if let custom = customBudgets?.budget(for: reasoning) { return custom }
+        let id = modelId
+        func pick(_ minimal: Int, _ low: Int, _ medium: Int, _ high: Int) -> Int {
+            switch reasoning {
+            case .minimal: return minimal
+            case .low: return low
+            case .medium: return medium
+            case .high, .xhigh: return high
+            }
+        }
+        if id.contains("2.5-pro") { return pick(128, 2048, 8192, 32768) }
+        if id.contains("2.5-flash-lite") { return pick(512, 2048, 8192, 24576) }
+        if id.contains("2.5-flash") { return pick(128, 2048, 8192, 24576) }
+        return -1
+    }
+
+    /// Thinking config that disables reasoning on a reasoning-capable model,
+    /// mirroring pi's getDisabledThinkingConfig.
+    private static func disabledThinkingConfig(_ id: String) -> [String: Any] {
+        let lower = id.lowercased()
+        if isGemini3Pro(lower) { return ["thinkingLevel": "LOW"] }
+        if isGemini3Flash(lower) { return ["thinkingLevel": "MINIMAL"] }
+        if isGemma4(lower) { return ["thinkingLevel": "MINIMAL"] }
+        return ["thinkingBudget": 0]
+    }
+
+    // MARK: - Thought-signature validation & function-response helpers
+
+    /// base64 validity check, mirroring pi's isValidThoughtSignature
+    /// (`^[A-Za-z0-9+/]+={0,2}$` and length divisible by 4).
+    static func isValidThoughtSignature(_ sig: String?) -> Bool {
+        guard let sig, !sig.isEmpty else { return false }
+        if sig.count % 4 != 0 { return false }
+        return sig.range(of: #"^[A-Za-z0-9+/]+={0,2}$"#, options: .regularExpression) != nil
+    }
+
+    /// Major Gemini version from a model id (`gemini-3-pro` -> 3). Returns nil
+    /// for non-gemini ids. Mirrors pi's getGeminiMajorVersion.
+    private static func geminiMajorVersion(_ id: String) -> Int? {
+        let lower = id.lowercased()
+        guard let match = lower.range(
+            of: #"^gemini(?:-live)?-(\d+)"#, options: .regularExpression
+        ) else { return nil }
+        let matched = String(lower[match])
+        let digits = matched.reversed().prefix { $0.isNumber }.reversed()
+        return Int(String(digits))
+    }
+
+    /// Whether the model nests images inside `functionResponse.parts` (Gemini
+    /// major version >= 3; default true for non-gemini). Mirrors pi.
+    private static func supportsMultimodalFunctionResponse(_ id: String) -> Bool {
+        if let v = geminiMajorVersion(id) { return v >= 3 }
+        return true
+    }
+
+    /// Whether the model requires an `id` on functionResponse parts (claude- /
+    /// gpt-oss- routed through Gemini). Mirrors pi's requiresToolCallId.
+    private static func requiresToolCallId(_ id: String) -> Bool {
+        id.hasPrefix("claude-") || id.hasPrefix("gpt-oss-")
+    }
+
+    private static func encodeContents(context: Context, model: Model) -> [[String: Any]] {
         var out: [[String: Any]] = []
         for message in context.messages {
             switch message {
@@ -309,14 +442,35 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 out.append(["role": "user", "parts": parts])
 
             case .assistant(let a):
+                // Cross-model thinking is already downgraded upstream
+                // (TransformMessages.stripCrossModelThinking). Signatures are
+                // only valid for replay to the same provider/api/model, so gate
+                // emission on same-model AND base64 validity to mirror pi's
+                // resolveThoughtSignature.
+                let isSameModel = a.provider == model.provider
+                    && a.api == model.api && a.model == model.id
+                func resolveSig(_ sig: String?) -> String? {
+                    guard isSameModel, Self.isValidThoughtSignature(sig) else { return nil }
+                    return sig
+                }
                 var parts: [[String: Any]] = []
                 for block in a.content {
                     switch block {
                     case .text(let t):
-                        if !t.text.isEmpty { parts.append(["text": t.text]) }
+                        if !t.text.isEmpty {
+                            var part: [String: Any] = ["text": t.text]
+                            if let sig = resolveSig(t.textSignature) {
+                                part["thoughtSignature"] = sig
+                            }
+                            parts.append(part)
+                        }
                     case .thinking(let th):
                         if !th.thinking.isEmpty {
-                            parts.append(["text": th.thinking, "thought": true])
+                            var part: [String: Any] = ["text": th.thinking, "thought": true]
+                            if let sig = resolveSig(th.thinkingSignature) {
+                                part["thoughtSignature"] = sig
+                            }
+                            parts.append(part)
                         }
                     case .toolCall(let tc):
                         var part: [String: Any] = [
@@ -325,7 +479,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                                 "args": anyFromJSONValue(tc.arguments) ?? [:] as Any,
                             ],
                         ]
-                        if let sig = tc.thoughtSignature {
+                        if let sig = resolveSig(tc.thoughtSignature) {
                             part["thoughtSignature"] = sig
                         }
                         parts.append(part)
@@ -339,15 +493,49 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 let text = tr.content.compactMap { block -> String? in
                     if case .text(let t) = block { return t.text } else { return nil }
                 }.joined(separator: "\n")
-                out.append([
-                    "role": "function",
-                    "parts": [[
-                        "functionResponse": [
-                            "name": tr.toolName,
-                            "response": ["output": text],
-                        ],
-                    ]],
-                ])
+                let images: [ImageContent] = model.input.contains(.image)
+                    ? tr.content.compactMap {
+                        if case .image(let i) = $0 { return i } else { return nil }
+                    }
+                    : []
+                let hasImages = !images.isEmpty
+                let multimodal = supportsMultimodalFunctionResponse(model.id)
+                let responseValue = !text.isEmpty
+                    ? text
+                    : (hasImages ? "(see attached image)" : "")
+                let imageParts: [[String: Any]] = images.map {
+                    ["inlineData": ["mimeType": $0.mimeType, "data": $0.data]]
+                }
+
+                var fnResp: [String: Any] = ["name": tr.toolName]
+                fnResp["response"] = tr.isError
+                    ? ["error": responseValue]
+                    : ["output": responseValue]
+                if hasImages && multimodal { fnResp["parts"] = imageParts }
+                if requiresToolCallId(model.id) { fnResp["id"] = tr.toolCallId }
+                let fnPart: [String: Any] = ["functionResponse": fnResp]
+
+                // Merge consecutive functionResponses into the trailing user
+                // turn (Gemini groups tool results under one `user` content).
+                if var last = out.last,
+                   (last["role"] as? String) == "user",
+                   let lastParts = last["parts"] as? [[String: Any]],
+                   lastParts.contains(where: { $0["functionResponse"] != nil }) {
+                    var merged = lastParts
+                    merged.append(fnPart)
+                    last["parts"] = merged
+                    out[out.count - 1] = last
+                } else {
+                    out.append(["role": "user", "parts": [fnPart]])
+                }
+
+                // Non-multimodal models receive images as a separate user turn.
+                if hasImages && !multimodal {
+                    out.append([
+                        "role": "user",
+                        "parts": [["text": "Tool result image:"]] + imageParts,
+                    ])
+                }
             }
         }
         return out
@@ -477,6 +665,29 @@ final class GoogleGeminiState: @unchecked Sendable {
         }
     }
 
+    private static func retainSignature(_ existing: String?, _ incoming: String?) -> String? {
+        if let incoming, !incoming.isEmpty { return incoming }
+        return existing
+    }
+
+    func setTextSignature(index: Int, sig: String?) {
+        lock.withLock {
+            if case .text(var t) = blocks[index] {
+                t.textSignature = Self.retainSignature(t.textSignature, sig)
+                blocks[index] = .text(t)
+            }
+        }
+    }
+
+    func setThinkingSignature(index: Int, sig: String?) {
+        lock.withLock {
+            if case .thinking(var th) = blocks[index] {
+                th.thinkingSignature = Self.retainSignature(th.thinkingSignature, sig)
+                blocks[index] = .thinking(th)
+            }
+        }
+    }
+
     func appendToolCall(name: String, args: JSONValue, signature: String?) -> Int {
         lock.withLock {
             let idx = order.count
@@ -502,10 +713,22 @@ final class GoogleGeminiState: @unchecked Sendable {
     }
 
     func applyUsage(_ obj: [String: JSONValue]) {
-        if case .int(let v) = obj["promptTokenCount"] ?? .null { usage.input = v }
-        if case .int(let v) = obj["candidatesTokenCount"] ?? .null { usage.output = v }
-        if case .int(let v) = obj["cachedContentTokenCount"] ?? .null { usage.cacheRead = v }
-        usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        func intVal(_ key: String) -> Int {
+            switch obj[key] ?? .null {
+            case .int(let v): return v
+            case .double(let v): return Int(v)
+            default: return 0
+            }
+        }
+        let prompt = intVal("promptTokenCount")
+        let cached = intVal("cachedContentTokenCount")
+        let candidates = intVal("candidatesTokenCount")
+        let thoughts = intVal("thoughtsTokenCount")
+        usage.input = prompt - cached
+        usage.output = candidates + thoughts
+        usage.cacheRead = cached
+        usage.reasoning = thoughts
+        usage.totalTokens = intVal("totalTokenCount")
     }
 
     func snapshot() -> AssistantMessage {

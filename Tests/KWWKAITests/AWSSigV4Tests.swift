@@ -228,9 +228,13 @@ struct BedrockProviderTests {
             ("messageStop", "{\"stopReason\":\"end_turn\"}"),
         ])
         let client = ByteStubClient(body: body)
+        // Region now resolves from the configured (env) region, not the
+        // vestigial `region` constructor arg, per pi precedence. Inject
+        // AWS_REGION so resolution is deterministic regardless of ambient env.
         let provider = BedrockProvider(
             client: client,
             region: "us-west-2",
+            environment: ["AWS_REGION": "us-west-2"],
             credentialsProvider: {
                 AWSSigV4.Credentials(accessKeyId: "AKID", secretAccessKey: "SECRET")
             }
@@ -240,7 +244,9 @@ struct BedrockProviderTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        for _ in 0..<400 where client.lastRequest == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
         let h = client.lastRequest?.headers ?? [:]
         #expect(h["authorization"]?.contains("AWS4-HMAC-SHA256") == true)
         #expect(h["authorization"]?.contains("us-west-2/bedrock/aws4_request") == true)
@@ -278,7 +284,9 @@ struct BedrockProviderTests {
                 toolChoice: .required
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        for _ in 0..<400 where client.lastRequest == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
         let sent = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: sent) as? [String: Any]
         let systemParts = json?["system"] as? [[String: Any]]

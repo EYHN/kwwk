@@ -1,5 +1,10 @@
 import Foundation
 import KWWKAI
+#if os(Linux)
+import Glibc
+#else
+import Darwin
+#endif
 
 /// `BackgroundTaskRunner` backed by `Process`. Spawns the command with
 /// stdin redirected from `/dev/null` and both stdout/stderr fd-dup'd onto
@@ -73,36 +78,21 @@ enum BashRunnerImpl {
         cancellation: CancellationHandle
     ) -> BackgroundTaskOutcome {
         let control = BashProcessControl(pid: 0)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-lc", command]
+        let effectiveCommand: String
         if let workDir {
-            process.currentDirectoryURL = URL(fileURLWithPath: workDir)
-        }
-        if !extraEnv.isEmpty {
-            var env = ProcessInfo.processInfo.environment
-            for (k, v) in extraEnv { env[k] = v }
-            process.environment = env
+            effectiveCommand = "cd \(shellQuote(workDir)) && \(command)"
+        } else {
+            effectiveCommand = command
         }
 
-        // Redirect stdout + stderr to the output file at the fd level.
-        guard let writeHandle = try? FileHandle(forWritingTo: outputFile) else {
-            return BackgroundTaskOutcome(
-                success: false,
-                summary: "outputfile not writable",
-                details: nil,
-                errorMessage: "could not open output file \(outputFile.path)"
-            )
-        }
-        defer { try? writeHandle.close() }
-        process.standardOutput = writeHandle
-        process.standardError = writeHandle
-        if let devNull = FileHandle(forReadingAtPath: "/dev/null") {
-            process.standardInput = devNull
-        }
-
+        let spawned: SpawnedBashProcess
         do {
-            try process.run()
+            spawned = try SpawnedBashProcess.start(
+                shellPath: shellPath,
+                command: effectiveCommand,
+                outputFile: outputFile,
+                extraEnv: extraEnv
+            )
         } catch {
             return BackgroundTaskOutcome(
                 success: false,
@@ -111,16 +101,20 @@ enum BashRunnerImpl {
                 errorMessage: "\(error)"
             )
         }
-        control.setPid(process.processIdentifier)
+        control.setPid(spawned.pid)
 
         cancellation.onCancel { _ in control.terminate() }
 
-        process.waitUntilExit()
+        let status = spawned.wait()
 
         return BashProcessOutcome.from(
-            process: process,
+            status: status,
             cancelled: control.didCancel || cancellation.isCancelled
         )
+    }
+
+    private static func shellQuote(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 
@@ -130,8 +124,15 @@ enum BashRunnerImpl {
 /// identical success/summary/details for a given process state.
 enum BashProcessOutcome {
     static func from(process: Process, cancelled: Bool) -> BackgroundTaskOutcome {
-        let code = process.terminationStatus
-        let reason = process.terminationReason
+        let status = SpawnedBashProcess.ExitStatus(
+            code: process.terminationStatus,
+            signaled: process.terminationReason == .uncaughtSignal && process.terminationStatus != 0
+        )
+        return from(status: status, cancelled: cancelled)
+    }
+
+    static func from(status: SpawnedBashProcess.ExitStatus, cancelled: Bool) -> BackgroundTaskOutcome {
+        let code = status.code
         if cancelled {
             return BackgroundTaskOutcome(
                 success: false,
@@ -140,7 +141,7 @@ enum BashProcessOutcome {
                 errorMessage: nil
             )
         }
-        if reason == .uncaughtSignal && code != 0 {
+        if status.signaled {
             return BackgroundTaskOutcome(
                 success: false,
                 summary: "exit \(code) (signal)",
@@ -157,6 +158,124 @@ enum BashProcessOutcome {
             details: .object(["exitCode": .int(Int(code))]),
             errorMessage: nil
         )
+    }
+}
+
+struct SpawnedBashProcess {
+    struct ExitStatus {
+        var code: Int32
+        var signaled: Bool
+    }
+
+    enum SpawnError: Error, CustomStringConvertible {
+        case openOutput(String)
+        case openDevNull
+        case fileAction(String)
+        case spawn(String)
+
+        var description: String {
+            switch self {
+            case .openOutput(let path): return "could not open output file \(path)"
+            case .openDevNull: return "could not open /dev/null"
+            case .fileAction(let message): return "could not prepare process file actions: \(message)"
+            case .spawn(let message): return message
+            }
+        }
+    }
+
+    let pid: pid_t
+
+    static func start(
+        shellPath: String,
+        command: String,
+        outputFile: URL,
+        extraEnv: [String: String]
+    ) throws -> SpawnedBashProcess {
+        let outputFd = open(outputFile.path, O_WRONLY | O_CREAT | O_TRUNC, 0o666)
+        guard outputFd >= 0 else { throw SpawnError.openOutput(outputFile.path) }
+        defer { close(outputFd) }
+
+        let inputFd = open("/dev/null", O_RDONLY)
+        guard inputFd >= 0 else { throw SpawnError.openDevNull }
+        defer { close(inputFd) }
+
+        // Glibc imports these spawn handles as concrete structs, Darwin as
+        // optional opaque pointers — declare each per-platform so `&handle`
+        // matches the C function's pointee on both.
+        #if os(Linux)
+        var actions = posix_spawn_file_actions_t()
+        #else
+        var actions: posix_spawn_file_actions_t? = nil
+        #endif
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+
+        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, inputFd, STDIN_FILENO))
+        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, outputFd, STDOUT_FILENO))
+        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, outputFd, STDERR_FILENO))
+        try checkFileAction(posix_spawn_file_actions_addclose(&actions, inputFd))
+        try checkFileAction(posix_spawn_file_actions_addclose(&actions, outputFd))
+
+        #if os(Linux)
+        var attr = posix_spawnattr_t()
+        #else
+        var attr: posix_spawnattr_t? = nil
+        #endif
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        let flags = Int16(POSIX_SPAWN_SETPGROUP)
+        posix_spawnattr_setflags(&attr, flags)
+        posix_spawnattr_setpgroup(&attr, 0)
+
+        let argvStrings = [shellPath, "-lc", command]
+        var argv = argvStrings.map { strdup($0) }
+        argv.append(nil)
+        defer { argv.compactMap { $0 }.forEach { free($0) } }
+
+        var environment = ProcessInfo.processInfo.environment
+        for (key, value) in extraEnv { environment[key] = value }
+        var envp = environment.map { strdup("\($0.key)=\($0.value)") }
+        envp.append(nil)
+        defer { envp.compactMap { $0 }.forEach { free($0) } }
+
+        var pid: pid_t = 0
+        let result = shellPath.withCString { path in
+            argv.withUnsafeMutableBufferPointer { argvBuffer in
+                envp.withUnsafeMutableBufferPointer { envBuffer in
+                    posix_spawn(
+                        &pid,
+                        path,
+                        &actions,
+                        &attr,
+                        // Non-optional on Glibc; both arrays always hold at
+                        // least their nil terminator, so the unwrap is safe.
+                        argvBuffer.baseAddress!,
+                        envBuffer.baseAddress!
+                    )
+                }
+            }
+        }
+        guard result == 0 else { throw SpawnError.spawn(String(cString: strerror(result))) }
+        return SpawnedBashProcess(pid: pid)
+    }
+
+    func wait() -> ExitStatus {
+        var rawStatus: Int32 = 0
+        while waitpid(pid, &rawStatus, 0) == -1 {
+            if errno == EINTR { continue }
+            return ExitStatus(code: 1, signaled: false)
+        }
+        let signal = rawStatus & 0x7f
+        if signal != 0 {
+            return ExitStatus(code: signal, signaled: true)
+        }
+        return ExitStatus(code: (rawStatus >> 8) & 0xff, signaled: false)
+    }
+
+    private static func checkFileAction(_ result: Int32) throws {
+        guard result == 0 else {
+            throw SpawnError.fileAction(String(cString: strerror(result)))
+        }
     }
 }
 
@@ -183,7 +302,7 @@ final class BashProcessControl: @unchecked Sendable {
             _didCancel = true
             return self.pid
         }
-        if pid > 0 { kill(pid, SIGTERM) }
+        escalate(pid)
     }
 
     func timeoutAndTerminate() {
@@ -193,7 +312,37 @@ final class BashProcessControl: @unchecked Sendable {
             _didTimeOut = true
             return self.pid
         }
-        if pid > 0 { kill(pid, SIGTERM) }
+        escalate(pid)
+    }
+
+    /// Signal the whole process group, then escalate to SIGKILL if anything
+    /// survives. `SpawnedBashProcess` puts the child in a fresh group whose id
+    /// equals the shell pid (`POSIX_SPAWN_SETPGROUP` with pgid 0), so signalling
+    /// that group also reaches backgrounded grandchildren.
+    private func escalate(_ pid: pid_t) {
+        guard pid > 0 else { return }
+        // Decide once, while the leader is alive, whether the child is its own
+        // group leader; if setpgroup didn't take, fall back to the single pid.
+        let isGroupLeader = getpgid(pid) == pid
+        Self.signal(pid, SIGTERM, group: isGroupLeader)
+        // Grace period, then SIGKILL survivors. A process-group id is not reused
+        // while the group still has members, so a delayed `killpg` is safe even
+        // after the leader was reaped; the `sig 0` existence check skips it once
+        // the group is empty (also avoids signalling a recycled id).
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2.0) {
+            if Self.signal(pid, 0, group: isGroupLeader) == 0 {
+                Self.signal(pid, SIGKILL, group: isGroupLeader)
+            }
+        }
+    }
+
+    /// Send `sig` to the process group (`killpg`) or the single pid (`kill`).
+    /// Returns the syscall result (0 on success, used with `sig == 0` as an
+    /// existence probe).
+    @discardableResult
+    private static func signal(_ pid: pid_t, _ sig: Int32, group: Bool) -> Int32 {
+        guard pid > 0 else { return -1 }
+        return group ? killpg(pid, sig) : kill(pid, sig)
     }
 }
 
@@ -205,4 +354,3 @@ func bashShortLabel(_ command: String, max: Int = 80) -> String {
     if trimmed.count <= max { return trimmed }
     return String(trimmed.prefix(max)) + "…"
 }
-

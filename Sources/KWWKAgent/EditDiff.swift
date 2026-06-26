@@ -106,23 +106,20 @@ public enum EditDiff {
         }
 
         // Probe each edit against the normalized content; if any uses fuzzy
-        // matching, the whole operation runs in fuzzy-normalized space so
-        // offsets remain consistent.
+        // matching, match/replacement offsets are computed in fuzzy-normalized
+        // space (`replacementBase`). But the written output is overlaid back
+        // onto the ORIGINAL `normalizedContent`, so lines the edits never touch
+        // keep their exact bytes — fuzzy matching must never flatten trailing
+        // whitespace / smart quotes / etc. on unrelated lines (data loss).
         let initialMatches = normEdits.map { fuzzyFindText($0.oldText, in: normalizedContent) }
-        let baseContent: String = initialMatches.contains(where: { $0.usedFuzzyMatch })
+        let usedFuzzy = initialMatches.contains(where: { $0.usedFuzzyMatch })
+        let replacementBase: String = usedFuzzy
             ? normalizeForFuzzyMatch(normalizedContent)
             : normalizedContent
 
-        struct Match: Sendable {
-            var editIndex: Int
-            var matchIndex: Int
-            var matchLength: Int
-            var newText: String
-        }
-
         var matches: [Match] = []
         for (i, edit) in normEdits.enumerated() {
-            let matchResult = fuzzyFindText(edit.oldText, in: baseContent)
+            let matchResult = fuzzyFindText(edit.oldText, in: replacementBase)
             if !matchResult.found {
                 if normEdits.count == 1 {
                     throw CodingToolError.textNotFound(
@@ -133,7 +130,7 @@ public enum EditDiff {
                     "Could not find edits[\(i)] in \(path). The oldText must match exactly including all whitespace and newlines."
                 )
             }
-            let occurrences = countOccurrences(of: edit.oldText, in: baseContent)
+            let occurrences = countOccurrences(of: edit.oldText, in: replacementBase)
             if occurrences > 1 {
                 throw CodingToolError.multipleMatches(count: occurrences)
             }
@@ -156,16 +153,131 @@ public enum EditDiff {
             }
         }
 
-        var utf8 = Array(baseContent.utf8)
-        for match in matches.reversed() {
-            let newBytes = Array(match.newText.utf8)
-            utf8.replaceSubrange(match.matchIndex..<(match.matchIndex + match.matchLength), with: newBytes)
+        let newContent: String
+        if usedFuzzy {
+            newContent = try applyReplacementsPreservingUnchangedLines(
+                original: normalizedContent, base: replacementBase, matches: matches, path: path
+            )
+        } else {
+            var utf8 = Array(replacementBase.utf8)
+            for match in matches.reversed() {
+                utf8.replaceSubrange(
+                    match.matchIndex..<(match.matchIndex + match.matchLength),
+                    with: Array(match.newText.utf8)
+                )
+            }
+            newContent = String(decoding: utf8, as: UTF8.self)
         }
-        let newContent = String(decoding: utf8, as: UTF8.self)
+
+        // Diff + no-op detection are against the ORIGINAL content, never the
+        // fuzzy-normalized view.
+        let baseContent = normalizedContent
         if baseContent == newContent {
             throw CodingToolError.invalidArgument("No changes made to \(path).")
         }
         return (baseContent, newContent)
+    }
+
+    private struct Match: Sendable {
+        var editIndex: Int
+        var matchIndex: Int
+        var matchLength: Int
+        var newText: String
+    }
+
+    /// Overlay fuzzy-space replacements onto the original content, rewriting
+    /// only the lines each match actually spans and copying every other line
+    /// verbatim from the original. Ported from pi
+    /// `applyReplacementsPreservingUnchangedLines`. All offsets are UTF-8 bytes.
+    private static func applyReplacementsPreservingUnchangedLines(
+        original: String, base: String, matches: [Match], path: String
+    ) throws -> String {
+        let originalBytes = Array(original.utf8)
+        let baseBytes = Array(base.utf8)
+        let originalSpans = lineSpans(originalBytes)
+        let baseSpans = lineSpans(baseBytes)
+        guard originalSpans.count == baseSpans.count else {
+            // Fuzzy normalization preserves line count; a mismatch means we
+            // cannot safely overlay. Fail loudly rather than corrupt the file.
+            throw CodingToolError.invalidArgument(
+                "Cannot apply fuzzy edit to \(path) without risking unrelated lines; please provide exact text."
+            )
+        }
+
+        struct Group { var startLine: Int; var endLine: Int; var reps: [Match] }
+        var groups: [Group] = []
+        for rep in matches.sorted(by: { $0.matchIndex < $1.matchIndex }) {
+            let range = try replacementLineRange(baseSpans, rep, path: path)
+            if var current = groups.last, range.start < current.endLine {
+                current.endLine = max(current.endLine, range.end)
+                current.reps.append(rep)
+                groups[groups.count - 1] = current
+            } else {
+                groups.append(Group(startLine: range.start, endLine: range.end, reps: [rep]))
+            }
+        }
+
+        var result: [UInt8] = []
+        var origLineIdx = 0
+        for g in groups {
+            if g.startLine > origLineIdx {
+                let from = originalSpans[origLineIdx].start
+                let to = originalSpans[g.startLine - 1].end
+                result.append(contentsOf: originalBytes[from..<to])
+            }
+            let groupStart = baseSpans[g.startLine].start
+            let groupEnd = baseSpans[g.endLine - 1].end
+            var slice = Array(baseBytes[groupStart..<groupEnd])
+            for rep in g.reps.sorted(by: { $0.matchIndex < $1.matchIndex }).reversed() {
+                let localStart = rep.matchIndex - groupStart
+                let localEnd = localStart + rep.matchLength
+                slice.replaceSubrange(localStart..<localEnd, with: Array(rep.newText.utf8))
+            }
+            result.append(contentsOf: slice)
+            origLineIdx = g.endLine
+        }
+        if origLineIdx < originalSpans.count {
+            result.append(contentsOf: originalBytes[originalSpans[origLineIdx].start...])
+        }
+        return String(decoding: result, as: UTF8.self)
+    }
+
+    /// Byte ranges of each line (including its trailing `\n`), mirroring pi's
+    /// `[^\n]*\n|[^\n]+` split.
+    private static func lineSpans(_ bytes: [UInt8]) -> [(start: Int, end: Int)] {
+        var spans: [(Int, Int)] = []
+        var start = 0
+        var i = 0
+        while i < bytes.count {
+            if bytes[i] == 0x0A {
+                spans.append((start, i + 1))
+                start = i + 1
+            }
+            i += 1
+        }
+        if start < bytes.count { spans.append((start, bytes.count)) }
+        return spans
+    }
+
+    private static func replacementLineRange(
+        _ spans: [(start: Int, end: Int)], _ rep: Match, path: String
+    ) throws -> (start: Int, end: Int) {
+        let repStart = rep.matchIndex
+        let repEnd = rep.matchIndex + rep.matchLength
+        var startLine = -1
+        for (i, span) in spans.enumerated() where repStart >= span.start && repStart < span.end {
+            startLine = i
+            break
+        }
+        guard startLine != -1 else {
+            throw CodingToolError.invalidArgument("Replacement range is outside \(path).")
+        }
+        var endLine = startLine
+        while endLine < spans.count && spans[endLine].end < repEnd { endLine += 1 }
+        guard endLine < spans.count else {
+            throw CodingToolError.invalidArgument("Replacement range is outside \(path).")
+        }
+        return (startLine, endLine + 1)
     }
 
     public struct FuzzyFind: Sendable {

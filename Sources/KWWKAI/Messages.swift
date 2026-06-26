@@ -175,15 +175,38 @@ public struct Usage: Codable, Sendable, Hashable {
     public var output: Int
     public var cacheRead: Int
     public var cacheWrite: Int
+    /// Subset of `cacheWrite` written with the 1h ephemeral TTL
+    /// (`cache_creation.ephemeral_1h_input_tokens`). Informational; not added
+    /// into `totalTokens`.
+    public var cacheWrite1h: Int
+    public var reasoning: Int
     public var totalTokens: Int
     public var cost: Cost
-    public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite: Int = 0, totalTokens: Int = 0, cost: Cost = .init()) {
+    public init(input: Int = 0, output: Int = 0, cacheRead: Int = 0, cacheWrite: Int = 0, cacheWrite1h: Int = 0, reasoning: Int = 0, totalTokens: Int = 0, cost: Cost = .init()) {
         self.input = input
         self.output = output
         self.cacheRead = cacheRead
         self.cacheWrite = cacheWrite
+        self.cacheWrite1h = cacheWrite1h
+        self.reasoning = reasoning
         self.totalTokens = totalTokens
         self.cost = cost
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case input, output, cacheRead, cacheWrite, cacheWrite1h, reasoning, totalTokens, cost
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.input = try c.decodeIfPresent(Int.self, forKey: .input) ?? 0
+        self.output = try c.decodeIfPresent(Int.self, forKey: .output) ?? 0
+        self.cacheRead = try c.decodeIfPresent(Int.self, forKey: .cacheRead) ?? 0
+        self.cacheWrite = try c.decodeIfPresent(Int.self, forKey: .cacheWrite) ?? 0
+        self.cacheWrite1h = try c.decodeIfPresent(Int.self, forKey: .cacheWrite1h) ?? 0
+        self.reasoning = try c.decodeIfPresent(Int.self, forKey: .reasoning) ?? 0
+        self.totalTokens = try c.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
+        self.cost = try c.decodeIfPresent(Cost.self, forKey: .cost) ?? .init()
     }
 }
 

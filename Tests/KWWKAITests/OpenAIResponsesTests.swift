@@ -187,7 +187,7 @@ struct OpenAIResponsesTests {
                 )
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let headers = client.lastRequest?.headers ?? [:]
         #expect(headers["authorization"] == nil)
         #expect(headers["api-key"] == "azure-key")
@@ -215,7 +215,7 @@ struct OpenAIResponsesTests {
                 parallelToolCalls: false
             )
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["instructions"] as? String == "Be concise.")
@@ -223,12 +223,128 @@ struct OpenAIResponsesTests {
         #expect(json?["tool_choice"] as? String == "required")
         let reasoning = json?["reasoning"] as? [String: Any]
         #expect(reasoning?["effort"] as? String == "medium")
+        // store defaults to false (pi parity), and reasoning requests opt into
+        // encrypted-reasoning round-tripping.
+        #expect(json?["store"] as? Bool == false)
+        #expect(json?["include"] as? [String] == ["reasoning.encrypted_content"])
         let input = json?["input"] as? [[String: Any]]
         #expect(input?.first?["type"] as? String == "message")
         #expect(input?.first?["role"] as? String == "user")
         let tools = json?["tools"] as? [[String: Any]]
         #expect(tools?.first?["type"] as? String == "function")
         #expect(tools?.first?["name"] as? String == "calc")
+    }
+
+    @Test("emits disabled reasoning effort=off when no reasoning requested and off not null")
+    func disabledReasoningBranch() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        var model = Self.model
+        model.thinkingLevelMap = ["off": "none"]
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        let reasoning = json?["reasoning"] as? [String: Any]
+        #expect(reasoning?["effort"] as? String == "none")
+        #expect(reasoning?["summary"] == nil)
+        #expect(json?["include"] == nil)
+    }
+
+    @Test("omits reasoning entirely when off is explicitly null")
+    func disabledReasoningSuppressedWhenOffNull() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        var model = Self.model
+        model.thinkingLevelMap = ["off": nil]
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        #expect(json?["reasoning"] == nil)
+    }
+
+    @Test("reasoningSummary=detailed is sent through")
+    func reasoningSummaryDetailed() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(reasoning: .high, reasoningSummary: .detailed)
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        let r = json?["reasoning"] as? [String: Any]
+        #expect(r?["effort"] as? String == "high")
+        #expect(r?["summary"] as? String == "detailed")
+    }
+
+    @Test("reasoningSummary=.omit drops summary key; effort defaults to medium when only summary set")
+    func reasoningSummaryOmitAndDefaultEffort() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(reasoningSummary: .omit)
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        let r = json?["reasoning"] as? [String: Any]
+        #expect(r?["effort"] as? String == "medium")
+        #expect(r?["summary"] == nil)
+        #expect(json?["include"] as? [String] == ["reasoning.encrypted_content"])
+    }
+
+    @Test("service_tier=flex is passed through in the request body")
+    func serviceTierFlexPassthrough() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(serviceTier: .flex)
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        #expect(json?["service_tier"] as? String == "flex")
+    }
+
+    @Test("service_tier absent by default")
+    func serviceTierDefaultAbsent() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        #expect(json?["service_tier"] == nil)
+    }
+
+    @Test("prompt_cache_key is clamped to 64 chars")
+    func cacheKeyClamped() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let longId = String(repeating: "x", count: 100)
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: longId)
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let body = client.lastRequest?.body ?? Data()
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        #expect((json?["prompt_cache_key"] as? String)?.count == 64)
     }
 
     @Test("represents tool_result as function_call_output in the input array")
@@ -255,7 +371,7 @@ struct OpenAIResponsesTests {
             ]),
             options: nil
         )
-        try? await Task.sleep(nanoseconds: 20_000_000)
+        try? await Task.sleep(nanoseconds: 300_000_000)
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let input = json?["input"] as? [[String: Any]]

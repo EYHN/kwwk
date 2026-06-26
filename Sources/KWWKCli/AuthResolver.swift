@@ -83,7 +83,187 @@ func resolveAgentAuth(
         }
     }
 
+    // No stored login: fall back to environment API keys (lowest priority),
+    // matching pi. An exported OPENROUTER_API_KEY / GROQ_API_KEY / etc. (or
+    // ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY) runs kwwk without
+    // an interactive `kwwk login`.
+    if let env = await resolveEnvAuth(modelOverride: modelOverride) {
+        return env
+    }
+
     throw AuthResolveError.noCredentials
+}
+
+/// Resolve a session from environment-variable API keys. Honors a
+/// `provider/model` override; otherwise scans providers in priority order and
+/// uses the first one whose env key is set and whose wire protocol kwwk can
+/// already speak. Returns nil when nothing is configured / supported.
+func resolveEnvAuth(modelOverride: String?) async -> ResolvedAuth? {
+    // Split an explicit `provider/model` override.
+    var forcedProvider: String?
+    var forcedId: String? = modelOverride
+    if let mo = modelOverride, let slash = mo.firstIndex(of: "/") {
+        let prefix = String(mo[..<slash])
+        if ModelsCatalog.byProvider[prefix] != nil {
+            forcedProvider = prefix
+            forcedId = String(mo[mo.index(after: slash)...])
+        }
+    }
+
+    let candidates: [String] = forcedProvider.map { [$0] } ?? EnvAPIKeys.configuredProviders()
+    for provider in candidates {
+        // Amazon Bedrock authenticates via ambient AWS credentials, not a
+        // single API key — register the SigV4-backed BedrockProvider directly.
+        if provider == "amazon-bedrock" {
+            guard EnvAPIKeys.hasBedrockKeys() else { continue }
+            guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
+            await APIRegistry.shared.register(BedrockProvider(region: bedrockRegion(for: model)))
+            return ResolvedAuth(
+                model: model,
+                modelLabel: "\(model.id) · Amazon Bedrock (env)",
+                authResolver: nil
+            )
+        }
+        // Azure OpenAI / Cloudflare authenticate via a key plus extra config
+        // (endpoint / account+gateway ids) and ride bespoke ProviderVariants.
+        if provider == "azure-openai-responses" {
+            guard let azure = EnvAPIKeys.azure() else { continue }
+            return await registerAzureEnv(azure, modelOverride: forcedId)
+        }
+        if provider == "cloudflare-ai-gateway" {
+            guard let cf = EnvAPIKeys.cloudflare(), cf.accountId != nil, cf.gatewayId != nil else { continue }
+            return await registerCloudflareEnv(cf, gateway: true, modelOverride: forcedId)
+        }
+        if provider == "cloudflare-workers-ai" {
+            guard let cf = EnvAPIKeys.cloudflare(), cf.accountId != nil else { continue }
+            return await registerCloudflareEnv(cf, gateway: false, modelOverride: forcedId)
+        }
+        guard let key = EnvAPIKeys.apiKey(for: provider), !key.isEmpty else { continue }
+        guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
+        guard await registerEnvProvider(for: model, apiKey: key) else { continue }
+        let label = "\(model.id) · \(EnvAPIKeys.displayName(for: provider)) (env)"
+        return ResolvedAuth(model: model, modelLabel: label, authResolver: nil)
+    }
+    return nil
+}
+
+/// Register Azure OpenAI (Responses wire) from resolved env config.
+private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?) async -> ResolvedAuth {
+    let endpoint = URL(string: azure.baseURL) ?? URL(string: "https://example.openai.azure.com/openai/v1")!
+    await APIRegistry.shared.register(ProviderVariants.azureOpenAIResponsesV1(
+        endpoint: endpoint, apiVersion: azure.apiVersion, apiKey: azure.apiKey
+    ))
+    let modelId = modelOverride ?? "gpt-5"
+    let catalog = ModelsCatalog.model(provider: "azure-openai-responses", id: modelId)
+    let model = Model(
+        id: modelId, name: catalog?.name ?? modelId,
+        api: "azure-openai-responses", provider: "azure-openai-responses",
+        baseUrl: azure.baseURL, reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text, .image],
+        contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 16_384
+    )
+    return ResolvedAuth(model: model, modelLabel: "\(modelId) · Azure OpenAI (env)", authResolver: nil)
+}
+
+/// Register Cloudflare Workers AI / AI Gateway from resolved env config.
+private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, modelOverride: String?) async -> ResolvedAuth {
+    let providerId = gateway ? "cloudflare-ai-gateway" : "cloudflare-workers-ai"
+    if gateway {
+        await APIRegistry.shared.register(ProviderVariants.cloudflareAIGateway(apiKey: cf.apiKey))
+    } else {
+        await APIRegistry.shared.register(ProviderVariants.cloudflareWorkersAI(apiKey: cf.apiKey))
+    }
+    let fallbackBase = gateway
+        ? "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
+        : "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+    let modelId = modelOverride ?? (gateway ? "claude-3.5-haiku" : "@cf/google/gemma-4-26b-a4b-it")
+    // The provider is registered under `providerId`, and `APIRegistry` dispatches
+    // by `model.api` — so the model's `api` MUST equal `providerId`, otherwise the
+    // request is routed to a generic provider (e.g. `openai-completions`) that
+    // lacks the account-scoped base URL, `{CLOUDFLARE_*}` substitution and key.
+    //
+    // Workers AI catalog entries are themselves openai-completions models, so we
+    // borrow their metadata. AI Gateway catalog entries describe the *native*
+    // (e.g. anthropic) wire whose baseUrl doesn't match the openai-compat gateway
+    // endpoint, so we ignore the catalog there and use the compat fallback base.
+    let catalog = gateway ? nil : ModelsCatalog.model(provider: providerId, id: modelId)
+    let model = Model(
+        id: modelId, name: catalog?.name ?? modelId,
+        api: providerId, provider: providerId,
+        baseUrl: catalog?.baseUrl ?? fallbackBase, reasoning: catalog?.reasoning ?? false,
+        input: catalog?.input ?? [.text],
+        contextWindow: catalog?.contextWindow ?? 128_000, maxTokens: catalog?.maxTokens ?? 16_384,
+        compat: catalog?.compat, thinkingLevelMap: catalog?.thinkingLevelMap
+    )
+    let label = gateway ? "Cloudflare AI Gateway" : "Cloudflare Workers AI"
+    return ResolvedAuth(model: model, modelLabel: "\(modelId) · \(label) (env)", authResolver: nil)
+}
+
+/// Derive the AWS region for a Bedrock model from its catalog baseUrl host
+/// (`bedrock-runtime.<region>.amazonaws.com`), falling back to AWS_REGION /
+/// us-east-1. Keeps EU/APAC-hosted models from being misrouted to us-east-1.
+private func bedrockRegion(for model: Model) -> String {
+    if let host = URL(string: model.baseUrl)?.host {
+        let parts = host.split(separator: ".")
+        if parts.count >= 3, parts[0] == "bedrock-runtime" {
+            return String(parts[1])
+        }
+    }
+    return ProcessInfo.processInfo.environment["AWS_REGION"]
+        ?? ProcessInfo.processInfo.environment["AWS_DEFAULT_REGION"]
+        ?? "us-east-1"
+}
+
+/// Pick the catalog model to launch for an env-authenticated provider: the
+/// requested id if it exists, else a reasoning-capable model, else the first
+/// model by id.
+private func pickEnvModel(provider: String, id: String?) -> Model? {
+    if let id, let exact = ModelsCatalog.model(provider: provider, id: id) {
+        return exact
+    }
+    let models = ModelsCatalog.models(for: provider)
+    if let id, !id.isEmpty {
+        // Honor an override id even if it isn't catalogued, inheriting the
+        // provider's wire api/baseUrl from any sibling model.
+        if let sibling = models.first {
+            return Model(
+                id: id, name: id, api: sibling.api, provider: provider,
+                baseUrl: sibling.baseUrl, reasoning: sibling.reasoning,
+                input: sibling.input, cost: sibling.cost,
+                contextWindow: sibling.contextWindow, maxTokens: sibling.maxTokens,
+                headers: sibling.headers, compat: sibling.compat
+            )
+        }
+    }
+    return models.first(where: { $0.reasoning }) ?? models.first
+}
+
+/// Register the provider implementation matching a model's wire `api`, using
+/// the env key as the static credential. Returns false for protocols kwwk
+/// can't yet drive from a raw key (handled in later phases).
+private func registerEnvProvider(for model: Model, apiKey: String) async -> Bool {
+    switch model.api {
+    case "openai-completions":
+        await APIRegistry.shared.register(OpenAICompletionsProvider(defaultAPIKey: apiKey))
+        return true
+    case "openai-responses":
+        await APIRegistry.shared.register(OpenAIResponsesProvider(defaultAPIKey: apiKey))
+        return true
+    case "google-generative-ai":
+        await APIRegistry.shared.register(GoogleGeminiProvider(defaultAPIKey: apiKey))
+        return true
+    case "mistral-conversations":
+        await APIRegistry.shared.register(MistralConversationsProvider(defaultAPIKey: apiKey))
+        return true
+    case "anthropic-messages" where model.provider == "anthropic":
+        // Direct Anthropic uses x-api-key (AnthropicProvider's default).
+        // Anthropic-compatible providers (fireworks/vercel) need Bearer and
+        // are wired in a later phase.
+        await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: apiKey))
+        return true
+    default:
+        return false
+    }
 }
 
 /// Deterministic priority order when the store holds more than one entry.

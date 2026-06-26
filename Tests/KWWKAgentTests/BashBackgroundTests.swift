@@ -15,6 +15,22 @@ private var isCIRunner: Bool {
         || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
 }
 
+/// True when `pid` is no longer a live, running process: gone (`ESRCH`) or — on
+/// Linux — a zombie. When a SIGKILL'd orphan is reparented to an init that
+/// doesn't reap promptly (common in CI containers), `kill(pid, 0)` still
+/// succeeds even though the process is dead; a zombie counts as terminated.
+func processTerminated(_ pid: pid_t) -> Bool {
+    if kill(pid, 0) != 0 { return true }
+    #if os(Linux)
+    guard let stat = try? String(contentsOfFile: "/proc/\(pid)/stat", encoding: .utf8),
+          let close = stat.lastIndex(of: ")") else { return true }
+    let afterParen = stat[stat.index(after: close)...].drop(while: { $0 == " " })
+    return afterParen.first == "Z"
+    #else
+    return false
+    #endif
+}
+
 func awaitUntil(
     _ budgetMs: Int,
     _ predicate: @Sendable () async -> Bool
@@ -100,6 +116,42 @@ struct BashBackgroundRunnerTests {
         }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .killed)
+    }
+
+    @Test("cancellation kills grandchildren, not just the shell (no orphans)")
+    func cancelKillsGrandchild() async {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let pidFile = outputDir.appendingPathComponent("grandchild.pid")
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        // The shell backgrounds a grandchild `sleep`, records its pid, then
+        // blocks. Killing the task must reap the whole process group.
+        let runner = BashBackgroundRunner(
+            command: "sleep 30 & echo $! > \(pidFile.path); sleep 30"
+        )
+        let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
+
+        // Wait for the grandchild pid to be recorded and confirm it's alive.
+        let started = await awaitUntil(3000) {
+            guard let s = try? String(contentsOf: pidFile, encoding: .utf8),
+                  let pid = pid_t(s.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+            return kill(pid, 0) == 0
+        }
+        #expect(started)
+        let grandchildPid = pid_t(
+            (try? String(contentsOf: pidFile, encoding: .utf8))?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        ) ?? -1
+        #expect(grandchildPid > 0)
+
+        try? await manager.kill(taskId)
+
+        // The grandchild must die (SIGTERM to the group, SIGKILL escalation).
+        // Accept a zombie as dead: CI containers may not reap the orphan.
+        let reaped = await awaitUntil(5000) {
+            processTerminated(grandchildPid)
+        }
+        #expect(reaped)
     }
 
     @Test("extraEnv is propagated to the child process")
