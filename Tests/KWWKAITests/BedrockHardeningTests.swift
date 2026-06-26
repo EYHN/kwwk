@@ -270,6 +270,7 @@ struct BedrockCacheAndAuthTests {
             client: client,
             region: "us-east-1",
             environment: env,
+            resolveProfileFiles: false,
             credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
         )
         _ = provider.stream(
@@ -286,6 +287,64 @@ struct BedrockCacheAndAuthTests {
     private static func decode(_ client: ByteStubClient) throws -> [String: Any] {
         let data = client.lastRequest?.body ?? Data()
         return (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
+    @Test("AWS profile files are explicit opt-in")
+    func profileFilesAreExplicitOptIn() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bedrock-profile-opt-in-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let credentials = dir.appendingPathComponent("credentials")
+        try """
+        [work]
+        aws_access_key_id = PROFILEKEY
+        aws_secret_access_key = PROFILESECRET
+        """.write(to: credentials, atomically: true, encoding: .utf8)
+
+        let config = dir.appendingPathComponent("config")
+        try "[profile work]\nregion = eu-west-1\n".write(to: config, atomically: true, encoding: .utf8)
+
+        let env = [
+            "AWS_PROFILE": "work",
+            "AWS_SHARED_CREDENTIALS_FILE": credentials.path,
+            "AWS_CONFIG_FILE": config.path,
+        ]
+
+        let blockedClient = ByteStubClient(body: Self.endFrames())
+        let blockedProvider = BedrockProvider(
+            client: blockedClient,
+            environment: env,
+            resolveProfileFiles: false
+        )
+        var terminal: AssistantMessage?
+        for await event in blockedProvider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        ) {
+            if case .error(_, let err) = event { terminal = err }
+        }
+        #expect(blockedClient.lastRequest == nil)
+        #expect(terminal?.errorMessage == "AWS credentials unavailable")
+
+        let allowedClient = ByteStubClient(body: Self.endFrames())
+        let allowedProvider = BedrockProvider(
+            client: allowedClient,
+            environment: env,
+            resolveProfileFiles: true
+        )
+        _ = allowedProvider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        for _ in 0..<200 where allowedClient.lastRequest == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(allowedClient.lastRequest?.url.host == "bedrock-runtime.eu-west-1.amazonaws.com")
+        #expect(allowedClient.lastRequest?.headers["authorization"]?.contains("Credential=PROFILEKEY/") == true)
     }
 
     @Test("no cache points when cacheRetention is nil/none")
@@ -422,6 +481,7 @@ struct BedrockCacheAndAuthTests {
             client: client,
             region: "us-east-1",
             environment: ["AWS_BEARER_TOKEN_BEDROCK": "abc123"],
+            resolveProfileFiles: false,
             // No IAM creds available — bearer path must not require them.
             credentialsProvider: { nil }
         )
@@ -525,6 +585,7 @@ struct BedrockCacheAndAuthTests {
             client: client,
             region: "us-east-1",
             environment: env,
+            resolveProfileFiles: false,
             credentialsProvider: { AWSSigV4.Credentials(accessKeyId: "k", secretAccessKey: "s") }
         )
         let out = provider.stream(
@@ -588,6 +649,7 @@ struct BedrockCacheAndAuthTests {
         let provider = BedrockProvider(
             client: client, region: "us-east-1",
             environment: ["AWS_BEARER_TOKEN_BEDROCK": "abc", "AWS_BEDROCK_SKIP_AUTH": "1"],
+            resolveProfileFiles: false,
             credentialsProvider: { nil })
         _ = provider.stream(model: Self.model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]), options: nil)

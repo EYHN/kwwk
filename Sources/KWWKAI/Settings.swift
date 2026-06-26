@@ -1,9 +1,8 @@
 import Foundation
 
 /// User/project settings model, ported from pi's `Settings` interface in
-/// `coding-agent/src/core/settings-manager.ts`. kwwk loads a global
-/// `~/.kwwk/settings.json` and an optional project `./.kwwk/settings.json`,
-/// deep-merging the two (project wins) into a single `Settings`.
+/// `coding-agent/src/core/settings-manager.ts`. `SettingsStore` can deep-merge
+/// explicit global and project files, with project settings winning.
 ///
 /// Unknown keys are preserved verbatim in `extra` so a forward-compatible
 /// config doesn't lose data on round-trips, and so the deep-merge can recurse

@@ -13,13 +13,9 @@ import KWWKAI
 ///   - `send-keys` and `capture-pane` are the only primitives needed — the
 ///     model doesn't need raw byte control.
 ///
-/// Availability is probed lazily via `tmux -V`. If tmux isn't on PATH, the
-/// manager still constructs but `isAvailable` returns false and
-/// `createTmuxTool` returns nil — existing bash / background flows stay fully
-/// functional.
+/// Availability is probed lazily via `<tmuxPath> -V`. `tmuxPath` must be an
+/// explicit executable path; the SDK does not search PATH on behalf of callers.
 public actor TmuxSessionManager {
-    public static let shared = TmuxSessionManager()
-
     public struct PaneInfo: Sendable, Codable {
         public let paneId: String
         public let name: String
@@ -38,14 +34,14 @@ public actor TmuxSessionManager {
     private var panes: [String: PaneInfo] = [:]
 
     /// - Parameters:
-    ///   - tmuxPath: Resolved via PATH when bare (the default).
+    ///   - tmuxPath: Explicit path to the tmux executable.
     ///   - socketName: Defaults to `kw-<pid>` so multiple kw processes
     ///     don't collide on the same socket. Tests override for isolation.
     ///   - sessionName: tmux session name under the socket. Defaults to
     ///     `"kw"`; tests override so parallel suites don't hit
     ///     `duplicate session` errors.
     public init(
-        tmuxPath: String = "tmux",
+        tmuxPath: String,
         socketName: String? = nil,
         sessionName: String = "kw"
     ) {
@@ -250,7 +246,7 @@ public actor TmuxSessionManager {
         probed = true
         available = result.exitCode == 0
         if !available {
-            throw TmuxError.unavailable("tmux not found on PATH. Install with `brew install tmux` or `apt install tmux`.")
+            throw TmuxError.unavailable("tmux unavailable at \(tmuxPath)")
         }
     }
 
@@ -261,19 +257,8 @@ public actor TmuxSessionManager {
     }
 
     nonisolated static func runProcessSync(executable: String, args: [String]) -> ProcResult {
-        // `Process` resolves bare executable names via the PATH env when
-        // `launchPath` is set; using the resolved path URL is more robust.
         let process = Process()
-        if executable.contains("/") {
-            process.executableURL = URL(fileURLWithPath: executable)
-        } else {
-            // Find the binary on PATH.
-            if let resolved = Self.whichOnPath(executable) {
-                process.executableURL = URL(fileURLWithPath: resolved)
-            } else {
-                return ProcResult(exitCode: 127, stdout: "", stderr: "\(executable) not found")
-            }
-        }
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -295,16 +280,6 @@ public actor TmuxSessionManager {
         )
     }
 
-    private static func whichOnPath(_ executable: String) -> String? {
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin"
-        for dir in path.split(separator: ":").map(String.init) {
-            let candidate = "\(dir)/\(executable)"
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return nil
-    }
 }
 
 public struct ProcResult: Sendable {
@@ -349,4 +324,3 @@ private func deriveName(from command: String) -> String {
     let base = (first as NSString).lastPathComponent
     return base
 }
-

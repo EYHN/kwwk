@@ -21,8 +21,8 @@ public protocol WebSocketClient: Sendable {
 public struct URLSessionWebSocketClient: WebSocketClient {
     public let session: URLSession
 
-    public init(session: URLSession = .shared) {
-        self.session = session
+    public init(session: URLSession? = nil) {
+        self.session = session ?? Self.makeIsolatedSession()
     }
 
     public func connect(url: URL, headers: [String: String]) async throws -> any WebSocketConnection {
@@ -31,6 +31,18 @@ public struct URLSessionWebSocketClient: WebSocketClient {
         let task = session.webSocketTask(with: request)
         task.resume()
         return URLSessionWebSocketConnection(task: task)
+    }
+}
+
+private extension URLSessionWebSocketClient {
+    static func makeIsolatedSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
     }
 }
 

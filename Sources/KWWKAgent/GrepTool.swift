@@ -3,7 +3,9 @@ import KWWKAI
 
 public struct GrepToolOptions: Sendable {
     public var operations: GrepOperations
-    public init(operations: GrepOperations = LocalGrepOperations()) {
+    public init(
+        operations: GrepOperations = LocalGrepOperations()
+    ) {
         self.operations = operations
     }
 }
@@ -126,7 +128,9 @@ public func createGrepTool(cwd: String, options: GrepToolOptions = .init()) -> A
                 throw CodingToolError.invalidArgument("grep: `pattern` is required")
             }
             let path: String
-            if case .string(let p) = obj["path"] ?? .null { path = PathUtils.resolveToCwd(p, cwd: cwd) }
+            if case .string(let p) = obj["path"] ?? .null {
+                path = PathUtils.resolveToCwd(p, cwd: cwd)
+            }
             else { path = cwd }
 
             let ignoreCase: Bool = {

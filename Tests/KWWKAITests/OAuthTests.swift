@@ -39,6 +39,20 @@ final class StubResponseClient: HTTPClient, @unchecked Sendable {
 
 @Suite("OAuth credentials + store")
 struct OAuthStoreTests {
+    @Test("default store is in-memory and does not reopen credentials") func defaultStoreIsMemoryOnly() async throws {
+        let a = OAuthStore()
+        #expect(await a.isPersistent == false)
+        try await a.set(
+            OAuthCredentials(access: "A", refresh: "R", expires: 10),
+            for: "test"
+        )
+        #expect(await a.get("test")?.access == "A")
+
+        let b = OAuthStore()
+        #expect(await b.isPersistent == false)
+        #expect(await b.get("test") == nil)
+    }
+
     @Test("store persists credentials across instances") func persist() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")

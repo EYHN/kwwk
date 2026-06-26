@@ -15,7 +15,8 @@ struct SubagentToolTests {
         let withoutSubagents = await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
-            tools: .readOnly
+            tools: .readOnly,
+            bashEnvironment: [:]
         ))
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent" })
 
@@ -23,7 +24,8 @@ struct SubagentToolTests {
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
-            subagents: [minimalSubagent()]
+            subagents: [minimalSubagent()],
+            bashEnvironment: [:]
         ))
         #expect(withSubagents.state.tools.contains { $0.name == "agent" })
     }
@@ -35,7 +37,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         await #expect(throws: Error.self) {
@@ -67,7 +71,9 @@ struct SubagentToolTests {
                 ),
                 minimalSubagent(),
             ],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         let result = try await tool.execute(
@@ -84,8 +90,8 @@ struct SubagentToolTests {
         #expect(detailString(result, "subagent_type") == "general")
     }
 
-    @Test("definition without tools uses wildcard coding tools")
-    func omittedToolsUsesWildcard() async throws {
+    @Test("definition without tools inherits parent coding tools")
+    func omittedToolsInheritsParentTools() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         let capture = SubagentContextCapture()
@@ -101,13 +107,15 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent(tools: nil)],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .standard,
+            bashEnvironment: testBashEnvironment
         )
 
         _ = try await tool.execute(
             "call-1",
             .object([
-                "description": .string("wildcard tools"),
+                "description": .string("inherited tools"),
                 "prompt": .string("inspect tools"),
                 "subagent_type": .string("mini"),
             ]),
@@ -116,9 +124,11 @@ struct SubagentToolTests {
         )
 
         let snapshot = await capture.snapshot()
+        #expect(snapshot.toolNames.contains("read"))
         #expect(snapshot.toolNames.contains("write"))
         #expect(snapshot.toolNames.contains("edit"))
         #expect(snapshot.toolNames.contains("bash"))
+        #expect(snapshot.toolNames.contains("grep"))
         #expect(!snapshot.toolNames.contains("agent"))
     }
 
@@ -130,7 +140,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         let result = try await tool.execute(
@@ -169,7 +181,9 @@ struct SubagentToolTests {
         let runner = SubagentRunner(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         let result = try await runner.run(type: "mini", prompt: "answer directly")
@@ -189,8 +203,10 @@ struct SubagentToolTests {
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
             parentModel: faux.getModel(),
+            parentTools: .readOnly,
             backgroundManager: manager,
-            sessionId: "sdk-parent"
+            sessionId: "sdk-parent",
+            bashEnvironment: testBashEnvironment
         )
 
         let started = try await runner.startBackground(
@@ -222,7 +238,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         let result = try await tool.execute(
@@ -272,7 +290,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
         let agent = Agent(initialState: AgentInitialState(
             model: faux.getModel(),
@@ -339,7 +359,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
         let agent = Agent(initialState: AgentInitialState(
             model: faux.getModel(),
@@ -398,7 +420,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent(tools: .all)],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         _ = try await tool.execute(
@@ -436,7 +460,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [definition],
-            parentModel: parent
+            parentModel: parent,
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
 
         let definitionResult = try await tool.execute(
@@ -465,6 +491,41 @@ struct SubagentToolTests {
         #expect(detailString(toolOverrideResult, "model") == "tool-model")
     }
 
+    @Test("tool-call model override cannot switch provider through the global catalog")
+    func modelOverrideStaysOnParentProvider() async throws {
+        guard let foreign = ModelsCatalog.models(for: "openai").first else {
+            Issue.record("expected bundled OpenAI catalog models")
+            return
+        }
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(
+            models: [FauxModelDefinition(id: "parent-model")]
+        ))
+        defer { faux.unregister() }
+        faux.setResponses([.message(fauxAssistantMessage("same provider result"))])
+        let tool = createAgentTool(
+            cwd: FileManager.default.currentDirectoryPath,
+            subagents: [minimalSubagent()],
+            parentModel: faux.getModel(id: "parent-model")!,
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
+        )
+
+        let result = try await tool.execute(
+            "call-cross-provider-model",
+            .object([
+                "description": .string("foreign model id"),
+                "prompt": .string("use parent provider"),
+                "subagent_type": .string("mini"),
+                "model": .string(foreign.id),
+            ]),
+            nil,
+            nil
+        )
+
+        #expect(resultText(result).contains("same provider result"))
+        #expect(detailString(result, "model") == foreign.id)
+    }
+
     @Test("public agent tool overload reads live parent agent state")
     func publicOverloadReadsLiveParentState() async throws {
         let faux = await registerFauxProvider(RegisterFauxProviderOptions(
@@ -480,7 +541,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentAgent: parentAgent
+            parentAgent: parentAgent,
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
         parentAgent.state.model = faux.getModel(id: "live-parent")!
         faux.setResponses([.message(fauxAssistantMessage("live model result"))])
@@ -511,8 +574,10 @@ struct SubagentToolTests {
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
             parentModel: faux.getModel(),
+            parentTools: .readOnly,
             backgroundManager: manager,
-            sessionId: "s1"
+            sessionId: "s1",
+            bashEnvironment: testBashEnvironment
         )
 
         let result = try await tool.execute(
@@ -580,8 +645,10 @@ struct SubagentToolTests {
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent(tools: [.bash])],
             parentModel: faux.getModel(),
+            parentTools: .readOnly,
             backgroundManager: manager,
-            sessionId: "parent-session"
+            sessionId: "parent-session",
+            bashEnvironment: testBashEnvironment
         )
 
         let result = try await tool.execute(
@@ -621,7 +688,9 @@ struct SubagentToolTests {
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
-            parentModel: faux.getModel()
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
         )
         let cancellation = CancellationHandle()
 
@@ -664,7 +733,9 @@ struct SubagentToolTests {
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
             parentModel: model,
-            sessionId: parentSessionId
+            parentTools: .readOnly,
+            sessionId: parentSessionId,
+            bashEnvironment: testBashEnvironment
         )
         let cancellation = CancellationHandle()
 

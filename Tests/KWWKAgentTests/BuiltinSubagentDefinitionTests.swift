@@ -30,6 +30,7 @@ struct BuiltinSubagentDefinitionTests {
             selection: [.general, .explore]
         )
         #expect(readOnly.map(\.name) == ["general", "Explore"])
+        #expect(readOnly.first { $0.name == "general" }?.tools == nil)
 
         let selected = SubagentDefinition.builtins(
             for: .all,
@@ -51,7 +52,8 @@ struct BuiltinSubagentDefinitionTests {
         let base = CodingAgentConfig(
             model: .init(id: "m", name: "m", api: "a", provider: "p"),
             cwd: "/tmp",
-            tools: .all
+            tools: .all,
+            bashEnvironment: testBashEnvironment
         )
 
         let configured = base.withBuiltinSubagents(.general.union(.plan))

@@ -3,7 +3,9 @@ import KWWKAI
 
 public struct EditToolOptions: Sendable {
     public var operations: EditOperations
-    public init(operations: EditOperations = LocalEditOperations()) {
+    public init(
+        operations: EditOperations = LocalEditOperations()
+    ) {
         self.operations = operations
     }
 }

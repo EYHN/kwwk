@@ -19,15 +19,18 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
     /// Snapshot of the environment used for region/auth resolution. Captured at
     /// init so tests can inject a deterministic environment.
     let environment: [String: String]
+    /// Whether AWS shared config/credentials files may be consulted when
+    /// `AWS_PROFILE` is present in `environment`. Disabled by default so SDK
+    /// callers do not read `~/.aws/*` unless they opt in.
+    let resolveProfileFiles: Bool
 
     public init(
         api: String = "bedrock-converse-stream",
         client: HTTPClient = URLSessionHTTPClient(),
-        region: String = ProcessInfo.processInfo.environment["AWS_REGION"]
-            ?? ProcessInfo.processInfo.environment["AWS_DEFAULT_REGION"]
-            ?? "us-east-1",
+        region: String = "us-east-1",
         service: String = "bedrock",
-        environment: [String: String] = ProcessInfo.processInfo.environment,
+        environment: [String: String] = [:],
+        resolveProfileFiles: Bool,
         credentialsProvider: (@Sendable () async -> AWSSigV4.Credentials?)? = nil
     ) {
         self.api = api
@@ -35,10 +38,12 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         self.region = region
         self.service = service
         self.environment = environment
+        self.resolveProfileFiles = resolveProfileFiles
         self.credentialsProvider = credentialsProvider ?? {
-            // IAM static keys, then best-effort AWS_PROFILE shared-credentials.
+            // IAM static keys, then explicitly-enabled AWS_PROFILE
+            // shared-credentials.
             if let creds = BedrockCredentials.fromEnv(environment) { return creds }
-            if let profile = environment["AWS_PROFILE"], !profile.isEmpty {
+            if resolveProfileFiles, let profile = environment["AWS_PROFILE"], !profile.isEmpty {
                 return BedrockCredentials.fromProfile(profile, env: environment)
             }
             return nil
@@ -67,7 +72,8 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         // Region: ARN > configuredRegion (env) > endpoint host (gated) >
         // profile region > us-east-1. (pi precedence ladder.)
         let profileRegion: String? = {
-            guard let p = environment["AWS_PROFILE"], !p.isEmpty else { return nil }
+            guard resolveProfileFiles,
+                  let p = environment["AWS_PROFILE"], !p.isEmpty else { return nil }
             return BedrockRegion.regionFromProfile(p, env: environment)
         }()
         let effectiveRegion = BedrockRegion.resolve(

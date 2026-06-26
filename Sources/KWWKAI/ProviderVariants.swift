@@ -83,22 +83,34 @@ public enum ProviderVariants {
     // MARK: - Cloudflare Workers AI (Completions wire)
     //
     // Workers AI exposes an OpenAI-compatible /chat/completions endpoint under
-    // an account-scoped URL. The base carries a literal `{CLOUDFLARE_ACCOUNT_ID}`
-    // placeholder in the catalog; `OpenAICompletionsProvider`'s default
-    // urlBuilder substitutes it from the environment. Auth is a Bearer key.
+    // an account-scoped URL. Catalog bases may carry a literal
+    // `{CLOUDFLARE_ACCOUNT_ID}` placeholder; this variant substitutes it from
+    // the explicit `accountId` argument. Auth is a Bearer key.
     public static func cloudflareWorkersAI(
         apiKey: String? = nil,
+        accountId: String? = nil,
         api: String = "cloudflare-workers-ai",
         baseURL: URL = URL(
             string: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
         )!,
         client: HTTPClient = URLSessionHTTPClient()
     ) -> OpenAICompletionsProvider {
-        OpenAICompletionsProvider(
+        let fallbackBase = baseURL.absoluteString.trimmedSlashes
+        return OpenAICompletionsProvider(
             api: api,
             client: client,
             defaultBaseURL: baseURL,
             defaultAPIKey: apiKey,
+            urlBuilder: { model, _, fallback in
+                var base = model.baseUrl.isEmpty ? fallbackBase : model.baseUrl
+                while base.hasSuffix("/") { base.removeLast() }
+                base = substituteCloudflarePlaceholders(in: base) { token in
+                    token == "CLOUDFLARE_ACCOUNT_ID" ? accountId : nil
+                }
+                let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
+                return URL(string: "\(versioned)/chat/completions")
+                    ?? fallback.appendingPathComponent("v1/chat/completions")
+            },
             authHeaderBuilder: { key in ["Authorization": bearerHeaderValue(key)] }
         )
     }
@@ -114,17 +126,34 @@ public enum ProviderVariants {
     // `Authorization` header.
     public static func cloudflareAIGateway(
         apiKey: String? = nil,
+        accountId: String? = nil,
+        gatewayId: String? = nil,
         api: String = "cloudflare-ai-gateway",
         baseURL: URL = URL(
             string: "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
         )!,
         client: HTTPClient = URLSessionHTTPClient()
     ) -> OpenAICompletionsProvider {
-        OpenAICompletionsProvider(
+        let fallbackBase = baseURL.absoluteString.trimmedSlashes
+        return OpenAICompletionsProvider(
             api: api,
             client: client,
             defaultBaseURL: baseURL,
             defaultAPIKey: apiKey,
+            urlBuilder: { model, _, fallback in
+                var base = model.baseUrl.isEmpty ? fallbackBase : model.baseUrl
+                while base.hasSuffix("/") { base.removeLast() }
+                base = substituteCloudflarePlaceholders(in: base) { token in
+                    switch token {
+                    case "CLOUDFLARE_ACCOUNT_ID": return accountId
+                    case "CLOUDFLARE_GATEWAY_ID": return gatewayId
+                    default: return nil
+                    }
+                }
+                let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
+                return URL(string: "\(versioned)/chat/completions")
+                    ?? fallback.appendingPathComponent("v1/chat/completions")
+            },
             authHeaderBuilder: { key in
                 ["cf-aig-authorization": "Bearer \(key.trimmingCharacters(in: .whitespacesAndNewlines))"]
             }

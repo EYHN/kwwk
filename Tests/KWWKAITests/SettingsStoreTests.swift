@@ -26,7 +26,9 @@ struct SettingsStoreTests {
         let dir = tempDir()
         let store = SettingsStore.load(
             globalPath: dir.appendingPathComponent("global.json"),
-            projectPath: dir.appendingPathComponent("project.json"))
+            projectPath: dir.appendingPathComponent("project.json"),
+            projectTrusted: true
+        )
         #expect(store.merged == .empty)
         #expect(store.merged.defaultModel == nil)
         #expect(store.merged.resolvedThinkingLevel == .off)
@@ -85,6 +87,29 @@ struct SettingsStoreTests {
         #expect(store.merged.defaultModel == "g")
     }
 
+    @Test("cwd convenience requires explicit project scope")
+    func cwdConvenienceRequiresProjectScope() {
+        let dir = tempDir()
+        let project = SettingsStore.projectPath(cwd: dir)
+        write(#"{"defaultModel":"from-project"}"#, to: project)
+
+        let empty = SettingsStore.load(
+            cwd: dir,
+            includeGlobal: false,
+            includeProject: false,
+            projectTrusted: true
+        )
+        #expect(empty.merged == .empty)
+
+        let loaded = SettingsStore.load(
+            cwd: dir,
+            includeGlobal: false,
+            includeProject: true,
+            projectTrusted: true
+        )
+        #expect(loaded.merged.defaultModel == "from-project")
+    }
+
     // MARK: deep-merge precedence
 
     @Test("project settings override global; unset keys fall through")
@@ -95,7 +120,7 @@ struct SettingsStoreTests {
         write(#"{"defaultModel":"global-model","theme":"dark","defaultProvider":"openai"}"#, to: globalURL)
         write(#"{"defaultModel":"project-model","defaultThinkingLevel":"high"}"#, to: projectURL)
 
-        let store = SettingsStore.load(globalPath: globalURL, projectPath: projectURL)
+        let store = SettingsStore.load(globalPath: globalURL, projectPath: projectURL, projectTrusted: true)
         // Project wins.
         #expect(store.merged.defaultModel == "project-model")
         #expect(store.merged.defaultThinkingLevel == .high)
@@ -112,7 +137,7 @@ struct SettingsStoreTests {
         write(#"{"retry":{"enabled":true,"maxRetries":3}}"#, to: globalURL)
         write(#"{"retry":{"maxRetries":5}}"#, to: projectURL)
 
-        let store = SettingsStore.load(globalPath: globalURL, projectPath: projectURL)
+        let store = SettingsStore.load(globalPath: globalURL, projectPath: projectURL, projectTrusted: true)
         guard case .object(let retry)? = store.merged.extra["retry"] else {
             Issue.record("retry not preserved as object")
             return
@@ -136,22 +161,22 @@ struct SettingsStoreTests {
     @Test("env templates expand from the provided environment")
     func envExpansion() {
         let env = ["TOKEN": "abc123", "HOST": "example.com"]
-        #expect(ConfigValue.resolve("${TOKEN}", env: env) == "abc123")
-        #expect(ConfigValue.resolve("$TOKEN", env: env) == "abc123")
-        #expect(ConfigValue.resolve("https://$HOST/api", env: env) == "https://example.com/api")
-        #expect(ConfigValue.resolve("Bearer ${TOKEN}", env: env) == "Bearer abc123")
+        #expect(ConfigValue.resolve("${TOKEN}", env: env, allowCommands: false) == "abc123")
+        #expect(ConfigValue.resolve("$TOKEN", env: env, allowCommands: false) == "abc123")
+        #expect(ConfigValue.resolve("https://$HOST/api", env: env, allowCommands: false) == "https://example.com/api")
+        #expect(ConfigValue.resolve("Bearer ${TOKEN}", env: env, allowCommands: false) == "Bearer abc123")
     }
 
     @Test("missing env var makes the template resolve to nil")
     func envMissing() {
-        #expect(ConfigValue.resolve("${NOPE_NOT_SET}", env: [:]) == nil)
-        #expect(ConfigValue.resolve("prefix-${NOPE}", env: [:]) == nil)
+        #expect(ConfigValue.resolve("${NOPE_NOT_SET}", env: [:], allowCommands: false) == nil)
+        #expect(ConfigValue.resolve("prefix-${NOPE}", env: [:], allowCommands: false) == nil)
     }
 
     @Test("dollar escapes and literals")
     func envEscapes() {
-        #expect(ConfigValue.resolve("$$5.00", env: [:]) == "$5.00")
-        #expect(ConfigValue.resolve("plain literal", env: [:]) == "plain literal")
+        #expect(ConfigValue.resolve("$$5.00", env: [:], allowCommands: false) == "$5.00")
+        #expect(ConfigValue.resolve("plain literal", env: [:], allowCommands: false) == "plain literal")
         #expect(ConfigValue.envVarNames("${A}-${B}-${A}") == ["A", "B"])
     }
 
@@ -160,15 +185,22 @@ struct SettingsStoreTests {
     @Test("bang prefix runs a shell command and uses trimmed stdout")
     func shellExpansion() {
         #expect(ConfigValue.isCommand("!echo hi"))
-        #expect(ConfigValue.resolve("!echo hello-world") == "hello-world")
+        #expect(ConfigValue.resolve("!echo hello-world", env: [:], allowCommands: true) == "hello-world")
         // Trimming of trailing newline.
-        #expect(ConfigValue.resolve("!printf '  spaced  \n'") == "spaced")
+        #expect(ConfigValue.resolve("!printf '  spaced  \n'", env: [:], allowCommands: true) == "spaced")
+        #expect(ConfigValue.resolve("!echo blocked", env: [:], allowCommands: false) == nil)
+    }
+
+    @Test("shell command expansion uses only the provided environment")
+    func shellExpansionEnv() {
+        #expect(ConfigValue.resolve("!printf \"$TOKEN\"", env: ["TOKEN": "abc123"], allowCommands: true) == "abc123")
+        #expect(ConfigValue.resolve("!printf \"$TOKEN\"", env: [:], allowCommands: true) == nil)
     }
 
     @Test("failing command resolves to nil")
     func shellFailure() {
-        #expect(ConfigValue.resolve("!exit 1") == nil)
-        #expect(ConfigValue.resolve("!true") == nil) // empty stdout -> nil
+        #expect(ConfigValue.resolve("!exit 1", env: [:], allowCommands: true) == nil)
+        #expect(ConfigValue.resolve("!true", env: [:], allowCommands: true) == nil) // empty stdout -> nil
     }
 
     @Test("shell command resolution times out")

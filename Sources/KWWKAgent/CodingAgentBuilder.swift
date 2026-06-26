@@ -5,8 +5,8 @@ import KWWKAI
 /// full set, `.readOnly` for a sandboxed reviewer-style agent, or compose
 /// an arbitrary subset (`[.read, .grep, .bash]`).
 ///
-/// `.tmux` is only honored when `tmux` is on PATH; otherwise the tool is
-/// silently omitted so the model doesn't see something it can't use.
+/// `.tmux` requires an explicit `tmuxManager`; otherwise construction traps
+/// instead of probing PATH or silently omitting a requested tool.
 /// `.taskStatus` and `.waitTask` are only honored when a `backgroundManager`
 /// is supplied. `.bash` works without a manager (legacy pipe executor) —
 /// it just loses `run_in_background` and the auto-background-on-timeout flip.
@@ -28,8 +28,19 @@ public struct CodingTools: OptionSet, Sendable {
     /// Filesystem-scan only — no write, no edit, no shell, no PTY.
     public static let readOnly: CodingTools = [.read, .grep, .find, .ls]
 
-    /// Everything.
+    /// Common editing tools. Includes shell and mutation capabilities; SDK
+    /// callers must opt in explicitly when they want those effects.
+    public static let standard: CodingTools = [
+        .read, .write, .edit, .bash, .grep, .find, .ls, .taskStatus, .waitTask,
+    ]
+
+    /// Everything except tmux, which requires an explicit executable path.
     public static let all: CodingTools = [
+        .read, .write, .edit, .bash, .grep, .find, .ls, .taskStatus, .waitTask,
+    ]
+
+    /// Everything, including tmux. Requires `CodingAgentConfig.tmuxManager`.
+    public static let allIncludingTmux: CodingTools = [
         .read, .write, .edit, .bash, .grep, .find, .ls, .taskStatus, .waitTask, .tmux,
     ]
 }
@@ -44,6 +55,12 @@ public struct CodingAgentConfig: Sendable {
     /// If nil, a default system prompt is synthesized. Pass a non-nil string
     /// to fully override.
     public var systemPrompt: String?
+    /// Project/user context files to inject into the synthesized system prompt.
+    /// Empty by default so library callers do not implicitly read from `cwd`.
+    public var contextFiles: [(path: String, content: String)]
+    /// Skill directories to scan for `<available_skills>`. Empty by default so
+    /// library callers do not implicitly read project or user config.
+    public var skillDirectories: [String]
     /// When non-nil, wired into both the bash tool (for
     /// `run_in_background` + auto-background-on-timeout) and the
     /// agent's notification bridge (so `<task-notification>` user messages
@@ -60,25 +77,39 @@ public struct CodingAgentConfig: Sendable {
     /// the background on this deadline when a `backgroundManager` is attached.
     public var bashDefaultTimeoutSeconds: Int
     public var bashMaxTimeoutSeconds: Int
+    /// Exact environment passed to bash tool processes. Empty by default so
+    /// SDK callers do not expose host process environment variables.
+    public var bashEnvironment: [String: String]
+    /// Shell used by the bash tool.
+    public var bashShellPath: String
+    /// Explicit tmux manager used only when `tools` contains `.tmux`.
+    public var tmuxManager: TmuxSessionManager?
 
     public init(
         model: Model,
         cwd: String,
-        tools: CodingTools = .all,
+        tools: CodingTools,
         systemPrompt: String? = nil,
+        contextFiles: [(path: String, content: String)] = [],
+        skillDirectories: [String] = [],
         backgroundManager: BackgroundTaskManager? = nil,
         subagents: [SubagentDefinition] = [],
         sessionId: String = UUID().uuidString,
         authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
         autoCompactThreshold: Double? = 0.75,
         autoCompactConfig: AgentContextCompactionConfig = .init(),
+        bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
-        bashMaxTimeoutSeconds: Int = 600
+        bashMaxTimeoutSeconds: Int = 600,
+        bashShellPath: String = kwwkDefaultShellPath,
+        tmuxManager: TmuxSessionManager? = nil
     ) {
         self.model = model
         self.cwd = cwd
         self.tools = tools
         self.systemPrompt = systemPrompt
+        self.contextFiles = contextFiles
+        self.skillDirectories = skillDirectories
         self.backgroundManager = backgroundManager
         self.subagents = subagents
         self.sessionId = sessionId
@@ -87,6 +118,9 @@ public struct CodingAgentConfig: Sendable {
         self.autoCompactConfig = autoCompactConfig
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.bashEnvironment = bashEnvironment
+        self.bashShellPath = bashShellPath
+        self.tmuxManager = tmuxManager
     }
 }
 
@@ -112,8 +146,9 @@ public extension CodingAgentConfig {
 /// let agent = await makeCodingAgent(CodingAgentConfig(
 ///     model: model,
 ///     cwd: "/Users/me/project",
-///     tools: .all,
-///     backgroundManager: BackgroundTaskManager()
+///     tools: .standard,
+///     backgroundManager: BackgroundTaskManager(),
+///     bashEnvironment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
 /// ))
 /// try await agent.prompt("list the swift files")
 /// ```
@@ -124,6 +159,13 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
     let cwd = config.cwd
     let bgManager = config.backgroundManager
     let sessionId = config.sessionId
+    let autoCompact = config.autoCompactThreshold.map {
+        AgentAutoCompactOptions(
+            threshold: $0,
+            config: config.autoCompactConfig,
+            backgroundManager: bgManager
+        )
+    }
 
     var tools = await buildCodingToolList(
         cwd: cwd,
@@ -131,13 +173,18 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         backgroundManager: bgManager,
         sessionId: sessionId,
         bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
-        bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds
+        bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
+        bashEnvironment: config.bashEnvironment,
+        bashShellPath: config.bashShellPath,
+        tmuxManager: config.tmuxManager
     )
     let subagentParent = SubagentParentBox(
         fallbackModel: config.model,
+        fallbackTools: config.tools,
         fallbackThinkingLevel: .off,
         fallbackThinkingBudgets: nil,
         fallbackMaxRetryDelayMs: nil,
+        fallbackAutoCompact: autoCompact,
         fallbackAuthResolver: config.authResolver
     )
     if !config.subagents.isEmpty {
@@ -147,15 +194,18 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
             backgroundManager: bgManager,
             sessionId: sessionId,
             parentSnapshot: { subagentParent.snapshot() },
+            bashEnvironment: config.bashEnvironment,
             bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
-            bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds
+            bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
+            bashShellPath: config.bashShellPath,
+            tmuxManager: config.tmuxManager
         ))
     }
 
     let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(
         cwd: cwd,
-        contextFiles: loadProjectContextFiles(cwd: cwd),
-        availableSkills: Skills.discover(cwd: cwd).skills
+        contextFiles: config.contextFiles,
+        availableSkills: Skills.load(directories: config.skillDirectories).skills
     ))
 
     let agent = Agent(options: AgentOptions(
@@ -165,13 +215,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
             tools: tools
         ),
         sessionId: sessionId,
-        autoCompact: config.autoCompactThreshold.map {
-            AgentAutoCompactOptions(
-                threshold: $0,
-                config: config.autoCompactConfig,
-                backgroundManager: bgManager
-            )
-        },
+        autoCompact: autoCompact,
         authResolver: config.authResolver
     ))
     subagentParent.attach(agent)
@@ -189,7 +233,10 @@ internal func buildCodingToolList(
     backgroundManager: BackgroundTaskManager?,
     sessionId: String?,
     bashDefaultTimeoutSeconds: Int = 120,
-    bashMaxTimeoutSeconds: Int = 600
+    bashMaxTimeoutSeconds: Int = 600,
+    bashEnvironment: [String: String],
+    bashShellPath: String = kwwkDefaultShellPath,
+    tmuxManager: TmuxSessionManager? = nil
 ) async -> [AgentTool] {
     var tools: [AgentTool] = []
     if selected.contains(.read)  { tools.append(createReadTool(cwd: cwd)) }
@@ -197,11 +244,13 @@ internal func buildCodingToolList(
     if selected.contains(.edit)  { tools.append(createEditTool(cwd: cwd)) }
     if selected.contains(.bash) {
         tools.append(createBashTool(cwd: cwd, options: BashToolOptions(
+            environment: bashEnvironment,
             defaultTimeoutSeconds: bashDefaultTimeoutSeconds,
             maxTimeoutSeconds: bashMaxTimeoutSeconds,
             manager: backgroundManager,
             sessionId: sessionId,
-            autoBackgroundOnTimeout: true
+            autoBackgroundOnTimeout: true,
+            shellPath: bashShellPath
         )))
     }
     if selected.contains(.grep) { tools.append(createGrepTool(cwd: cwd)) }
@@ -213,9 +262,18 @@ internal func buildCodingToolList(
     if selected.contains(.waitTask), let backgroundManager {
         tools.append(createWaitTaskTool(manager: backgroundManager, sessionId: sessionId))
     }
-    if selected.contains(.tmux),
-       let tmuxTool = await createTmuxTool(bgManager: backgroundManager, sessionId: sessionId) {
-        tools.append(tmuxTool)
+    if selected.contains(.tmux) {
+        guard let tmuxManager else {
+            preconditionFailure("CodingTools.tmux requires an explicit TmuxSessionManager")
+        }
+        if let tmuxTool = await createTmuxTool(
+            manager: tmuxManager,
+            cwd: cwd,
+            bgManager: backgroundManager,
+            sessionId: sessionId
+        ) {
+            tools.append(tmuxTool)
+        }
     }
     return tools
 }
@@ -223,7 +281,7 @@ internal func buildCodingToolList(
 /// Load project context files (`AGENTS.md`, `CLAUDE.md`) from `cwd` if present.
 /// Returned in a stable order; missing or empty files are skipped. These are
 /// injected into the system prompt under `# Project Context`.
-internal func loadProjectContextFiles(cwd: String) -> [(path: String, content: String)] {
+public func loadProjectContextFiles(cwd: String) -> [(path: String, content: String)] {
     let candidates = ["AGENTS.md", "CLAUDE.md"]
     var files: [(path: String, content: String)] = []
     for name in candidates {

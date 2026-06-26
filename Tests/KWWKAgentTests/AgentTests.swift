@@ -58,7 +58,7 @@ struct AgentInitTests {
         #expect(agent.state.streamingMessage == nil)
         #expect(agent.state.pendingToolCalls.isEmpty)
         #expect(agent.state.errorMessage == nil)
-        #expect(agent.autoCompact?.threshold == 0.75)
+        #expect(agent.autoCompact == nil)
     }
 
     @Test("honours custom initial state")
@@ -75,19 +75,17 @@ struct AgentInitTests {
         #expect(agent.state.thinkingLevel == .low)
     }
 
-    @Test("auto compact can be explicitly disabled")
-    func autoCompactCanBeDisabled() async throws {
+    @Test("auto compact can be explicitly enabled")
+    func autoCompactCanBeEnabled() async throws {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
 
         let agent = Agent(options: AgentOptions(
             initialState: AgentInitialState(model: registration.getModel()),
-            autoCompact: nil
+            autoCompact: AgentAutoCompactOptions(threshold: 0.5)
         ))
 
-        if case .some = agent.autoCompact {
-            Issue.record("expected autoCompact to be disabled")
-        }
+        #expect(agent.autoCompact?.threshold == 0.5)
     }
 
     @Test("state setters do not emit events")
@@ -129,11 +127,49 @@ struct AgentInitTests {
             model: registration.getModel(),
             cwd: FileManager.default.temporaryDirectory.path,
             tools: [],
-            sessionId: "stable-session"
+            sessionId: "stable-session",
+            bashEnvironment: [:]
         ))
 
         #expect(agent.sessionId == "stable-session")
         #expect(agent.autoCompact?.threshold == 0.75)
+    }
+
+    @Test("coding agent does not scan skill directories unless configured")
+    func codingAgentSkillDirectoriesAreExplicit() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-agent-skills-\(UUID().uuidString)")
+        let skillsRoot = root.appendingPathComponent(".kwwk/skills")
+        let skillDir = skillsRoot.appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        try """
+        ---
+        name: greeter
+        description: Greets people
+        ---
+        Body.
+        """.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let defaultAgent = await makeCodingAgent(CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: root.path,
+            tools: [],
+            bashEnvironment: [:]
+        ))
+        #expect(!defaultAgent.state.systemPrompt.contains("<name>greeter</name>"))
+
+        let configuredAgent = await makeCodingAgent(CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: root.path,
+            tools: [],
+            skillDirectories: [skillsRoot.path],
+            bashEnvironment: [:]
+        ))
+        #expect(configuredAgent.state.systemPrompt.contains("<name>greeter</name>"))
     }
 }
 

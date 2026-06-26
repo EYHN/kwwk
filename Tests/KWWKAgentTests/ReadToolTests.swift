@@ -48,6 +48,20 @@ struct ReadToolTests {
         }
     }
 
+    @Test("allows explicit paths outside cwd")
+    func allowsOutsideCwd() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let outsideDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outsideDir) }
+        let outside = outsideDir.appendingPathComponent("secret.txt")
+        try write("secret", to: outside)
+
+        let tool = createReadTool(cwd: dir.path)
+        let result = try await tool.execute("call-outside", ["path": .string(outside.path)], nil, nil)
+        #expect(textOutput(result) == "secret")
+    }
+
     @Test("truncates files exceeding line limit")
     func truncatesByLines() async throws {
         let dir = makeTempDir()
@@ -177,6 +191,23 @@ struct WriteToolTests {
         #expect(textOutput(result).contains("Successfully wrote"))
         #expect(FileManager.default.fileExists(atPath: file.path))
     }
+
+    @Test("allows explicit writes outside cwd")
+    func allowsOutsideCwd() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let outsideDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outsideDir) }
+        let outside = outsideDir.appendingPathComponent("out.txt")
+
+        let tool = createWriteTool(cwd: dir.path)
+        _ = try await tool.execute(
+            "call-outside",
+            ["path": .string(outside.path), "content": .string("outside")],
+            nil, nil
+        )
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "outside")
+    }
 }
 
 @Suite("Edit tool")
@@ -229,6 +260,27 @@ struct EditToolTests {
         }
     }
 
+    @Test("allows explicit edits outside cwd")
+    func allowsOutsideCwd() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let outsideDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outsideDir) }
+        let outside = outsideDir.appendingPathComponent("edit.txt")
+        try write("secret", to: outside)
+
+        let tool = createEditTool(cwd: dir.path)
+        let edits: JSONValue = .array([
+            .object(["oldText": .string("secret"), "newText": .string("changed")])
+        ])
+        _ = try await tool.execute(
+            "call-outside",
+            .object(["path": .string(outside.path), "edits": edits]),
+            nil, nil
+        )
+        #expect(try String(contentsOf: outside, encoding: .utf8) == "changed")
+    }
+
     @Test("fails when oldText matches multiple locations")
     func ambiguousOldText() async throws {
         let dir = makeTempDir()
@@ -278,7 +330,10 @@ struct BashToolTests {
     func simpleCommand() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let tool = createBashTool(cwd: dir.path)
+        let tool = createBashTool(
+            cwd: dir.path,
+            options: BashToolOptions(environment: testBashEnvironment)
+        )
         let result = try await tool.execute(
             "call-1",
             ["command": .string("echo hello-kw")],
@@ -287,11 +342,30 @@ struct BashToolTests {
         #expect(textOutput(result).contains("hello-kw"))
     }
 
+    @Test("uses only the explicit environment")
+    func explicitEnvironmentOnly() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tool = createBashTool(
+            cwd: dir.path,
+            options: BashToolOptions(environment: testBashEnvironment)
+        )
+        let result = try await tool.execute(
+            "call-env",
+            ["command": .string("printf '<%s>' \"$HOME\"")],
+            nil, nil
+        )
+        #expect(textOutput(result) == "<>")
+    }
+
     @Test("surfaces non-zero exit code as an error")
     func exitCodeFailure() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let tool = createBashTool(cwd: dir.path)
+        let tool = createBashTool(
+            cwd: dir.path,
+            options: BashToolOptions(environment: testBashEnvironment)
+        )
         await #expect(throws: Error.self) {
             _ = try await tool.execute(
                 "call-2",
@@ -305,7 +379,10 @@ struct BashToolTests {
     func cancels() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let tool = createBashTool(cwd: dir.path)
+        let tool = createBashTool(
+            cwd: dir.path,
+            options: BashToolOptions(environment: testBashEnvironment)
+        )
         let cancel = CancellationHandle()
         Task { @Sendable in
             try? await Task.sleep(nanoseconds: 20_000_000)

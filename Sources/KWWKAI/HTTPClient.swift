@@ -19,8 +19,8 @@ public protocol HTTPClient: Sendable {
 public struct URLSessionHTTPClient: HTTPClient {
     public let session: URLSession
 
-    public init(session: URLSession = .shared) {
-        self.session = session
+    public init(session: URLSession? = nil) {
+        self.session = session ?? Self.makeIsolatedSession()
     }
 
     public func stream(
@@ -34,6 +34,18 @@ public struct URLSessionHTTPClient: HTTPClient {
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.httpBody = body
         return try await streamViaDelegate(base: session, request: request)
+    }
+}
+
+private extension URLSessionHTTPClient {
+    static func makeIsolatedSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpCookieStorage = nil
+        configuration.urlCredentialStorage = nil
+        configuration.urlCache = nil
+        configuration.httpShouldSetCookies = false
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
     }
 }
 

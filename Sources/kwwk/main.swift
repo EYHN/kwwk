@@ -104,9 +104,9 @@ struct KwwkCLI {
         Sessions are persisted to ~/.kwwk/sessions/<id>.jsonl as an
         append-only log and replayed on resume.
 
-        Credentials are read from the OAuth store at ~/.kwwk/oauth.json.
-        Run `kwwk login` once to register a provider (OAuth subscription
-        or API key).
+        Credentials are read from the OAuth store at ~/.kwwk/oauth.json,
+        with supported API-key environment variables as a fallback. Run
+        `kwwk login` once to register a provider explicitly.
         """)
     }
 

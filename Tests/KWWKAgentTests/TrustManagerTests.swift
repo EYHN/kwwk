@@ -12,6 +12,17 @@ struct TrustManagerTests {
         return (TrustManager(storeURL: url), dir)
     }
 
+    @Test("default manager is disabled and empty")
+    func defaultManagerDisabled() {
+        let mgr = TrustManager()
+        let project = "/tmp/kwwk-default-\(UUID().uuidString.prefix(6))"
+        #expect(mgr.isPersistent == false)
+        #expect(mgr.decision(project) == nil)
+        mgr.trust(project)
+        #expect(mgr.decision(project) == nil)
+        #expect(mgr.isTrusted(project) == false)
+    }
+
     @Test("unknown dir is untrusted with no decision")
     func unknownIsUntrusted() {
         let (mgr, dir) = tempStore()

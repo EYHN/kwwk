@@ -23,7 +23,7 @@ func runCodingTUIInternal(
 
     // Resolve session persistence up front: a fresh id by default, or a
     // stored transcript when `--resume` / `--session` was passed.
-    let sessionStore = SessionStore()
+    let sessionStore = SessionStore(directory: SessionStore.defaultDirectory())
     // `--resume` opens an interactive picker across all projects; resolve the
     // user's choice to a concrete session id before loading. Cancelling exits
     // cleanly (pi parity: "No session selected", exit 0).
@@ -39,15 +39,24 @@ func runCodingTUIInternal(
     let resolvedResume = await sessionStore.resolveResume(effectiveResume, cwd: cwd)
     let sessionId = resolvedResume.sessionId
 
+    let environment = ProcessInfo.processInfo.environment
+    let tmuxManager = tools.contains(.tmux)
+        ? try cliTmuxManager(environment: environment)
+        : nil
     let agent = await makeCodingAgent(CodingAgentConfig(
         model: model,
         cwd: cwd,
         tools: tools,
+        contextFiles: loadProjectContextFiles(cwd: cwd),
+        skillDirectories: Skills.defaultDirectories(cwd: cwd, includeUserDirectory: true),
         backgroundManager: bgManager,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
         authResolver: authResolver,
-        autoCompactThreshold: autoCompactThreshold
+        autoCompactThreshold: autoCompactThreshold,
+        bashEnvironment: environment,
+        bashShellPath: cliShellPath(environment: environment),
+        tmuxManager: tmuxManager
     ))
 
     // Seed the transcript from disk when resuming so the model continues
@@ -329,7 +338,7 @@ func runCodingTUIInternal(
     // the invocation args and submit it as an ordinary prompt. Project-local
     // commands are loaded only when the project is trusted — an untrusted
     // checkout must not be able to inject a template that gets sent to the model.
-    let projectTrusted = TrustManager().isTrusted(cwd)
+    let projectTrusted = TrustManager(storeURL: TrustManager.defaultStoreURL()).isTrusted(cwd)
     CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd, trustProject: projectTrusted)
     let slashContext = SlashContext(
         agent: agent,
@@ -559,7 +568,7 @@ func runCodingTUIInternal(
         pollTask.cancel()
         await agent.abortAndKillBackgroundTasks()
         await agent.closeSession()
-        await TmuxSessionManager.shared.teardown()
+        await tmuxManager?.teardown()
     }
 
     do {

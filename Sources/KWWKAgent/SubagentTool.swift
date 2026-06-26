@@ -5,20 +5,27 @@ public func createAgentTool(
     cwd: String,
     subagents: [SubagentDefinition],
     parentModel: Model,
+    parentTools: CodingTools,
     parentThinkingLevel: ThinkingLevel = .off,
     parentThinkingBudgets: ThinkingBudgets? = nil,
     parentMaxRetryDelayMs: Int? = nil,
+    parentAutoCompact: AgentAutoCompactOptions? = nil,
     backgroundManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil,
     authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+    bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
-    bashMaxTimeoutSeconds: Int = 600
+    bashMaxTimeoutSeconds: Int = 600,
+    bashShellPath: String = kwwkDefaultShellPath,
+    tmuxManager: TmuxSessionManager? = nil
 ) -> AgentTool {
     let snapshot = SubagentParentSnapshot(
         model: parentModel,
+        tools: parentTools,
         thinkingLevel: parentThinkingLevel,
         thinkingBudgets: parentThinkingBudgets,
         maxRetryDelayMs: parentMaxRetryDelayMs,
+        autoCompact: parentAutoCompact,
         authResolver: authResolver
     )
     return _createAgentTool(
@@ -27,8 +34,11 @@ public func createAgentTool(
         backgroundManager: backgroundManager,
         sessionId: sessionId,
         parentSnapshot: { snapshot },
+        bashEnvironment: bashEnvironment,
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-        bashMaxTimeoutSeconds: bashMaxTimeoutSeconds
+        bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+        bashShellPath: bashShellPath,
+        tmuxManager: tmuxManager
     )
 }
 
@@ -36,17 +46,23 @@ public func createAgentTool(
     cwd: String,
     subagents: [SubagentDefinition],
     parentAgent: Agent,
+    parentTools: CodingTools,
     backgroundManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil,
     fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+    bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
-    bashMaxTimeoutSeconds: Int = 600
+    bashMaxTimeoutSeconds: Int = 600,
+    bashShellPath: String = kwwkDefaultShellPath,
+    tmuxManager: TmuxSessionManager? = nil
 ) -> AgentTool {
     let parentBox = SubagentParentBox(
         fallbackModel: parentAgent.state.model,
+        fallbackTools: parentTools,
         fallbackThinkingLevel: parentAgent.state.thinkingLevel,
         fallbackThinkingBudgets: parentAgent.thinkingBudgets,
         fallbackMaxRetryDelayMs: parentAgent.maxRetryDelayMs,
+        fallbackAutoCompact: parentAgent.autoCompact,
         fallbackAuthResolver: parentAgent.authResolver ?? fallbackAuthResolver
     )
     parentBox.attach(parentAgent)
@@ -56,16 +72,21 @@ public func createAgentTool(
         backgroundManager: backgroundManager,
         sessionId: sessionId,
         parentSnapshot: { parentBox.snapshot() },
+        bashEnvironment: bashEnvironment,
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-        bashMaxTimeoutSeconds: bashMaxTimeoutSeconds
+        bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+        bashShellPath: bashShellPath,
+        tmuxManager: tmuxManager
     )
 }
 
 internal struct SubagentParentSnapshot: Sendable {
     var model: Model
+    var tools: CodingTools
     var thinkingLevel: ThinkingLevel
     var thinkingBudgets: ThinkingBudgets?
     var maxRetryDelayMs: Int?
+    var autoCompact: AgentAutoCompactOptions?
     var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 }
 
@@ -73,22 +94,28 @@ internal final class SubagentParentBox: @unchecked Sendable {
     private let lock = NSLock()
     private weak var agent: Agent?
     private let fallbackModel: Model
+    private let fallbackTools: CodingTools
     private let fallbackThinkingLevel: ThinkingLevel
     private let fallbackThinkingBudgets: ThinkingBudgets?
     private let fallbackMaxRetryDelayMs: Int?
+    private let fallbackAutoCompact: AgentAutoCompactOptions?
     private let fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
 
     init(
         fallbackModel: Model,
+        fallbackTools: CodingTools,
         fallbackThinkingLevel: ThinkingLevel,
         fallbackThinkingBudgets: ThinkingBudgets?,
         fallbackMaxRetryDelayMs: Int?,
+        fallbackAutoCompact: AgentAutoCompactOptions?,
         fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
     ) {
         self.fallbackModel = fallbackModel
+        self.fallbackTools = fallbackTools
         self.fallbackThinkingLevel = fallbackThinkingLevel
         self.fallbackThinkingBudgets = fallbackThinkingBudgets
         self.fallbackMaxRetryDelayMs = fallbackMaxRetryDelayMs
+        self.fallbackAutoCompact = fallbackAutoCompact
         self.fallbackAuthResolver = fallbackAuthResolver
     }
 
@@ -101,17 +128,21 @@ internal final class SubagentParentBox: @unchecked Sendable {
             guard let agent else {
                 return SubagentParentSnapshot(
                     model: fallbackModel,
+                    tools: fallbackTools,
                     thinkingLevel: fallbackThinkingLevel,
                     thinkingBudgets: fallbackThinkingBudgets,
                     maxRetryDelayMs: fallbackMaxRetryDelayMs,
+                    autoCompact: fallbackAutoCompact,
                     authResolver: fallbackAuthResolver
                 )
             }
             return SubagentParentSnapshot(
                 model: agent.state.model,
+                tools: fallbackTools,
                 thinkingLevel: agent.state.thinkingLevel,
                 thinkingBudgets: agent.thinkingBudgets,
                 maxRetryDelayMs: agent.maxRetryDelayMs,
+                autoCompact: agent.autoCompact,
                 authResolver: agent.authResolver ?? fallbackAuthResolver
             )
         }
@@ -124,8 +155,11 @@ internal func _createAgentTool(
     backgroundManager: BackgroundTaskManager?,
     sessionId: String?,
     parentSnapshot: @escaping @Sendable () -> SubagentParentSnapshot,
+    bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
-    bashMaxTimeoutSeconds: Int = 600
+    bashMaxTimeoutSeconds: Int = 600,
+    bashShellPath: String = kwwkDefaultShellPath,
+    tmuxManager: TmuxSessionManager? = nil
 ) -> AgentTool {
     let registry = SubagentRegistry(subagents)
     let parameters: JSONValue = .object([
@@ -186,7 +220,10 @@ internal func _createAgentTool(
                 backgroundManager: backgroundManager,
                 childSessionId: childSessionId,
                 bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-                bashMaxTimeoutSeconds: bashMaxTimeoutSeconds
+                bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+                bashEnvironment: bashEnvironment,
+                bashShellPath: bashShellPath,
+                tmuxManager: tmuxManager
             )
             let shouldRunBackground = input.runInBackground ?? definition.runInBackgroundByDefault
             if shouldRunBackground {
@@ -453,7 +490,7 @@ private func buildAgentToolDescription(registry: SubagentRegistry) -> String {
 }
 
 private func subagentToolsDescription(_ tools: CodingTools?) -> String {
-    guard let tools else { return "All tools" }
+    guard let tools else { return "Inherits parent tools" }
     var names: [String] = []
     if tools.contains(.read) { names.append("read") }
     if tools.contains(.write) { names.append("write") }
@@ -528,25 +565,35 @@ public struct SubagentRunner: Sendable {
     private var parentSnapshot: @Sendable () -> SubagentParentSnapshot
     private var bashDefaultTimeoutSeconds: Int
     private var bashMaxTimeoutSeconds: Int
+    private var bashEnvironment: [String: String]
+    private var bashShellPath: String
+    private var tmuxManager: TmuxSessionManager?
 
     public init(
         cwd: String,
         subagents: [SubagentDefinition],
         parentModel: Model,
+        parentTools: CodingTools,
         parentThinkingLevel: ThinkingLevel = .off,
         parentThinkingBudgets: ThinkingBudgets? = nil,
         parentMaxRetryDelayMs: Int? = nil,
+        parentAutoCompact: AgentAutoCompactOptions? = nil,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String? = nil,
         authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
-        bashMaxTimeoutSeconds: Int = 600
+        bashMaxTimeoutSeconds: Int = 600,
+        bashShellPath: String = kwwkDefaultShellPath,
+        tmuxManager: TmuxSessionManager? = nil
     ) {
         let snapshot = SubagentParentSnapshot(
             model: parentModel,
+            tools: parentTools,
             thinkingLevel: parentThinkingLevel,
             thinkingBudgets: parentThinkingBudgets,
             maxRetryDelayMs: parentMaxRetryDelayMs,
+            autoCompact: parentAutoCompact,
             authResolver: authResolver
         )
         self.cwd = cwd
@@ -556,23 +603,32 @@ public struct SubagentRunner: Sendable {
         self.parentSnapshot = { snapshot }
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.bashEnvironment = bashEnvironment
+        self.bashShellPath = bashShellPath
+        self.tmuxManager = tmuxManager
     }
 
     public init(
         cwd: String,
         subagents: [SubagentDefinition],
         parentAgent: Agent,
+        parentTools: CodingTools,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String? = nil,
         fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
-        bashMaxTimeoutSeconds: Int = 600
+        bashMaxTimeoutSeconds: Int = 600,
+        bashShellPath: String = kwwkDefaultShellPath,
+        tmuxManager: TmuxSessionManager? = nil
     ) {
         let parentBox = SubagentParentBox(
             fallbackModel: parentAgent.state.model,
+            fallbackTools: parentTools,
             fallbackThinkingLevel: parentAgent.state.thinkingLevel,
             fallbackThinkingBudgets: parentAgent.thinkingBudgets,
             fallbackMaxRetryDelayMs: parentAgent.maxRetryDelayMs,
+            fallbackAutoCompact: parentAgent.autoCompact,
             fallbackAuthResolver: parentAgent.authResolver ?? fallbackAuthResolver
         )
         parentBox.attach(parentAgent)
@@ -583,6 +639,9 @@ public struct SubagentRunner: Sendable {
         self.parentSnapshot = { parentBox.snapshot() }
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.bashEnvironment = bashEnvironment
+        self.bashShellPath = bashShellPath
+        self.tmuxManager = tmuxManager
     }
 
     public func run(
@@ -662,7 +721,10 @@ public struct SubagentRunner: Sendable {
             backgroundManager: backgroundManager,
             childSessionId: makeSubagentSessionId(parent: parentSessionId, name: definition.name),
             bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-            bashMaxTimeoutSeconds: bashMaxTimeoutSeconds
+            bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+            bashEnvironment: bashEnvironment,
+            bashShellPath: bashShellPath,
+            tmuxManager: tmuxManager
         )
     }
 }
@@ -750,6 +812,9 @@ private struct SubagentInvocationRunner: Sendable {
     var childSessionId: String
     var bashDefaultTimeoutSeconds: Int
     var bashMaxTimeoutSeconds: Int
+    var bashEnvironment: [String: String]
+    var bashShellPath: String
+    var tmuxManager: TmuxSessionManager?
 
     func run(
         cancellation: CancellationHandle?,
@@ -782,14 +847,17 @@ private struct SubagentInvocationRunner: Sendable {
             definitionModel: definition.model,
             toolOverride: modelOverride
         )
-        let selectedTools = definition.tools ?? .all
+        let selectedTools = definition.tools ?? parent.tools
         let tools = await buildCodingToolList(
             cwd: cwd,
             selected: selectedTools,
             backgroundManager: backgroundManager,
             sessionId: childSessionId,
             bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-            bashMaxTimeoutSeconds: bashMaxTimeoutSeconds
+            bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+            bashEnvironment: bashEnvironment,
+            bashShellPath: bashShellPath,
+            tmuxManager: tmuxManager
         )
         let systemPrompt = buildSubagentSystemPrompt(
             definition: definition,
@@ -806,7 +874,10 @@ private struct SubagentInvocationRunner: Sendable {
             sessionId: childSessionId,
             thinkingBudgets: parent.thinkingBudgets,
             maxRetryDelayMs: parent.maxRetryDelayMs,
-            autoCompact: AgentAutoCompactOptions(backgroundManager: backgroundManager),
+            autoCompact: inheritedAutoCompact(
+                parent.autoCompact,
+                backgroundManager: backgroundManager
+            ),
             authResolver: parent.authResolver
         ))
         let progress = SubagentProgressEmitter(
@@ -957,13 +1028,19 @@ private func resolveModelString(_ raw: String, parent: Model) -> Model {
     if let sameProvider = ModelsCatalog.model(provider: parent.provider, id: value) {
         return adoptRuntimeFields(from: parent, into: sameProvider)
     }
-    if let anyProvider = ModelsCatalog.all.first(where: { $0.id == value }) {
-        return anyProvider
-    }
     var fallback = parent
     fallback.id = value
     fallback.name = value
     return fallback
+}
+
+private func inheritedAutoCompact(
+    _ parent: AgentAutoCompactOptions?,
+    backgroundManager: BackgroundTaskManager?
+) -> AgentAutoCompactOptions? {
+    guard var inherited = parent else { return nil }
+    inherited.backgroundManager = backgroundManager
+    return inherited
 }
 
 private func adoptRuntimeFields(from current: Model, into picked: Model) -> Model {

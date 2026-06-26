@@ -136,45 +136,35 @@ extension Agent {
     // MARK: - Private storage wiring
 
     fileprivate func appendAttachment(_ attachment: BackgroundAttachment) {
-        AgentAttachmentStore.shared.append(for: self, attachment)
+        backgroundAttachmentList.append(attachment)
     }
 
     fileprivate func removeAttachment(bridgeId: UUID) {
-        AgentAttachmentStore.shared.remove(for: self, bridgeId: bridgeId)
+        backgroundAttachmentList.remove(bridgeId: bridgeId)
     }
 
     fileprivate func backgroundAttachments() -> [BackgroundAttachment] {
-        AgentAttachmentStore.shared.list(for: self)
+        backgroundAttachmentList.list()
     }
 }
 
-/// Side-store for per-Agent attachment lists. Held as a process-wide
-/// singleton so we don't need to change `Agent`'s public shape.
-final class AgentAttachmentStore: @unchecked Sendable {
-    static let shared = AgentAttachmentStore()
-
+final class AgentBackgroundAttachmentList: @unchecked Sendable {
     private let lock = NSLock()
-    private var byAgent: [ObjectIdentifier: [BackgroundAttachment]] = [:]
+    private var attachments: [BackgroundAttachment] = []
 
-    func append(for agent: Agent, _ attachment: BackgroundAttachment) {
-        let key = ObjectIdentifier(agent)
+    func append(_ attachment: BackgroundAttachment) {
         lock.withLock {
-            byAgent[key, default: []].append(attachment)
+            attachments.append(attachment)
         }
     }
 
-    func remove(for agent: Agent, bridgeId: UUID) {
-        let key = ObjectIdentifier(agent)
+    func remove(bridgeId: UUID) {
         lock.withLock {
-            byAgent[key]?.removeAll { $0.bridgeId == bridgeId }
-            if byAgent[key]?.isEmpty == true {
-                byAgent.removeValue(forKey: key)
-            }
+            attachments.removeAll { $0.bridgeId == bridgeId }
         }
     }
 
-    func list(for agent: Agent) -> [BackgroundAttachment] {
-        let key = ObjectIdentifier(agent)
-        return lock.withLock { byAgent[key] ?? [] }
+    func list() -> [BackgroundAttachment] {
+        lock.withLock { attachments }
     }
 }

@@ -317,7 +317,7 @@ private func runOAuthFlow(providerId: String) async throws {
 /// `GitHubCopilotOAuthProvider.refresh`); we prefer that over the
 /// Individual default so policy POSTs hit the correct tier.
 private func runCopilotPolicyEnable() async {
-    let store = OAuthStore()
+    let store = OAuthStore(url: OAuthStore.defaultURL())
     let manager = OAuthManager(store: store)
     let sessionToken: String
     do {
@@ -396,7 +396,7 @@ private func persistExclusive(
     _ credentials: OAuthCredentials,
     providerId: String
 ) async throws {
-    let store = OAuthStore()
+    let store = OAuthStore(url: OAuthStore.defaultURL())
     let previous = await store.all().keys.filter { $0 != providerId }.sorted()
     try await store.setExclusive(credentials, for: providerId)
     let path = await store.url.path

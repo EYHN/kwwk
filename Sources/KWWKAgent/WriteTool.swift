@@ -3,7 +3,9 @@ import KWWKAI
 
 public struct WriteToolOptions: Sendable {
     public var operations: WriteOperations
-    public init(operations: WriteOperations = LocalWriteOperations()) {
+    public init(
+        operations: WriteOperations = LocalWriteOperations()
+    ) {
         self.operations = operations
     }
 }

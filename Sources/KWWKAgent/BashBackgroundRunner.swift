@@ -15,7 +15,9 @@ public struct BashBackgroundRunner: BackgroundTaskRunner {
     public let command: String
     public let workDir: String?
     public let shellPath: String
-    /// Optional extra env merged on top of the inherited process env.
+    /// Exact base environment passed to the child process.
+    public let environment: [String: String]
+    /// Optional extra env merged on top of `environment`.
     public let extraEnv: [String: String]
 
     public init(
@@ -25,11 +27,13 @@ public struct BashBackgroundRunner: BackgroundTaskRunner {
         hardTimeoutSeconds: Int = 1800,
         shellPath: String = kwwkDefaultShellPath,
         label: String? = nil,
+        environment: [String: String],
         extraEnv: [String: String] = [:]
     ) {
         self.command = command
         self.workDir = workDir
         self.shellPath = shellPath
+        self.environment = environment
         self.extraEnv = extraEnv
         self.spec = BackgroundTaskSpec(
             kind: "bash",
@@ -48,12 +52,14 @@ public struct BashBackgroundRunner: BackgroundTaskRunner {
         let command = self.command
         let workDir = self.workDir
         let shellPath = self.shellPath
+        let environment = self.environment
         let extraEnv = self.extraEnv
         Task.detached {
             let outcome = BashRunnerImpl.run(
                 command: command,
                 workDir: workDir,
                 shellPath: shellPath,
+                environment: environment,
                 extraEnv: extraEnv,
                 outputFile: outputFile,
                 cancellation: cancellation
@@ -73,6 +79,7 @@ enum BashRunnerImpl {
         command: String,
         workDir: String?,
         shellPath: String,
+        environment: [String: String],
         extraEnv: [String: String],
         outputFile: URL,
         cancellation: CancellationHandle
@@ -91,6 +98,7 @@ enum BashRunnerImpl {
                 shellPath: shellPath,
                 command: effectiveCommand,
                 outputFile: outputFile,
+                environment: environment,
                 extraEnv: extraEnv
             )
         } catch {
@@ -189,9 +197,10 @@ struct SpawnedBashProcess {
         shellPath: String,
         command: String,
         outputFile: URL,
+        environment: [String: String],
         extraEnv: [String: String]
     ) throws -> SpawnedBashProcess {
-        let outputFd = open(outputFile.path, O_WRONLY | O_CREAT | O_TRUNC, 0o666)
+        let outputFd = open(outputFile.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
         guard outputFd >= 0 else { throw SpawnError.openOutput(outputFile.path) }
         defer { close(outputFd) }
 
@@ -227,12 +236,12 @@ struct SpawnedBashProcess {
         posix_spawnattr_setflags(&attr, flags)
         posix_spawnattr_setpgroup(&attr, 0)
 
-        let argvStrings = [shellPath, "-lc", command]
+        let argvStrings = [shellPath, "-c", command]
         var argv = argvStrings.map { strdup($0) }
         argv.append(nil)
         defer { argv.compactMap { $0 }.forEach { free($0) } }
 
-        var environment = ProcessInfo.processInfo.environment
+        var environment = environment
         for (key, value) in extraEnv { environment[key] = value }
         var envp = environment.map { strdup("\($0.key)=\($0.value)") }
         envp.append(nil)

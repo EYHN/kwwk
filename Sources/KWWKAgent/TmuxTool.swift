@@ -2,9 +2,9 @@ import Foundation
 import KWWKAI
 
 /// Exposes `TmuxSessionManager` to the agent as a single multiplexed tool.
-/// The tool is only meaningful when tmux is available on PATH — the factory
-/// returns nil otherwise so the agent doesn't see a tool it can't actually
-/// use.
+/// The tool is only meaningful when the caller supplied a `TmuxSessionManager`
+/// whose explicit `tmuxPath` is executable. The factory returns nil otherwise
+/// so the agent doesn't see a tool it can't actually use.
 ///
 /// Schema (five actions):
 /// ```json
@@ -15,7 +15,8 @@ import KWWKAI
 /// { "action": "list" }
 /// ```
 public func createTmuxTool(
-    manager: TmuxSessionManager = .shared,
+    manager: TmuxSessionManager,
+    cwd: String,
     bgManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil
 ) async -> AgentTool? {
@@ -94,10 +95,12 @@ public func createTmuxTool(
                 guard case .string(let command) = obj["command"] ?? .null else {
                     throw CodingToolError.invalidArgument("tmux: `command` is required for action=start")
                 }
-                let workDir: String? = {
-                    if case .string(let s) = obj["work_dir"] ?? .null { return s }
-                    return nil
-                }()
+                let workDir: String?
+                if case .string(let s) = obj["work_dir"] ?? .null {
+                    workDir = PathUtils.resolveToCwd(s, cwd: cwd)
+                } else {
+                    workDir = cwd
+                }
                 let name: String? = {
                     if case .string(let s) = obj["name"] ?? .null { return s }
                     return nil
@@ -243,4 +246,3 @@ public func createTmuxTool(
         }
     )
 }
-

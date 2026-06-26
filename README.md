@@ -40,14 +40,17 @@ kwwk login        log in to an OAuth provider
 kwwk --help       show this message
 ```
 
-Credentials come from the OAuth store at `~/.kwwk/oauth.json` — run
-`kwwk login` once to register a provider (OAuth subscription like
-ChatGPT Codex, Gemini, Copilot, or Claude Code; or an API key for
+Credentials come from the OAuth store at `~/.kwwk/oauth.json`; if no login
+exists, the CLI checks supported API-key environment variables. Run
+`kwwk login` once to register a provider explicitly (OAuth subscription
+like ChatGPT Codex, Gemini, Copilot, or Claude Code; or an API key for
 Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint).
 
 Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,
-LS, tmux, and background-task tools out of the box.
+LS, and background-task tools out of the box. SDK callers that want tmux
+must opt into `.tmux` or `.allIncludingTmux` and provide an explicit
+`TmuxSessionManager`.
 
 ---
 
@@ -70,6 +73,11 @@ Then depend on the libraries you need:
   message / tool types.
 - **`KWWKAgent`** — the turn/tool loop, built-in coding tools, hooks.
 
+The SDK does not read `~/.kwwk` or process environment variables by
+default. Pass credentials, settings, session stores, context files, and
+skill directories explicitly. The `kwwk` binary is the layer that opts into
+`~/.kwwk/*` and environment-key discovery.
+
 ### Quick start — one-shot run
 
 `Agent.runOnce` mirrors `query()` in the Python Agent SDK: a fresh agent
@@ -80,13 +88,15 @@ import KWWKAI
 import KWWKAgent
 
 // 1. Register a provider using an API key.
-await registerBuiltins(anthropic: ProcessInfo.processInfo.environment["ANTHROPIC_API_KEY"])
+let anthropicAPIKey = "sk-ant-..."
+await registerBuiltins(anthropic: anthropicAPIKey)
 
 // 2. Build a coding agent scoped to a working directory.
 let agent = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet45,
     cwd: FileManager.default.currentDirectoryPath,
-    tools: .all
+    tools: .readOnly,
+    bashEnvironment: [:]
 ))
 
 // 3. Drive it.
@@ -117,12 +127,14 @@ let reviewer = SubagentDefinition(
 )
 
 let bg = BackgroundTaskManager()
+let shellEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
 let agent = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet45,
     cwd: FileManager.default.currentDirectoryPath,
-    tools: .all,
+    tools: .standard,
     backgroundManager: bg,
-    subagents: [reviewer]
+    subagents: [reviewer],
+    bashEnvironment: shellEnvironment
 ))
 
 try await agent.prompt("Use the reviewer subagent to review Sources/KWWKAgent.")
@@ -135,8 +147,9 @@ copying prompts:
 let agent = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet45,
     cwd: FileManager.default.currentDirectoryPath,
-    tools: .all,
-    backgroundManager: BackgroundTaskManager()
+    tools: .standard,
+    backgroundManager: BackgroundTaskManager(),
+    bashEnvironment: shellEnvironment
 ).withBuiltinSubagents([.general, .explore, .plan]))
 ```
 
@@ -146,7 +159,9 @@ SDK users can also run a subagent directly:
 let runner = SubagentRunner(
     cwd: FileManager.default.currentDirectoryPath,
     subagents: [.plan()],
-    parentModel: Models.claudeSonnet45
+    parentModel: Models.claudeSonnet45,
+    parentTools: .readOnly,
+    bashEnvironment: [:]
 )
 let result = try await runner.run(
     type: "Plan",
@@ -157,9 +172,10 @@ let result = try await runner.run(
 Subagents are fresh-context agents: they do not inherit the parent
 transcript. The parent model must put the relevant files, errors, goals,
 and constraints into the `agent` tool's `prompt`. Subagents inherit the
-parent model, thinking level, retry delay, and API key resolver, but they
-do not inherit parent hooks such as `betweenTurns`, `transformContext`,
-`convertToLlm`, `userPromptSubmit`, or tool-call hooks.
+parent model, tools when `SubagentDefinition.tools` is nil, thinking
+level, retry delay, and API key resolver, but they do not inherit parent
+hooks such as `betweenTurns`, `transformContext`, `convertToLlm`,
+`userPromptSubmit`, or tool-call hooks.
 
 Each subagent run gets its own child session id. Tools inside that
 subagent, including background-capable tools such as Bash, are scoped to
@@ -188,11 +204,11 @@ is started; their completion is delivered through the existing
 background-task notification flow.
 
 The interactive `kwwk` CLI enables a small built-in set by default:
-`general`, `Explore`, and `Plan`. `general` has wildcard tools by
-default and is used when the model omits `subagent_type`. `Explore` and
-`Plan` are read-only specialists. Use `--no-subagents` to disable them
-or `--subagents general,Explore` to enable only a subset. The SDK does
-not enable those automatically.
+`general`, `Explore`, and `Plan`. `general` inherits the parent agent's
+tools and is used when the model omits `subagent_type`. `Explore` and
+`Plan` are read-only specialists. Use `--no-subagents` to disable them or
+`--subagents general,Explore` to enable only a subset. The SDK does not
+enable those automatically.
 
 When an SDK application is done with an agent session, call
 `await agent.closeSession()` to release provider-owned resources keyed by
@@ -321,7 +337,9 @@ agent.steer(UserMessage(text: "also add tests as you go"))
 ### Providers
 
 `registerBuiltins` covers Anthropic, OpenAI (Completions + Responses),
-and Google Gemini. `Models` exposes a small curated catalog
+and Google Gemini from explicit keys. For CLI-style environment discovery,
+call `registerBuiltinsFromEnvironment(env:)` with an environment snapshot.
+`Models` exposes a small curated catalog
 (`claudeSonnet45`, `gpt5`, `gemini25Pro`, …) or you can construct
 `Model` values by hand. For OpenAI-compatible endpoints (xAI, Groq,
 OpenRouter) there are `Models.xaiGrok(id:)`, `Models.groq(id:)`,
