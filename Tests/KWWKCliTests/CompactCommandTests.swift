@@ -101,6 +101,7 @@ struct CompactCommandTests {
 
         let notifier = NotifyBox()
         let commits = CommitBox()
+        var recordedMessagesCompacted: Int?
         let ctx = SlashContext(
             agent: agent,
             modal: makeStubModalHost(),
@@ -108,7 +109,8 @@ struct CompactCommandTests {
             sessionId: "test-session",
             notifyBlock: { lines in for l in lines { notifier.append(l) } },
             commitScrollback: commits.collect(),
-            refreshTranscript: {}
+            refreshTranscript: {},
+            recordCompaction: { n in recordedMessagesCompacted = n }
         )
         let registry = SlashCommandRegistry()
         registerBuiltinSlashCommands(registry)
@@ -127,6 +129,7 @@ struct CompactCommandTests {
         // The durable boundary lives in scrollback now, not in the
         // transient notification area.
         #expect(commits.joined.contains("compacted"))
+        #expect(recordedMessagesCompacted == messages.count)
         // And it's shaped like a horizontal rule so it stands out when
         // the user scrolls back through history.
         #expect(commits.joined.contains("──"))

@@ -44,6 +44,28 @@ struct SessionStoreTests {
         }
     }
 
+    private func text(from message: Message?) -> String {
+        switch message {
+        case .user(let user):
+            return user.content.compactMap { block in
+                guard case .text(let text) = block else { return nil }
+                return text.text
+            }.joined(separator: "\n")
+        case .assistant(let assistant):
+            return assistant.content.compactMap { block in
+                guard case .text(let text) = block else { return nil }
+                return text.text
+            }.joined(separator: "\n")
+        case .toolResult(let result):
+            return result.content.compactMap { block in
+                guard case .text(let text) = block else { return nil }
+                return text.text
+            }.joined(separator: "\n")
+        case nil:
+            return ""
+        }
+    }
+
     @Test("round-trip: append then load preserves order and content")
     func roundTrip() async throws {
         let (store, dir) = tempStore()
@@ -215,6 +237,85 @@ struct SessionStoreTests {
         #expect(loaded.messages.count == 1)
     }
 
+    @Test("load projects the latest compaction entry as resumable context")
+    func loadProjectsCompaction() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-compact"
+        let cwd = "/w"
+        let before = [
+            userMsg("one"),
+            assistantMsg("two"),
+            toolResultMsg("three"),
+        ]
+        for message in before {
+            try await store.append(id: id, cwd: cwd, message: message)
+        }
+
+        let summary = userMsg(
+            "<previous-session-summary>one through three</previous-session-summary>")
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [summary],
+            messagesCompacted: before.count,
+            tokensBefore: 123,
+            contextWindow: 456
+        )
+
+        let after = userMsg("after compact")
+        try await store.append(id: id, cwd: cwd, message: after)
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [summary, after])
+        #expect(loaded.transcriptMessages == before + [after])
+        #expect(loaded.persistedContextCount == 2)
+
+        let raw = try String(contentsOf: dir.appendingPathComponent("\(id).jsonl"), encoding: .utf8)
+        #expect(raw.contains(#""type":"compaction""#))
+        #expect(raw.contains(#""tokensBefore":123"#))
+    }
+
+    @Test("repeated compactions project from the newest marker")
+    func repeatedCompactionsUseNewestProjection() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-repeat-compact"
+        let cwd = "/w"
+        let a = userMsg("a")
+        let b = assistantMsg("b")
+        try await store.append(id: id, cwd: cwd, messages: [a, b])
+
+        let firstSummary = userMsg("summary a-b")
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [firstSummary],
+            messagesCompacted: 2
+        )
+
+        let c = userMsg("c")
+        try await store.append(id: id, cwd: cwd, message: c)
+
+        let secondSummary = userMsg("summary compacted-plus-c")
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [secondSummary],
+            messagesCompacted: 2
+        )
+
+        let d = assistantMsg("d")
+        try await store.append(id: id, cwd: cwd, message: d)
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [secondSummary, d])
+        #expect(loaded.transcriptMessages == [a, b, c, d])
+        #expect(loaded.persistedContextCount == 2)
+    }
+
     @Test("resolveResume(.latestForCwd) seeds the stored transcript")
     func resolveResumeLatest() async throws {
         let (store, dir) = tempStore()
@@ -263,5 +364,113 @@ struct SessionStoreTests {
 
         let loaded = try await store.load(id: id)
         #expect(loaded.messages.count == 2)
+    }
+
+    @Test("SessionRecorder resets its append baseline after compaction")
+    func recorderAppendsImmediatelyAfterCompaction() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-rec-compact"
+        let recorder = SessionRecorder(
+            store: store, sessionId: id, cwd: "/w",
+            model: "m1", provider: "p1"
+        )
+        await recorder.ensureCreated()
+
+        let before = [
+            userMsg("a"),
+            assistantMsg("b"),
+            userMsg("c"),
+            assistantMsg("d"),
+        ]
+        await recorder.flush(messages: before)
+
+        let summary = userMsg("<previous-session-summary>a-d</previous-session-summary>")
+        await recorder.recordCompaction(
+            messages: [summary],
+            messagesCompacted: before.count,
+            tokensBefore: 99,
+            contextWindow: 1000
+        )
+
+        let after = userMsg("post-compact")
+        await recorder.flush(messages: [summary, after])
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [summary, after])
+        #expect(loaded.transcriptMessages == before + [after])
+        #expect(loaded.persistedContextCount == 2)
+
+        let raw = try String(contentsOf: dir.appendingPathComponent("\(id).jsonl"), encoding: .utf8)
+        #expect(raw.contains(#""contextWindow":1000"#))
+        #expect(raw.contains(#""tokensBefore":99"#))
+    }
+
+    @Test("SessionRecorder persists compactEnd events from an agent")
+    func recorderPersistsAgentCompactEnd() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let faux = await registerFauxProvider(
+            RegisterFauxProviderOptions(models: [
+                FauxModelDefinition(id: "compact-recorder-window", contextWindow: 5)
+            ]))
+        defer { faux.unregister() }
+
+        let model = faux.getModel()
+        let highUsage = AssistantMessage(
+            content: [.text(TextContent(text: "large answer"))],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(input: 80, output: 1)
+        )
+        faux.setResponses([
+            .message(highUsage),
+            .message(fauxAssistantMessage("event summary")),
+        ])
+
+        let agent = Agent(
+            options: AgentOptions(
+                initialState: AgentInitialState(
+                    model: model,
+                    messages: [userMsg("seed"), assistantMsg("reply")]
+                ),
+                autoCompact: AgentAutoCompactOptions(
+                    threshold: 0.1,
+                    config: AgentContextCompactionConfig(minMessages: 1)
+                )
+            ))
+
+        let id = "sess-agent-compact"
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: id,
+            cwd: "/w",
+            model: model.id,
+            provider: model.provider
+        )
+        await recorder.ensureCreated()
+        let unsubscribe = recorder.attach(to: agent)
+        defer { unsubscribe() }
+
+        try await agent.prompt("trigger compaction")
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages.count == 1)
+        #expect(text(from: loaded.messages.first).contains("event summary"))
+        #expect(loaded.transcriptMessages.count > loaded.messages.count)
+        #expect(loaded.persistedContextCount == 1)
+
+        let resolved = await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh")
+        #expect(resolved.resumed)
+        #expect(resolved.messages == loaded.messages)
+        #expect(resolved.persistedCount == loaded.persistedContextCount)
+
+        let raw = try String(contentsOf: dir.appendingPathComponent("\(id).jsonl"), encoding: .utf8)
+        #expect(raw.contains(#""type":"compaction""#))
+        #expect(raw.contains(#""contextWindow":5"#))
+        #expect(raw.contains(#""tokensBefore":"#))
     }
 }

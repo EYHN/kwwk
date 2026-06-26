@@ -8,18 +8,21 @@ import KWWKAI
 /// Mirrors pi's `packages/agent/src/harness/session` storage in spirit but
 /// keeps a flat append-only log instead of pi's branching entry tree: each
 /// session file is a versioned header line followed by one JSON entry per
-/// line. Entries are either transcript messages (`user` / `assistant` /
-/// `toolResult`) or sparse metadata updates (model / thinking-level changes).
+/// line. Entries are transcript messages (`user` / `assistant` /
+/// `toolResult`), sparse metadata updates (model / thinking-level changes),
+/// or compaction markers that describe the projected resumable context.
 ///
 /// The store never rewrites the file — every `append(...)` is an `O(1)` write
 /// to the end of the file, so persisting on every message is cheap. Loading
-/// replays the log to reconstruct the transcript plus the latest metadata.
+/// replays the log to reconstruct the projected context plus the latest
+/// metadata.
 ///
 /// File layout (one JSON object per line):
 /// ```
 /// {"type":"session","version":1,"id":"…","cwd":"…","createdAt":…,"model":"…","provider":"…"}
 /// {"type":"message","timestamp":…,"message":{ …Message… }}
 /// {"type":"meta","timestamp":…,"model":"…","provider":"…","thinkingLevel":"…"}
+/// {"type":"compaction","timestamp":…,"replacementMessages":[{ …Message… }],"messagesCompacted":42}
 /// ```
 public actor SessionStore {
 
@@ -85,16 +88,44 @@ public actor SessionStore {
         }
     }
 
-    /// One appended log line after the header. Either a transcript message or
-    /// a metadata update.
+    /// Append-only marker written when the live agent context is compacted.
+    /// `replacementMessages` is the model-facing context that should replace
+    /// prior projected messages when the session is resumed.
+    public struct Compaction: Codable, Sendable, Hashable {
+        public var replacementMessages: [Message]
+        public var messagesCompacted: Int
+        public var firstKeptMessageIndex: Int?
+        public var tokensBefore: Int?
+        public var contextWindow: Int?
+
+        public init(
+            replacementMessages: [Message],
+            messagesCompacted: Int,
+            firstKeptMessageIndex: Int? = nil,
+            tokensBefore: Int? = nil,
+            contextWindow: Int? = nil
+        ) {
+            self.replacementMessages = replacementMessages
+            self.messagesCompacted = messagesCompacted
+            self.firstKeptMessageIndex = firstKeptMessageIndex
+            self.tokensBefore = tokensBefore
+            self.contextWindow = contextWindow
+        }
+    }
+
+    /// One appended log line after the header. Either a transcript message,
+    /// a metadata update, or a context compaction marker.
     public enum Entry: Codable, Sendable, Hashable {
         case message(timestamp: Int64, message: Message)
         case meta(timestamp: Int64, model: String?, provider: String?, thinkingLevel: String?)
+        case compaction(timestamp: Int64, compaction: Compaction)
 
         private enum CodingKeys: String, CodingKey {
             case type, timestamp, message, model, provider, thinkingLevel
+            case replacementMessages, messagesCompacted, firstKeptMessageIndex
+            case tokensBefore, contextWindow
         }
-        private enum Kind: String, Codable { case message, meta }
+        private enum Kind: String, Codable { case message, meta, compaction }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -108,6 +139,19 @@ public actor SessionStore {
                     model: try c.decodeIfPresent(String.self, forKey: .model),
                     provider: try c.decodeIfPresent(String.self, forKey: .provider),
                     thinkingLevel: try c.decodeIfPresent(String.self, forKey: .thinkingLevel)
+                )
+            case .compaction:
+                self = .compaction(
+                    timestamp: timestamp,
+                    compaction: Compaction(
+                        replacementMessages: try c.decode(
+                            [Message].self, forKey: .replacementMessages),
+                        messagesCompacted: try c.decode(Int.self, forKey: .messagesCompacted),
+                        firstKeptMessageIndex: try c.decodeIfPresent(
+                            Int.self, forKey: .firstKeptMessageIndex),
+                        tokensBefore: try c.decodeIfPresent(Int.self, forKey: .tokensBefore),
+                        contextWindow: try c.decodeIfPresent(Int.self, forKey: .contextWindow)
+                    )
                 )
             }
         }
@@ -125,14 +169,28 @@ public actor SessionStore {
                 try c.encodeIfPresent(model, forKey: .model)
                 try c.encodeIfPresent(provider, forKey: .provider)
                 try c.encodeIfPresent(thinkingLevel, forKey: .thinkingLevel)
+            case .compaction(let timestamp, let compaction):
+                try c.encode(Kind.compaction, forKey: .type)
+                try c.encode(timestamp, forKey: .timestamp)
+                try c.encode(compaction.replacementMessages, forKey: .replacementMessages)
+                try c.encode(compaction.messagesCompacted, forKey: .messagesCompacted)
+                try c.encodeIfPresent(
+                    compaction.firstKeptMessageIndex, forKey: .firstKeptMessageIndex)
+                try c.encodeIfPresent(compaction.tokensBefore, forKey: .tokensBefore)
+                try c.encodeIfPresent(compaction.contextWindow, forKey: .contextWindow)
             }
         }
     }
 
-    /// Metadata + replayed transcript returned by `load`.
+    /// Metadata + projected resumable context returned by `load`.
     public struct LoadedSession: Sendable, Hashable {
         public var header: Header
+        /// Model-facing context after replaying any compaction markers.
         public var messages: [Message]
+        /// Raw transcript message entries, excluding compaction replacements.
+        public var transcriptMessages: [Message]
+        /// Number of messages in `messages` already represented on disk.
+        public var persistedContextCount: Int
         /// Latest model id seen (from the header or a later `meta` entry).
         public var model: String?
         /// Latest provider id seen.
@@ -143,12 +201,16 @@ public actor SessionStore {
         public init(
             header: Header,
             messages: [Message],
+            transcriptMessages: [Message]? = nil,
+            persistedContextCount: Int? = nil,
             model: String?,
             provider: String?,
             thinkingLevel: String?
         ) {
             self.header = header
             self.messages = messages
+            self.transcriptMessages = transcriptMessages ?? messages
+            self.persistedContextCount = persistedContextCount ?? messages.count
             self.model = model
             self.provider = provider
             self.thinkingLevel = thinkingLevel
@@ -297,6 +359,38 @@ public actor SessionStore {
         ))
     }
 
+    /// Record a context compaction without rewriting prior message entries.
+    /// Loading the session will project `replacementMessages` first, followed
+    /// by message entries appended after this marker.
+    public func appendCompaction(
+        id: String,
+        cwd: String,
+        replacementMessages: [Message],
+        messagesCompacted: Int,
+        firstKeptMessageIndex: Int? = nil,
+        tokensBefore: Int? = nil,
+        contextWindow: Int? = nil,
+        model: String? = nil,
+        provider: String? = nil
+    ) throws {
+        let url = try path(for: id)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try create(id: id, cwd: cwd, model: model, provider: provider)
+        }
+        try appendEntry(
+            id: id,
+            .compaction(
+                timestamp: Timestamp.now(),
+                compaction: Compaction(
+                    replacementMessages: replacementMessages,
+                    messagesCompacted: messagesCompacted,
+                    firstKeptMessageIndex: firstKeptMessageIndex,
+                    tokensBefore: tokensBefore,
+                    contextWindow: contextWindow
+                )
+            ))
+    }
+
     private func appendEntry(id: String, _ entry: Entry) throws {
         let url = try path(for: id)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -312,8 +406,9 @@ public actor SessionStore {
 
     // MARK: - Load
 
-    /// Replay a session file into its header, full transcript, and latest
-    /// metadata. Throws on a missing/invalid header or unsupported version.
+    /// Replay a session file into its header, projected resumable context, raw
+    /// transcript message entries, and latest metadata. Throws on a
+    /// missing/invalid header or unsupported version.
     public func load(id: String) throws -> LoadedSession {
         try load(at: try path(for: id))
     }
@@ -329,6 +424,7 @@ public actor SessionStore {
         let header = try parseHeader(String(first), path: url.path)
 
         var messages: [Message] = []
+        var transcriptMessages: [Message] = []
         var model = header.model
         var provider = header.provider
         var thinkingLevel: String?
@@ -342,17 +438,22 @@ public actor SessionStore {
             }
             switch entry {
             case .message(_, let message):
+                transcriptMessages.append(message)
                 messages.append(message)
             case .meta(_, let m, let p, let t):
                 if let m { model = m }
                 if let p { provider = p }
                 if let t { thinkingLevel = t }
+            case .compaction(_, let compaction):
+                messages = compaction.replacementMessages
             }
         }
 
         return LoadedSession(
             header: header,
             messages: messages,
+            transcriptMessages: transcriptMessages,
+            persistedContextCount: messages.count,
             model: model,
             provider: provider,
             thinkingLevel: thinkingLevel
@@ -426,6 +527,8 @@ public actor SessionStore {
             case .meta(_, let m, let p, _):
                 if let m { model = m }
                 if let p { provider = p }
+            case .compaction:
+                continue
             }
         }
 

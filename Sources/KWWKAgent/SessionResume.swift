@@ -23,7 +23,7 @@ public enum SessionResume: Sendable, Hashable {
 }
 
 /// Result of resolving a `SessionResume` against a `SessionStore`: the
-/// session id to use plus any transcript to seed the agent with. When nothing
+/// session id to use plus any context to seed the agent with. When nothing
 /// matched (`.none`, or `.latestForCwd` with no prior session), `messages` is
 /// empty and `persistedCount` is zero so the recorder starts appending from
 /// scratch.
@@ -32,7 +32,8 @@ public struct ResolvedResume: Sendable {
     public var messages: [Message]
     public var model: String?
     public var thinkingLevel: String?
-    /// Number of transcript messages already on disk for this session.
+    /// Number of projected context messages already represented on disk for
+    /// this session.
     public var persistedCount: Int
     /// True when an existing session was loaded (vs. a fresh id minted).
     public var resumed: Bool
@@ -82,7 +83,7 @@ extension SessionStore {
                 messages: loaded.messages,
                 model: loaded.model,
                 thinkingLevel: loaded.thinkingLevel,
-                persistedCount: loaded.messages.count,
+                persistedCount: loaded.persistedContextCount,
                 resumed: true
             )
 
@@ -97,7 +98,7 @@ extension SessionStore {
                     messages: loaded.messages,
                     model: loaded.model,
                     thinkingLevel: loaded.thinkingLevel,
-                    persistedCount: loaded.messages.count,
+                    persistedCount: loaded.persistedContextCount,
                     resumed: true
                 )
             } catch SessionStoreError.notFound {

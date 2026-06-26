@@ -64,6 +64,9 @@ final class SlashContext {
     /// (e.g. `/thinking show|hide`) without emitting an AgentEvent the
     /// listener would otherwise observe.
     let refreshTranscript: @MainActor () -> Void
+    /// Persist a successful manual compaction. Automatic compaction uses
+    /// AgentEvent subscriptions; slash commands need an explicit hook.
+    let recordCompaction: @MainActor (_ messagesCompacted: Int) async -> Void
 
     init(
         agent: Agent,
@@ -72,7 +75,8 @@ final class SlashContext {
         sessionId: String,
         notifyBlock: @MainActor @escaping ([String]) -> Void,
         commitScrollback: @MainActor @escaping ((Int) -> [String]) -> Void,
-        refreshTranscript: @MainActor @escaping () -> Void
+        refreshTranscript: @MainActor @escaping () -> Void,
+        recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in }
     ) {
         self.agent = agent
         self.modal = modal
@@ -81,6 +85,7 @@ final class SlashContext {
         self.notifyBlock = notifyBlock
         self.commitScrollback = commitScrollback
         self.refreshTranscript = refreshTranscript
+        self.recordCompaction = recordCompaction
     }
 
     /// Single-line convenience: one-off status messages (`/model switched

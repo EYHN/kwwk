@@ -364,6 +364,12 @@ func runCodingTUIInternal(
             renderer.setThinkingDisplay(agent.state.thinkingDisplay)
             recomputeTranscript()
             runner.tui.requestRender()
+        },
+        recordCompaction: { messagesCompacted in
+            await sessionRecorder.recordCompaction(
+                messages: agent.state.messages,
+                messagesCompacted: messagesCompacted
+            )
         }
     )
 
