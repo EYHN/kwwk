@@ -351,6 +351,7 @@ private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
     case .compacted(let n, let hasLedger):
         // Show a compact record + durable boundary so the user can
         // scroll up later and see where the compact happened.
+        await ctx.recordCompaction(n)
         ctx.notify(Style.dimmed("  /compact: summarizing \(n) messages…"))
         ctx.commitScrollback { width in
             renderCompactBoundary(

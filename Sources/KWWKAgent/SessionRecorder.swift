@@ -11,7 +11,8 @@ import KWWKAI
 /// (`messageEnd`, `turnEnd`, `agentEnd`) by diffing the agent's current
 /// transcript against the count already written, then appending only the new
 /// tail. That keeps writes append-only even when the loop produces several
-/// messages between events.
+/// messages between events. Compaction is persisted as its own append-only
+/// marker and resets the live-message baseline to the compacted context.
 public final class SessionRecorder: @unchecked Sendable {
     private let store: SessionStore
     private let sessionId: String
@@ -22,6 +23,8 @@ public final class SessionRecorder: @unchecked Sendable {
     private let lock = NSLock()
     /// Number of transcript messages already flushed to disk.
     private var persistedCount: Int
+    /// Usage snapshot from the latest compactStart, consumed by compactEnd.
+    private var pendingCompactionUsage: AgentContextUsage?
     /// Tail of the serialized append chain. Each flush enqueues its write after
     /// the previous one so concurrent events can't reorder the on-disk JSONL.
     private var appendChain: Task<Void, Never>?
@@ -60,6 +63,15 @@ public final class SessionRecorder: @unchecked Sendable {
             switch event {
             case .messageEnd, .turnEnd, .agentEnd:
                 await self.flush(messages: agent.state.messages)
+            case .compactStart(_, let usage):
+                await self.noteCompactionStart(usage)
+            case .compactEnd(let outcome):
+                if case .compacted(let messagesCompacted, _) = outcome {
+                    await self.recordCompaction(
+                        messages: agent.state.messages,
+                        messagesCompacted: messagesCompacted
+                    )
+                }
             default:
                 break
             }
@@ -96,5 +108,51 @@ public final class SessionRecorder: @unchecked Sendable {
             return next
         }
         await work?.value
+    }
+
+    /// Record that the live context has been replaced by a compacted
+    /// projection. This appends a compaction marker after any queued message
+    /// writes and resets the baseline so the next post-compaction message is
+    /// persisted immediately.
+    public func recordCompaction(
+        messages replacementMessages: [Message],
+        messagesCompacted: Int,
+        tokensBefore: Int? = nil,
+        contextWindow: Int? = nil
+    ) async {
+        let work: Task<Void, Never> = lock.withLock {
+            let usage = pendingCompactionUsage
+            pendingCompactionUsage = nil
+            persistedCount = replacementMessages.count
+
+            let previous = appendChain
+            let store = self.store
+            let sessionId = self.sessionId
+            let cwd = self.cwd
+            let model = self.model
+            let provider = self.provider
+            let next = Task<Void, Never> {
+                await previous?.value
+                try? await store.appendCompaction(
+                    id: sessionId,
+                    cwd: cwd,
+                    replacementMessages: replacementMessages,
+                    messagesCompacted: messagesCompacted,
+                    tokensBefore: tokensBefore ?? usage?.tokens,
+                    contextWindow: contextWindow ?? usage?.window,
+                    model: model,
+                    provider: provider
+                )
+            }
+            appendChain = next
+            return next
+        }
+        await work.value
+    }
+
+    private func noteCompactionStart(_ usage: AgentContextUsage) async {
+        lock.withLock {
+            pendingCompactionUsage = usage
+        }
     }
 }
