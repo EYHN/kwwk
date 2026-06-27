@@ -59,7 +59,8 @@ func resolveAgentAuth(
     // Pick the single entry. If the store somehow holds multiple (legacy
     // files from before `setExclusive`), prefer OAuth subscriptions over
     // raw API keys so users on both don't silently land on the wrong one.
-    if let providerId = pickStoredProvider(from: all), let creds = all[providerId] {
+    if let providerId = pickStoredProvider(from: all),
+       let creds = all[providerId] {
         switch providerId {
         case "openai-codex":
             return await registerCodex(store: store, creds: creds, modelOverride: modelOverride)
@@ -122,7 +123,7 @@ func resolveEnvAuth(
         // Amazon Bedrock authenticates via ambient AWS credentials, not a
         // single API key — register the SigV4-backed BedrockProvider directly.
         if provider == "amazon-bedrock" {
-            guard EnvAPIKeys.hasBedrockKeys(env: environment) else { continue }
+            guard EnvAPIKeys.hasBedrockAuth(env: environment) else { continue }
             guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
             await APIRegistry.shared.register(BedrockProvider(
                 region: bedrockRegion(for: model, environment: environment),
@@ -153,7 +154,7 @@ func resolveEnvAuth(
         }
         guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
-        guard await registerEnvProvider(for: model, apiKey: key) else { continue }
+        guard await registerEnvProviders(for: provider, apiKey: key) else { continue }
         let label = "\(model.id) · \(EnvAPIKeys.displayName(for: provider)) (env)"
         return ResolvedAuth(model: model, modelLabel: label, authResolver: nil)
     }
@@ -259,10 +260,21 @@ private func pickEnvModel(provider: String, id: String?) -> Model? {
 }
 
 /// Register the provider implementation matching a model's wire `api`, using
-/// the env key as the static credential. Returns false for protocols kwwk
-/// can't yet drive from a raw key (handled in later phases).
-private func registerEnvProvider(for model: Model, apiKey: String) async -> Bool {
-    switch model.api {
+/// the env key as the static credential. Returns false for wire protocols this
+/// CLI cannot drive from a raw environment credential.
+private func registerEnvProviders(for provider: String, apiKey: String) async -> Bool {
+    let apis = Set(ModelsCatalog.models(for: provider).map(\.api))
+    var registered = false
+    for api in apis {
+        if await registerEnvProvider(api: api, provider: provider, apiKey: apiKey) {
+            registered = true
+        }
+    }
+    return registered
+}
+
+private func registerEnvProvider(api: String, provider: String, apiKey: String) async -> Bool {
+    switch api {
     case "openai-completions":
         await APIRegistry.shared.register(OpenAICompletionsProvider(defaultAPIKey: apiKey))
         return true
@@ -275,11 +287,15 @@ private func registerEnvProvider(for model: Model, apiKey: String) async -> Bool
     case "mistral-conversations":
         await APIRegistry.shared.register(MistralConversationsProvider(defaultAPIKey: apiKey))
         return true
-    case "anthropic-messages" where model.provider == "anthropic":
-        // Direct Anthropic uses x-api-key (AnthropicProvider's default).
-        // Anthropic-compatible providers (fireworks/vercel) need Bearer and
-        // are wired in a later phase.
-        await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: apiKey))
+    case "anthropic-messages":
+        if provider == "anthropic" {
+            await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: apiKey))
+        } else {
+            await APIRegistry.shared.register(AnthropicProvider(
+                defaultAPIKey: apiKey,
+                authHeaderBuilder: { key in ["Authorization": cliBearerHeaderValue(key)] }
+            ))
+        }
         return true
     default:
         return false
@@ -630,6 +646,14 @@ private func registerOpenAICompatible(
 private func stringExtra(_ creds: OAuthCredentials, _ key: String) -> String? {
     if case .string(let s) = creds.extras[key] ?? .null { return s }
     return nil
+}
+
+private func cliBearerHeaderValue(_ token: String) -> String {
+    let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.range(of: "Bearer ", options: [.anchored, .caseInsensitive]) != nil {
+        return trimmed
+    }
+    return "Bearer \(trimmed)"
 }
 
 private func oauthResolver(

@@ -145,8 +145,8 @@ struct PromptTemplateDiscoveryTests {
         #expect(loaded.first?.render(args: "thing") == "Do thing")
     }
 
-    @Test("discover skips project-local commands when project is untrusted")
-    func discoverGatesProjectOnTrust() throws {
+    @Test("discover includes project-local commands")
+    func discoverIncludesProjectCommands() throws {
         let cwd = FileManager.default.temporaryDirectory
             .appendingPathComponent("kwwk-proj-\(UUID().uuidString.prefix(8))")
         let cmds = cwd.appendingPathComponent(".kwwk/commands")
@@ -157,10 +157,7 @@ struct PromptTemplateDiscoveryTests {
         try "Run $1".write(to: cmds.appendingPathComponent("\(name).md"),
                            atomically: true, encoding: .utf8)
 
-        let trusted = CustomSlashCommandLoader.discover(cwd: cwd.path, includeProject: true)
-        #expect(trusted.contains { $0.name == name })
-
-        let untrusted = CustomSlashCommandLoader.discover(cwd: cwd.path, includeProject: false)
-        #expect(!untrusted.contains { $0.name == name })
+        let discovered = CustomSlashCommandLoader.discover(cwd: cwd.path)
+        #expect(discovered.contains { $0.name == name })
     }
 }

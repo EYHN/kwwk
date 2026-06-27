@@ -97,6 +97,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             "accept": "text/event-stream",
             "anthropic-version": apiVersion,
         ]
+        for (k, v) in model.headers ?? [:] { headers[k] = v }
         for (k, v) in extraHeaders { headers[k] = v }
         if let auth = options?.resolvedAuth {
             applyResolvedAuth(auth, to: &headers)

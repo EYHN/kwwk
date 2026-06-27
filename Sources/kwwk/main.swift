@@ -15,7 +15,8 @@ import KWWKCli
 ///   kwwk --help             → usage
 ///
 /// Global flags (apply to both TUI and headless `-p`):
-///   `--thinking <off|minimal|low|medium|high|xhigh>` — reasoning effort, default `medium`.
+///   `--thinking <off|minimal|low|medium|high|xhigh>` — reasoning effort,
+///                        defaulting to `medium`.
 ///   `--model <id>`     — override the resolved provider's default model id
 ///                        (e.g. `--model claude-opus-4-5`). Catalog metadata
 ///                        is looked up by id; unknown ids fall back to sane
@@ -87,7 +88,8 @@ struct KwwkCLI {
 
         global options:
           --thinking <level>          reasoning effort: off, minimal, low,
-                                      medium (default), high, xhigh
+                                      medium, high, xhigh
+                                      (default: medium)
           --model <id>                override the provider's default model id
                                       (e.g. --model claude-opus-4-5)
           --context-1m                opt into Anthropic 1M-context beta
@@ -111,8 +113,8 @@ struct KwwkCLI {
     }
 
     /// Pull `--thinking <level>` out of argv and return the remaining args
-    /// plus the parsed level. A missing flag defaults to `.medium`; an
-    /// invalid value exits with usage.
+    /// plus the parsed level. A missing flag defaults to medium; an invalid
+    /// value exits with usage.
     static func extractThinking(_ argv: [String]) -> ([String], ThinkingLevel) {
         var out: [String] = []
         var level: ThinkingLevel = .medium

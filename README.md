@@ -74,8 +74,8 @@ Then depend on the libraries you need:
 - **`KWWKAgent`** — the turn/tool loop, built-in coding tools, hooks.
 
 The SDK does not read `~/.kwwk` or process environment variables by
-default. Pass credentials, settings, session stores, context files, and
-skill directories explicitly. The `kwwk` binary is the layer that opts into
+default. Pass credentials, session stores, context files, and skill
+directories explicitly. The `kwwk` binary is the layer that opts into
 `~/.kwwk/*` and environment-key discovery.
 
 ### Quick start — one-shot run

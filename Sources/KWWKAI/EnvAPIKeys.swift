@@ -85,11 +85,17 @@ public enum EnvAPIKeys {
         return nil
     }
 
-    /// Whether ambient AWS credentials that `BedrockProvider` can actually use
-    /// (long-term IAM keys) are present. Profile/bearer/ECS/web-identity are
-    /// recognized for reachability but not yet consumed by the SigV4 path.
-    public static func hasBedrockKeys(env: [String: String] = [:]) -> Bool {
-        (env["AWS_ACCESS_KEY_ID"]?.isEmpty == false) && (env["AWS_SECRET_ACCESS_KEY"]?.isEmpty == false)
+    /// Whether ambient AWS credentials that `BedrockProvider` can consume are
+    /// present. The provider supports static IAM keys, AWS_PROFILE shared
+    /// credentials, Bedrock bearer tokens, and explicit skip-auth mode.
+    public static func hasBedrockAuth(env: [String: String] = [:]) -> Bool {
+        let hasStaticKeys =
+            (env["AWS_ACCESS_KEY_ID"]?.isEmpty == false) &&
+            (env["AWS_SECRET_ACCESS_KEY"]?.isEmpty == false)
+        return hasStaticKeys
+            || firstValue(of: ["AWS_PROFILE"], env: env) != nil
+            || firstValue(of: ["AWS_BEARER_TOKEN_BEDROCK"], env: env) != nil
+            || env["AWS_BEDROCK_SKIP_AUTH"] == "1"
     }
 
     /// Every provider that currently has a usable env key configured, in scan
@@ -98,7 +104,7 @@ public enum EnvAPIKeys {
     public static func configuredProviders(env: [String: String] = [:]) -> [String] {
         let ranked = scanPriority + envVars.keys.filter { !scanPriority.contains($0) }.sorted()
         var out = ranked.filter { !foundEnvVars(for: $0, env: env).isEmpty }
-        if hasBedrockKeys(env: env) { out.append("amazon-bedrock") }
+        if hasBedrockAuth(env: env) { out.append("amazon-bedrock") }
         return out
     }
 

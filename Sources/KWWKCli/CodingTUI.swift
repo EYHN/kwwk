@@ -335,11 +335,8 @@ func runCodingTUIInternal(
     // User/project prompt-template commands (`.kwwk/commands/*.md`,
     // `~/.kwwk/commands/*.md`). Registered after builtins so a custom file
     // can't shadow a core command; their handlers render the template against
-    // the invocation args and submit it as an ordinary prompt. Project-local
-    // commands are loaded only when the project is trusted — an untrusted
-    // checkout must not be able to inject a template that gets sent to the model.
-    let projectTrusted = TrustManager(storeURL: TrustManager.defaultStoreURL()).isTrusted(cwd)
-    CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd, trustProject: projectTrusted)
+    // the invocation args and submit it as an ordinary prompt.
+    CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd)
     let slashContext = SlashContext(
         agent: agent,
         modal: modal,

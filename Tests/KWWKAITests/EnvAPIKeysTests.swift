@@ -47,10 +47,14 @@ struct EnvAPIKeysTests {
     @Test("amazon-bedrock surfaces when ambient AWS keys are present")
     func bedrockDetection() {
         let withKeys = ["AWS_ACCESS_KEY_ID": "AKIA", "AWS_SECRET_ACCESS_KEY": "secret"]
-        #expect(EnvAPIKeys.hasBedrockKeys(env: withKeys))
+        #expect(EnvAPIKeys.hasBedrockAuth(env: withKeys))
         #expect(EnvAPIKeys.configuredProviders(env: withKeys).contains("amazon-bedrock"))
-        // Partial creds don't count.
-        #expect(!EnvAPIKeys.hasBedrockKeys(env: ["AWS_ACCESS_KEY_ID": "AKIA"]))
+        #expect(EnvAPIKeys.hasBedrockAuth(env: ["AWS_PROFILE": "default"]))
+        #expect(EnvAPIKeys.hasBedrockAuth(env: ["AWS_BEARER_TOKEN_BEDROCK": "bedrock-token"]))
+        #expect(EnvAPIKeys.hasBedrockAuth(env: ["AWS_BEDROCK_SKIP_AUTH": "1"]))
+        #expect(EnvAPIKeys.configuredProviders(env: ["AWS_PROFILE": "default"]).contains("amazon-bedrock"))
+        // Partial static creds don't count.
+        #expect(!EnvAPIKeys.hasBedrockAuth(env: ["AWS_ACCESS_KEY_ID": "AKIA"]))
         #expect(!EnvAPIKeys.configuredProviders(env: [:]).contains("amazon-bedrock"))
     }
 

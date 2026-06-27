@@ -36,8 +36,11 @@ public enum KWWK {
         context1m: Bool = false,
         resume: SessionResume = .none
     ) async throws {
-        let resolved = try await resolveAgentAuth(modelOverride: modelOverride, context1m: context1m)
         let workDir = cwd ?? FileManager.default.currentDirectoryPath
+        let resolved = try await resolveAgentAuth(
+            modelOverride: modelOverride,
+            context1m: context1m
+        )
         try await runCodingTUIInternal(
             model: resolved.model,
             modelLabel: resolved.modelLabel,

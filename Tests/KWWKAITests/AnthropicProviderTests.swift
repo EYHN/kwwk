@@ -200,6 +200,23 @@ struct AnthropicProviderTests {
         #expect(req?.headers["accept"] == "text/event-stream")
     }
 
+    @Test("model headers are included in Anthropic requests")
+    func modelHeadersAreIncluded() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "test-key")
+        var model = Self.sampleModel
+        model.headers = ["User-Agent": "KimiCLI/1.5"]
+
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        #expect(client.lastRequest?.headers["User-Agent"] == "KimiCLI/1.5")
+    }
+
     @Test("resolved auth can select bearer scheme and merge custom headers")
     func resolvedAuthBearerHeaders() async throws {
         let client = StubSSEClient(body: Self.textSSE)

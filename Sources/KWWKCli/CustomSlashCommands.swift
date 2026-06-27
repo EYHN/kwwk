@@ -218,19 +218,13 @@ enum CustomSlashCommandLoader {
     /// Discover commands from project (`<cwd>/.kwwk/commands`) and user
     /// (`~/.kwwk/commands`) directories. Project entries win on name collisions
     /// (loaded last). Non-`.md` files and unreadable files are skipped.
-    ///
-    /// Project-local commands are loaded only when `includeProject` is true. The
-    /// caller gates this on `TrustManager.isTrusted(cwd)` so an untrusted project
-    /// can't inject a `.kwwk/commands/*.md` whose template is silently submitted
-    /// to the model. User-level commands are always loaded.
-    static func discover(cwd: String, includeProject: Bool = true) -> [PromptTemplateCommand] {
+    static func discover(cwd: String) -> [PromptTemplateCommand] {
         var byName: [String: PromptTemplateCommand] = [:]
         // User dir first, project dir second so project overrides user.
         let userDir = (NSHomeDirectory() as NSString)
             .appendingPathComponent(".kwwk/commands")
         let projectDir = (cwd as NSString).appendingPathComponent(".kwwk/commands")
-        let dirs = includeProject ? [userDir, projectDir] : [userDir]
-        for dir in dirs {
+        for dir in [userDir, projectDir] {
             for cmd in loadFromDirectory(dir) {
                 byName[cmd.name] = cmd
             }
@@ -249,10 +243,9 @@ enum CustomSlashCommandLoader {
     static func register(
         into registry: SlashCommandRegistry,
         cwd: String,
-        trustProject: Bool = true,
         commands: [PromptTemplateCommand]? = nil
     ) -> [PromptTemplateCommand] {
-        let discovered = commands ?? discover(cwd: cwd, includeProject: trustProject)
+        let discovered = commands ?? discover(cwd: cwd)
         var registered: [PromptTemplateCommand] = []
         for cmd in discovered {
             if registry.find(cmd.name) != nil { continue }

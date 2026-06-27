@@ -32,7 +32,10 @@ func runHeadlessInternal(
     context1m: Bool = false,
     resume: SessionResume = .none
 ) async throws -> Int32 {
-    let resolved = try await resolveAgentAuth(modelOverride: modelOverride, context1m: context1m)
+    let resolved = try await resolveAgentAuth(
+        modelOverride: modelOverride,
+        context1m: context1m
+    )
 
     let bgManager = BackgroundTaskManager()
 
