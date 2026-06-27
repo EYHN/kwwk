@@ -259,11 +259,16 @@ private func pickEnvModel(provider: String, id: String?) -> Model? {
     return models.first(where: { $0.reasoning }) ?? models.first
 }
 
-/// Register the provider implementation matching a model's wire `api`, using
-/// the env key as the static credential. Returns false for wire protocols this
-/// CLI cannot drive from a raw environment credential.
+/// Register every wire `api` used by the provider, using the env key as the
+/// static credential. Returns false when none of the provider's wire protocols
+/// can be driven from a raw environment credential.
 private func registerEnvProviders(for provider: String, apiKey: String) async -> Bool {
-    let apis = Set(ModelsCatalog.models(for: provider).map(\.api))
+    guard let catalog = ModelsCatalog.byProvider[provider] else { return false }
+    var apis: Set<String> = []
+    for model in catalog.values {
+        apis.insert(model.api)
+    }
+
     var registered = false
     for api in apis {
         if await registerEnvProvider(api: api, provider: provider, apiKey: apiKey) {
