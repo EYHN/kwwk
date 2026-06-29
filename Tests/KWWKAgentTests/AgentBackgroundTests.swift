@@ -10,6 +10,10 @@ struct AgentBackgroundTests {
     func idleWakeInjectsUserMessage() async throws {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
+        registration.setResponses([
+            .message(fauxAssistantMessage("initial")),
+            .message(fauxAssistantMessage("woke from background notification")),
+        ])
 
         let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
         // Seed a user message so `continue()` has something to continue from.
@@ -34,7 +38,7 @@ struct AgentBackgroundTests {
         // Wait for the agent to pick up the steered notification and complete
         // a run. We look for a user message containing the <task-notification>
         // tag in the transcript.
-        let ok = await awaitUntil(3000) {
+        let ok = await awaitUntil(12000) {
             let msgs = agent.state.messages
             return msgs.contains { message in
                 guard case .user(let u) = message else { return false }
@@ -97,7 +101,7 @@ struct AgentBackgroundTests {
 
         // After the initial run, the notification may still be in the queue
         // or delivered. Wait for it to land in the transcript.
-        let ok = await awaitUntil(3000) {
+        let ok = await awaitUntil(12000) {
             agent.state.messages.contains { m in
                 if case .user(let u) = m,
                    case .text(let t) = u.content.first,

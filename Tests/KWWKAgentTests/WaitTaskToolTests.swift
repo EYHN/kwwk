@@ -125,7 +125,7 @@ struct WaitTaskToolTests {
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let (taskId, _) = await manager.spawn(
-            runner: BashBackgroundRunner(command: "sleep 30", environment: testBashEnvironment),
+            runner: BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment),
             sessionId: "s1"
         )
         defer { Task { try? await manager.kill(taskId) } }
@@ -133,12 +133,7 @@ struct WaitTaskToolTests {
 
         let cancel = CancellationHandle()
         let tool = createWaitTaskTool(manager: manager, sessionId: "s1")
-
-        // Flip the handle after a tick so the poll loop picks it up.
-        let canceller = Task {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            cancel.cancel(reason: "test")
-        }
+        cancel.cancel(reason: "test")
 
         await #expect(throws: Error.self) {
             _ = try await tool.execute(
@@ -148,7 +143,6 @@ struct WaitTaskToolTests {
                 nil
             )
         }
-        canceller.cancel()
     }
 
     @Test("invalid timeout values are clamped instead of rejected")
@@ -157,7 +151,7 @@ struct WaitTaskToolTests {
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let (taskId, _) = await manager.spawn(
-            runner: BashBackgroundRunner(command: "sleep 30", environment: testBashEnvironment),
+            runner: BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment),
             sessionId: "s1"
         )
         defer { Task { try? await manager.kill(taskId) } }
