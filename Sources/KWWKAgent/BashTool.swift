@@ -482,10 +482,9 @@ private func runBashLegacy(
 // MARK: - Foreground/adopted process wrapper
 
 /// Sendable wrapper over the non-Sendable `Process` + `FileHandle`. Two roles:
-///   * Race the soft timeout against `waitUntilExit()` via `waitUpTo`.
-///   * If the timeout wins, the Manager's adopt closure calls
-///     `awaitAdoptedCompletion` to wait for the real exit and convert it to
-///     a `BackgroundTaskOutcome` using the shared `BashProcessOutcome` mapper.
+///   * Race the soft timeout against process termination via `waitUpTo`.
+///   * If the timeout wins, let the Manager's adopt closure await the same
+///     cached termination result and map it to a `BackgroundTaskOutcome`.
 private final class ForegroundBashExecution: @unchecked Sendable {
     let process: Process
     let writeHandle: FileHandle
@@ -493,7 +492,9 @@ private final class ForegroundBashExecution: @unchecked Sendable {
     let control: BashProcessControl
     let startedAt: Date
     private let lock = NSLock()
-    private var done = false
+    private var exitWaiterStarted = false
+    private var exitStatus: Int32?
+    private var exitCallbacks: [@Sendable (Int32) -> Void] = []
 
     init(
         process: Process,
@@ -511,38 +512,19 @@ private final class ForegroundBashExecution: @unchecked Sendable {
 
     func waitUpTo(seconds: Int) async -> Int32? {
         return await withCheckedContinuation { (cont: CheckedContinuation<Int32?, Never>) in
-            DispatchQueue.global().async {
-                self.process.waitUntilExit()
-                let shouldResume: Bool = self.lock.withLock {
-                    if self.done { return false }
-                    self.done = true
-                    return true
-                }
-                if shouldResume {
-                    cont.resume(returning: self.process.terminationStatus)
-                }
+            let oneShot = OneShotContinuation(cont)
+            self.onExit { status in
+                oneShot.resume(returning: status)
             }
             DispatchQueue.global().asyncAfter(deadline: .now() + .seconds(seconds)) {
-                let shouldResume: Bool = self.lock.withLock {
-                    if self.done { return false }
-                    self.done = true
-                    return true
-                }
-                if shouldResume {
-                    cont.resume(returning: nil)
-                }
+                oneShot.resume(returning: nil)
             }
         }
     }
 
     func awaitAdoptedCompletion(cancellation: CancellationHandle) async -> BackgroundTaskOutcome {
         cancellation.onCancel { [control] _ in control.terminate() }
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global().async {
-                self.process.waitUntilExit()
-                cont.resume()
-            }
-        }
+        _ = await awaitExitStatus()
         try? writeHandle.close()
         return BashProcessOutcome.from(
             process: process,
@@ -556,6 +538,72 @@ private final class ForegroundBashExecution: @unchecked Sendable {
         // spewed output before finishing.
         let capped = data.prefix(1_000_000)
         return String(data: capped, encoding: .utf8) ?? ""
+    }
+
+    private func awaitExitStatus() async -> Int32 {
+        await withCheckedContinuation { (cont: CheckedContinuation<Int32, Never>) in
+            onExit { status in cont.resume(returning: status) }
+        }
+    }
+
+    private func onExit(_ callback: @escaping @Sendable (Int32) -> Void) {
+        startExitWaiterIfNeeded()
+        let status: Int32? = lock.withLock {
+            if let exitStatus { return exitStatus }
+            exitCallbacks.append(callback)
+            return nil
+        }
+        if let status {
+            callback(status)
+        }
+    }
+
+    private func startExitWaiterIfNeeded() {
+        let shouldStart: Bool = lock.withLock {
+            if exitWaiterStarted { return false }
+            exitWaiterStarted = true
+            return true
+        }
+        guard shouldStart else { return }
+
+        process.terminationHandler = { [weak self] process in
+            self?.finishExit(status: process.terminationStatus)
+        }
+        if !process.isRunning {
+            finishExit(status: process.terminationStatus)
+        }
+    }
+
+    private func finishExit(status: Int32) {
+        let callbacks: [@Sendable (Int32) -> Void] = lock.withLock {
+            if exitStatus != nil { return [] }
+            exitStatus = status
+            let callbacks = exitCallbacks
+            exitCallbacks.removeAll()
+            return callbacks
+        }
+        process.terminationHandler = nil
+        for callback in callbacks {
+            callback(status)
+        }
+    }
+}
+
+private final class OneShotContinuation<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Never>?
+
+    init(_ continuation: CheckedContinuation<Value, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(returning value: Value) {
+        let continuation: CheckedContinuation<Value, Never>? = lock.withLock {
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }
+        continuation?.resume(returning: value)
     }
 }
 
