@@ -216,6 +216,13 @@ struct SubagentToolTests {
         )
 
         #expect(started.subagentType == "mini")
+        let done = await awaitUntil(12000) {
+            let snap = await manager.get(started.taskId)
+            return snap?.status != .running
+        }
+        #expect(done)
+        guard done else { return }
+
         let waitTool = createWaitTaskTool(manager: manager, sessionId: "sdk-parent")
         let waitResult = try await waitTool.execute(
             "wait",

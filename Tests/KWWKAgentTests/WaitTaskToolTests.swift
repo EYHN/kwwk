@@ -73,7 +73,7 @@ struct WaitTaskToolTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "sleep 30", environment: testBashEnvironment)
+        let runner = BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         defer { Task { try? await manager.kill(taskId) } }
         try? await Task.sleep(nanoseconds: 50_000_000)

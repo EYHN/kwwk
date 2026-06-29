@@ -23,8 +23,8 @@ struct EscapeKeyFlushTests {
         // split in half.
         #expect(fired.get() == false)
 
-        // Wait past the flush timer + scheduler jitter. 250ms is generous.
-        _ = await waitUntil { fired.get() == true }
+        #expect(runner.hasPendingEscapeFlushForTesting())
+        #expect(runner.flushPendingEscapeForTesting() == 1)
         #expect(fired.get() == true, "standalone ESC was never delivered")
     }
 
@@ -41,8 +41,8 @@ struct EscapeKeyFlushTests {
         runner.ingest(Data([0x1B]))
         runner.ingest(Data([0x5B, 0x41])) // [A → up
 
-        try? await Task.sleep(nanoseconds: 250_000_000)
-
+        #expect(runner.hasPendingEscapeFlushForTesting() == false)
+        #expect(runner.flushPendingEscapeForTesting() == 0)
         #expect(escCount.get() == 0, "standalone ESC fired even though a CSI tail followed")
         #expect(upCount.get() == 1)
     }
@@ -53,34 +53,14 @@ struct EscapeKeyFlushTests {
         runner.bind(.init("escape")) { _ in count.bump() }
 
         runner.ingest(Data([0x1B]))
-        _ = await waitUntil { count.get() == 1 }
+        #expect(runner.hasPendingEscapeFlushForTesting())
+        #expect(runner.flushPendingEscapeForTesting() == 1)
         runner.ingest(Data([0x1B]))
-        _ = await waitUntil { count.get() == 2 }
+        #expect(runner.hasPendingEscapeFlushForTesting())
+        #expect(runner.flushPendingEscapeForTesting() == 1)
 
         #expect(count.get() == 2)
     }
-}
-
-private func waitUntil(
-    timeoutNanoseconds: UInt64 = defaultWaitTimeoutNanoseconds(),
-    pollNanoseconds: UInt64 = 20_000_000,
-    _ predicate: @escaping @Sendable () -> Bool
-) async -> Bool {
-    let deadline = ContinuousClock.now + .nanoseconds(Int(timeoutNanoseconds))
-    while ContinuousClock.now < deadline {
-        if predicate() { return true }
-        try? await Task.sleep(nanoseconds: pollNanoseconds)
-    }
-    return predicate()
-}
-
-private func defaultWaitTimeoutNanoseconds() -> UInt64 {
-    isCIRunner ? 60_000_000_000 : 1_000_000_000
-}
-
-private var isCIRunner: Bool {
-    ProcessInfo.processInfo.environment["CI"] == "true"
-        || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
 }
 
 // MARK: - Thread-safe test bookkeeping
