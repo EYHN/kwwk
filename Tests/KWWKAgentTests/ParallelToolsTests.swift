@@ -123,23 +123,21 @@ struct ParallelToolsTests {
             toolExecution: .parallel
         ))
 
-        let start = Date()
         try await agent.prompt("run both")
-        let elapsed = Date().timeIntervalSince(start)
-
-        // Two 60ms sleeps in parallel should finish in ~60-90ms. Sequentially
-        // it'd be 120ms+ (so this still catches a serial regression). The
-        // `b-start before a-end` check below is the authoritative proof of
-        // parallelism; this timing assertion is a sanity net only, so we give
-        // it generous CI-jitter headroom (loaded runners hit 0.4s+ with real
-        // overlap).
-        #expect(elapsed < 1.5, "elapsed was \(elapsed)s; tools did not overlap")
 
         let events = await recorder.events
-        // Expect at least one interleaving: b-start before a-end.
-        let aEnd = events.firstIndex(of: "a-end") ?? -1
-        let bStart = events.firstIndex(of: "b-start") ?? -1
-        #expect(bStart < aEnd, "b did not start before a ended; not actually parallel")
+        let aStart = events.firstIndex(of: "a-start")
+        let bStart = events.firstIndex(of: "b-start")
+        let aEnd = events.firstIndex(of: "a-end")
+        let bEnd = events.firstIndex(of: "b-end")
+        #expect(aStart != nil)
+        #expect(bStart != nil)
+        #expect(aEnd != nil)
+        #expect(bEnd != nil)
+        if let aStart, let bStart, let aEnd, let bEnd {
+            #expect(aStart < bEnd, "a did not start before b ended; not actually parallel")
+            #expect(bStart < aEnd, "b did not start before a ended; not actually parallel")
+        }
     }
 
     @Test("sequential mode runs tool calls one at a time")

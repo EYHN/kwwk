@@ -14,6 +14,8 @@ import Glibc
 /// `run()` is itself async and suspends until `exit()` is called or a signal
 /// tears the runner down.
 final class TUIRunner: @unchecked Sendable {
+    typealias EscapeFlushScheduler = @Sendable (_ delayMs: Int, _ work: DispatchWorkItem) -> Void
+
     let terminal: StdoutTerminal
     let tui: TUI
     let keybindings: KeybindingRegistry
@@ -26,6 +28,7 @@ final class TUIRunner: @unchecked Sendable {
     private var sigtermSource: DispatchSourceSignal?
     private var exitContinuation: CheckedContinuation<Void, Never>?
     private var pendingExitCode: Int32?
+    private let escapeFlushScheduler: EscapeFlushScheduler
     /// Pending flush for a buffered standalone ESC. `StdinBuffer` holds a
     /// lone 0x1B byte waiting for a potential CSI continuation (arrow keys,
     /// function keys, etc.). If no continuation arrives we must flush it
@@ -39,10 +42,20 @@ final class TUIRunner: @unchecked Sendable {
     /// keys / function keys.
     private static let escapeFlushDelayMs: Int = 50
 
-    init(useAlternateScreen: Bool = true, hideCursor: Bool = false) {
+    init(
+        useAlternateScreen: Bool = true,
+        hideCursor: Bool = false,
+        escapeFlushScheduler: EscapeFlushScheduler? = nil
+    ) {
         self.terminal = StdoutTerminal()
         self.tui = TUI(terminal: terminal)
         self.keybindings = KeybindingRegistry()
+        self.escapeFlushScheduler = escapeFlushScheduler ?? { delayMs, work in
+            DispatchQueue.global().asyncAfter(
+                deadline: .now() + .milliseconds(delayMs),
+                execute: work
+            )
+        }
         tui.setUseAlternateScreen(useAlternateScreen)
         tui.setHideCursor(hideCursor)
     }
@@ -197,10 +210,7 @@ final class TUIRunner: @unchecked Sendable {
             }
         }
         lock.withLock { pendingEscapeFlush = work }
-        DispatchQueue.global().asyncAfter(
-            deadline: .now() + .milliseconds(Self.escapeFlushDelayMs),
-            execute: work
-        )
+        escapeFlushScheduler(Self.escapeFlushDelayMs, work)
     }
 }
 #endif

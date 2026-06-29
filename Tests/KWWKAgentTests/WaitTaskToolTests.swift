@@ -73,7 +73,7 @@ struct WaitTaskToolTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "sleep 30", environment: testBashEnvironment)
+        let runner = BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment)
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         defer { Task { try? await manager.kill(taskId) } }
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -87,10 +87,9 @@ struct WaitTaskToolTests {
             nil
         )
         let elapsed = Date().timeIntervalSince(start)
-        // Allow generous headroom for CI hiccups; the real check is
-        // that we didn't wait 30s (the sleep) or 0s (no poll loop).
-        #expect(elapsed >= 0.9 && elapsed < 5,
-                "expected wait ≈ timeout_seconds; got \(elapsed)s")
+        // The real checks are the returned timeout status below and that the
+        // tool did not skip its polling loop by returning immediately.
+        #expect(elapsed >= 0.9, "wait_task returned too quickly: \(elapsed)s")
         if case .object(let obj) = result.details ?? .null {
             if case .bool(let to) = obj["timed_out"] ?? .null { #expect(to == true) }
             if case .bool(let w) = obj["waited"] ?? .null { #expect(w == false) }

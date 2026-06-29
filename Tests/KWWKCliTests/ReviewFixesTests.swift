@@ -161,30 +161,18 @@ struct NotificationOrderingTests {
             await recorder.append(notif.taskId)
         }
 
-        // Spawn three tasks with staged delays so completion order is
-        // deterministic: "one" finishes first (100ms), "two" second
-        // (200ms), "three" third (300ms). The delays dwarf scheduling
-        // jitter, so the three notifications enter `enqueueNotification`
-        // in a known order. The invariant under test is: the listener
-        // sees them in that same order — even with a `Task.yield()` in
-        // the listener body.
-        let stages: [(String, UInt64)] = [
-            ("one", 100),
-            ("two", 200),
-            ("three", 300),
-        ]
+        let gate = ManualCompletionGate()
+        let stages = ["one", "two", "three"]
         var ids: [String] = []
-        for (tag, delay) in stages {
-            let runner = DelayedRunner(tag: tag, delayMs: delay)
+        for tag in stages {
+            let runner = ManualCompletionRunner(tag: tag, gate: gate)
             let (taskId, _) = await manager.spawn(runner: runner)
             ids.append(taskId)
         }
 
-        // Wait for all three to drain. 300ms for the last task to finish
-        // + generous delivery slack.
-        let deadline = Date().addingTimeInterval(5)
-        while await recorder.count < 3, Date() < deadline {
-            try? await Task.sleep(nanoseconds: 50_000_000)
+        for index in stages.indices {
+            await gate.release(stages[index])
+            await recorder.waitForCount(index + 1)
         }
         await listener.unsubscribe()
 
@@ -195,24 +183,68 @@ struct NotificationOrderingTests {
 
 private actor OrderRecorder {
     private(set) var ids: [String] = []
-    func append(_ id: String) { ids.append(id) }
+    private var waiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+    func append(_ id: String) {
+        ids.append(id)
+        resumeReadyWaiters()
+    }
+
+    func waitForCount(_ expected: Int) async {
+        if ids.count >= expected { return }
+        await withCheckedContinuation { continuation in
+            waiters.append((expected, continuation))
+        }
+    }
+
     var count: Int { ids.count }
+
+    private func resumeReadyWaiters() {
+        var ready: [CheckedContinuation<Void, Never>] = []
+        waiters.removeAll { expected, continuation in
+            if ids.count >= expected {
+                ready.append(continuation)
+                return true
+            }
+            return false
+        }
+        for continuation in ready {
+            continuation.resume()
+        }
+    }
 }
 
-/// Runner that completes after `delayMs`. Different delays per-spawn
-/// make completion order deterministic (task with the smallest delay
-/// finishes first), so the ordering test actually pins the invariant
-/// we care about: "if enqueueNotification was called in order A, B, C,
-/// the listener sees A, B, C" — independent of how the fan-out into
-/// Task-spawning scheduling happens.
-private struct DelayedRunner: BackgroundTaskRunner {
+private actor ManualCompletionGate {
+    private var released: Set<String> = []
+    private var waiters: [String: CheckedContinuation<Void, Never>] = [:]
+
+    func wait(for tag: String) async {
+        if released.remove(tag) != nil { return }
+        await withCheckedContinuation { continuation in
+            waiters[tag] = continuation
+        }
+    }
+
+    func release(_ tag: String) {
+        if let continuation = waiters.removeValue(forKey: tag) {
+            continuation.resume()
+        } else {
+            released.insert(tag)
+        }
+    }
+}
+
+/// Runner that completes only when the test releases its tag. This makes
+/// notification enqueue order deterministic without relying on wall-clock
+/// sleeps that can be heavily delayed by the macOS CI scheduler.
+private struct ManualCompletionRunner: BackgroundTaskRunner {
     let spec: BackgroundTaskSpec
     let tag: String
-    let delayMs: UInt64
+    let gate: ManualCompletionGate
 
-    init(tag: String, delayMs: UInt64) {
+    init(tag: String, gate: ManualCompletionGate) {
         self.tag = tag
-        self.delayMs = delayMs
+        self.gate = gate
         self.spec = BackgroundTaskSpec(
             kind: "echo",
             label: tag,
@@ -228,9 +260,9 @@ private struct DelayedRunner: BackgroundTaskRunner {
         onDone: @escaping @Sendable (BackgroundTaskOutcome) -> Void
     ) {
         let tag = self.tag
-        let delay = delayMs
+        let gate = self.gate
         Task.detached {
-            try? await Task.sleep(nanoseconds: delay * 1_000_000)
+            await gate.wait(for: tag)
             try? tag.write(to: outputFile, atomically: true, encoding: .utf8)
             onDone(BackgroundTaskOutcome(
                 success: true,

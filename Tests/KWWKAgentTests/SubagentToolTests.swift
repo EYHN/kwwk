@@ -216,6 +216,13 @@ struct SubagentToolTests {
         )
 
         #expect(started.subagentType == "mini")
+        let done = await awaitUntil(12000) {
+            let snap = await manager.get(started.taskId)
+            return snap?.status != .running
+        }
+        #expect(done)
+        guard done else { return }
+
         let waitTool = createWaitTaskTool(manager: manager, sessionId: "sdk-parent")
         let waitResult = try await waitTool.execute(
             "wait",
@@ -596,11 +603,12 @@ struct SubagentToolTests {
             return
         }
 
-        let done = await awaitUntil(3000) {
+        let done = await awaitUntil(12000) {
             let snap = await manager.get(taskId)
             return snap?.status != .running
         }
         #expect(done)
+        guard done else { return }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .completed)
         let contents = snap?.outputFile.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
@@ -626,7 +634,7 @@ struct SubagentToolTests {
                     fauxToolCall(
                         name: "bash",
                         arguments: .object([
-                            "command": .string("exec sleep 30"),
+                            "command": .string("exec sleep 300"),
                             "description": .string("Sleep inside child"),
                             "run_in_background": .bool(true),
                         ]),
@@ -635,6 +643,7 @@ struct SubagentToolTests {
                 ],
                 stopReason: .toolUse
             )),
+            .message(fauxAssistantMessage("child finished after starting background work")),
             .message(fauxAssistantMessage("child finished after starting background work")),
         ])
 
