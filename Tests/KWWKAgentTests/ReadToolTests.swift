@@ -220,22 +220,33 @@ struct EditToolTests {
         try write("Hello, world!", to: file)
 
         let tool = createEditTool(cwd: dir.path)
+        let updates = EditUpdateCapture()
         let edits: JSONValue = .array([
             .object(["oldText": .string("world"), "newText": .string("testing")])
         ])
         let result = try await tool.execute(
             "call-1",
             .object(["path": .string(file.path), "edits": edits]),
-            nil, nil
+            nil,
+            { updates.record($0) }
         )
 
         #expect(textOutput(result).contains("Successfully replaced"))
         if case .object(let details) = result.details ?? .null,
-           case .string(let diff) = details["diff"] ?? .null {
+           case .string(let diff) = details["diff"] ?? .null,
+           case .string(let patch) = details["patch"] ?? .null,
+           case .int(let firstChangedLine) = details["firstChangedLine"] ?? .null {
             #expect(diff.contains("testing"))
+            #expect(patch.contains("--- \(file.path)"))
+            #expect(patch.contains("+++ \(file.path)"))
+            #expect(firstChangedLine == 1)
         } else {
-            Issue.record("expected diff in details")
+            Issue.record("expected diff, patch, and firstChangedLine in details")
         }
+        let previewDisplays = updates.uiDisplays()
+        #expect(previewDisplays.contains(where: { $0.contains("Previewing 1 replacement") }))
+        #expect(previewDisplays.contains(where: { $0.contains("testing") }))
+        #expect(result.uiDisplay?.contains(where: { $0.contains("Successfully replaced") }) == true)
         let after = try String(contentsOf: file, encoding: .utf8)
         #expect(after == "Hello, testing!")
     }
@@ -257,6 +268,51 @@ struct EditToolTests {
                 .object(["path": .string(file.path), "edits": edits]),
                 nil, nil
             )
+        }
+    }
+
+    @Test("missing target error includes POSIX code")
+    func missingTargetIncludesPOSIXCode() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let missing = dir.appendingPathComponent("missing.txt")
+
+        let tool = createEditTool(cwd: dir.path)
+        let edits: JSONValue = .array([
+            .object(["oldText": .string("hello"), "newText": .string("world")])
+        ])
+        do {
+            _ = try await tool.execute(
+                "call-missing-target",
+                .object(["path": .string(missing.path), "edits": edits]),
+                nil, nil
+            )
+            Issue.record("expected missing target to throw")
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            #expect(message.contains("Could not edit file: \(missing.path). Error code: ENOENT."))
+        }
+    }
+
+    @Test("directory target error includes POSIX code")
+    func directoryTargetIncludesPOSIXCode() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let tool = createEditTool(cwd: dir.path)
+        let edits: JSONValue = .array([
+            .object(["oldText": .string("hello"), "newText": .string("world")])
+        ])
+        do {
+            _ = try await tool.execute(
+                "call-directory-target",
+                .object(["path": .string(dir.path), "edits": edits]),
+                nil, nil
+            )
+            Issue.record("expected directory target to throw")
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            #expect(message.contains("Could not edit file: \(dir.path). Error code: EISDIR."))
         }
     }
 
@@ -321,6 +377,67 @@ struct EditToolTests {
         #expect(textOutput(result).contains("Successfully replaced 2 block(s)"))
         let after = try String(contentsOf: file, encoding: .utf8)
         #expect(after == "ALPHA\nbeta\nGAMMA\ndelta\n")
+    }
+
+    @Test("collapses large unchanged gaps in displayed diff")
+    func collapsedLargeGapDiff() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("large-gap.txt")
+        let lines = (1...600).map { "line \(String(format: "%03d", $0))" }
+        try write(lines.joined(separator: "\n") + "\n", to: file)
+
+        let tool = createEditTool(cwd: dir.path)
+        let edits: JSONValue = .array([
+            .object(["oldText": .string("line 100\n"), "newText": .string("LINE 100\n")]),
+            .object(["oldText": .string("line 300\n"), "newText": .string("LINE 300\n")]),
+            .object(["oldText": .string("line 500\n"), "newText": .string("LINE 500\n")]),
+        ])
+        let result = try await tool.execute(
+            "call-large-gap",
+            .object(["path": .string(file.path), "edits": edits]),
+            nil, nil
+        )
+
+        guard case .object(let details) = result.details ?? .null,
+              case .string(let diff) = details["diff"] ?? .null else {
+            Issue.record("expected diff in details")
+            return
+        }
+        #expect(diff.contains("LINE 100"))
+        #expect(diff.contains("LINE 300"))
+        #expect(diff.contains("LINE 500"))
+        #expect(diff.contains("..."))
+        #expect(!diff.contains("line 250"))
+        #expect(diff.components(separatedBy: "\n").count < 60)
+    }
+}
+
+@Suite("Path utilities")
+struct PathUtilsTests {
+    @Test("resolveToCwd strips at-prefix and normalizes unicode spaces")
+    func stripsAtPrefixAndNormalizesSpaces() {
+        let resolved = PathUtils.resolveToCwd("@nested\u{00A0}dir/file.txt", cwd: "/tmp/root")
+        #expect(resolved == "/tmp/root/nested dir/file.txt")
+    }
+
+    @Test("resolveToCwd expands tilde only for tilde paths")
+    func expandsTildePaths() {
+        #expect(PathUtils.resolveToCwd("~/file.txt", cwd: "/tmp").hasPrefix(NSHomeDirectory()))
+        #expect(PathUtils.resolveToCwd("~not-home/file.txt", cwd: "/tmp") == "/tmp/~not-home/file.txt")
+    }
+}
+
+private final class EditUpdateCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var updates: [AgentToolResult] = []
+
+    func record(_ update: AgentToolResult) {
+        lock.withLock { updates.append(update) }
+    }
+
+    func uiDisplays() -> [String] {
+        lock.withLock { updates.flatMap { $0.uiDisplay ?? [] } }
     }
 }
 

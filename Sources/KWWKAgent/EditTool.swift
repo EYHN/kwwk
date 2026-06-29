@@ -1,5 +1,10 @@
 import Foundation
 import KWWKAI
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 public struct EditToolOptions: Sendable {
     public var operations: EditOperations
@@ -17,6 +22,26 @@ public struct LocalEditOperations: EditOperations {
     }
     public func writeFile(_ absolutePath: String, content: Data) async throws {
         try content.write(to: URL(fileURLWithPath: absolutePath), options: .atomic)
+    }
+    public func access(_ absolutePath: String) async throws {
+        var isDirectory: ObjCBool = false
+        if !FileManager.default.fileExists(atPath: absolutePath, isDirectory: &isDirectory) {
+            throw POSIXError(.ENOENT)
+        }
+        if isDirectory.boolValue {
+            throw POSIXError(.EISDIR)
+        }
+        #if canImport(Darwin)
+        let accessResult = Darwin.access(absolutePath, R_OK | W_OK)
+        #elseif canImport(Glibc)
+        let accessResult = Glibc.access(absolutePath, R_OK | W_OK)
+        #else
+        let accessResult = FileManager.default.isReadableFile(atPath: absolutePath)
+            && FileManager.default.isWritableFile(atPath: absolutePath) ? 0 : -1
+        #endif
+        if accessResult != 0 {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EACCES)
+        }
     }
 }
 
@@ -45,7 +70,7 @@ public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> A
         label: "edit",
         description: "Edit a file using exact text replacement. Each oldText must match a unique, non-overlapping region.",
         parameters: parameters,
-        execute: { _, args, cancellation, _ in
+        execute: { _, args, cancellation, onUpdate in
             try cancellation?.throwIfCancelled()
             guard case .object(let obj) = args,
                   case .string(let rawPath) = obj["path"] ?? .null else {
@@ -67,12 +92,15 @@ public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> A
 
             let absolutePath = PathUtils.resolveToCwd(rawPath, cwd: cwd)
             return try await FileMutationQueue.shared.run(absolutePath) {
-                let buffer: Data
                 do {
-                    buffer = try await ops.readFile(absolutePath)
+                    try await ops.access(absolutePath)
                 } catch {
-                    throw CodingToolError.fileNotFound(rawPath)
+                    throw CodingToolError.runtime(
+                        "Could not edit file: \(rawPath). \(editAccessErrorDescription(error))."
+                    )
                 }
+
+                let buffer = try await ops.readFile(absolutePath)
                 guard let raw = String(data: buffer, encoding: .utf8) else {
                     throw CodingToolError.invalidArgument("edit: file is not valid UTF-8")
                 }
@@ -83,17 +111,76 @@ public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> A
                 let applied = try EditDiff.applyEdits(to: normalized, edits: edits, path: rawPath)
                 try cancellation?.throwIfCancelled()
 
+                let diffResult = EditDiff.generateDiffString(old: applied.baseContent, new: applied.newContent)
+                let patch = EditDiff.generateUnifiedPatch(
+                    path: rawPath,
+                    old: applied.baseContent,
+                    new: applied.newContent
+                )
+                let details = editDetails(diff: diffResult.diff, patch: patch, firstChangedLine: diffResult.firstChangedLine)
+                let display = editDisplayLines(
+                    summary: "Previewing \(edits.count) replacement(s) in \(rawPath).",
+                    diff: diffResult.diff
+                )
+                onUpdate?(AgentToolResult(
+                    content: [.text(TextContent(text: "Previewing \(edits.count) replacement(s) in \(rawPath)."))],
+                    details: details,
+                    uiDisplay: display
+                ))
+                try cancellation?.throwIfCancelled()
+
                 let final = bom + EditDiff.restoreLineEndings(applied.newContent, ending: ending)
                 try await ops.writeFile(absolutePath, content: Data(final.utf8))
 
-                let diff = EditDiff.generateDiff(old: applied.baseContent, new: applied.newContent)
+                let summary = "Successfully replaced \(edits.count) block(s) in \(rawPath)."
                 return AgentToolResult(
                     content: [.text(TextContent(
-                        text: "Successfully replaced \(edits.count) block(s) in \(rawPath)."
+                        text: summary
                     ))],
-                    details: .object(["diff": .string(diff)])
+                    details: details,
+                    uiDisplay: editDisplayLines(summary: summary, diff: diffResult.diff)
                 )
             }
         }
     )
+}
+
+private func editDetails(diff: String, patch: String, firstChangedLine: Int?) -> JSONValue {
+    var details: [String: JSONValue] = [
+        "diff": .string(diff),
+        "patch": .string(patch),
+    ]
+    if let firstChangedLine {
+        details["firstChangedLine"] = .int(firstChangedLine)
+    }
+    return .object(details)
+}
+
+private func editDisplayLines(summary: String, diff: String) -> [String] {
+    var lines = [summary]
+    if !diff.isEmpty {
+        lines.append(contentsOf: diff.components(separatedBy: "\n"))
+    }
+    return lines
+}
+
+private func editAccessErrorDescription(_ error: Error) -> String {
+    if let posix = error as? POSIXError {
+        return "Error code: \(posixErrorCodeName(posix.code.rawValue))"
+    }
+    if let localized = error as? LocalizedError, let description = localized.errorDescription, !description.isEmpty {
+        return description
+    }
+    return String(describing: error)
+}
+
+private func posixErrorCodeName(_ code: Int32) -> String {
+    switch code {
+    case ENOENT: return "ENOENT"
+    case EACCES: return "EACCES"
+    case EPERM: return "EPERM"
+    case ENOTDIR: return "ENOTDIR"
+    case EISDIR: return "EISDIR"
+    default: return "POSIX(\(code))"
+    }
 }
