@@ -13,7 +13,7 @@ jobs:
       - name: swift build
         run: swift build --product kwwk
       - name: swift test
-        run: bash Scripts/test.sh
+        run: swift test
 
   build-linux:
     runs-on: ubuntu-latest
@@ -23,4 +23,4 @@ jobs:
       - name: swift build
         run: swift build --product kwwk
       - name: swift test
-        run: bash Scripts/test.sh
+        run: swift test

@@ -32,8 +32,7 @@ struct GenerateModels {
 
     private static func run() throws {
         let options = try Options.parse(CommandLine.arguments.dropFirst())
-        let raw = try String(contentsOf: URL(fileURLWithPath: options.inputPath), encoding: .utf8)
-        let result = try GenerateModelsCore.generate(from: raw)
+        let result = try GenerateModelsCore.generate(fromFile: URL(fileURLWithPath: options.inputPath))
         let outputURL = URL(fileURLWithPath: options.outputPath)
         try FileManager.default.createDirectory(
             at: outputURL.deletingLastPathComponent(),

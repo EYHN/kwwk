@@ -40,6 +40,59 @@ struct GenerateModelsCoreTests {
         #expect(model["contextWindow"] as? Int == 400_000)
     }
 
+    @Test("inlines split pi provider catalogs")
+    func inlinesSplitProviderCatalogs() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-generate-models-\(UUID().uuidString)")
+        let providers = root.appendingPathComponent("providers")
+        try FileManager.default.createDirectory(at: providers, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let generated = """
+        import { OPENAI_MODELS } from "./providers/openai.models.ts";
+
+        export const MODELS = {
+          "openai": OPENAI_MODELS,
+        } as const;
+        """
+        try generated.write(
+            to: root.appendingPathComponent("models.generated.ts"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let provider = """
+        import type { Model } from "../types.ts";
+
+        export const OPENAI_MODELS = {
+          "gpt-5.5": {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            api: "openai-responses",
+            provider: "openai",
+            input: ["text", "image"],
+            contextWindow: 400000,
+            maxTokens: 128000,
+          } satisfies Model<"openai-responses">,
+        } as const;
+        """
+        try provider.write(
+            to: providers.appendingPathComponent("openai.models.ts"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try GenerateModelsCore.generate(
+            fromFile: root.appendingPathComponent("models.generated.ts")
+        )
+        let openai = try #require(result.root["openai"] as? [String: Any])
+        let model = try #require(openai["gpt-5.5"] as? [String: Any])
+
+        #expect(model["id"] as? String == "gpt-5.5")
+        #expect(model["api"] as? String == "openai-responses")
+        #expect(model["contextWindow"] as? Int == 400_000)
+    }
+
     @Test("preserves providers from the source catalog")
     func preservesSourceProviders() throws {
         let raw = """
