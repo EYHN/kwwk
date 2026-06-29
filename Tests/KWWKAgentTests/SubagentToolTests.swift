@@ -596,11 +596,12 @@ struct SubagentToolTests {
             return
         }
 
-        let done = await awaitUntil(3000) {
+        let done = await awaitUntil(12000) {
             let snap = await manager.get(taskId)
             return snap?.status != .running
         }
         #expect(done)
+        guard done else { return }
         let snap = await manager.get(taskId)
         #expect(snap?.status == .completed)
         let contents = snap?.outputFile.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""

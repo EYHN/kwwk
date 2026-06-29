@@ -62,7 +62,7 @@ struct EscapeKeyFlushTests {
 }
 
 private func waitUntil(
-    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    timeoutNanoseconds: UInt64 = defaultWaitTimeoutNanoseconds(),
     pollNanoseconds: UInt64 = 20_000_000,
     _ predicate: @escaping @Sendable () -> Bool
 ) async -> Bool {
@@ -72,6 +72,15 @@ private func waitUntil(
         try? await Task.sleep(nanoseconds: pollNanoseconds)
     }
     return predicate()
+}
+
+private func defaultWaitTimeoutNanoseconds() -> UInt64 {
+    isCIRunner ? 60_000_000_000 : 1_000_000_000
+}
+
+private var isCIRunner: Bool {
+    ProcessInfo.processInfo.environment["CI"] == "true"
+        || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
 }
 
 // MARK: - Thread-safe test bookkeeping

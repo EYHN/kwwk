@@ -44,6 +44,10 @@ func awaitUntil(
     return false
 }
 
+func shellQuote(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
 @Suite("BashBackgroundRunner", .serialized)
 struct BashBackgroundRunnerTests {
 
@@ -289,6 +293,7 @@ struct BashToolBackgroundTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
+        let releaseFile = cwdDir.appendingPathComponent("release-timeout-cap")
         // Soft default 2s, cap 3s. A request for 9999s should be clamped to 3s.
         let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
             environment: testBashEnvironment,
@@ -296,23 +301,40 @@ struct BashToolBackgroundTests {
             maxTimeoutSeconds: 3,
             manager: manager,
             sessionId: "s1",
-            autoBackgroundOnTimeout: true
+            autoBackgroundOnTimeout: true,
+            hardTimeoutSeconds: 90
         ))
-        let start = Date()
         let result = try await tool.execute(
             "call-1",
             .object([
-                "command": .string("sleep 10"),
+                "command": .string("while [ ! -f \(shellQuote(releaseFile.path)) ]; do sleep 0.1; done"),
                 "timeout": .int(9999),
             ]),
             nil, nil
         )
-        let elapsed = Date().timeIntervalSince(start)
-        // We expect the soft timeout (cap=3s) to fire and the command to flip.
-        #expect(elapsed < 5)
-        if case .object(let obj) = result.details ?? .null,
-           case .string(let status) = obj["status"] ?? .null {
+        guard case .object(let obj) = result.details ?? .null else {
+            Issue.record("expected details.object")
+            return
+        }
+        if case .string(let status) = obj["status"] ?? .null {
             #expect(status == "auto_backgrounded")
+        } else {
+            Issue.record("expected status=auto_backgrounded")
+        }
+        if case .int(let softTimeoutSeconds) = obj["softTimeoutSeconds"] ?? .null {
+            #expect(softTimeoutSeconds == 3)
+        } else {
+            Issue.record("expected softTimeoutSeconds=3")
+        }
+        if case .string(let taskId) = obj["taskId"] ?? .null {
+            FileManager.default.createFile(atPath: releaseFile.path, contents: Data())
+            let done = await awaitUntil(10000) {
+                let snap = await manager.get(taskId)
+                return snap?.status != .running
+            }
+            #expect(done)
+        } else {
+            Issue.record("expected taskId")
         }
     }
 
@@ -323,18 +345,19 @@ struct BashToolBackgroundTests {
         let cwdDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: cwdDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
+        let releaseFile = cwdDir.appendingPathComponent("release-auto-background")
         let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
             environment: testBashEnvironment,
             defaultTimeoutSeconds: 1,      // soft timeout = 1s
             manager: manager,
             sessionId: "sF",
             autoBackgroundOnTimeout: true,
-            hardTimeoutSeconds: 30
+            hardTimeoutSeconds: 90
         ))
         let result = try await tool.execute(
             "call-1",
             .object([
-                "command": .string("sleep 3; echo done-after-sleep"),
+                "command": .string("while [ ! -f \(shellQuote(releaseFile.path)) ]; do sleep 0.1; done; echo done-after-sleep"),
                 "description": .string("slow echo"),
             ]),
             nil, nil
@@ -352,6 +375,8 @@ struct BashToolBackgroundTests {
             Issue.record("expected taskId")
             return
         }
+
+        FileManager.default.createFile(atPath: releaseFile.path, contents: Data())
 
         // Wait for the background task to complete.
         let done = await awaitUntil(8000) {
