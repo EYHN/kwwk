@@ -42,12 +42,6 @@ final class StdinBuffer: @unchecked Sendable {
         }
     }
 
-    func hasPendingStandaloneEscape() -> Bool {
-        lock.withLock {
-            buffer.count == 1 && buffer[0] == 0x1B
-        }
-    }
-
     private func takeOne() -> (Int, String?)? {
         guard !buffer.isEmpty else { return nil }
         let first = buffer[0]

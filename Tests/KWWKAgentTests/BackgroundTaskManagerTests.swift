@@ -248,7 +248,7 @@ struct BackgroundTaskManagerTests {
         }
         _ = await manager.spawn(runner: FauxRunner(label: "sub"), sessionId: "s1")
 
-        let delivered = await awaitUntil(12000) {
+        let delivered = await awaitUntil(2000) {
             await received.count() >= 1
         }
         guard delivered else {

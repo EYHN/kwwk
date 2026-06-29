@@ -189,37 +189,18 @@ final class TUIRunner: @unchecked Sendable {
     /// sequence), schedule a short-delay flush. Cancelled on the next
     /// `ingest` so real escape sequences aren't split.
     private func scheduleEscapeFlushIfNeeded() {
-        guard stdinBuffer.hasPendingStandaloneEscape() else { return }
         let work = DispatchWorkItem { [weak self] in
-            self?.flushPendingEscape()
+            guard let self else { return }
+            let flushed = self.stdinBuffer.flushOnTimeout()
+            if !flushed.isEmpty {
+                self.handleSequences(flushed)
+            }
         }
         lock.withLock { pendingEscapeFlush = work }
         DispatchQueue.global().asyncAfter(
             deadline: .now() + .milliseconds(Self.escapeFlushDelayMs),
             execute: work
         )
-    }
-
-    @discardableResult
-    func flushPendingEscapeForTesting() -> Int {
-        flushPendingEscape()
-    }
-
-    func hasPendingEscapeFlushForTesting() -> Bool {
-        lock.withLock { pendingEscapeFlush != nil }
-    }
-
-    @discardableResult
-    private func flushPendingEscape() -> Int {
-        lock.withLock {
-            pendingEscapeFlush?.cancel()
-            pendingEscapeFlush = nil
-        }
-        let flushed = stdinBuffer.flushOnTimeout()
-        if !flushed.isEmpty {
-            handleSequences(flushed)
-        }
-        return flushed.count
     }
 }
 #endif

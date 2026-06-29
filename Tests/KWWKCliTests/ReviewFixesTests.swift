@@ -180,9 +180,9 @@ struct NotificationOrderingTests {
             ids.append(taskId)
         }
 
-        // Wait for all three to drain. The invariant is ordering, not the
-        // hosted runner's timer precision under full-suite concurrency.
-        let deadline = Date().addingTimeInterval(isCIRunner ? 60 : 5)
+        // Wait for all three to drain. 300ms for the last task to finish
+        // + generous delivery slack.
+        let deadline = Date().addingTimeInterval(5)
         while await recorder.count < 3, Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
@@ -191,11 +191,6 @@ struct NotificationOrderingTests {
         let observed = await recorder.ids
         #expect(observed == ids, "expected FIFO order \(ids), got \(observed)")
     }
-}
-
-private var isCIRunner: Bool {
-    ProcessInfo.processInfo.environment["CI"] == "true"
-        || ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
 }
 
 private actor OrderRecorder {
