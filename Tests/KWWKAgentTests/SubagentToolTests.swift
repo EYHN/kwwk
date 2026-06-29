@@ -634,7 +634,7 @@ struct SubagentToolTests {
                     fauxToolCall(
                         name: "bash",
                         arguments: .object([
-                            "command": .string("exec sleep 300"),
+                            "command": .string("exec sleep 3600"),
                             "description": .string("Sleep inside child"),
                             "run_in_background": .bool(true),
                         ]),

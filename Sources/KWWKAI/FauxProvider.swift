@@ -323,7 +323,50 @@ public final class FauxProvider: APIProvider, @unchecked Sendable {
         let getCached: @Sendable (String) -> String? = { [weak self] id in self?.cachedPrompt(for: id) }
         let setCached: @Sendable (String, String) -> Void = { [weak self] prompt, id in self?.setCachedPrompt(prompt, for: id) }
 
-        Task.detached {
+        if tokensPerSecond == nil {
+            switch step {
+            case nil:
+                var errorMessage = FauxProvider.makeErrorMessage(
+                    reason: "No more faux responses queued",
+                    api: api, provider: provider, modelId: model.id
+                )
+                errorMessage = FauxProvider.estimateUsage(
+                    message: errorMessage,
+                    context: context,
+                    options: options,
+                    cached: getCached,
+                    setCached: setCached
+                )
+                outStream.push(.error(reason: .error, error: errorMessage))
+                outStream.end(errorMessage)
+                return outStream
+
+            case .message(let resolved)?:
+                var message = FauxProvider.clone(
+                    resolved, api: api, provider: provider, modelId: model.id
+                )
+                message = FauxProvider.estimateUsage(
+                    message: message,
+                    context: context,
+                    options: options,
+                    cached: getCached,
+                    setCached: setCached
+                )
+                FauxProvider.streamDeltasImmediately(
+                    to: outStream,
+                    message: message,
+                    minTokenSize: minTokenSize,
+                    maxTokenSize: maxTokenSize,
+                    cancellation: options?.cancellation
+                )
+                return outStream
+
+            case .factory?:
+                break
+            }
+        }
+
+        Task {
             guard let step else {
                 var errorMessage = FauxProvider.makeErrorMessage(
                     reason: "No more faux responses queued",
@@ -380,6 +423,96 @@ public final class FauxProvider: APIProvider, @unchecked Sendable {
     }
 
     // MARK: Streaming
+
+    static func streamDeltasImmediately(
+        to stream: AssistantMessageStream,
+        message: AssistantMessage,
+        minTokenSize: Int,
+        maxTokenSize: Int,
+        cancellation: CancellationHandle?
+    ) {
+        var partial = message
+        partial.content = []
+
+        if cancellation?.isCancelled == true {
+            let aborted = abortedMessage(from: partial)
+            stream.push(.error(reason: .aborted, error: aborted))
+            stream.end(aborted)
+            return
+        }
+
+        stream.push(.start(partial: partial))
+
+        for (index, block) in message.content.enumerated() {
+            if cancellation?.isCancelled == true {
+                let aborted = abortedMessage(from: partial)
+                stream.push(.error(reason: .aborted, error: aborted))
+                stream.end(aborted)
+                return
+            }
+            switch block {
+            case .thinking(let t):
+                partial.content.append(.thinking(ThinkingContent(thinking: "")))
+                stream.push(.thinkingStart(contentIndex: index, partial: partial))
+                for chunk in splitByTokenSize(t.thinking, min: minTokenSize, max: maxTokenSize) {
+                    if cancellation?.isCancelled == true {
+                        let aborted = abortedMessage(from: partial)
+                        stream.push(.error(reason: .aborted, error: aborted))
+                        stream.end(aborted)
+                        return
+                    }
+                    if case .thinking(var current) = partial.content[index] {
+                        current.thinking += chunk
+                        partial.content[index] = .thinking(current)
+                    }
+                    stream.push(.thinkingDelta(contentIndex: index, delta: chunk, partial: partial))
+                }
+                stream.push(.thinkingEnd(contentIndex: index, content: t.thinking, partial: partial))
+
+            case .text(let t):
+                partial.content.append(.text(TextContent(text: "")))
+                stream.push(.textStart(contentIndex: index, partial: partial))
+                for chunk in splitByTokenSize(t.text, min: minTokenSize, max: maxTokenSize) {
+                    if cancellation?.isCancelled == true {
+                        let aborted = abortedMessage(from: partial)
+                        stream.push(.error(reason: .aborted, error: aborted))
+                        stream.end(aborted)
+                        return
+                    }
+                    if case .text(var current) = partial.content[index] {
+                        current.text += chunk
+                        partial.content[index] = .text(current)
+                    }
+                    stream.push(.textDelta(contentIndex: index, delta: chunk, partial: partial))
+                }
+                stream.push(.textEnd(contentIndex: index, content: t.text, partial: partial))
+
+            case .toolCall(let call):
+                partial.content.append(.toolCall(ToolCall(id: call.id, name: call.name, arguments: .object([:]))))
+                stream.push(.toolCallStart(contentIndex: index, partial: partial))
+                let argsJSON = (try? JSONValueEncoder.encode(call.arguments)) ?? "{}"
+                for chunk in splitByTokenSize(argsJSON, min: minTokenSize, max: maxTokenSize) {
+                    if cancellation?.isCancelled == true {
+                        let aborted = abortedMessage(from: partial)
+                        stream.push(.error(reason: .aborted, error: aborted))
+                        stream.end(aborted)
+                        return
+                    }
+                    stream.push(.toolCallDelta(contentIndex: index, delta: chunk, partial: partial))
+                }
+                partial.content[index] = .toolCall(call)
+                stream.push(.toolCallEnd(contentIndex: index, toolCall: call, partial: partial))
+            }
+        }
+
+        if message.stopReason == .error || message.stopReason == .aborted {
+            stream.push(.error(reason: message.stopReason, error: message))
+            stream.end(message)
+            return
+        }
+        stream.push(.done(reason: message.stopReason, message: message))
+        stream.end(message)
+    }
 
     static func streamDeltas(
         to stream: AssistantMessageStream,

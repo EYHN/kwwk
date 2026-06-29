@@ -44,11 +44,10 @@ struct FauxRunner: BackgroundTaskRunner {
         let outcome = self.outcome
         let delayMs = self.delayMs
         let writeText = self.writeToFile
-        Task.detached {
+        let finish: @Sendable () -> Void = {
             if let text = writeText {
                 _ = try? text.data(using: .utf8)?.write(to: outputFile)
             }
-            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             if cancellation.isCancelled {
                 onDone(BackgroundTaskOutcome(
                     success: false,
@@ -59,6 +58,14 @@ struct FauxRunner: BackgroundTaskRunner {
             } else {
                 onDone(outcome)
             }
+        }
+        if delayMs <= 0 {
+            finish()
+            return
+        }
+        Task.detached {
+            try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+            finish()
         }
     }
 }
@@ -246,7 +253,7 @@ struct BackgroundTaskManagerTests {
         let handle = await manager.onNotification { notif in
             await received.add(notif)
         }
-        _ = await manager.spawn(runner: FauxRunner(label: "sub"), sessionId: "s1")
+        _ = await manager.spawn(runner: FauxRunner(label: "sub", delayMs: 0), sessionId: "s1")
 
         let delivered = await awaitUntil(2000) {
             await received.count() >= 1

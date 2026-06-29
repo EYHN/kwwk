@@ -73,7 +73,7 @@ struct WaitTaskToolTests {
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
-        let runner = BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment)
+        let runner = NeverCompletingRunner(label: "wait-timeout")
         let (taskId, _) = await manager.spawn(runner: runner, sessionId: "s1")
         defer { Task { try? await manager.kill(taskId) } }
         try? await Task.sleep(nanoseconds: 50_000_000)
@@ -125,7 +125,7 @@ struct WaitTaskToolTests {
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let (taskId, _) = await manager.spawn(
-            runner: BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment),
+            runner: NeverCompletingRunner(label: "wait-cancel"),
             sessionId: "s1"
         )
         defer { Task { try? await manager.kill(taskId) } }
@@ -151,7 +151,7 @@ struct WaitTaskToolTests {
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let (taskId, _) = await manager.spawn(
-            runner: BashBackgroundRunner(command: "exec sleep 300", environment: testBashEnvironment),
+            runner: NeverCompletingRunner(label: "wait-clamp"),
             sessionId: "s1"
         )
         defer { Task { try? await manager.kill(taskId) } }
@@ -174,3 +174,24 @@ struct WaitTaskToolTests {
 }
 
 // MARK: - Helpers
+
+private struct NeverCompletingRunner: BackgroundTaskRunner {
+    let spec: BackgroundTaskSpec
+
+    init(label: String) {
+        self.spec = BackgroundTaskSpec(
+            kind: "never",
+            label: label,
+            description: nil,
+            hardTimeoutSeconds: 3600
+        )
+    }
+
+    func run(
+        taskId _: String,
+        outputFile _: URL,
+        cancellation _: CancellationHandle,
+        onDone _: @escaping @Sendable (BackgroundTaskOutcome) -> Void
+    ) {
+    }
+}
