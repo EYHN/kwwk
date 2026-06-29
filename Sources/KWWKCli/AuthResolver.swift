@@ -166,14 +166,14 @@ private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?)
     await APIRegistry.shared.register(ProviderVariants.azureOpenAIResponsesV1(
         endpoint: endpoint, apiVersion: azure.apiVersion, apiKey: azure.apiKey
     ))
-    let modelId = modelOverride ?? "gpt-5"
+    let modelId = modelOverride ?? "gpt-5.5"
     let catalog = ModelsCatalog.model(provider: "azure-openai-responses", id: modelId)
     let model = Model(
         id: modelId, name: catalog?.name ?? modelId,
         api: "azure-openai-responses", provider: "azure-openai-responses",
         baseUrl: azure.baseURL, reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
-        contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 16_384
+        contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 128_000
     )
     return ResolvedAuth(model: model, modelLabel: "\(modelId) · Azure OpenAI (env)", authResolver: nil)
 }
@@ -196,7 +196,7 @@ private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, m
     let fallbackBase = gateway
         ? "https://gateway.ai.cloudflare.com/v1/{CLOUDFLARE_ACCOUNT_ID}/{CLOUDFLARE_GATEWAY_ID}/compat"
         : "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
-    let modelId = modelOverride ?? (gateway ? "claude-3.5-haiku" : "@cf/google/gemma-4-26b-a4b-it")
+    let modelId = modelOverride ?? (gateway ? "claude-haiku-4-5" : "@cf/google/gemma-4-26b-a4b-it")
     // The provider is registered under `providerId`, and `APIRegistry` dispatches
     // by `model.api` — so the model's `api` MUST equal `providerId`, otherwise the
     // request is routed to a generic provider (e.g. `openai-completions`) that
@@ -328,7 +328,7 @@ private func registerCodex(
         originator: "kwwk"
     ))
 
-    let modelId = modelOverride ?? "gpt-5.4"
+    let modelId = modelOverride ?? "gpt-5.5"
     let catalogEntry = ModelsCatalog.model(provider: "openai-codex", id: modelId)
     let model = Model(
         id: modelId,
@@ -377,7 +377,7 @@ private func registerAnthropicOAuth(
         beta: beta
     ))
 
-    let modelId = modelOverride ?? "claude-sonnet-4-5-20250929"
+    let modelId = modelOverride ?? "claude-opus-4-8"
     let catalog = ModelsCatalog.model(provider: "anthropic", id: modelId)
     let defaultContext = context1m ? 1_000_000 : 200_000
     let model = Model(
@@ -389,7 +389,7 @@ private func registerAnthropicOAuth(
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: context1m ? 1_000_000 : (catalog?.contextWindow ?? defaultContext),
-        maxTokens: catalog?.maxTokens ?? 8192
+        maxTokens: catalog?.maxTokens ?? 128_000
     )
 
     let suffix = context1m ? " · Anthropic OAuth (1M ctx)" : " · Anthropic OAuth"
@@ -451,10 +451,10 @@ private func registerGitHubCopilot(
         baseURL: baseURL
     ))
 
-    // Default to `gpt-4.1` — generally available on all Copilot tiers, no
+    // Default to `gpt-5.5` — generally available on all Copilot tiers, no
     // policy-enable dependency. Users can /model to Claude/GPT-5/etc after
     // login-time policy-enable has run, or set `--model` at launch.
-    let defaultId = modelOverride ?? "gpt-4.1"
+    let defaultId = modelOverride ?? "gpt-5.5"
     let fallback = Model(
         id: defaultId,
         name: defaultId,
@@ -463,8 +463,8 @@ private func registerGitHubCopilot(
         baseUrl: baseURLString,
         reasoning: false,
         input: [.text, .image],
-        contextWindow: 128_000,
-        maxTokens: 16_384
+        contextWindow: 200_000,
+        maxTokens: 128_000
     )
     // Use catalog model for wire-format api + capabilities, but stamp
     // the session's resolved `baseUrl` on it — catalog entries hardcode
@@ -511,7 +511,7 @@ private func registerAnthropicAPIKey(
     let baseURL = stringExtra(creds, "baseUrl") ?? "https://api.anthropic.com"
     await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: creds.access))
 
-    let modelId = modelOverride ?? "claude-sonnet-4-5-20250929"
+    let modelId = modelOverride ?? "claude-opus-4-8"
     let catalog = ModelsCatalog.model(provider: "anthropic", id: modelId)
     let model = Model(
         id: modelId,
@@ -522,7 +522,7 @@ private func registerAnthropicAPIKey(
         reasoning: catalog?.reasoning ?? false,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000,
-        maxTokens: catalog?.maxTokens ?? 8192
+        maxTokens: catalog?.maxTokens ?? 128_000
     )
     return ResolvedAuth(
         model: model,
@@ -540,7 +540,7 @@ private func registerOpenAIAPIKey(
     let baseURL = stringExtra(creds, "baseUrl") ?? "https://api.openai.com"
     await APIRegistry.shared.register(OpenAIResponsesProvider(defaultAPIKey: creds.access))
 
-    let modelId = modelOverride ?? "gpt-5"
+    let modelId = modelOverride ?? "gpt-5.5"
     let catalog = ModelsCatalog.model(provider: "openai", id: modelId)
     let model = Model(
         id: modelId,
@@ -551,7 +551,7 @@ private func registerOpenAIAPIKey(
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000,
-        maxTokens: catalog?.maxTokens ?? 16_384
+        maxTokens: catalog?.maxTokens ?? 128_000
     )
     return ResolvedAuth(
         model: model,
@@ -569,7 +569,7 @@ private func registerGoogleAPIKey(
     let baseURL = stringExtra(creds, "baseUrl") ?? "https://generativelanguage.googleapis.com"
     await APIRegistry.shared.register(GoogleGeminiProvider(defaultAPIKey: creds.access))
 
-    let modelId = modelOverride ?? "gemini-2.5-pro"
+    let modelId = modelOverride ?? "gemini-3.1-pro-preview"
     let catalog = ModelsCatalog.model(provider: "google", id: modelId)
     let model = Model(
         id: modelId,
@@ -583,7 +583,7 @@ private func registerGoogleAPIKey(
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 1_048_576,
-        maxTokens: catalog?.maxTokens ?? 8192
+        maxTokens: catalog?.maxTokens ?? 128_000
     )
     return ResolvedAuth(
         model: model,
@@ -616,7 +616,7 @@ private func registerOpenAICompatible(
         reasoning: false,
         input: [.text],
         contextWindow: 131_072,
-        maxTokens: 16_384
+        maxTokens: 32_000
     )
     return ResolvedAuth(
         model: model,
