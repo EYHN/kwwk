@@ -176,7 +176,7 @@ func runLoginInternal() async throws {
 /// entry, or throws `.cancelled` if the user hits Esc / Ctrl-C.
 @MainActor
 private func selectProviderTUI() async throws -> LoginEntry {
-    let runner = TUIRunner(useAlternateScreen: false, hideCursor: true)
+    let runner = TUIRunner(hideCursor: true)
 
     let header = TextComponent([
         Style.header("✻ kwwk login"),

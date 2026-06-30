@@ -255,11 +255,10 @@ struct CompactCommandTests {
 
 @MainActor
 private func makeStubModalHost() -> ModalHost {
-    // ModalHost needs a layout + closures. For compact tests we never open
-    // a modal, so a throwaway layout + no-op hooks is enough — the object
-    // just has to exist.
+    // ModalHost needs render closures. For compact tests we never open
+    // a modal, so no-op hooks are enough — the object just has to exist.
     ModalHost(
-        layout: CodingLayout(statusRows: 2),
+        renderModalLines: { _ in },
         restoreTranscript: {},
         requestRender: {}
     )

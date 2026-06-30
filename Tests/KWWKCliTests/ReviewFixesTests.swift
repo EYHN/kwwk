@@ -327,7 +327,7 @@ struct CompactPreservesRunningTasksTests {
         let ctx = SlashContext(
             agent: agent,
             modal: ModalHost(
-                layout: CodingLayout(statusRows: 1),
+                renderModalLines: { _ in },
                 restoreTranscript: {},
                 requestRender: {}
             ),
@@ -383,7 +383,7 @@ struct CompactPreservesRunningTasksTests {
         let ctx = SlashContext(
             agent: agent,
             modal: ModalHost(
-                layout: CodingLayout(statusRows: 1),
+                renderModalLines: { _ in },
                 restoreTranscript: {},
                 requestRender: {}
             ),

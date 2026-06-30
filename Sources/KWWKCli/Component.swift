@@ -121,16 +121,3 @@ final class TextComponent: Component, @unchecked Sendable {
         cachedSource = nil
     }
 }
-
-/// Horizontal rule — renders as a single line made of `character` repeated to
-/// the viewport width. Reacts automatically to resize.
-final class HorizontalRule: Component, @unchecked Sendable {
-    var character: Character
-    init(_ character: Character = "─") {
-        self.character = character
-    }
-    func render(width: Int) -> [String] {
-        [String(repeating: String(character), count: max(0, width))]
-    }
-    func invalidate() {}
-}

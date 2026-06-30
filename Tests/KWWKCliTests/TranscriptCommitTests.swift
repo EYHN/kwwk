@@ -55,7 +55,10 @@ struct TranscriptCommitTests {
         // with one" convention.
         #expect(commits.count == 2)
         #expect(commits[0] == "")
-        #expect(commits[1].contains("❯ hi"))
+        // User message renders as a full-width bar: ❯ glyph then the text,
+        // separated by SGR runs. Assert on the stripped plain text.
+        let bar = ANSI.stripEscapes(commits[1])
+        #expect(bar.hasPrefix("❯ hi"))
         #expect(r.liveLines.isEmpty)
     }
 
@@ -361,8 +364,8 @@ struct TranscriptCommitTests {
     }
 
     @MainActor
-    @Test("live budget does not spill incomplete assistant text")
-    func liveBudgetDoesNotSpillIncompleteAssistantText() {
+    @Test("incomplete assistant text is not committed or retained live")
+    func incompleteAssistantTextDoesNotSpill() {
         let r = TranscriptRenderer()
         r.apply(.messageStart(message: .assistant(stubAssistant(""))))
         let partial = stubAssistant("unfinished text")
@@ -371,7 +374,6 @@ struct TranscriptCommitTests {
             assistantMessageEvent: .textDelta(contentIndex: 0, delta: "unfinished text", partial: partial)
         ))
 
-        r.applyLiveBudget(0, reserved: 0)
         #expect(r.drainCommits().isEmpty)
         #expect(r.liveLines.isEmpty)
     }

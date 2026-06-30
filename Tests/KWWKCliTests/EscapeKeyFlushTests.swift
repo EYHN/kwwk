@@ -14,7 +14,6 @@ struct EscapeKeyFlushTests {
     func escDeliveredAfterDelay() async {
         let scheduler = ManualEscapeFlushScheduler()
         let runner = TUIRunner(
-            useAlternateScreen: false,
             hideCursor: false,
             escapeFlushScheduler: scheduler.schedule
         )
@@ -36,7 +35,6 @@ struct EscapeKeyFlushTests {
     func csiSequenceNotSplit() async {
         let scheduler = ManualEscapeFlushScheduler()
         let runner = TUIRunner(
-            useAlternateScreen: false,
             hideCursor: false,
             escapeFlushScheduler: scheduler.schedule
         )
@@ -59,7 +57,6 @@ struct EscapeKeyFlushTests {
     @Test("two consecutive ESC presses both fire") func doubleEsc() async {
         let scheduler = ManualEscapeFlushScheduler()
         let runner = TUIRunner(
-            useAlternateScreen: false,
             hideCursor: false,
             escapeFlushScheduler: scheduler.schedule
         )

@@ -89,6 +89,11 @@ final class TranscriptRenderer {
     /// receiving deltas. Reset on every `messageStart`.
     private var thinkingTimings: [Int: (start: DispatchTime, end: DispatchTime?)] = [:]
 
+    /// Terminal width used to render full-width blocks (the user-message bar).
+    /// Updated by CodingTUI on init + resize. Committed lines are otherwise
+    /// width-agnostic (the terminal owns autowrap).
+    var displayWidth: Int = 80
+
     init() {}
 
     func setThinkingDisplay(_ display: ThinkingDisplay) {
@@ -112,14 +117,6 @@ final class TranscriptRenderer {
         return out
     }
 
-    /// Assistant text is committed in append-only segments, not retained in
-    /// the live zone, so there is no assistant-body budget to spill here.
-    /// Kept as the UI-layer hook for future live-tail budgeting.
-    func applyLiveBudget(_ budget: Int, reserved: Int = 0) {
-        _ = budget
-        _ = reserved
-    }
-
     func apply(_ event: AgentEvent) {
         switch event {
         case .messageStart(let message):
@@ -135,7 +132,7 @@ final class TranscriptRenderer {
                 if let summary = BgNotificationSummary.parse(text) {
                     commit(summary.render())
                 } else {
-                    commit(["", Style.user("❯ " + text)])
+                    commit([""] + Theme.userBar(text, width: displayWidth))
                 }
             case .assistant:
                 streaming = true
@@ -417,37 +414,6 @@ final class TranscriptRenderer {
             commit([""] + lines)
             assistantCommittedDuringTurn = true
         }
-    }
-
-    /// One-liner for a thinking block in collapsed mode.
-    ///   running  → "[thinking 2.3s…]"
-    ///   settled  → "[thought for 3.4s]"
-    private func collapsedThinkingLabel(blockIndex: Int) -> String {
-        let timing = thinkingTimings[blockIndex]
-        if let timing {
-            if let end = timing.end {
-                return "[thought for \(formatElapsed(from: timing.start, to: end))]"
-            } else {
-                return "[thinking \(formatElapsed(from: timing.start, to: DispatchTime.now()))…]"
-            }
-        }
-        // No timing recorded — message restored from history or fed in
-        // pre-formed (no events observed). Fall back to a neutral marker.
-        return "[thought]"
-    }
-
-    /// Header used in expanded mode. Mirrors the collapsed label format
-    /// so the user can eyeball duration without switching modes.
-    private func expandedThinkingHeader(blockIndex: Int) -> String {
-        let timing = thinkingTimings[blockIndex]
-        if let timing {
-            if let end = timing.end {
-                return "[thinking — \(formatElapsed(from: timing.start, to: end))]"
-            } else {
-                return "[thinking — \(formatElapsed(from: timing.start, to: DispatchTime.now()))…]"
-            }
-        }
-        return "[thinking]"
     }
 
     /// Format a DispatchTime delta as a human-readable duration. 0.1s
