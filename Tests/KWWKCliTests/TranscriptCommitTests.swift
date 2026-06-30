@@ -262,7 +262,7 @@ struct TranscriptCommitTests {
         let r = TranscriptRenderer()
         r.apply(.toolExecutionStart(toolCallId: "1", toolName: "bash", args: .object(["cmd": .string("ls")])))
 
-        // Running tool sits in live (leading blank + header + running…),
+        // Calling tool sits in live (leading blank + header + calling…),
         // nothing committed yet. The leading blank is the "every block
         // opens with a separator" rule applied to the live view so
         // parallel tools and streaming body don't stack.
@@ -270,6 +270,7 @@ struct TranscriptCommitTests {
         #expect(r.liveLines.count >= 3)
         #expect(r.liveLines.first == "")
         #expect(r.liveLines.dropFirst().first?.contains("bash") == true)
+        #expect(r.liveLines.contains(where: { $0.contains("calling") }))
 
         r.apply(.toolExecutionEnd(
             toolCallId: "1",
@@ -300,7 +301,7 @@ struct TranscriptCommitTests {
 
         #expect(r.drainCommits().isEmpty)
         #expect(r.liveLines.contains(where: { $0.contains("128 tokens") }))
-        #expect(!r.liveLines.contains(where: { $0.contains("running…") }))
+        #expect(!r.liveLines.contains(where: { $0.contains("calling…") }))
 
         r.apply(.toolExecutionEnd(
             toolCallId: "1",

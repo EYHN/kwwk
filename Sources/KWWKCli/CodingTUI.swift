@@ -4,7 +4,7 @@ import KWWKAgent
 
 /// Internal implementation of the coding-agent TUI. Public entry points
 /// live on `KWWK` (see KWWK.swift) and resolve credentials before calling
-/// in here. `@MainActor` because `TranscriptRenderer` and the TUI layout
+/// in here. `@MainActor` because `TranscriptRenderer` and the TUI frame
 /// mutate main-thread-only state.
 @MainActor
 func runCodingTUIInternal(
@@ -87,116 +87,116 @@ func runCodingTUIInternal(
     // `/thinking off` (or `high` / `xhigh` for thornier problems).
     agent.state.thinkingLevel = thinkingLevel
 
-    // --- TUI (shared layout) --------------------------------------------
-    // Inline render mode — the frame anchors at the current cursor and
-    // preserves the user's shell scrollback above it (the Claude Code
-    // behavior). Pass `useAlternateScreen: true` if you want a blank
-    // fullscreen buffer instead.
-    let runner = TUIRunner(useAlternateScreen: false, hideCursor: false)
-    let layout = CodingLayout(statusRows: 0, chromeMode: .promptOnly)
+    // --- TUI (full-screen retained frame) -------------------------------
+    //
+    // Coding runs in the alternate screen now: transcript, live tool calls,
+    // status, modals, and prompt are one retained frame. We never mutate
+    // native scrollback while the app is active, so terminal resize can no
+    // longer reflow stale retained rows into repeated clear-line trails.
+    let runner = TUIRunner(useAlternateScreen: true, hideCursor: false)
     let renderer = TranscriptRenderer()
-
-    // Print the header banner once, as ordinary terminal output. It
-    // sits above the live zone at startup and scrolls into native
-    // scrollback as content piles up — same treatment as any other
-    // committed line. Per-turn capacity (`42% ctx`) moves to the
-    // status bar so we don't need to re-render this block.
-    let cwdShort = shortenPath(cwd, to: max(20, runner.terminal.width - 4))
-    let bannerLines: [String] = [
-        Style.header("✻ kwwk coding agent"),
-        Style.dimmed("  \(modelLabel)"),
-        Style.dimmed("  \(cwdShort)"),
-        "",
-    ]
-    for line in bannerLines {
-        runner.terminal.write(line + "\r\n")
-    }
-    if resolvedResume.resumed {
-        runner.terminal.write(
-            Style.dimmed("  ↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages")
-            + "\r\n\r\n"
-        )
-    }
-
-    layout.install(into: runner.tui)
-    layout.fitViewport(height: runner.terminal.height, width: runner.terminal.width)
-    runner.focus(layout.promptRow)
+    let resumedLine = resolvedResume.resumed
+        ? "↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages"
+        : nil
+    let frame = CodingFrame(
+        cwd: cwd,
+        resumedLine: resumedLine,
+        viewportHeight: runner.terminal.height
+    )
+    runner.tui.addChild(frame)
+    runner.focus(frame.promptRow)
 
     // Paste plumbing: `onPaste` is called whenever the terminal
     // delivers a bracketed-paste sequence. We route it through the
     // AttachmentStore so long / multi-line bodies stay out of the
     // single-line input, and show up as compact tokens instead.
     let attachments = AttachmentStore()
-    layout.input.onPaste = { body in
+    frame.input.onPaste = { body in
         handlePastedBody(
             body,
-            input: layout.input,
+            input: frame.input,
             attachments: attachments,
             tui: runner.tui
         )
     }
-    // Non-LLM messages the coding TUI wants to surface ("switched to
-    // gpt-5.4", "unknown slash command /foo", attach issues, etc.) are
-    // committed directly to scrollback via `runner.tui.commit(...)`.
-    // There's no separate notification block in the live zone — those
-    // were annoying (user couldn't dismiss them, took vertical space,
-    // complicated the layout math). Slash commands are gated to the
-    // idle state below so we never need to interleave them with
-    // streaming output.
-    //
-    // `recomputeTranscript` deliberately leaves the live tail empty. The
-    // coding surface is append-only now: assistant text, tool output, slash
-    // command output, and notifications all flow through stdout so the
-    // terminal owns autowrap and resize reflow. The only retained rows are
-    // transient modal content and the editable prompt.
+
+    var frameMode: CodingFrameMode = .idle
+    var runningBackgroundTasks = 0
+
+    let updateFrameStatus: @MainActor @Sendable () -> Void = {
+        let capacityHint = formatCapacityHint(
+            usage: AgentContextCompactor.currentUsage(
+                messages: agent.state.messages,
+                model: agent.state.model
+            ),
+            threshold: autoCompactThreshold
+        )
+        frame.metadataLine = statusMetadataLine(
+            model: agent.state.model,
+            thinkingLevel: agent.state.thinkingLevel,
+            thinkingDisplay: agent.state.thinkingDisplay,
+            capacityHint: capacityHint,
+            width: max(0, runner.terminal.width)
+        )
+        frame.stateLine = codingFrameStateLine(
+            mode: frameMode,
+            isStreaming: agent.state.isStreaming,
+            runningBackgroundTasks: runningBackgroundTasks,
+            queuedPrompts: agent.queuedSteeringCount(),
+            spinner: frame.spinner
+        )
+    }
+
     let recomputeTranscript: @MainActor @Sendable () -> Void = {
-        layout.setLiveTail([])
+        frame.setLiveLines(renderer.liveLines)
     }
 
     // Modal overlay host — takes over the transcript area for selectors
     // (/model). Only one modal is active at a time; its bindings are
     // wired below via `modal.routeXxx`. On close we both restore the
-    // live tail and drain any commits that accumulated while the modal
-    // was up, so scrollback catches up to what the agent did in the
-    // meantime.
+    // live tail and drain any commits that accumulated while the modal was
+    // up, so the retained transcript catches up to what the agent did in
+    // the meantime.
     let modal = ModalHost(
-        layout: layout,
+        renderModalLines: { lines in frame.setModalLines(lines) },
         restoreTranscript: {
             let committed = renderer.drainCommits()
-            if !committed.isEmpty { runner.tui.commit(committed) }
+            if !committed.isEmpty { frame.appendHistory(committed) }
             recomputeTranscript()
+            updateFrameStatus()
         },
         requestRender: { runner.tui.requestRender() }
     )
 
     _ = runner.terminal.onResize { w, h in
         Task { @MainActor in
-            layout.fitViewport(height: h, width: w)
+            frame.setViewport(height: h)
             if !modal.isOpen {
                 recomputeTranscript()
             }
+            updateFrameStatus()
             runner.tui.requestRender()
         }
     }
 
-    /// Drain the renderer's commit buffer and forward to the TUI so the
-    /// newly-settled lines show up above the live zone on the next
-    /// render. Called after every agent event + after modal close.
+    /// Drain the renderer's commit buffer into retained transcript history.
+    /// Called after every agent event + after modal close.
     ///
     /// While a modal is open we deliberately leave commits sitting in
-    /// the renderer's buffer: flushing would print history lines above
-    /// the modal and make the UI feel noisy. They drain on close.
+    /// the renderer's buffer: flushing would mutate the transcript behind
+    /// the selector and make the UI feel noisy. They drain on close.
     let flushCommits: @MainActor @Sendable () -> Bool = {
         guard !modal.isOpen else { return false }
         let committed = renderer.drainCommits()
         if !committed.isEmpty {
-            runner.tui.commit(committed)
+            frame.appendHistory(committed)
             return true
         }
         return false
     }
 
     var isAutoCompacting = false
+    updateFrameStatus()
 
     // Keep the renderer's display mode in sync with the agent's state on
     // every event, so `/thinking show|hide` (which only mutates agent
@@ -206,81 +206,69 @@ func runCodingTUIInternal(
         await MainActor.run {
             renderer.setThinkingDisplay(agent.state.thinkingDisplay)
             renderer.apply(event)
-            // Order matters here:
-            //   1. recomputeTranscript() — may spill streaming overflow
-            //      into the commit buffer as a side effect (long
-            //      assistant turns need to scroll their head into
-            //      scrollback as they grow).
-            //   2. flushCommits() — forwards everything (settled lines
-            //      from `apply` PLUS spill from the live-budget step)
-            //      to the TUI in one batch so a single render emits
-            //      all of it.
-            // When a modal is open we leave the live tail alone and
-            // let the modal keep the display; pending commits buffer
-            // until close, then drain together.
+            // Settled rows move into retained history; live rows stay mutable
+            // in the same full-screen frame. When a modal is open we keep the
+            // transcript behind it stable and drain pending rows on close.
             if !modal.isOpen {
                 recomputeTranscript()
             }
-            var needsRender = flushCommits()
+            _ = flushCommits()
             switch event {
             case .agentStart:
                 break
             case .agentEnd:
-                break
+                frameMode = .idle
             case .compactStart(let count, _):
                 isAutoCompacting = true
-                runner.tui.commit([
+                frameMode = .compacting(messageCount: count)
+                frame.appendHistory([
                     "",
                     Style.dimmed("  ◐ auto-compacting \(count) messages…"),
                 ])
-                needsRender = true
             case .compactEnd(let outcome):
                 isAutoCompacting = false
+                frameMode = .idle
                 switch outcome {
                 case .compacted(let n, let hasLedger):
-                    runner.tui.commit(renderCompactBoundary(
+                    frame.appendHistory(renderCompactBoundary(
                         messagesCompacted: n,
                         hasRunningTasksLedger: hasLedger,
                         width: runner.terminal.width
                     ))
-                    needsRender = true
                 case .refusedAgentBusy:
-                    runner.tui.commit([
+                    frame.appendHistory([
                         "",
                         Style.error("  auto-compact: agent is busy; compact skipped"),
                         "",
                     ])
-                    needsRender = true
                 case .refusedTooFewMessages:
                     break
                 case .failed(let msg):
-                    runner.tui.commit([
+                    frame.appendHistory([
                         "",
                         Style.error("  auto-compact failed: \(msg)"),
                         "",
                     ])
-                    needsRender = true
                 }
-            case .streamRetry:
-                break
-            case .messageStart, .messageUpdate:
+            case .streamRetry(let attempt, let delayMs, let reason):
+                frameMode = .retrying(
+                    attempt: attempt,
+                    until: Date().addingTimeInterval(Double(delayMs) / 1000.0),
+                    reason: reason
+                )
+            case .messageStart:
+                frameMode = .idle
+            case .messageUpdate:
                 break
             default: break
             }
-            layout.fitViewport(height: runner.terminal.height, width: runner.terminal.width)
-            if needsRender || modal.isOpen {
-                runner.tui.requestRender()
-            }
+            updateFrameStatus()
+            runner.tui.requestRender()
         }
     }
 
-    // Slash command registry. Handlers get a `SlashContext` with the
-    // agent + modal host + a `notify` hook that commits a line to
-    // scrollback. There's no ephemeral notification area anymore:
-    // every slash-command output — `/help`, `/queue`, `/model` status,
-    // attach warnings, etc. — flows straight into history so the user
-    // can scroll up to see what happened and no dedicated "block"
-    // needs to be dismissed.
+    // Slash command registry. Handlers get a `SlashContext` with the agent,
+    // modal host, and a `notify` hook that appends into retained history.
     let slashRegistry = SlashCommandRegistry()
     registerBuiltinSlashCommands(slashRegistry)
     // User/project prompt-template commands (`.kwwk/commands/*.md`,
@@ -289,7 +277,7 @@ func runCodingTUIInternal(
     // the invocation args and submit it as an ordinary prompt.
     CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd)
     let slashCommandNames = slashRegistry.all.map(\.name)
-    layout.promptRow.ghostHintProvider = { input in
+    frame.promptRow.ghostHintProvider = { input in
         slashCompletion(for: input, commandNames: slashCommandNames)?.suffix
     }
     let slashContext = SlashContext(
@@ -299,22 +287,25 @@ func runCodingTUIInternal(
         sessionId: sessionId,
         notifyBlock: { lines in
             guard !lines.isEmpty else { return }
-            // "Every scrollback block opens with a leading blank, never
+            // "Every transcript block opens with a leading blank, never
             // closes with one" — the whole notification is one block so
             // we prepend exactly one blank regardless of how many lines
             // the caller supplies.
-            runner.tui.commit([""] + lines)
+            frame.appendHistory([""] + lines)
+            updateFrameStatus()
             runner.tui.requestRender()
         },
         commitScrollback: { render in
             let lines = render(runner.terminal.width)
             guard !lines.isEmpty else { return }
-            runner.tui.commit(lines)
+            frame.appendHistory(lines)
+            updateFrameStatus()
             runner.tui.requestRender()
         },
         refreshTranscript: {
             renderer.setThinkingDisplay(agent.state.thinkingDisplay)
             recomputeTranscript()
+            updateFrameStatus()
             runner.tui.requestRender()
         },
         recordCompaction: { messagesCompacted in
@@ -343,7 +334,7 @@ func runCodingTUIInternal(
                 modal.routeConfirm()
                 return
             }
-            let text = layout.input.value
+            let text = frame.input.value
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
@@ -354,13 +345,14 @@ func runCodingTUIInternal(
             // would need to interleave output with streaming). Keeping
             // the gate simple means we never need a floating
             // "notification block" to surface their output — they
-            // always commit to scrollback on a quiet moment.
+            // always append to history on a quiet moment.
             if case .command = parsed, busy {
-                runner.tui.commit([
+                frame.appendHistory([
                     "",
                     Style.error("  slash commands run only when the agent is idle — stop it first (Esc) or wait"),
                     "",
                 ])
+                updateFrameStatus()
                 runner.tui.requestRender()
                 return
             }
@@ -381,25 +373,27 @@ func runCodingTUIInternal(
                 for img in built.images { blocks.append(.image(img)) }
                 agent.steer(.user(UserMessage(content: blocks)))
                 attachments.clear()
-                layout.input.value = ""
+                frame.input.value = ""
                 let queued = agent.queuedSteeringCount()
-                runner.tui.commit([
+                frame.appendHistory([
                     "",
                     Style.dimmed("  queued prompt\(queued > 1 ? " (\(queued) waiting)" : "")"),
                 ])
                 // Surface only attach problems — a clean queueing
                 // otherwise stays as the one-line queued prompt above.
                 if let issues = built.issues {
-                    runner.tui.commit([
+                    frame.appendHistory([
                         "",
                         Style.error("  attach: " + issues),
                     ])
                 }
+                updateFrameStatus()
                 runner.tui.requestRender()
                 return
             }
 
-            layout.input.value = ""
+            frame.input.value = ""
+            updateFrameStatus()
             runner.tui.requestRender()
 
             switch parsed {
@@ -408,11 +402,12 @@ func runCodingTUIInternal(
                     await cmd.handler(slashContext, args)
                     runner.tui.requestRender()
                 } else {
-                    runner.tui.commit([
+                    frame.appendHistory([
                         "",
                         Style.error("  unknown slash command: /\(name)"),
                         "",
                     ])
+                    updateFrameStatus()
                     runner.tui.requestRender()
                 }
             case .prompt:
@@ -427,11 +422,12 @@ func runCodingTUIInternal(
                 )
                 attachments.clear()
                 if let issues = built.issues {
-                    runner.tui.commit([
+                    frame.appendHistory([
                         "",
                         Style.error("  attach: " + issues),
                         "",
                     ])
+                    updateFrameStatus()
                     runner.tui.requestRender()
                 }
                 let promptText = built.text
@@ -441,10 +437,11 @@ func runCodingTUIInternal(
                         try await agent.prompt(promptText, images: promptImages)
                     } catch {
                         await MainActor.run {
-                            runner.tui.commit([
+                            frame.appendHistory([
                                 "",
                                 Style.error("  error: \(error)"),
                             ])
+                            updateFrameStatus()
                             runner.tui.requestRender()
                         }
                     }
@@ -456,20 +453,20 @@ func runCodingTUIInternal(
     runner.bind(.init("tab")) { _ in
         Task { @MainActor in
             guard !modal.isOpen else { return }
-            if layout.input.cursor == layout.input.value.count,
-               let completion = slashCompletion(for: layout.input.value, commandNames: slashCommandNames) {
-                layout.input.value = completion.completedInput
-                layout.input.moveEnd()
+            if frame.input.cursor == frame.input.value.count,
+               let completion = slashCompletion(for: frame.input.value, commandNames: slashCommandNames) {
+                frame.input.value = completion.completedInput
+                frame.input.moveEnd()
             } else {
-                layout.input.insert("\t")
+                frame.input.insert("\t")
             }
             runner.tui.requestRender()
         }
     }
 
     // Arrow keys — only have meaning inside a modal (move selection).
-    // Outside a modal they're no-ops, which matches pi-mono's behavior
-    // (we don't have a scrollback feature yet).
+    // Outside a modal they're no-ops for now; transcript scrolling can be
+    // layered on top of the retained frame later.
     runner.bind(.init("up"))   { _ in Task { @MainActor in modal.routeUp() } }
     runner.bind(.init("down")) { _ in Task { @MainActor in modal.routeDown() } }
 
@@ -495,10 +492,12 @@ func runCodingTUIInternal(
             }
             if agent.state.isStreaming {
                 agent.abort()
-                runner.tui.commit([
+                frameMode = .aborting
+                frame.appendHistory([
                     "",
                     Style.dimmed("  aborting…"),
                 ])
+                updateFrameStatus()
                 runner.tui.requestRender()
                 return
             }
@@ -506,14 +505,29 @@ func runCodingTUIInternal(
                 .filter { $0.status == .running }.count
             if running > 0 {
                 await bgManager.killAll(sessionId: sessionId)
-                runner.tui.commit([
+                runningBackgroundTasks = 0
+                frame.appendHistory([
                     "",
                     Style.dimmed("  killed \(running) background \(running == 1 ? "task" : "tasks")"),
                 ])
+                updateFrameStatus()
                 runner.tui.requestRender()
             }
             // No bg tasks, nothing streaming → Esc does nothing. The
             // user exits via Ctrl-C.
+        }
+    }
+
+    let frameStatusTask = Task { @MainActor in
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        while !Task.isCancelled {
+            let running = await bgManager.list(sessionId: sessionId)
+                .filter { $0.status == .running }.count
+            runningBackgroundTasks = running
+            frame.tick()
+            updateFrameStatus()
+            runner.tui.requestRender()
+            try? await Task.sleep(nanoseconds: 250_000_000)
         }
     }
 
@@ -529,19 +543,67 @@ func runCodingTUIInternal(
     do {
         try await runner.run()
     } catch {
+        frameStatusTask.cancel()
         await shutdown()
         throw error
     }
+    frameStatusTask.cancel()
     await shutdown()
 }
 
 // MARK: - Helpers
 
-private func shortenPath(_ path: String, to maxLen: Int) -> String {
-    if path.count <= maxLen { return path }
-    let head = path.prefix(maxLen / 2 - 1)
-    let tail = path.suffix(maxLen / 2 - 2)
-    return "\(head)…\(tail)"
+private enum CodingFrameMode {
+    case idle
+    case aborting
+    case compacting(messageCount: Int)
+    case retrying(attempt: Int, until: Date, reason: String)
+}
+
+private func codingFrameStateLine(
+    mode: CodingFrameMode,
+    isStreaming: Bool,
+    runningBackgroundTasks: Int,
+    queuedPrompts: Int,
+    spinner: String
+) -> String {
+    var parts: [String] = []
+
+    switch mode {
+    case .compacting(let count):
+        parts.append(Style.badge("\(spinner) compacting \(count)", fg: 16, bg: 178))
+        parts.append(Style.badge("new prompts queue", bg: 238))
+    case .aborting:
+        parts.append(Style.badge("\(spinner) aborting", fg: 16, bg: 160))
+        parts.append(Style.badge("Ctrl-C force quit", bg: 238))
+    case .retrying(let attempt, let until, let reason):
+        let remaining = max(0, until.timeIntervalSinceNow)
+        let countdown = remaining >= 1.0 ? "\(Int(remaining.rounded(.up)))s" : "now"
+        parts.append(Style.badge("retry \(attempt + 2)/5 \(countdown)", fg: 16, bg: 178))
+        if !reason.isEmpty {
+            parts.append(Style.badge(String(reason.prefix(40)), bg: 238))
+        }
+        parts.append(Style.badge("Esc cancel", bg: 238))
+    case .idle:
+        if isStreaming {
+            parts.append(Style.badge("\(spinner) generating", fg: 16, bg: 178))
+            parts.append(Style.badge("Esc cancel", bg: 238))
+        } else {
+            parts.append(Style.badge("ready", bg: 238))
+        }
+    }
+
+    if queuedPrompts > 0 {
+        parts.append(Style.badge("\(queuedPrompts) queued", bg: 61))
+    }
+    if runningBackgroundTasks > 0 {
+        parts.append(Style.badge("\(runningBackgroundTasks) bg running", bg: 24))
+        if !isStreaming {
+            parts.append(Style.badge("Esc stop bg", bg: 238))
+        }
+    }
+
+    return parts.joined()
 }
 
 /// Decide how to route a bracketed-paste body into the single-line

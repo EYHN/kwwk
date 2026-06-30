@@ -22,7 +22,7 @@ final class ModalHost {
     private(set) var isOpen: Bool = false
     private var active: Modal?
 
-    private let layout: CodingLayout
+    private let renderModalLines: ([String]?) -> Void
     /// Re-render the live tail from its canonical source (the
     /// TranscriptRenderer's liveLines + any notifications). Called on close
     /// so the user goes back to exactly what was on screen before the modal.
@@ -34,7 +34,23 @@ final class ModalHost {
         restoreTranscript: @escaping () -> Void,
         requestRender: @escaping () -> Void
     ) {
-        self.layout = layout
+        self.renderModalLines = { lines in
+            if let lines {
+                layout.setLiveTail(lines)
+            } else {
+                layout.setLiveTail([])
+            }
+        }
+        self.restoreTranscript = restoreTranscript
+        self.requestRender = requestRender
+    }
+
+    init(
+        renderModalLines: @escaping ([String]?) -> Void,
+        restoreTranscript: @escaping () -> Void,
+        requestRender: @escaping () -> Void
+    ) {
+        self.renderModalLines = renderModalLines
         self.restoreTranscript = restoreTranscript
         self.requestRender = requestRender
     }
@@ -48,6 +64,7 @@ final class ModalHost {
     func close() {
         self.active = nil
         self.isOpen = false
+        renderModalLines(nil)
         restoreTranscript()
         requestRender()
     }
@@ -62,7 +79,7 @@ final class ModalHost {
 
     private func redraw() {
         guard let active else { return }
-        layout.setLiveTail(active.render())
+        renderModalLines(active.render())
         requestRender()
     }
 }

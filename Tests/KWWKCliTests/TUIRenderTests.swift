@@ -283,6 +283,54 @@ struct CodingLayoutTests {
     }
 }
 
+@Suite("Coding fullscreen frame")
+struct CodingFrameTests {
+    @Test("renders a fixed-height retained frame")
+    func fixedHeight() {
+        let frame = CodingFrame(cwd: "/Users/me/project", viewportHeight: 8)
+        frame.metadataLine = Style.badge("model gpt-5.4", bg: 61)
+        frame.stateLine = Style.badge("ready", bg: 238)
+        frame.appendHistory(["hello from history"])
+        frame.setLiveLines([
+            "",
+            Style.tool("● bash(cmd: \"ls\")"),
+            Style.running("  ⎿  calling…"),
+        ])
+
+        let lines = frame.render(width: 32)
+
+        #expect(lines.count == 8)
+        #expect(lines.contains(where: { $0.contains("model gpt-5.4") }))
+        #expect(lines.contains(where: { $0.contains("calling") }))
+        #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= 32 })
+    }
+
+    @Test("rewraps retained history when width changes")
+    func rewrapsHistoryOnResize() {
+        let frame = CodingFrame(cwd: "/tmp/project", viewportHeight: 10)
+        frame.appendHistory(["abcdefghij"])
+
+        let wide = frame.render(width: 20).joined(separator: "\n")
+        let narrow = frame.render(width: 4).joined(separator: "\n")
+
+        #expect(wide.contains("abcdefghij"))
+        #expect(narrow.contains("abcd"))
+        #expect(narrow.contains("efgh"))
+    }
+
+    @Test("modal lines replace the transcript body")
+    func modalReplacesBody() {
+        let frame = CodingFrame(cwd: "/tmp/project", viewportHeight: 8)
+        frame.appendHistory(["history row"])
+        frame.setModalLines([Style.header("  Select a model")])
+
+        let rendered = frame.render(width: 40).joined(separator: "\n")
+
+        #expect(rendered.contains("Select a model"))
+        #expect(!rendered.contains("history row"))
+    }
+}
+
 @Suite("TUI inline resize reflow")
 struct TUIInlineResizeReflowTests {
     @Test("live frame drawing leaves the last terminal column unused")

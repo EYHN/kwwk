@@ -313,7 +313,7 @@ final class TranscriptRenderer {
             } else if let partial = slot.partial {
                 out.append(contentsOf: formatToolResult(partial, isError: false))
             } else {
-                out.append(Style.dimmed("  ⎿  running…"))
+                out.append(Style.running("  ⎿  calling…"))
             }
         }
         liveLines = out

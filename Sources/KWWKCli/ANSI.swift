@@ -160,6 +160,77 @@ enum ANSI {
         return out
     }
 
+    /// Soft-wrap a styled string into rows that fit `width` visible columns.
+    /// ANSI SGR sequences are treated as zero-width metadata and are carried
+    /// across wrapped rows so foreground/background styling does not leak or
+    /// disappear at a line break.
+    static func wrap(_ s: String, width: Int) -> [String] {
+        guard width > 0 else { return [""] }
+
+        var rows: [String] = []
+        var current = ""
+        var visible = 0
+        var activeSGR = ""
+
+        func finishRow() {
+            if !activeSGR.isEmpty, !current.hasSuffix(resetSequence) {
+                current += resetSequence
+            }
+            rows.append(current)
+            current = activeSGR
+            visible = 0
+        }
+
+        let scalars = Array(s.unicodeScalars)
+        var i = 0
+        while i < scalars.count {
+            let v = scalars[i].value
+
+            if v == 0x0A {
+                finishRow()
+                i += 1
+                continue
+            }
+
+            if v == 0x1B {
+                let end = skipEscape(scalars, from: i)
+                var escape = ""
+                for k in i..<end { escape.unicodeScalars.append(scalars[k]) }
+                current += escape
+                if isSGR(escape) {
+                    if isSGRReset(escape) {
+                        activeSGR = ""
+                    } else {
+                        activeSGR += escape
+                    }
+                }
+                i = end
+                continue
+            }
+
+            if v < 0x20 || v == 0x7F {
+                i += 1
+                continue
+            }
+
+            let cw = columnWidth(of: v)
+            if visible > 0, visible + cw > width {
+                finishRow()
+            }
+            if cw <= width {
+                current.unicodeScalars.append(scalars[i])
+                visible += cw
+            }
+            i += 1
+        }
+
+        if !activeSGR.isEmpty, !current.hasSuffix(resetSequence) {
+            current += resetSequence
+        }
+        rows.append(current)
+        return rows.isEmpty ? [""] : rows
+    }
+
     /// Strip ANSI escape sequences from `s`, returning plain text.
     static func stripEscapes(_ s: String) -> String {
         var out = ""
@@ -174,6 +245,20 @@ enum ANSI {
             i += 1
         }
         return out
+    }
+
+    private static let resetSequence = "\u{1B}[0m"
+
+    private static func isSGR(_ escape: String) -> Bool {
+        escape.hasPrefix("\u{1B}[") && escape.hasSuffix("m")
+    }
+
+    private static func isSGRReset(_ escape: String) -> Bool {
+        guard isSGR(escape) else { return false }
+        let params = escape
+            .dropFirst(2)
+            .dropLast()
+        return params.isEmpty || params == "0"
     }
 
     /// Advance past a single ANSI escape sequence starting at `from`, which
