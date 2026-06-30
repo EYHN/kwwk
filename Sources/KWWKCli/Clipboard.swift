@@ -94,3 +94,45 @@ enum ClipboardImageReader {
     }
     #endif
 }
+
+/// Write text to the system clipboard. On macOS this drives `NSPasteboard`;
+/// everywhere else (and over SSH where there's no local pasteboard) it falls
+/// back to the OSC 52 terminal escape, which asks the *outer* terminal
+/// emulator to set its own clipboard. Backs `/copy` and `/dump`.
+enum ClipboardWriter {
+
+    /// Result of a write so callers can tailor the confirmation message.
+    enum Outcome: Equatable {
+        /// Wrote via the native macOS pasteboard.
+        case pasteboard
+        /// Emitted an OSC 52 escape to stdout (remote / non-macOS terminals).
+        case osc52
+    }
+
+    /// Copy `text` to the clipboard. Prefers the native pasteboard; otherwise
+    /// emits OSC 52. `write` lets tests capture the escape without touching the
+    /// real terminal — production callers leave it at the stdout default.
+    @discardableResult
+    static func copy(
+        _ text: String,
+        write: (String) -> Void = { FileHandle.standardOutput.write(Data($0.utf8)) }
+    ) -> Outcome {
+        #if canImport(AppKit)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        return .pasteboard
+        #else
+        write(osc52Sequence(for: text))
+        return .osc52
+        #endif
+    }
+
+    /// The OSC 52 "set clipboard" escape for `text`. Format:
+    /// `ESC ] 52 ; c ; <base64> BEL`. `c` selects the clipboard (vs. the
+    /// primary selection). Exposed (internal) so tests can assert the payload.
+    static func osc52Sequence(for text: String) -> String {
+        let b64 = Data(text.utf8).base64EncodedString()
+        return "\u{1B}]52;c;\(b64)\u{07}"
+    }
+}

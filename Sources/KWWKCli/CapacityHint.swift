@@ -15,3 +15,15 @@ func formatCapacityHint(usage: AgentContextUsage, threshold: Double?) -> String 
     }
     return Style.dimmed(body)
 }
+
+/// A `width`-wide filled/empty bar with a trailing percent, used by
+/// `/context` to visualize how full the window is. Ported from omp's
+/// `renderAsciiBar` (format.ts). `fraction` is clamped to [0, 1].
+func renderContextBar(fraction: Double, width: Int = 24) -> String {
+    let clamped = min(max(fraction, 0), 1)
+    let filled = Int((clamped * Double(width)).rounded())
+    let pct = Int((clamped * 100).rounded())
+    let bar = String(repeating: "█", count: filled)
+        + String(repeating: "░", count: max(0, width - filled))
+    return "[\(bar)] \(pct)%"
+}

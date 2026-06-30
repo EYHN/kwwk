@@ -18,6 +18,11 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
         handler: handleCompactCommand
     ))
     registry.register(SlashCommand(
+        name: "shake",
+        description: "Trim heavy tool output from context (no LLM)",
+        handler: handleShakeCommand
+    ))
+    registry.register(SlashCommand(
         name: "queue",
         description: "Show or clear the steering-message queue",
         handler: handleQueueCommand
@@ -33,12 +38,53 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
         handler: handleVerboseCommand
     ))
     registry.register(SlashCommand(
+        name: "context",
+        description: "Show the context-window usage breakdown",
+        handler: handleContextCommand
+    ))
+    registry.register(SlashCommand(
+        name: "init",
+        description: "Explore the repo and generate an AGENTS.md",
+        handler: handleInitCommand
+    ))
+    registry.register(SlashCommand(
+        name: "tools",
+        description: "List the tools available to the agent",
+        handler: handleToolsCommand
+    ))
+    registry.register(SlashCommand(
+        name: "hotkeys",
+        description: "Show the TUI keyboard shortcuts",
+        aliases: ["keys"],
+        handler: handleHotkeysCommand
+    ))
+    registry.register(SlashCommand(
+        name: "copy",
+        description: "Copy the last assistant reply to the clipboard",
+        handler: handleCopyCommand
+    ))
+    registry.register(SlashCommand(
+        name: "dump",
+        description: "Copy the full transcript to the clipboard",
+        handler: handleDumpCommand
+    ))
+    registry.register(SlashCommand(
+        name: "rename",
+        description: "Set a title for the current session",
+        handler: handleRenameCommand
+    ))
+    registry.register(SlashCommand(
         name: "help",
         description: "List available slash commands",
         handler: { ctx, _ in
             var lines = [Style.dimmed("  available slash commands:")]
             for cmd in registry.all {
-                lines.append(Style.dimmed("    /\(cmd.name) — \(cmd.description)"))
+                var line = "    /\(cmd.name) — \(cmd.description)"
+                if !cmd.aliases.isEmpty {
+                    let aliasList = cmd.aliases.map { "/\($0)" }.joined(separator: ", ")
+                    line += " (alias: \(aliasList))"
+                }
+                lines.append(Style.dimmed(line))
             }
             ctx.notifyBlock(lines)
         }
@@ -363,4 +409,269 @@ private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
     case .failed(let msg):
         ctx.notify(Style.error("  /compact: \(msg)"))
     }
+}
+
+// MARK: - /context
+
+/// `/context` — a full breakdown of context-window usage. The one-line
+/// header hint (`42% ctx`) only nudges; this command shows the window size,
+/// tokens used with a visual bar, and the auto-compact threshold so the user
+/// can decide whether to `/compact` before continuing.
+@MainActor
+private func handleContextCommand(_ ctx: SlashContext, _ args: String) async {
+    let usage = AgentContextCompactor.currentUsage(
+        messages: ctx.agent.state.messages,
+        model: ctx.agent.state.model
+    )
+    guard usage.window > 0 else {
+        ctx.notify(Style.dimmed("  /context: usage unavailable (no context window for \(ctx.agent.state.model.id))"))
+        return
+    }
+    let pct = Int((usage.ratio * 100).rounded(.down))
+    var lines = [
+        Style.dimmed("  /context: \(usage.window) token window"),
+        Style.dimmed("    " + renderContextBar(fraction: usage.ratio)),
+        Style.dimmed("    \(usage.tokens) tokens used · \(pct)%"),
+    ]
+    if let threshold = ctx.agent.autoCompact?.threshold, threshold > 0 {
+        let thresholdPct = Int((threshold * 100).rounded(.down))
+        let headroom = max(0, Int(Double(usage.window) * threshold) - usage.tokens)
+        lines.append(Style.dimmed("    auto-compact at \(thresholdPct)% · ~\(headroom) tokens of headroom"))
+    }
+    ctx.notifyBlock(lines)
+}
+
+// MARK: - /shake
+
+/// `/shake` — a non-LLM context trim. Unlike `/compact` (which spends a
+/// model round-trip to summarize the transcript), `/shake` just walks the
+/// live conversation and collapses oversized tool-result output into a short
+/// placeholder, reclaiming context window with no LLM call. Idempotent:
+/// re-running skips results already collapsed.
+///
+/// LIMITATION: this trims the IN-MEMORY transcript only — it is not
+/// re-persisted to the session file, so a later `/resume` reloads the
+/// original tool output. That's acceptable for a "reclaim live context"
+/// tool; the saving lands on the next request's prompt, not on disk.
+///
+/// The before→after token figures come from `currentUsage`, which reflects
+/// the most recent *recorded* request, so the window number only moves on the
+/// next turn after the trimmed messages are actually sent. The reclaimed-chars
+/// line is the immediate, concrete win.
+@MainActor
+private func handleShakeCommand(_ ctx: SlashContext, _ args: String) async {
+    let before = AgentContextCompactor.currentUsage(
+        messages: ctx.agent.state.messages,
+        model: ctx.agent.state.model
+    )
+    let beforeChars = toolResultTextChars(ctx.agent.state.messages)
+
+    let result = AgentContextCompactor.shakeToolOutputs(ctx.agent.state.messages)
+    if result.elidedCount == 0 {
+        ctx.notify(Style.dimmed("  /shake: nothing to trim"))
+        return
+    }
+
+    ctx.agent.state.messages = result.messages
+    ctx.refreshTranscript()
+
+    let after = AgentContextCompactor.currentUsage(
+        messages: ctx.agent.state.messages,
+        model: ctx.agent.state.model
+    )
+    let afterChars = toolResultTextChars(result.messages)
+    let reclaimed = max(0, beforeChars - afterChars)
+
+    let n = result.elidedCount
+    var lines = [
+        Style.dimmed("  /shake: elided \(n) heavy tool \(n == 1 ? "result" : "results") (no LLM)"),
+        Style.dimmed("    reclaimed ~\(reclaimed) chars of tool output"),
+    ]
+    if before.window > 0 {
+        lines.append(Style.dimmed("    context: \(before.tokens) → \(after.tokens) tokens of \(before.window) (refreshes next turn)"))
+    }
+    lines.append(Style.dimmed("    (in-memory only — /resume reloads the original output)"))
+    ctx.notifyBlock(lines)
+}
+
+/// Total character count of every `.text` block across all tool-result
+/// messages — the bulk `/shake` reclaims. Used to report a concrete savings.
+private func toolResultTextChars(_ messages: [Message]) -> Int {
+    messages.reduce(0) { total, message in
+        guard case .toolResult(let result) = message else { return total }
+        return total + result.content.reduce(0) { sub, block in
+            if case .text(let text) = block { return sub + text.text.count }
+            return sub
+        }
+    }
+}
+
+// MARK: - /init
+
+/// Canned prompt body for `/init`. Ported from omp's `prompts/agents/init.md`,
+/// trimmed to kwwk's toolset: the explorer fan-out goes through the `agent`
+/// tool's `explore` subagents instead of omp's `task`/`explore` naming.
+private let initPromptBody = """
+Generate an AGENTS.md for this repository. Launch several `explore` subagents \
+in parallel (via the `agent` tool) to scan different areas — core source, \
+tests, build/config, and scripts/docs — then synthesize their findings into a \
+single file written to the project root as AGENTS.md.
+
+Structure the document with Markdown headings:
+- Project Overview: what the project is for.
+- Architecture & Data Flow: high-level structure, key modules, how data moves.
+- Key Directories: the main source directories and their purpose.
+- Development Commands: build, test, lint, and run commands.
+- Code Conventions & Common Patterns: formatting, naming, error handling, \
+async patterns, state management.
+- Important Files: entry points, config files, key modules.
+- Testing & QA: test frameworks, how to run them, coverage expectations.
+
+Requirements:
+- Title the document "Repository Guidelines".
+- Be concise and practical; focus on what an AI assistant needs to help with \
+this codebase.
+- Include concrete commands and file paths where helpful.
+- Call out architecture and code patterns explicitly.
+- Omit information that is obvious from the code structure.
+
+After your analysis, write the result to AGENTS.md at the project root.
+"""
+
+/// `/init` — kick off a repo-exploration turn that writes an AGENTS.md. kwwk
+/// already injects AGENTS.md / CLAUDE.md into the system prompt, so generating
+/// the file improves every later session. Submits the canned prompt on the
+/// same fire-and-forget path custom slash commands use.
+@MainActor
+private func handleInitCommand(_ ctx: SlashContext, _ args: String) async {
+    let agent = ctx.agent
+    ctx.notify(Style.dimmed("  /init: exploring the repo to generate AGENTS.md…"))
+    Task.detached {
+        try? await agent.prompt(initPromptBody)
+    }
+}
+
+// MARK: - /tools
+
+/// `/tools` — list the tools the agent can call this session. Read-only;
+/// pairs with `/hotkeys` for in-session discoverability.
+@MainActor
+private func handleToolsCommand(_ ctx: SlashContext, _ args: String) async {
+    let tools = ctx.agent.state.tools.sorted { $0.name < $1.name }
+    guard !tools.isEmpty else {
+        ctx.notify(Style.dimmed("  /tools: no tools registered for this session"))
+        return
+    }
+    var lines = [Style.dimmed("  /tools: \(tools.count) available")]
+    for tool in tools {
+        let summary = toolSummaryLine(tool.description)
+        if summary.isEmpty {
+            lines.append(Style.dimmed("    \(tool.name)"))
+        } else {
+            lines.append(Style.dimmed("    \(tool.name) — \(summary)"))
+        }
+    }
+    ctx.notifyBlock(lines)
+}
+
+/// First non-empty line of a tool description, clipped so the listing stays
+/// one row per tool.
+private func toolSummaryLine(_ description: String, max: Int = 72) -> String {
+    let first = description
+        .split(separator: "\n", omittingEmptySubsequences: true)
+        .first
+        .map(String.init)?
+        .trimmingCharacters(in: .whitespaces) ?? ""
+    return first.count <= max ? first : String(first.prefix(max)) + "…"
+}
+
+// MARK: - /hotkeys
+
+/// `/hotkeys` — a static reference for the TUI's keyboard bindings. The
+/// redesign added keys (slash popup, Alt+↑ dequeue) with no in-session way to
+/// learn them; this surfaces them. Read-only.
+@MainActor
+private func handleHotkeysCommand(_ ctx: SlashContext, _ args: String) async {
+    let rows: [(String, String)] = [
+        ("Enter", "submit prompt / run highlighted slash command"),
+        ("Tab", "complete the slash command under the cursor"),
+        ("↑ / ↓", "recall prompt history · move in popups"),
+        ("Alt/Option+↑", "pop a queued prompt back into the input to edit"),
+        ("Esc", "stop the agent (and close an open popup/modal)"),
+        ("Ctrl+L", "repaint the screen"),
+        ("Ctrl+C", "exit"),
+        ("Ctrl+D", "exit when the input is empty"),
+    ]
+    var lines = [Style.dimmed("  /hotkeys:")]
+    let pad = rows.map { $0.0.count }.max() ?? 0
+    for (key, desc) in rows {
+        let padded = key.padding(toLength: pad, withPad: " ", startingAt: 0)
+        lines.append(Style.dimmed("    \(padded)  \(desc)"))
+    }
+    ctx.notifyBlock(lines)
+}
+
+// MARK: - /copy, /dump
+
+/// `/copy` — put the last assistant reply on the clipboard (plain text, ANSI
+/// stripped). Defers omp's interactive selector; the no-arg default covers the
+/// common case.
+@MainActor
+private func handleCopyCommand(_ ctx: SlashContext, _ args: String) async {
+    guard let text = lastAssistantText(ctx.agent.state.messages), !text.isEmpty else {
+        ctx.notify(Style.dimmed("  /copy: no assistant message to copy yet"))
+        return
+    }
+    let outcome = ClipboardWriter.copy(text)
+    ctx.notify(Style.dimmed("  /copy: copied last reply (\(text.count) chars)\(clipboardVia(outcome))"))
+}
+
+/// `/dump` — put the whole transcript on the clipboard as plain text.
+@MainActor
+private func handleDumpCommand(_ ctx: SlashContext, _ args: String) async {
+    let rendered = TranscriptSnapshot.render(ctx.agent.state.messages, width: 100)
+    let plain = rendered.map { ANSI.stripEscapes($0) }.joined(separator: "\n")
+    let trimmed = plain.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        ctx.notify(Style.dimmed("  /dump: transcript is empty"))
+        return
+    }
+    let outcome = ClipboardWriter.copy(trimmed)
+    ctx.notify(Style.dimmed("  /dump: copied transcript (\(trimmed.count) chars)\(clipboardVia(outcome))"))
+}
+
+/// Trailing " · via OSC 52" note when the write didn't go through the native
+/// pasteboard, so a user on a remote box knows the escape was emitted.
+private func clipboardVia(_ outcome: ClipboardWriter.Outcome) -> String {
+    outcome == .osc52 ? " · via OSC 52" : ""
+}
+
+/// Plain text of the most recent assistant message (its text blocks joined).
+private func lastAssistantText(_ messages: [Message]) -> String? {
+    for message in messages.reversed() {
+        if case .assistant(let a) = message {
+            let text = a.content.compactMap { block -> String? in
+                if case .text(let t) = block { return t.text }
+                return nil
+            }.joined(separator: "\n")
+            return text
+        }
+    }
+    return nil
+}
+
+// MARK: - /rename
+
+/// `/rename <title>` — set a human-friendly title for the current session.
+/// The title is persisted as an append-only `meta` entry and surfaces in the
+/// `/resume` picker. `/rename` with no argument reports the requirement.
+@MainActor
+private func handleRenameCommand(_ ctx: SlashContext, _ args: String) async {
+    let title = args.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !title.isEmpty else {
+        ctx.notify(Style.error("  /rename: usage: /rename <title>"))
+        return
+    }
+    await ctx.setSessionTitle(title)
+    ctx.notify(Style.dimmed("  /rename: session titled “\(title)”"))
 }
