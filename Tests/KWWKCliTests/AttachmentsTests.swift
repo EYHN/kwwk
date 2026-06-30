@@ -223,7 +223,7 @@ struct BuildPromptTests {
     }
 
     @MainActor
-    @Test("clipboard-image placeholder expands to a <clipboard-image/> marker and attaches bytes")
+    @Test("clipboard-image keeps its [image #N] token in the prose and attaches bytes")
     func clipboardImageExpands() {
         let store = AttachmentStore()
         let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
@@ -234,11 +234,15 @@ struct BuildPromptTests {
             cwd: "/tmp",
             modelSupportsImages: true
         )
-        #expect(built.text.contains("<clipboard-image id=\"1\" mime=\"image/png\" />"),
-                "placeholder should turn into a short marker, not stay as [image #1]")
-        #expect(!built.text.contains("[image #1]"))
+        // The `[image #N]` token is left verbatim so the transcript matches the
+        // input box; correlation to the bytes happens via the matching id in
+        // the <attachments> block, not an inline <clipboard-image/> marker.
+        #expect(built.text.contains("[image #1]"),
+                "token should stay [image #1], consistent with the input box")
+        #expect(!built.text.contains("<clipboard-image"))
         #expect(built.text.contains("<attachments>"))
         #expect(built.text.contains("source=\"clipboard\""))
+        #expect(built.text.contains("id=\"1\""))
         #expect(built.images.count == 1)
         #expect(built.images.first?.mimeType == "image/png")
         #expect(built.summary?.contains("1 image") == true)

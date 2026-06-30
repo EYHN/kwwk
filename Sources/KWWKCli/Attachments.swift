@@ -330,19 +330,17 @@ func buildPromptWithAttachments(
     var attachBlocks: [String] = []
     var counts = (image: 0, file: 0, folder: 0, missing: 0, skippedImage: 0)
 
-    // 2. Expand clipboard-image placeholders (`[image #N]`). These
+    // 2. Resolve clipboard-image placeholders (`[image #N]`). These
     //    came from a macOS ⌘V where the system pasteboard held image
     //    bytes directly — no filesystem path to reference. Resolve
     //    them the same way as @-path images: attach `ImageContent`
     //    when the model supports image input, skip-with-note
-    //    otherwise. The placeholder token is replaced with a short
-    //    `<clipboard-image id="N" />` marker so the LLM can map
-    //    positions back to attachments (and so there isn't a literal
-    //    `[image #N]` left in the prose).
+    //    otherwise. The `[image #N]` token is left verbatim in the
+    //    prose so what the user sees in the transcript matches what
+    //    they typed in the input box; the LLM maps it back to the
+    //    attachment via the matching `id="N"` in the `<attachments>`
+    //    block below.
     for clip in store.clipboardImages {
-        let placeholder = "[image #\(clip.id)]"
-        let marker = "<clipboard-image id=\"\(clip.id)\" mime=\"\(clip.mimeType)\" />"
-        expanded = expanded.replacingOccurrences(of: placeholder, with: marker)
         if modelSupportsImages {
             images.append(ImageContent(
                 data: clip.data.base64EncodedString(),
