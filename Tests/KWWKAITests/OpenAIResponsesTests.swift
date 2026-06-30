@@ -607,6 +607,56 @@ struct OpenAIResponsesTests {
         #expect(http.lastRequest == nil)
     }
 
+    @Test("treats cancelled WebSocket receive failure as abort without disabling WebSocket")
+    func cancelledWebSocketReceiveFailureIsAborted() async throws {
+        let responseCreated = """
+        {"type":"response.created","response":{"id":"resp_partial","status":"in_progress"}}
+        """
+        let cancelledConnection = StubWebSocketConnection(
+            batches: [[responseCreated]],
+            receiveError: StubWebSocketError.receive,
+            receiveErrorDelayNanoseconds: 200_000_000
+        )
+        let succeedingConnection = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.textSSE)])
+        let ws = StubWebSocketClient(connections: [cancelledConnection, succeedingConnection])
+        let http = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(
+            client: http,
+            webSocketClient: ws,
+            defaultAPIKey: "k",
+            maxWebSocketFailures: 1
+        )
+        let cancellation = CancellationHandle()
+
+        let first = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "ws-cancel-after-event", cancellation: cancellation)
+        )
+        var iterator = first.makeAsyncIterator()
+        let firstEvent = await iterator.next()
+        #expect(firstEvent?.type == "start")
+        cancellation.cancel(reason: "test")
+        while await iterator.next() != nil {}
+        let firstResult = await first.result()
+
+        #expect(firstResult.stopReason == .aborted)
+        #expect(firstResult.errorMessage == "Request was aborted")
+        #expect(firstResult.errorMessage?.contains("WebSocket stream failed") != true)
+        #expect(http.lastRequest == nil)
+        #expect(ws.connectCount == 1)
+
+        let second = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "again"))]),
+            options: StreamOptions(sessionId: "ws-cancel-after-event")
+        )
+        for await _ in second {}
+        #expect(await second.result().responseId == "resp_1")
+        #expect(ws.connectCount == 2)
+        #expect(http.lastRequest == nil)
+    }
+
     @Test("returns a stream error when WebSocket closes before response.completed after events")
     func webSocketCloseAfterEventsBeforeCompletedReturnsError() async throws {
         let responseCreated = """
@@ -814,6 +864,7 @@ final class StubWebSocketConnection: WebSocketConnection, @unchecked Sendable {
     private var receiveError: Error?
     private var sendErrors: [Error?]
     private var firstReceiveDelayNanoseconds: UInt64
+    private var receiveErrorDelayNanoseconds: UInt64
     private var pending: [WebSocketMessage] = []
     private var _sentTexts: [String] = []
     private var _closed = false
@@ -822,12 +873,14 @@ final class StubWebSocketConnection: WebSocketConnection, @unchecked Sendable {
         batches: [[String]],
         receiveError: Error? = nil,
         sendErrors: [Error?] = [],
-        firstReceiveDelayNanoseconds: UInt64 = 0
+        firstReceiveDelayNanoseconds: UInt64 = 0,
+        receiveErrorDelayNanoseconds: UInt64 = 0
     ) {
         self.batches = batches
         self.receiveError = receiveError
         self.sendErrors = sendErrors
         self.firstReceiveDelayNanoseconds = firstReceiveDelayNanoseconds
+        self.receiveErrorDelayNanoseconds = receiveErrorDelayNanoseconds
     }
 
     var sentTexts: [String] { lock.withLock { _sentTexts } }
@@ -855,6 +908,12 @@ final class StubWebSocketConnection: WebSocketConnection, @unchecked Sendable {
         }
         if delay > 0 {
             try await Task.sleep(nanoseconds: delay)
+        }
+        let errorDelay = lock.withLock { () -> UInt64 in
+            pending.isEmpty && receiveError != nil ? receiveErrorDelayNanoseconds : 0
+        }
+        if errorDelay > 0 {
+            try await Task.sleep(nanoseconds: errorDelay)
         }
         return try lock.withLock { () throws -> WebSocketMessage? in
             if !pending.isEmpty {

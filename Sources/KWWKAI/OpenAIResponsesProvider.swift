@@ -255,6 +255,8 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         var connection: (any WebSocketConnection)?
         var cancellationRegistration: CancellationRegistration?
         defer { cancellationRegistration?.cancel() }
+        let state = OpenAIResponsesState(api: api, provider: model.provider, modelId: model.id)
+        state.signal = options?.cancellation
         do {
             if let existing = session.takeConnection() {
                 connection = existing
@@ -293,6 +295,15 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 metadata: metadata
             )
         } catch {
+            if state.signal?.isCancelled == true {
+                session.resetWebSocketState()
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket stream cancelled during setup"
+                )
+                Self.finishAborted(out: out, state: state)
+                return .completed
+            }
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             await options?.emitVerbose(
                 source: verboseSource,
@@ -319,8 +330,6 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             return .fallbackToHTTP
         }
 
-        let state = OpenAIResponsesState(api: api, provider: model.provider, modelId: model.id)
-        state.signal = options?.cancellation
         let progress = WebSocketStreamProgress()
         do {
             let result = try await drive(
@@ -342,6 +351,15 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     metadata: ["response_id": .string(responseId)]
                 )
             } else if result.endedWithoutTerminalEvent {
+                if state.signal?.isCancelled == true {
+                    session.resetWebSocketState()
+                    await options?.emitVerbose(
+                        source: verboseSource,
+                        message: "WebSocket stream cancelled"
+                    )
+                    Self.finishAborted(out: out, state: state)
+                    return .completed
+                }
                 let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
                 if !progress.hasReceivedEvent {
                     await options?.emitVerbose(
@@ -380,6 +398,16 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             }
             return .completed
         } catch {
+            if state.signal?.isCancelled == true {
+                session.resetWebSocketState()
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket stream cancelled",
+                    metadata: ["error": .string("\(error)")]
+                )
+                Self.finishAborted(out: out, state: state)
+                return .completed
+            }
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             if !progress.hasReceivedEvent {
                 await options?.emitVerbose(
@@ -407,6 +435,12 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             out.end(err)
             return .failedWithoutFallback
         }
+    }
+
+    private static func finishAborted(out: AssistantMessageStream, state: OpenAIResponsesState) {
+        let aborted = state.asAborted()
+        out.push(.error(reason: .aborted, error: aborted))
+        out.end(aborted)
     }
 
     private func makeHeaders(options: StreamOptions?, accept: String?) -> [String: String] {
