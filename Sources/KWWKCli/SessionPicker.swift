@@ -22,9 +22,11 @@ enum SessionPicker {
     static func renderRow(_ info: SessionStore.SessionInfo, index: Int) -> String {
         let base = (info.cwd as NSString).lastPathComponent
         let dir = base.isEmpty ? info.cwd : base
+        // Prefer a user-set title (from /rename); fall back to the dir.
+        let label = info.title?.isEmpty == false ? info.title! : dir
         let when = relativeTime(fromMillis: info.updatedAt)
         let idPrefix = String(info.id.prefix(8))
-        return "\(index)) \(dir) · \(info.messageCount) msgs · \(when) · \(idPrefix)"
+        return "\(index)) \(label) · \(info.messageCount) msgs · \(when) · \(idPrefix)"
     }
 
     /// Render the full menu (header + rows) for a non-empty session list.
