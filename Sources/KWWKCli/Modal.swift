@@ -30,22 +30,6 @@ final class ModalHost {
     private let requestRender: () -> Void
 
     init(
-        layout: CodingLayout,
-        restoreTranscript: @escaping () -> Void,
-        requestRender: @escaping () -> Void
-    ) {
-        self.renderModalLines = { lines in
-            if let lines {
-                layout.setLiveTail(lines)
-            } else {
-                layout.setLiveTail([])
-            }
-        }
-        self.restoreTranscript = restoreTranscript
-        self.requestRender = requestRender
-    }
-
-    init(
         renderModalLines: @escaping ([String]?) -> Void,
         restoreTranscript: @escaping () -> Void,
         requestRender: @escaping () -> Void

@@ -47,7 +47,7 @@ func runAPIKeyForm(
     // Hide the hardware cursor: focus is surfaced via the `❯` prefix, and
     // emitting our own CURSOR_MARKER on a focus-varying row caused
     // spurious re-layout on some terminals ("按上下破版").
-    let runner = TUIRunner(useAlternateScreen: false, hideCursor: true)
+    let runner = TUIRunner(hideCursor: true)
     let form = APIKeyFormComponent(title: title, fields: fields)
 
     let header = TextComponent([

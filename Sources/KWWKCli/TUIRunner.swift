@@ -43,7 +43,6 @@ final class TUIRunner: @unchecked Sendable {
     private static let escapeFlushDelayMs: Int = 50
 
     init(
-        useAlternateScreen: Bool = true,
         hideCursor: Bool = false,
         escapeFlushScheduler: EscapeFlushScheduler? = nil
     ) {
@@ -56,7 +55,6 @@ final class TUIRunner: @unchecked Sendable {
                 execute: work
             )
         }
-        tui.setUseAlternateScreen(useAlternateScreen)
         tui.setHideCursor(hideCursor)
     }
 
