@@ -67,6 +67,9 @@ final class SlashContext {
     /// Persist a successful manual compaction. Automatic compaction uses
     /// AgentEvent subscriptions; slash commands need an explicit hook.
     let recordCompaction: @MainActor (_ messagesCompacted: Int) async -> Void
+    /// Persist a user-set session title to the live session file. Backed by
+    /// the SessionRecorder in the TUI; a no-op in headless/test contexts.
+    let setSessionTitle: @MainActor (_ title: String) async -> Void
 
     init(
         agent: Agent,
@@ -76,7 +79,8 @@ final class SlashContext {
         notifyBlock: @MainActor @escaping ([String]) -> Void,
         commitScrollback: @MainActor @escaping ((Int) -> [String]) -> Void,
         refreshTranscript: @MainActor @escaping () -> Void,
-        recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in }
+        recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in },
+        setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in }
     ) {
         self.agent = agent
         self.modal = modal
@@ -86,6 +90,7 @@ final class SlashContext {
         self.commitScrollback = commitScrollback
         self.refreshTranscript = refreshTranscript
         self.recordCompaction = recordCompaction
+        self.setSessionTitle = setSessionTitle
     }
 
     /// Single-line convenience: one-off status messages (`/model switched
@@ -105,12 +110,118 @@ typealias SlashHandler = @MainActor (SlashContext, String) async -> Void
 struct SlashCommand: Sendable {
     let name: String
     let description: String
+    /// Optional alternate names the command also answers to in the popup /
+    /// completion (e.g. `clear` for `/new`). Not registered as separate
+    /// dispatch keys — purely a matcher affordance.
+    let aliases: [String]
     let handler: SlashHandler
+
+    init(name: String, description: String, aliases: [String] = [], handler: @escaping SlashHandler) {
+        self.name = name
+        self.description = description
+        self.aliases = aliases
+        self.handler = handler
+    }
+}
+
+/// The matcher's view of a slash command — name plus the optional fields it
+/// ranks against. Decoupled from `SlashCommand` so both the popup
+/// (`CodingFrame`) and the sync completion path can share one ranker without
+/// dragging the (non-Equatable) handler closure along.
+struct SlashCommandInfo: Equatable, Sendable {
+    let name: String
+    let description: String
+    let aliases: [String]
+
+    init(name: String, description: String = "", aliases: [String] = []) {
+        self.name = name
+        self.description = description
+        self.aliases = aliases
+    }
 }
 
 struct SlashCompletion: Equatable {
     let suffix: String
     let completedInput: String
+}
+
+// MARK: - Fuzzy matcher (ported from omp's autocomplete.ts fuzzyMatch/fuzzyScore)
+
+/// True when every character of `query` appears in `target` in order (a
+/// subsequence test). `"cpt"` matches `"compact"`. Both args must already be
+/// lowercased by the caller.
+func slashFuzzyMatch(_ query: String, _ target: String) -> Bool {
+    if query.isEmpty { return true }
+    if query.count > target.count { return false }
+    var qi = query.startIndex
+    for ch in target {
+        if ch == query[qi] {
+            qi = query.index(after: qi)
+            if qi == query.endIndex { return true }
+        }
+    }
+    return qi == query.endIndex
+}
+
+/// Score a fuzzy match, higher = tighter. Mirrors omp: exact (100) >
+/// starts-with (80) > contains (60) > subsequence (40 minus a per-gap
+/// penalty). Returns 0 for a non-match. Both args must be lowercased.
+func slashFuzzyScore(_ query: String, _ target: String) -> Int {
+    if query.isEmpty { return 1 }
+    if target == query { return 100 }
+    if target.hasPrefix(query) { return 80 }
+    if target.contains(query) { return 60 }
+
+    var qi = query.startIndex
+    var gaps = 0
+    var lastMatchIdx = -1
+    var ti = 0
+    for ch in target {
+        if qi != query.endIndex && ch == query[qi] {
+            if lastMatchIdx >= 0 && ti - lastMatchIdx > 1 { gaps += 1 }
+            lastMatchIdx = ti
+            qi = query.index(after: qi)
+        }
+        ti += 1
+    }
+    if qi != query.endIndex { return 0 }
+    return max(1, 40 - gaps * 5)
+}
+
+/// The single shared ranker. `query` is the text after the leading `/` (no
+/// slash). Scores each command's name, aliases, and (at half weight) its
+/// description, keeping any candidate that scores > 0; ties preserve the
+/// input order so callers that pass commands pre-sorted by name get a stable,
+/// predictable top match. An empty query returns every command unchanged so
+/// the bare-`/` popup lists the full catalog in registry order.
+///
+/// Both `CodingFrame`'s popup and `slashCompletion` funnel through this so the
+/// highlighted row, the Tab completion, and the inline ghost suffix can never
+/// disagree on which command a partial query resolves to.
+func rankSlashCommands(query: String, commands: [SlashCommandInfo]) -> [SlashCommandInfo] {
+    let lower = query.lowercased()
+    if lower.isEmpty { return commands }
+
+    var scored: [(cmd: SlashCommandInfo, score: Int, index: Int)] = []
+    for (index, cmd) in commands.enumerated() {
+        let lowerName = cmd.name.lowercased()
+        var best = slashFuzzyMatch(lower, lowerName) ? slashFuzzyScore(lower, lowerName) : 0
+        for alias in cmd.aliases {
+            let lowerAlias = alias.lowercased()
+            if slashFuzzyMatch(lower, lowerAlias) {
+                best = max(best, slashFuzzyScore(lower, lowerAlias))
+            }
+        }
+        let lowerDesc = cmd.description.lowercased()
+        if !lowerDesc.isEmpty && slashFuzzyMatch(lower, lowerDesc) {
+            best = max(best, slashFuzzyScore(lower, lowerDesc) / 2)
+        }
+        if best > 0 { scored.append((cmd, best, index)) }
+    }
+    scored.sort { a, b in
+        a.score != b.score ? a.score > b.score : a.index < b.index
+    }
+    return scored.map(\.cmd)
 }
 
 /// Lookup table for slash commands. Single-threaded: all registration and
@@ -123,8 +234,13 @@ final class SlashCommandRegistry {
         commands[command.name] = command
     }
 
+    /// Resolve by primary name first, then fall back to any command that
+    /// lists `name` as an alias — so `/clear` dispatches `/new`. Aliases are
+    /// matcher-only (never registered as separate dispatch keys), so a single
+    /// pass over the small command set is fine.
     func find(_ name: String) -> SlashCommand? {
-        commands[name]
+        if let direct = commands[name] { return direct }
+        return commands.values.first { $0.aliases.contains(name) }
     }
 
     var all: [SlashCommand] {
@@ -134,22 +250,41 @@ final class SlashCommandRegistry {
 
 @MainActor
 func slashCompletion(for input: String, registry: SlashCommandRegistry) -> SlashCompletion? {
-    slashCompletion(for: input, commandNames: registry.all.map(\.name))
+    slashCompletion(
+        for: input,
+        commands: registry.all.map {
+            SlashCommandInfo(name: $0.name, description: $0.description, aliases: $0.aliases)
+        }
+    )
 }
 
+/// Names-only convenience: ranks by name alone. Kept for call sites (and
+/// tests) that only have a flat command list.
 func slashCompletion(for input: String, commandNames: [String]) -> SlashCompletion? {
+    slashCompletion(for: input, commands: commandNames.map { SlashCommandInfo(name: $0) })
+}
+
+func slashCompletion(for input: String, commands: [SlashCommandInfo]) -> SlashCompletion? {
     guard input.hasPrefix("/") else { return nil }
     let body = String(input.dropFirst())
     guard !body.contains(where: { $0 == " " || $0 == "\t" || $0 == "\n" }) else {
         return nil
     }
 
-    let matches = commandNames.sorted().filter { $0.hasPrefix(body) }
-    guard let match = matches.first else { return nil }
+    // Share the popup's ranker so the ghost/Tab target is always the popup's
+    // top row.
+    let ranked = rankSlashCommands(query: body, commands: commands)
+    guard let match = ranked.first?.name else { return nil }
     if match == body {
         return input.hasSuffix(" ") ? nil : SlashCompletion(suffix: "", completedInput: "/\(match) ")
     }
 
-    let suffix = String(match.dropFirst(body.count))
+    // The inline ghost suffix only reads correctly when the typed body is a
+    // literal prefix of the match; for looser fuzzy hits (e.g. `/cpt` →
+    // `/compact`) we still complete on Tab via `completedInput`, but suppress
+    // the appended ghost since there's no contiguous tail to show.
+    let suffix = match.lowercased().hasPrefix(body.lowercased())
+        ? String(match.dropFirst(body.count))
+        : ""
     return SlashCompletion(suffix: suffix, completedInput: "/\(match) ")
 }
