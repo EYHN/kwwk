@@ -65,8 +65,11 @@ func runCodingTUIInternal(
         agent.state.messages = resolvedResume.messages
     }
 
-    // Persist the transcript as it grows.
-    let sessionRecorder = SessionRecorder(
+    // Persist the transcript as it grows. The recorder + its subscription
+    // live in a reference box so `/resume` can hot-swap them to a different
+    // session file mid-run (a plain `var` can't be mutated from the resume
+    // closure under Swift 6 concurrency).
+    let initialRecorder = SessionRecorder(
         store: sessionStore,
         sessionId: sessionId,
         cwd: cwd,
@@ -75,10 +78,14 @@ func runCodingTUIInternal(
         persistedCount: resolvedResume.persistedCount
     )
     if !resolvedResume.resumed {
-        await sessionRecorder.ensureCreated()
+        await initialRecorder.ensureCreated()
     }
-    let unsubscribeSessionRecorder = sessionRecorder.attach(to: agent)
-    defer { unsubscribeSessionRecorder() }
+    let recorderBox = RecorderBox(
+        recorder: initialRecorder,
+        unsubscribe: initialRecorder.attach(to: agent),
+        sessionId: sessionId
+    )
+    defer { recorderBox.unsubscribe() }
     // Turn on extended thinking by default — otherwise reasoning-capable
     // providers never produce `[thinking]` blocks. The level is a user
     // intent: the agent loop filters it to `nil` when the live model
@@ -87,22 +94,55 @@ func runCodingTUIInternal(
     // `/thinking off` (or `high` / `xhigh` for thornier problems).
     agent.state.thinkingLevel = thinkingLevel
 
-    // --- TUI (full-screen retained frame) -------------------------------
+    // --- TUI (inline, native-scroll) ------------------------------------
     //
-    // Coding runs in the alternate screen now: transcript, live tool calls,
-    // status, modals, and prompt are one retained frame. We never mutate
-    // native scrollback while the app is active, so terminal resize can no
-    // longer reflow stale retained rows into repeated clear-line trails.
-    let runner = TUIRunner(useAlternateScreen: true, hideCursor: false)
+    // Coding renders inline. Settled transcript
+    // and the welcome card are committed to the terminal's native scrollback
+    // via `runner.tui.commit(...)`, so the user can scroll back through
+    // history with the trackpad. Only the live zone — running tool blocks,
+    // the slash popup, and the prompt box — is redrawn in place each frame
+    // by `frame`.
+    let runner = TUIRunner(hideCursor: false)
     let renderer = TranscriptRenderer()
-    let resumedLine = resolvedResume.resumed
-        ? "↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages"
-        : nil
-    let frame = CodingFrame(
+    renderer.displayWidth = runner.terminal.width
+    let frame = CodingFrame(viewportHeight: runner.terminal.height)
+
+    // Resolve the git branch once — used by the welcome card and the prompt
+    // breadcrumb. Cheap one-shot shell call; nil outside a repo.
+    let gitBranch = GitInfo.currentBranch(cwd: cwd)
+
+    // Welcome card — committed once to scrollback so it scrolls away
+    // naturally as the conversation grows (omp / Claude Code behavior).
+    // Recent sessions are real data pulled from the session store.
+    let recent = await sessionStore.list().prefix(5).map { info -> WelcomeContext.RecentSession in
+        let base = (info.cwd as NSString).lastPathComponent
+        return WelcomeContext.RecentSession(
+            name: base.isEmpty ? info.cwd : base,
+            relativeTime: WelcomeScreen.relativeTime(fromMillis: info.updatedAt),
+            messageCount: info.messageCount
+        )
+    }
+    let welcomeCtx = WelcomeContext(
+        version: KWWKBuild.version,
+        modelId: model.id,
+        providerName: ProviderAttribution.getProviderDisplayName(model.provider),
         cwd: cwd,
-        resumedLine: resumedLine,
-        viewportHeight: runner.terminal.height
+        branch: gitBranch,
+        recentSessions: Array(recent)
     )
+    // The welcome card is a re-renderable header (not committed text): it
+    // prints once into scrollback on the first frame and is re-rendered at
+    // the new width on resize so its box re-fits cleanly.
+    runner.tui.headerProvider = { width in
+        WelcomeScreen.render(welcomeCtx, width: width) + [""]
+    }
+    if resolvedResume.resumed {
+        runner.tui.commit([
+            Theme.faintText("  ↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages"),
+            "",
+        ])
+    }
+
     runner.tui.addChild(frame)
     runner.focus(frame.promptRow)
 
@@ -131,12 +171,11 @@ func runCodingTUIInternal(
             ),
             threshold: autoCompactThreshold
         )
-        frame.metadataLine = statusMetadataLine(
+        frame.breadcrumb = promptBreadcrumb(model: agent.state.model, branch: gitBranch)
+        frame.metaRight = promptMetaLabel(
             model: agent.state.model,
             thinkingLevel: agent.state.thinkingLevel,
-            thinkingDisplay: agent.state.thinkingDisplay,
-            capacityHint: capacityHint,
-            width: max(0, runner.terminal.width)
+            capacityHint: capacityHint
         )
         frame.stateLine = codingFrameStateLine(
             mode: frameMode,
@@ -145,6 +184,10 @@ func runCodingTUIInternal(
             queuedPrompts: agent.queuedSteeringCount(),
             spinner: frame.spinner
         )
+        // Surface the pending queue as a live list above the input (omp-style).
+        frame.queuedPrompts = agent.queuedSteeringMessages().map { queuedPromptPreview($0) }
+        // Slash commands are idle-only; mirror that into the popup footer hint.
+        frame.isBusy = agent.state.isStreaming
     }
 
     let recomputeTranscript: @MainActor @Sendable () -> Void = {
@@ -161,7 +204,7 @@ func runCodingTUIInternal(
         renderModalLines: { lines in frame.setModalLines(lines) },
         restoreTranscript: {
             let committed = renderer.drainCommits()
-            if !committed.isEmpty { frame.appendHistory(committed) }
+            if !committed.isEmpty { runner.tui.commit(committed) }
             recomputeTranscript()
             updateFrameStatus()
         },
@@ -171,6 +214,7 @@ func runCodingTUIInternal(
     _ = runner.terminal.onResize { w, h in
         Task { @MainActor in
             frame.setViewport(height: h)
+            renderer.displayWidth = w
             if !modal.isOpen {
                 recomputeTranscript()
             }
@@ -189,7 +233,7 @@ func runCodingTUIInternal(
         guard !modal.isOpen else { return false }
         let committed = renderer.drainCommits()
         if !committed.isEmpty {
-            frame.appendHistory(committed)
+            runner.tui.commit(committed)
             return true
         }
         return false
@@ -221,7 +265,7 @@ func runCodingTUIInternal(
             case .compactStart(let count, _):
                 isAutoCompacting = true
                 frameMode = .compacting(messageCount: count)
-                frame.appendHistory([
+                runner.tui.commit([
                     "",
                     Style.dimmed("  ◐ auto-compacting \(count) messages…"),
                 ])
@@ -230,13 +274,13 @@ func runCodingTUIInternal(
                 frameMode = .idle
                 switch outcome {
                 case .compacted(let n, let hasLedger):
-                    frame.appendHistory(renderCompactBoundary(
+                    runner.tui.commit(renderCompactBoundary(
                         messagesCompacted: n,
                         hasRunningTasksLedger: hasLedger,
                         width: runner.terminal.width
                     ))
                 case .refusedAgentBusy:
-                    frame.appendHistory([
+                    runner.tui.commit([
                         "",
                         Style.error("  auto-compact: agent is busy; compact skipped"),
                         "",
@@ -244,7 +288,7 @@ func runCodingTUIInternal(
                 case .refusedTooFewMessages:
                     break
                 case .failed(let msg):
-                    frame.appendHistory([
+                    runner.tui.commit([
                         "",
                         Style.error("  auto-compact failed: \(msg)"),
                         "",
@@ -267,6 +311,36 @@ func runCodingTUIInternal(
         }
     }
 
+    // Retry bookkeeping for `/retry`: remembers the last submitted prompt and
+    // whether its turn failed/aborted so it can be resubmitted on request.
+    let retry = TurnRetryState()
+
+    // Single submission path. Fires the prompt on a detached task (so the UI
+    // keeps pumping while it streams), records it for `/retry`, and flips the
+    // retry flag on failure. Both the Enter handler and `/retry` funnel through
+    // here so a resubmit drives the exact same streaming/steering UI as a fresh
+    // submission.
+    let submitBuiltPrompt: @MainActor @Sendable (String, [ImageContent]) -> Void = { text, images in
+        retry.lastText = text
+        retry.lastImages = images
+        retry.failed = false
+        Task.detached {
+            do {
+                try await agent.prompt(text, images: images)
+            } catch {
+                await MainActor.run {
+                    retry.failed = true
+                    runner.tui.commit([
+                        "",
+                        Style.error("  error: \(error)"),
+                    ])
+                    updateFrameStatus()
+                    runner.tui.requestRender()
+                }
+            }
+        }
+    }
+
     // Slash command registry. Handlers get a `SlashContext` with the agent,
     // modal host, and a `notify` hook that appends into retained history.
     let slashRegistry = SlashCommandRegistry()
@@ -276,9 +350,137 @@ func runCodingTUIInternal(
     // can't shadow a core command; their handlers render the template against
     // the invocation args and submit it as an ordinary prompt.
     CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd)
-    let slashCommandNames = slashRegistry.all.map(\.name)
+
+    // `/resume` — restore a previous session into the running TUI. Opens an
+    // arrow-key picker; on confirm it repoints persistence at the chosen
+    // session file, swaps the agent's message history, and repaints a recap.
+    slashRegistry.register(SlashCommand(
+        name: "resume",
+        description: "Restore a previous session",
+        handler: { _, _ in
+            let sessions = await sessionStore.list()
+            let picker = SessionResumeModal(
+                sessions: sessions,
+                currentSessionId: recorderBox.sessionId,
+                onSelect: { info in
+                    Task { @MainActor in
+                        let loaded = await sessionStore.resolveResume(.id(info.id), cwd: cwd)
+
+                        // Repoint persistence at the restored session.
+                        recorderBox.unsubscribe()
+                        let recorder = SessionRecorder(
+                            store: sessionStore,
+                            sessionId: info.id,
+                            cwd: cwd,
+                            model: agent.state.model.id,
+                            provider: agent.state.model.provider,
+                            persistedCount: loaded.persistedCount
+                        )
+                        recorderBox.recorder = recorder
+                        recorderBox.unsubscribe = recorder.attach(to: agent)
+                        recorderBox.sessionId = info.id
+
+                        // Swap the live context + commit a readable recap to
+                        // scrollback. Native scrollback can't be cleared, so
+                        // the prior conversation stays above and the restored
+                        // one is appended below a labeled separator.
+                        agent.state.messages = loaded.messages
+                        var recap: [String] = [
+                            "",
+                            Theme.borderText(String(repeating: "─", count: max(8, runner.terminal.width - 2))),
+                            Theme.accentText("↻ resumed session \(info.id.prefix(8)) · \(loaded.messages.count) messages", bold: false),
+                        ]
+                        let snapshot = TranscriptSnapshot.render(loaded.messages, width: runner.terminal.width)
+                        if !snapshot.isEmpty { recap.append(contentsOf: [""] + snapshot) }
+                        runner.tui.commit(recap)
+
+                        modal.close()
+                        recomputeTranscript()
+                        updateFrameStatus()
+                        runner.tui.requestRender()
+                    }
+                },
+                onCancel: { modal.close() }
+            )
+            modal.open(picker)
+        }
+    ))
+
+    // `/new` (alias `/clear`) — start a fresh, empty session mid-run without
+    // leaving the TUI. Mirrors `/resume`'s persistence hot-swap but mints a
+    // brand-new id and clears the live context instead of loading one.
+    slashRegistry.register(SlashCommand(
+        name: "new",
+        description: "Start a fresh session",
+        aliases: ["clear"],
+        handler: { _, _ in
+            let newId = UUID().uuidString
+
+            // Repoint persistence at a brand-new session file.
+            recorderBox.unsubscribe()
+            let recorder = SessionRecorder(
+                store: sessionStore,
+                sessionId: newId,
+                cwd: cwd,
+                model: agent.state.model.id,
+                provider: agent.state.model.provider,
+                persistedCount: 0
+            )
+            await recorder.ensureCreated()
+            recorderBox.recorder = recorder
+            recorderBox.unsubscribe = recorder.attach(to: agent)
+            recorderBox.sessionId = newId
+
+            // Reset the live context. Native scrollback can't be cleared, so
+            // the prior conversation stays above a labeled separator and the
+            // fresh session begins below it.
+            agent.state.messages = []
+            agent.clearSteeringQueue()
+            attachments.clear()
+            frame.input.value = ""
+            retry.failed = false
+            retry.lastText = nil
+            retry.lastImages = []
+
+            runner.tui.commit([
+                "",
+                Theme.borderText(String(repeating: "─", count: max(8, runner.terminal.width - 2))),
+                Theme.accentText("✦ new session \(newId.prefix(8))", bold: false),
+            ])
+
+            recomputeTranscript()
+            updateFrameStatus()
+            runner.tui.requestRender()
+        }
+    ))
+
+    // `/retry` — resubmit the last prompt when its turn ended in error or was
+    // aborted. Idle-gated by the dispatcher; resubmission goes through the
+    // normal streaming path so queued/steer UI behaves identically.
+    slashRegistry.register(SlashCommand(
+        name: "retry",
+        description: "Resubmit the last failed/aborted prompt",
+        handler: { ctx, _ in
+            guard retry.failed, let text = retry.lastText else {
+                ctx.notify(Style.dimmed("  /retry: nothing to retry"))
+                return
+            }
+            ctx.notify(Style.dimmed("  ↻ retrying…"))
+            submitBuiltPrompt(text, retry.lastImages)
+        }
+    ))
+
+    let slashCommandInfos = slashRegistry.all.map {
+        SlashCommandInfo(name: $0.name, description: $0.description, aliases: $0.aliases)
+    }
+    frame.slashCommands = slashCommandInfos
     frame.promptRow.ghostHintProvider = { input in
-        slashCompletion(for: input, commandNames: slashCommandNames)?.suffix
+        // Suppress the inline ghost suffix while the slash popup is open — the
+        // menu already shows (and highlights) the completion target, so a
+        // second dimmed copy after the cursor is redundant. Reserve the ghost
+        // for the no-popup case.
+        guard !frame.slashMenuActive else { return nil }
+        return slashCompletion(for: input, commands: slashCommandInfos)?.suffix
     }
     let slashContext = SlashContext(
         agent: agent,
@@ -291,14 +493,14 @@ func runCodingTUIInternal(
             // closes with one" — the whole notification is one block so
             // we prepend exactly one blank regardless of how many lines
             // the caller supplies.
-            frame.appendHistory([""] + lines)
+            runner.tui.commit([""] + lines)
             updateFrameStatus()
             runner.tui.requestRender()
         },
         commitScrollback: { render in
             let lines = render(runner.terminal.width)
             guard !lines.isEmpty else { return }
-            frame.appendHistory(lines)
+            runner.tui.commit(lines)
             updateFrameStatus()
             runner.tui.requestRender()
         },
@@ -309,10 +511,13 @@ func runCodingTUIInternal(
             runner.tui.requestRender()
         },
         recordCompaction: { messagesCompacted in
-            await sessionRecorder.recordCompaction(
+            await recorderBox.recorder.recordCompaction(
                 messages: agent.state.messages,
                 messagesCompacted: messagesCompacted
             )
+        },
+        setSessionTitle: { title in
+            await recorderBox.recorder.recordTitle(title)
         }
     )
 
@@ -334,7 +539,12 @@ func runCodingTUIInternal(
                 modal.routeConfirm()
                 return
             }
-            let text = frame.input.value
+            // Slash popup open → resolve the highlighted command, so Enter on
+            // `/comp` runs `/compact` rather than failing on the partial name.
+            var text = frame.input.value
+            if frame.slashMenuActive, let name = frame.selectedSlashCommandName() {
+                text = "/\(name)"
+            }
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
@@ -347,7 +557,7 @@ func runCodingTUIInternal(
             // "notification block" to surface their output — they
             // always append to history on a quiet moment.
             if case .command = parsed, busy {
-                frame.appendHistory([
+                runner.tui.commit([
                     "",
                     Style.error("  slash commands run only when the agent is idle — stop it first (Esc) or wait"),
                     "",
@@ -373,16 +583,15 @@ func runCodingTUIInternal(
                 for img in built.images { blocks.append(.image(img)) }
                 agent.steer(.user(UserMessage(content: blocks)))
                 attachments.clear()
+                frame.input.addToHistory(text)
                 frame.input.value = ""
-                let queued = agent.queuedSteeringCount()
-                frame.appendHistory([
-                    "",
-                    Style.dimmed("  queued prompt\(queued > 1 ? " (\(queued) waiting)" : "")"),
-                ])
-                // Surface only attach problems — a clean queueing
-                // otherwise stays as the one-line queued prompt above.
+                // No scrollback notice: the queued prompt now shows live in
+                // the pending list above the input box (updateFrameStatus
+                // syncs frame.queuedPrompts), where it can be edited (Alt+↑)
+                // or dropped (/queue clear) until the agent drains it.
+                // Surface only attach problems.
                 if let issues = built.issues {
-                    frame.appendHistory([
+                    runner.tui.commit([
                         "",
                         Style.error("  attach: " + issues),
                     ])
@@ -402,7 +611,7 @@ func runCodingTUIInternal(
                     await cmd.handler(slashContext, args)
                     runner.tui.requestRender()
                 } else {
-                    frame.appendHistory([
+                    runner.tui.commit([
                         "",
                         Style.error("  unknown slash command: /\(name)"),
                         "",
@@ -411,6 +620,9 @@ func runCodingTUIInternal(
                     runner.tui.requestRender()
                 }
             case .prompt:
+                // Recall ring: store the raw submission so Up/Down can bring
+                // it back (input was already cleared above).
+                frame.input.addToHistory(text)
                 // Rebuild with attachments — the raw `text` may carry
                 // `@path` tokens and `[pasted-text #N]` placeholders
                 // from earlier paste events.
@@ -422,7 +634,7 @@ func runCodingTUIInternal(
                 )
                 attachments.clear()
                 if let issues = built.issues {
-                    frame.appendHistory([
+                    runner.tui.commit([
                         "",
                         Style.error("  attach: " + issues),
                         "",
@@ -430,22 +642,7 @@ func runCodingTUIInternal(
                     updateFrameStatus()
                     runner.tui.requestRender()
                 }
-                let promptText = built.text
-                let promptImages = built.images
-                Task.detached {
-                    do {
-                        try await agent.prompt(promptText, images: promptImages)
-                    } catch {
-                        await MainActor.run {
-                            frame.appendHistory([
-                                "",
-                                Style.error("  error: \(error)"),
-                            ])
-                            updateFrameStatus()
-                            runner.tui.requestRender()
-                        }
-                    }
-                }
+                submitBuiltPrompt(built.text, built.images)
             }
         }
     }
@@ -453,8 +650,13 @@ func runCodingTUIInternal(
     runner.bind(.init("tab")) { _ in
         Task { @MainActor in
             guard !modal.isOpen else { return }
-            if frame.input.cursor == frame.input.value.count,
-               let completion = slashCompletion(for: frame.input.value, commandNames: slashCommandNames) {
+            // Slash popup open → complete to the highlighted command (which
+            // may differ from the alphabetically-first ghost completion).
+            if frame.slashMenuActive, let name = frame.selectedSlashCommandName() {
+                frame.input.value = "/\(name) "
+                frame.input.moveEnd()
+            } else if frame.input.cursor == frame.input.value.count,
+               let completion = slashCompletion(for: frame.input.value, commands: slashCommandInfos) {
                 frame.input.value = completion.completedInput
                 frame.input.moveEnd()
             } else {
@@ -464,11 +666,59 @@ func runCodingTUIInternal(
         }
     }
 
-    // Arrow keys — only have meaning inside a modal (move selection).
-    // Outside a modal they're no-ops for now; transcript scrolling can be
-    // layered on top of the retained frame later.
-    runner.bind(.init("up"))   { _ in Task { @MainActor in modal.routeUp() } }
-    runner.bind(.init("down")) { _ in Task { @MainActor in modal.routeDown() } }
+    // Arrow keys drive whichever overlay is up: a modal selector or the
+    // slash-command popup. With neither open they recall prompt history —
+    // gated to the first/last hard row of the editor so a multi-line draft
+    // keeps in-text navigation once that lands.
+    runner.bind(.init("up")) { _ in
+        Task { @MainActor in
+            if modal.isOpen { modal.routeUp() }
+            else if frame.slashMenuActive { frame.menuMove(-1); runner.tui.requestRender() }
+            else if frame.input.navigateHistoryUp() { updateFrameStatus(); runner.tui.requestRender() }
+        }
+    }
+    runner.bind(.init("down")) { _ in
+        Task { @MainActor in
+            if modal.isOpen { modal.routeDown() }
+            else if frame.slashMenuActive { frame.menuMove(1); runner.tui.requestRender() }
+            else if frame.input.navigateHistoryDown() { updateFrameStatus(); runner.tui.requestRender() }
+        }
+    }
+
+    // Option+↑ — pop the most recently queued prompt back into the input so
+    // the user can edit it or drop it (omp's dequeue, LIFO). Guarded so we
+    // never clobber a draft the user is mid-composing: it fires only when the
+    // input is empty OR still holds the previously-popped prompt unedited. In
+    // the latter case it keeps cycling — the popped prompt is pushed back to
+    // the front of the queue and the next item is surfaced, rotating through
+    // all queued prompts without losing any. The popped text is flattened to a
+    // single line for the one-line editor.
+    let dequeueCycle = DequeueCycleState()
+    runner.bind(.alt("up")) { _ in
+        Task { @MainActor in
+            guard !modal.isOpen, !frame.slashMenuActive else { return }
+            let current = frame.input.value
+            let matchesLast = dequeueCycle.last.map {
+                current == queuedMessageBodyText($0).replacingOccurrences(of: "\n", with: " ")
+            } ?? false
+            guard current.isEmpty || matchesLast else { return }
+            // Cycling onward: return the unedited prompt to the front so the
+            // next pop walks back to the prior item rather than re-popping it.
+            if matchesLast, let last = dequeueCycle.last {
+                agent.pushFrontSteeringMessage(last)
+            }
+            guard let msg = agent.popLastSteeringMessage() else {
+                dequeueCycle.last = nil
+                return
+            }
+            dequeueCycle.last = msg
+            frame.input.value = queuedMessageBodyText(msg)
+                .replacingOccurrences(of: "\n", with: " ")
+            frame.input.moveEnd()
+            updateFrameStatus()
+            runner.tui.requestRender()
+        }
+    }
 
     // Ctrl-C: always exits (single tap). Keep it as the hard-stop key so
     // there's always a predictable way out.
@@ -477,6 +727,24 @@ func runCodingTUIInternal(
             await agent.abortAndKillBackgroundTasks()
             runner.exit()
         }
+    }
+
+    // Ctrl-D on an empty input: EOF-style exit, the same teardown path as
+    // Ctrl-C. With text in the buffer it's a no-op (the editor doesn't bind
+    // forward-delete to it), so an accidental Ctrl-D mid-draft never quits.
+    runner.bind(.ctrl("d")) { _ in
+        Task { @MainActor in
+            guard !modal.isOpen, frame.input.value.isEmpty else { return }
+            await agent.abortAndKillBackgroundTasks()
+            runner.exit()
+        }
+    }
+
+    // Ctrl-L: force an authoritative repaint of the visible window. The
+    // conventional "redraw" key — recovers cleanly when a background writer or
+    // a flaky terminal resize has corrupted the on-screen frame.
+    runner.bind(.ctrl("l")) { _ in
+        runner.tui.forceRepaint()
     }
 
     // Esc. Three modes of operation:
@@ -493,7 +761,10 @@ func runCodingTUIInternal(
             if agent.state.isStreaming {
                 agent.abort()
                 frameMode = .aborting
-                frame.appendHistory([
+                // The active turn was interrupted — mark it retryable so
+                // `/retry` can resubmit the prompt that was streaming.
+                retry.failed = true
+                runner.tui.commit([
                     "",
                     Style.dimmed("  aborting…"),
                 ])
@@ -506,7 +777,7 @@ func runCodingTUIInternal(
             if running > 0 {
                 await bgManager.killAll(sessionId: sessionId)
                 runningBackgroundTasks = 0
-                frame.appendHistory([
+                runner.tui.commit([
                     "",
                     Style.dimmed("  killed \(running) background \(running == 1 ? "task" : "tasks")"),
                 ])
@@ -518,16 +789,33 @@ func runCodingTUIInternal(
         }
     }
 
+    // Background-task poll. Refreshes the "N bg running" count + retry/abort
+    // countdowns at a relaxed 250ms cadence. The spinner is NOT advanced here
+    // anymore — it has its own faster tick below — so a slow bg poll can't make
+    // the animation visibly step.
     let frameStatusTask = Task { @MainActor in
         try? await Task.sleep(nanoseconds: 250_000_000)
         while !Task.isCancelled {
             let running = await bgManager.list(sessionId: sessionId)
                 .filter { $0.status == .running }.count
             runningBackgroundTasks = running
-            frame.tick()
             updateFrameStatus()
             runner.tui.requestRender()
             try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+    }
+
+    // Dedicated spinner tick, decoupled from the bg poll. ~90ms gives the
+    // 10-frame braille set a smooth, continuous spin. We only advance + repaint
+    // while something is actually animating (streaming, compacting, aborting,
+    // retrying), so an idle prompt isn't redrawn ~11×/s for no reason.
+    let spinnerTask = Task { @MainActor in
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: 90_000_000)
+            guard agent.state.isStreaming || isAutoCompacting || frameMode.isActive else { continue }
+            frame.tick()
+            updateFrameStatus()
+            runner.tui.requestRender()
         }
     }
 
@@ -544,20 +832,124 @@ func runCodingTUIInternal(
         try await runner.run()
     } catch {
         frameStatusTask.cancel()
+        spinnerTask.cancel()
         await shutdown()
         throw error
     }
     frameStatusTask.cancel()
+    spinnerTask.cancel()
     await shutdown()
 }
 
 // MARK: - Helpers
+
+/// Mutable holder for the live session recorder + its agent subscription.
+/// `/resume` swaps both to repoint persistence at the restored session file;
+/// a reference type lets the resume closure mutate them without capturing a
+/// `var` (rejected under Swift 6 strict concurrency).
+@MainActor
+final class RecorderBox {
+    var recorder: SessionRecorder
+    var unsubscribe: Unsubscribe
+    var sessionId: String
+
+    init(recorder: SessionRecorder, unsubscribe: @escaping Unsubscribe, sessionId: String) {
+        self.recorder = recorder
+        self.unsubscribe = unsubscribe
+        self.sessionId = sessionId
+    }
+}
+
+/// Tracks the most recent prompt submission so `/retry` can resubmit it when
+/// the turn ended in error or was interrupted. A reference type so the submit
+/// path, the failure edges (catch / Esc-abort), and the `/retry` handler all
+/// share one mutable record under Swift 6 strict concurrency.
+@MainActor
+final class TurnRetryState {
+    /// The built prompt text of the last submission (already attachment-expanded).
+    var lastText: String?
+    /// The built image attachments of the last submission.
+    var lastImages: [ImageContent] = []
+    /// True when the last turn ended in error or was aborted — the only state
+    /// in which `/retry` resubmits.
+    var failed = false
+}
+
+/// Concatenated text of a queued user message's text blocks (image blocks
+/// are ignored). Used to restore a popped prompt back into the editor.
+@MainActor
+func queuedMessageBodyText(_ msg: Message) -> String {
+    guard case .user(let u) = msg else { return "" }
+    return u.content.compactMap { block -> String? in
+        if case .text(let t) = block { return t.text }
+        return nil
+    }.joined(separator: "\n")
+}
+
+/// One-line preview of a queued prompt for the live pending list: text blocks
+/// flattened onto a single line, with an `[image]` marker appended when the
+/// queued message also carries image content.
+@MainActor
+func queuedPromptPreview(_ msg: Message) -> String {
+    var text = queuedMessageBodyText(msg).replacingOccurrences(of: "\n", with: " ")
+    if case .user(let u) = msg,
+       u.content.contains(where: { if case .image = $0 { return true } else { return false } }) {
+        text = text.isEmpty ? "[image]" : text + "  [image]"
+    }
+    return text
+}
 
 private enum CodingFrameMode {
     case idle
     case aborting
     case compacting(messageCount: Int)
     case retrying(attempt: Int, until: Date, reason: String)
+
+    /// True whenever the state line is showing a spinner (anything but plain
+    /// idle). Drives the dedicated spinner tick so we only repaint at the
+    /// fast cadence while something is actually animating.
+    var isActive: Bool {
+        if case .idle = self { return false }
+        return true
+    }
+}
+
+/// Tracks the prompt most recently popped back into the editor by Alt+↑ so a
+/// repeat press can keep cycling through the remaining queued items instead of
+/// stopping after one. Reference type so the @MainActor keybinding closures can
+/// mutate it without capturing a `var` (rejected under Swift 6 concurrency).
+@MainActor
+final class DequeueCycleState {
+    var last: Message?
+}
+
+/// Top-border breadcrumb for the prompt box: the live model id, then the
+/// git branch when inside a repo. Already styled.
+private func promptBreadcrumb(model: Model, branch: String?) -> String {
+    var out = Theme.accentText(model.id, bold: false)
+    if let branch, !branch.isEmpty {
+        out += Theme.faintText("  ⎇ \(branch)")
+    }
+    return out
+}
+
+/// Bottom-border right label for the prompt box: reasoning effort + context
+/// usage. The capacity portion glows amber once auto-compact is imminent.
+private func promptMetaLabel(
+    model: Model,
+    thinkingLevel: ThinkingLevel,
+    capacityHint: String
+) -> String {
+    var parts: [String] = []
+    if model.reasoning {
+        parts.append(Theme.faintText("reasoning \(thinkingLevel.rawValue)"))
+    }
+    let capacity = ANSI.stripEscapes(capacityHint)
+    if !capacity.isEmpty {
+        let short = capacity.split(separator: "·").first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? capacity
+        parts.append(short.hasPrefix("●") ? Theme.paint(short, Theme.warn) : Theme.faintText(short))
+    }
+    return parts.joined(separator: Theme.faintText(" · "))
 }
 
 private func codingFrameStateLine(
@@ -571,39 +963,39 @@ private func codingFrameStateLine(
 
     switch mode {
     case .compacting(let count):
-        parts.append(Style.badge("\(spinner) compacting \(count)", fg: 16, bg: 178))
-        parts.append(Style.badge("new prompts queue", bg: 238))
+        parts.append(Theme.paint("\(spinner) auto-compacting \(count)", Theme.warn, bold: true))
+        parts.append(Theme.faintText("new prompts queue"))
     case .aborting:
-        parts.append(Style.badge("\(spinner) aborting", fg: 16, bg: 160))
-        parts.append(Style.badge("Ctrl-C force quit", bg: 238))
+        parts.append(Theme.paint("\(spinner) aborting", Theme.warn, bold: true))
+        parts.append(Theme.faintText("Ctrl-C to force quit"))
     case .retrying(let attempt, let until, let reason):
         let remaining = max(0, until.timeIntervalSinceNow)
         let countdown = remaining >= 1.0 ? "\(Int(remaining.rounded(.up)))s" : "now"
-        parts.append(Style.badge("retry \(attempt + 2)/5 \(countdown)", fg: 16, bg: 178))
+        parts.append(Theme.paint("\(spinner) retry \(attempt + 2)/5 in \(countdown)", Theme.warn, bold: true))
         if !reason.isEmpty {
-            parts.append(Style.badge(String(reason.prefix(40)), bg: 238))
+            parts.append(Theme.faintText(String(reason.prefix(40))))
         }
-        parts.append(Style.badge("Esc cancel", bg: 238))
+        parts.append(Theme.faintText("Esc to cancel"))
     case .idle:
         if isStreaming {
-            parts.append(Style.badge("\(spinner) generating", fg: 16, bg: 178))
-            parts.append(Style.badge("Esc cancel", bg: 238))
+            parts.append(Theme.paint("\(spinner) generating", Theme.accent, bold: true))
+            parts.append(Theme.faintText("Esc to cancel"))
         } else {
-            parts.append(Style.badge("ready", bg: 238))
+            parts.append(Theme.faintText("/ commands · @ attach · ⇧⏎ newline"))
         }
     }
 
     if queuedPrompts > 0 {
-        parts.append(Style.badge("\(queuedPrompts) queued", bg: 61))
+        parts.append(Theme.paint("\(queuedPrompts) queued", Theme.accentDim))
     }
     if runningBackgroundTasks > 0 {
-        parts.append(Style.badge("\(runningBackgroundTasks) bg running", bg: 24))
+        parts.append(Theme.paint("\(runningBackgroundTasks) bg running", Theme.accentDim))
         if !isStreaming {
-            parts.append(Style.badge("Esc stop bg", bg: 238))
+            parts.append(Theme.faintText("Esc to stop"))
         }
     }
 
-    return parts.joined()
+    return parts.joined(separator: Theme.faintText("  ·  "))
 }
 
 /// Decide how to route a bracketed-paste body into the single-line

@@ -59,6 +59,87 @@ struct SlashInputParseTests {
         #expect(slashCompletion(for: "/model claude", commandNames: names) == nil)
         #expect(slashCompletion(for: "hello /mod", commandNames: names) == nil)
     }
+
+    @Test("fuzzy ranker scores exact > prefix > contains > subsequence")
+    func fuzzyRankingOrder() {
+        let infos = [
+            SlashCommandInfo(name: "compact"),
+            SlashCommandInfo(name: "model"),
+            SlashCommandInfo(name: "queue"),
+        ]
+        // Prefix match resolves to the right command.
+        #expect(rankSlashCommands(query: "comp", commands: infos).first?.name == "compact")
+        // Looser subsequence (c-p-t) still lands on /compact.
+        #expect(rankSlashCommands(query: "cpt", commands: infos).first?.name == "compact")
+        // No subsequence → no candidates.
+        #expect(rankSlashCommands(query: "zzz", commands: infos).isEmpty)
+        // Empty query lists the whole catalog in input order.
+        #expect(rankSlashCommands(query: "", commands: infos).map(\.name) == ["compact", "model", "queue"])
+    }
+
+    @Test("completion finds fuzzy matches and only ghosts contiguous prefixes")
+    func fuzzyCompletion() {
+        let infos = [
+            SlashCommandInfo(name: "compact"),
+            SlashCommandInfo(name: "model"),
+        ]
+        // Prefix: ghost suffix is the contiguous tail.
+        #expect(slashCompletion(for: "/comp", commands: infos) == SlashCompletion(
+            suffix: "act",
+            completedInput: "/compact "
+        ))
+        // Subsequence: complete on Tab but suppress the inline ghost suffix.
+        #expect(slashCompletion(for: "/cpt", commands: infos) == SlashCompletion(
+            suffix: "",
+            completedInput: "/compact "
+        ))
+    }
+
+    @Test("aliases participate in ranking")
+    func aliasRanking() {
+        let infos = [SlashCommandInfo(name: "new", aliases: ["clear"])]
+        #expect(rankSlashCommands(query: "clr", commands: infos).first?.name == "new")
+        #expect(slashCompletion(for: "/clear", commands: infos)?.completedInput == "/new ")
+    }
+
+    @MainActor
+    @Test("popup highlight and Tab completion agree on the top match")
+    func popupAndCompletionAgree() {
+        let frame = CodingFrame(viewportHeight: 20)
+        let infos = [
+            SlashCommandInfo(name: "compact", description: "summarize the conversation"),
+            SlashCommandInfo(name: "model", description: "switch model"),
+            SlashCommandInfo(name: "queue", description: "manage the queue"),
+        ]
+        frame.slashCommands = infos
+        frame.input.value = "/comp"
+
+        #expect(frame.slashMenuActive)
+        // The popup's highlighted (default-selected) row and the sync
+        // completion path resolve to the same command.
+        let highlighted = frame.selectedSlashCommandName()
+        let completion = slashCompletion(for: frame.input.value, commands: infos)
+        #expect(highlighted == "compact")
+        #expect(completion?.completedInput == "/compact ")
+    }
+
+    @MainActor
+    @Test("slash menu footer drops ↵ run while the agent is busy")
+    func busyFooterHint() {
+        let frame = CodingFrame(viewportHeight: 20)
+        frame.slashCommands = [SlashCommandInfo(name: "compact", description: "summarize")]
+        frame.input.value = "/comp"
+
+        let idle = frame.render(width: 60).joined(separator: "\n")
+        #expect(idle.contains("↵ run"))
+
+        frame.isBusy = true
+        let busy = frame.render(width: 60).joined(separator: "\n")
+        #expect(!busy.contains("↵ run"))
+        #expect(busy.contains("commands run when idle"))
+        // Tab completion stays advertised mid-stream.
+        #expect(busy.contains("Tab complete"))
+    }
 }
 
 @Suite("/verbose command")
@@ -80,7 +161,7 @@ struct VerboseCommandTests {
         let ctx = SlashContext(
             agent: agent,
             modal: ModalHost(
-                layout: CodingLayout(statusRows: 1),
+                renderModalLines: { _ in },
                 restoreTranscript: {},
                 requestRender: {}
             ),
@@ -109,6 +190,102 @@ struct VerboseCommandTests {
         #expect(agent.state.verboseEnabled == false)
         #expect(notifier.joined.contains("on"))
         #expect(notifier.joined.contains("off"))
+    }
+}
+
+@Suite("/shake command")
+struct ShakeCommandTests {
+
+    @MainActor
+    @Test("registered and listed in /help")
+    func registeredAndListed() async {
+        let registry = SlashCommandRegistry()
+        registerBuiltinSlashCommands(registry)
+
+        let shake = registry.find("shake")
+        #expect(shake != nil)
+        #expect(shake?.description.contains("no LLM") == true)
+        #expect(registry.all.contains { $0.name == "shake" })
+    }
+}
+
+@Suite("SlashCommandRegistry alias resolution")
+struct SlashCommandAliasTests {
+
+    @MainActor
+    @Test("find resolves a command by its alias")
+    func aliasResolves() {
+        let registry = SlashCommandRegistry()
+        registry.register(SlashCommand(
+            name: "new",
+            description: "Start a fresh session",
+            aliases: ["clear"],
+            handler: { _, _ in }
+        ))
+
+        // Primary name still resolves.
+        #expect(registry.find("new") != nil)
+        // Alias resolves to the same command.
+        #expect(registry.find("clear")?.name == "new")
+        // Unknown name doesn't resolve.
+        #expect(registry.find("nope") == nil)
+    }
+
+    @MainActor
+    @Test("the primary name wins over an alias collision")
+    func primaryNameWins() {
+        let registry = SlashCommandRegistry()
+        registry.register(SlashCommand(
+            name: "clear",
+            description: "real clear",
+            handler: { _, _ in }
+        ))
+        registry.register(SlashCommand(
+            name: "new",
+            description: "aliases clear",
+            aliases: ["clear"],
+            handler: { _, _ in }
+        ))
+        // A real command named "clear" takes precedence over the alias.
+        #expect(registry.find("clear")?.name == "clear")
+    }
+
+    @MainActor
+    @Test("/help lists a command's aliases")
+    func helpListsAliases() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+        let notifier = SlashNotifyRecorder()
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-alias-help-\(UUID().uuidString.prefix(8))")
+        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let ctx = SlashContext(
+            agent: agent,
+            modal: ModalHost(
+                renderModalLines: { _ in },
+                restoreTranscript: {},
+                requestRender: {}
+            ),
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            sessionId: "sess",
+            notifyBlock: { lines in for line in lines { notifier.append(line) } },
+            commitScrollback: { _ in },
+            refreshTranscript: {}
+        )
+
+        let registry = SlashCommandRegistry()
+        registerBuiltinSlashCommands(registry)
+        registry.register(SlashCommand(
+            name: "new",
+            description: "Start a fresh session",
+            aliases: ["clear"],
+            handler: { _, _ in }
+        ))
+        await registry.find("help")?.handler(ctx, "")
+        #expect(notifier.joined.contains("/new"))
+        #expect(notifier.joined.contains("alias: /clear"))
     }
 }
 

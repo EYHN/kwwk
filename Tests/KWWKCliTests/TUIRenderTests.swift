@@ -127,21 +127,6 @@ struct TextComponentTests {
     }
 }
 
-@Suite("Horizontal rule")
-struct HorizontalRuleTests {
-    @Test("renders full viewport width")
-    func rendersFullWidth() {
-        let rendered = HorizontalRule("─").render(width: 5)
-        #expect(rendered == ["─────"])
-        #expect(ANSI.visibleWidth(rendered[0]) == 5)
-    }
-
-    @Test("zero width renders an empty line")
-    func zeroWidth() {
-        #expect(HorizontalRule("─").render(width: 0) == [""])
-    }
-}
-
 @Suite("Container")
 struct ContainerTests {
     @Test("stacks children vertically")
@@ -163,95 +148,8 @@ struct ContainerTests {
     }
 }
 
-@Suite("Coding layout")
-struct CodingLayoutTests {
-    @Test("status row replaces the divider in the live zone")
-    func statusRowReplacesDivider() async {
-        let terminal = VirtualTerminal(width: 20, height: 10)
-        let tui = TUI(terminal: terminal)
-        let layout = CodingLayout(statusRows: 2)
-        layout.status.lines = [Style.dimmed("meta"), Style.dimmed("status")]
-        layout.install(into: tui)
-        tui.start()
-        await terminal.waitForRender()
-
-        let writes = terminal.getWrites()
-        #expect(writes.contains("meta"))
-        #expect(writes.contains("status"))
-        #expect(!writes.contains("────"))
-        #expect(layout.nonTailRows == 3)
-        tui.stop()
-    }
-
-    @Test("prompt-only chrome does not install status or queue rows")
-    func promptOnlyChromeSkipsPersistentRows() async {
-        let terminal = VirtualTerminal(width: 20, height: 10)
-        let tui = TUI(terminal: terminal)
-        let layout = CodingLayout(statusRows: 2, chromeMode: .promptOnly)
-        layout.status.lines = ["meta"]
-        layout.setQueueLines(["queued"])
-        layout.install(into: tui)
-        tui.start()
-        await terminal.waitForRender()
-
-        let writes = terminal.getWrites()
-        #expect(!writes.contains("meta"))
-        #expect(!writes.contains("queued"))
-        #expect(layout.nonTailRows == 1)
-        tui.stop()
-    }
-
-    @Test("status metadata is compact, badged, and never padded to terminal width")
-    func statusMetadataIsNotPadded() {
-        let model = Model(
-            id: "gpt-5.4",
-            api: "chatgpt-codex",
-            provider: "chatgpt-codex",
-            reasoning: true
-        )
-
-        let line = statusMetadataLine(
-            model: model,
-            thinkingLevel: .medium,
-            thinkingDisplay: .collapsed,
-            capacityHint: Style.dimmed("42% ctx"),
-            width: 80
-        )
-
-        #expect(line.contains("gpt-5.4"))
-        #expect(!line.contains("chatgpt-codex"))
-        #expect(line.contains("reasoning medium"))
-        #expect(!line.contains("display collapsed"))
-        #expect(!line.contains("thoughts expanded"))
-        #expect(line.contains("42% ctx"))
-        #expect(line.contains("48;5;"))
-        #expect(!line.hasSuffix(" "))
-        #expect(ANSI.visibleWidth(line) < 80)
-    }
-
-    @Test("status metadata names expanded thoughts only when non-default")
-    func statusMetadataShowsExpandedThoughts() {
-        let model = Model(
-            id: "gpt-5.4",
-            api: "chatgpt-codex",
-            provider: "chatgpt-codex",
-            reasoning: true
-        )
-
-        let line = statusMetadataLine(
-            model: model,
-            thinkingLevel: .medium,
-            thinkingDisplay: .expanded,
-            capacityHint: "",
-            width: 80
-        )
-
-        #expect(line.contains("thoughts expanded"))
-        #expect(!line.contains("display expanded"))
-        #expect(line.contains("48;5;"))
-        #expect(!line.hasSuffix(" "))
-    }
-
+@Suite("Prompt row")
+struct PromptRowTests {
     @Test("prompt row renders slash completion as a dimmed ghost suffix")
     func promptRowRendersSlashCompletionHint() {
         let input = InputComponent(initial: "/mod")
@@ -283,51 +181,99 @@ struct CodingLayoutTests {
     }
 }
 
-@Suite("Coding fullscreen frame")
+@Suite("Coding live zone")
 struct CodingFrameTests {
-    @Test("renders a fixed-height retained frame")
-    func fixedHeight() {
-        let frame = CodingFrame(cwd: "/Users/me/project", viewportHeight: 8)
-        frame.metadataLine = Style.badge("model gpt-5.4", bg: 61)
-        frame.stateLine = Style.badge("ready", bg: 238)
-        frame.appendHistory(["hello from history"])
+    @Test("renders the live tail + breadcrumb prompt box")
+    func liveZone() {
+        let frame = CodingFrame(viewportHeight: 12)
+        frame.breadcrumb = Theme.accentText("gpt-5.4")
+        frame.metaRight = Theme.faintText("reasoning medium")
+        frame.stateLine = Theme.faintText("ready")
         frame.setLiveLines([
             "",
             Style.tool("● bash(cmd: \"ls\")"),
             Style.running("  ⎿  calling…"),
         ])
 
-        let lines = frame.render(width: 32)
+        let lines = frame.render(width: 40)
 
-        #expect(lines.count == 8)
-        #expect(lines.contains(where: { $0.contains("model gpt-5.4") }))
+        // Breadcrumb on the prompt box top border, running tool in the tail.
+        #expect(lines.contains(where: { $0.contains("gpt-5.4") }))
         #expect(lines.contains(where: { $0.contains("calling") }))
-        #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= 32 })
+        // Rounded box borders are present.
+        #expect(lines.contains(where: { $0.contains("╭") }))
+        #expect(lines.contains(where: { $0.contains("╰") }))
+        #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= 40 })
     }
 
-    @Test("rewraps retained history when width changes")
-    func rewrapsHistoryOnResize() {
-        let frame = CodingFrame(cwd: "/tmp/project", viewportHeight: 10)
-        frame.appendHistory(["abcdefghij"])
+    @Test("clips the live tail so the prompt box stays visible")
+    func tailNeverHidesPrompt() {
+        let frame = CodingFrame(viewportHeight: 6)
+        frame.setLiveLines((0..<50).map { "line \($0)" })
 
-        let wide = frame.render(width: 20).joined(separator: "\n")
-        let narrow = frame.render(width: 4).joined(separator: "\n")
+        let lines = frame.render(width: 30)
 
-        #expect(wide.contains("abcdefghij"))
-        #expect(narrow.contains("abcd"))
-        #expect(narrow.contains("efgh"))
+        // Prompt box bottom border must survive even with an overlong tail.
+        #expect(lines.contains(where: { $0.contains("╰") }))
+        #expect(lines.count <= 6 + 2) // tail clipped to the viewport budget
     }
 
-    @Test("modal lines replace the transcript body")
-    func modalReplacesBody() {
-        let frame = CodingFrame(cwd: "/tmp/project", viewportHeight: 8)
-        frame.appendHistory(["history row"])
+    @Test("queued prompts render as a dim list above the prompt box")
+    func queuedPromptsAboveBox() {
+        let frame = CodingFrame(viewportHeight: 12)
+        frame.setLiveLines([Style.tool("● bash(cmd: \"sleep 5\")")])
+        frame.queuedPrompts = ["fix the failing test", "then update the docs"]
+
+        let lines = frame.render(width: 50)
+        let plain = lines.map { ANSI.stripEscapes($0) }
+        let joined = plain.joined(separator: "\n")
+
+        #expect(joined.contains("fix the failing test"))
+        #expect(joined.contains("then update the docs"))
+        // Edit/drop hint is present.
+        #expect(joined.contains("↑ edit"))
+        // The queued list sits above the prompt box, not below it.
+        let firstQueued = plain.firstIndex { $0.contains("fix the failing test") }!
+        let boxBottom = plain.firstIndex { $0.contains("╰") }!
+        #expect(firstQueued < boxBottom)
+    }
+
+    @Test("slash menu takes the footer slot and hides the queue list")
+    func slashMenuHidesQueueList() {
+        let frame = CodingFrame(viewportHeight: 14)
+        frame.slashCommands = [
+            SlashCommandInfo(name: "compact", description: "compact the context"),
+            SlashCommandInfo(name: "model", description: "switch model"),
+        ]
+        frame.queuedPrompts = ["fix the failing test"]
+        frame.input.value = "/comp"  // slash popup is open
+
+        let joined = frame.render(width: 50).map { ANSI.stripEscapes($0) }.joined(separator: "\n")
+        #expect(joined.contains("/compact"))          // slash menu showing
+        #expect(!joined.contains("fix the failing test"))  // queue list suppressed
+        #expect(!joined.contains("↑ edit"))
+    }
+
+    @Test("no queued list when the queue is empty")
+    func noQueuedListWhenEmpty() {
+        let frame = CodingFrame(viewportHeight: 12)
+        frame.setLiveLines([Style.tool("● working")])
+
+        let joined = frame.render(width: 50).map { ANSI.stripEscapes($0) }.joined(separator: "\n")
+        #expect(!joined.contains("↑ edit"))
+    }
+
+    @Test("modal lines overlay the tail, prompt box still renders")
+    func modalOverlay() {
+        let frame = CodingFrame(viewportHeight: 12)
+        frame.setLiveLines(["● running tool"])
         frame.setModalLines([Style.header("  Select a model")])
 
         let rendered = frame.render(width: 40).joined(separator: "\n")
 
         #expect(rendered.contains("Select a model"))
-        #expect(!rendered.contains("history row"))
+        #expect(!rendered.contains("running tool"))
+        #expect(rendered.contains("╭"))
     }
 }
 
@@ -337,7 +283,10 @@ struct TUIInlineResizeReflowTests {
     func liveFrameLeavesLastColumnUnused() async {
         let terminal = VirtualTerminal(width: 5, height: 20)
         let tui = TUI(terminal: terminal)
-        tui.addChild(HorizontalRule("─"))
+        // A child wider than the terminal so the live-zone width-cap is
+        // observable: the TUI renders children at width-1, leaving the last
+        // column unused.
+        tui.addChild(TextComponent([String(repeating: "─", count: 40)]))
         tui.start()
         await terminal.waitForRender()
 
@@ -356,6 +305,79 @@ struct TUIInlineResizeReflowTests {
         }
         #expect(!writes.contains("─────"))
         tui.stop()
+    }
+
+    @Test("inline live draw erases to end of screen so width-shrink reflow can't leak")
+    func inlineLiveDrawErasesToEndOfScreen() async {
+        let terminal = VirtualTerminal(width: 20, height: 20)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TextComponent([String(repeating: "─", count: 40)]))
+        tui.start()
+        await terminal.waitForRender()
+
+        // The live draw must clear from the cursor to the end of the screen
+        // (CSI 0 J) so that previously-drawn wider rows reflowed by a terminal
+        // width-shrink don't leave wrapped remnants below the live zone.
+        #expect(terminal.getWrites().contains("\u{1B}[0J"))
+        tui.stop()
+    }
+
+    @Test("direct-terminal resize replays the whole retained transcript re-wrapped")
+    func fullRepaintReplaysHistory() async {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TextComponent(["❯ "]))
+        tui.start()
+        await terminal.waitForRender()
+
+        tui.commit(["first committed line", "second committed line"])
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        // The omp-style authoritative repaint: clear scrollback (ED3) and
+        // replay every retained logical line so it re-wraps to the new width.
+        tui.triggerFullRepaintForTesting()
+        let writes = terminal.getWrites()
+        #expect(writes.contains("\u{1B}[3J"))
+        #expect(writes.contains("first committed line"))
+        #expect(writes.contains("second committed line"))
+        tui.stop()
+    }
+
+    @Test("full repaint does not duplicate pending commits")
+    func fullRepaintDoesNotDuplicatePendingCommits() async {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TextComponent(["❯ "]))
+        tui.start()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        tui.commit(["pending once"])
+        // Resize can force an authoritative repaint before the normal render
+        // drains pending commits. The retained history should still contain
+        // exactly one logical copy.
+        tui.triggerFullRepaintForTesting()
+
+        let writes = terminal.getWrites()
+        let occurrences = writes.components(separatedBy: "pending once").count - 1
+        #expect(occurrences == 1)
+        tui.stop()
+    }
+
+    @Test("stop exits below live zone when cursor is parked above bottom")
+    func stopDropsCursorToLiveZoneBottom() async {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TestLinesComponent([CURSOR_MARKER + "input", "border", "state"]))
+        tui.start()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        tui.stop()
+
+        #expect(terminal.getWrites().contains("\u{1B}[2B\r\n"))
     }
 
     @Test("inline renderer clamps overflowing child rows before writing")

@@ -109,6 +109,71 @@ struct AgentQueueIntrospectionTests {
         #expect(agent.queuedSteeringCount() == 0)
         #expect(snapshot.count == 2, "prior snapshot must not reflect the clear")
     }
+
+    @MainActor
+    @Test("popLastSteeringMessage removes the most recent queued prompt (LIFO)")
+    func popLastIsLIFO() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+
+        #expect(agent.popLastSteeringMessage() == nil, "empty queue pops nil")
+
+        agent.steer(.user(UserMessage(text: "first")))
+        agent.steer(.user(UserMessage(text: "second")))
+
+        let popped = agent.popLastSteeringMessage()
+        #expect(queuedMessageBodyText(popped!) == "second")
+        #expect(agent.queuedSteeringCount() == 1)
+        // The earlier message survives and stays at the head.
+        #expect(queuedMessageBodyText(agent.queuedSteeringMessages()[0]) == "first")
+    }
+
+    @MainActor
+    @Test("pushFrontSteeringMessage inserts at the FIFO head")
+    func pushFrontIsHead() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+
+        agent.steer(.user(UserMessage(text: "b")))
+        agent.steer(.user(UserMessage(text: "c")))
+        agent.pushFrontSteeringMessage(.user(UserMessage(text: "a")))
+
+        let snapshot = agent.queuedSteeringMessages().map { queuedMessageBodyText($0) }
+        #expect(snapshot == ["a", "b", "c"], "front-push must land at the head, not the tail")
+    }
+
+    @MainActor
+    @Test("Alt+↑ dequeue-cycle rotates through every queued prompt without loss")
+    func dequeueCycleRotates() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+
+        agent.steer(.user(UserMessage(text: "a")))
+        agent.steer(.user(UserMessage(text: "b")))
+        agent.steer(.user(UserMessage(text: "c")))
+
+        // First press: pop the most recent (LIFO). No front-push yet because
+        // the editor was empty.
+        var last = agent.popLastSteeringMessage()
+        #expect(queuedMessageBodyText(last!) == "c")
+
+        // Each subsequent press returns the unedited prompt to the front, then
+        // pops the next — walking c → b → a → c without dropping anything.
+        var seen: [String] = [queuedMessageBodyText(last!)]
+        for _ in 0..<3 {
+            agent.pushFrontSteeringMessage(last!)
+            last = agent.popLastSteeringMessage()
+            seen.append(queuedMessageBodyText(last!))
+        }
+        #expect(seen == ["c", "b", "a", "c"], "cycle should rotate in reverse and wrap")
+        // The queue still holds all three prompts the whole time.
+        #expect(agent.queuedSteeringCount() == 2)
+        let remaining = Set(agent.queuedSteeringMessages().map { queuedMessageBodyText($0) } + [queuedMessageBodyText(last!)])
+        #expect(remaining == ["a", "b", "c"], "no prompt is ever lost during cycling")
+    }
 }
 
 // MARK: - Helpers
@@ -129,7 +194,7 @@ private func makeContext() async -> (SlashContext, NotifyRecorder) {
     let ctx = SlashContext(
         agent: agent,
         modal: ModalHost(
-            layout: CodingLayout(statusRows: 1),
+            renderModalLines: { _ in },
             restoreTranscript: {},
             requestRender: {}
         ),

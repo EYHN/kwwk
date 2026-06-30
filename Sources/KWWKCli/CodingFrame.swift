@@ -1,35 +1,63 @@
 import Foundation
 
-/// Full-screen retained coding surface. The terminal is treated as a dumb
-/// viewport: transcript, live tool cards, status, modal content, and the
-/// prompt are all rendered from in-memory state on every frame.
+/// The persistent **live zone** for the inline coding TUI. Everything the
+/// terminal keeps redrawing in place lives here, bottom-anchored:
 ///
-/// This avoids the inline-anchor failure mode where old retained rows reflow
-/// in native scrollback after a narrow resize. Frame rows are wrapped and
-/// clipped before they are written, and no row is padded out with spaces.
+///   - running tool blocks (the streaming tail — `liveLines`)
+///   - the slash-command popup (when the user is naming a command)
+///   - the rounded prompt box (breadcrumb · input · reasoning/ctx)
+///   - a transient state line (generating / ready hints)
+///
+/// Settled transcript (user turns, assistant prose, finished tool results)
+/// and the welcome card are NOT held here — they are committed to the
+/// terminal's native scrollback via `TUI.commit`, so the user can scroll
+/// back through history with the trackpad. A modal selector temporarily
+/// replaces the tail+popup area while staying above the prompt box.
 final class CodingFrame: Component, @unchecked Sendable {
     let input: InputComponent
     let promptRow: PromptRow
 
-    var metadataLine: String = ""
+    /// Top-border breadcrumb for the prompt box (already styled).
+    var breadcrumb: String = ""
+    /// Bottom-border right label for the prompt box (already styled).
+    var metaRight: String = ""
+    /// Transient state line under the prompt box (already styled).
     var stateLine: String = ""
 
-    private let cwd: String
-    private let resumedLine: String?
-    private var historyLines: [String] = []
+    /// Whether the agent is mid-turn. Slash commands are idle-only, so when
+    /// busy the popup's footer drops the "↵ run" affordance (Enter is rejected
+    /// with the idle-only notice) and explains commands run when idle. Tab
+    /// completion stays available either way.
+    var isBusy: Bool = false
+
+    /// Pending queued prompts (plain text, in FIFO order) the user submitted
+    /// while the agent was busy. Rendered as a dim list that hugs the prompt
+    /// box — omp's "pending messages" container. They live in the redrawn
+    /// live zone (NOT scrollback), so they appear the moment they're queued
+    /// and vanish as the agent drains them into real turns.
+    var queuedPrompts: [String] = []
+
+    /// Slash-command catalog (name + one-line description + aliases). When the
+    /// input is a bare `/query`, a live-filtered preview of matches pops up
+    /// above the prompt box.
+    var slashCommands: [SlashCommandInfo] = []
+    private var menuSelection = 0
+    private var menuFilter: String?
+    private static let menuMaxRows = 8
+
     private var liveLines: [String] = []
     private var modalLines: [String]?
     private var viewportHeight: Int
     private var spinnerIndex: Int = 0
 
-    private let maxHistoryLines = 4_000
-    private static let spinnerFrames = ["◐", "◓", "◑", "◒"]
+    /// 10-frame braille spinner (width-1 glyphs). Advanced by `tick()` on a
+    /// dedicated ~90ms cadence — decoupled from the 250ms background-task poll
+    /// — so the animation reads as smooth motion rather than visible steps.
+    private static let spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
-    init(cwd: String, resumedLine: String? = nil, viewportHeight: Int = 20) {
+    init(viewportHeight: Int = 20) {
         self.input = InputComponent()
-        self.promptRow = PromptRow(prompt: Style.prompt("❯ "), input: input)
-        self.cwd = cwd
-        self.resumedLine = resumedLine
+        self.promptRow = PromptRow(prompt: Theme.accentText("❯ ", bold: true), input: input)
         self.viewportHeight = max(1, viewportHeight)
     }
 
@@ -45,17 +73,6 @@ final class CodingFrame: Component, @unchecked Sendable {
         spinnerIndex = (spinnerIndex + 1) % Self.spinnerFrames.count
     }
 
-    func appendHistory(_ lines: [String]) {
-        guard !lines.isEmpty else { return }
-        for raw in lines {
-            let split = raw.components(separatedBy: "\n")
-            historyLines.append(contentsOf: split)
-        }
-        if historyLines.count > maxHistoryLines {
-            historyLines.removeFirst(historyLines.count - maxHistoryLines)
-        }
-    }
-
     func setLiveLines(_ lines: [String]) {
         liveLines = lines
     }
@@ -64,90 +81,185 @@ final class CodingFrame: Component, @unchecked Sendable {
         modalLines = lines
     }
 
+    // MARK: - Slash menu
+
+    private func slashQuery() -> String? {
+        let v = input.value
+        guard v.hasPrefix("/") else { return nil }
+        let body = v.dropFirst()
+        if body.contains(where: { $0 == " " || $0 == "\t" || $0 == "\n" }) { return nil }
+        return String(body)
+    }
+
+    private func filteredCommands() -> [SlashCommandInfo] {
+        guard let q = slashQuery() else { return [] }
+        // Funnel through the one shared ranker so the highlighted row, Tab
+        // completion, and the inline ghost suffix always agree on the top
+        // match. `slashCommands` is supplied pre-sorted by name, so equal
+        // scores keep alphabetical order.
+        return rankSlashCommands(query: q, commands: slashCommands)
+    }
+
+    var slashMenuActive: Bool {
+        modalLines == nil && slashQuery() != nil && !filteredCommands().isEmpty
+    }
+
+    func menuMove(_ delta: Int) {
+        let matches = filteredCommands()
+        guard !matches.isEmpty else { return }
+        syncSelection(matches)
+        menuSelection = (menuSelection + delta + matches.count) % matches.count
+    }
+
+    func selectedSlashCommandName() -> String? {
+        let matches = filteredCommands()
+        guard !matches.isEmpty else { return nil }
+        syncSelection(matches)
+        return matches[min(menuSelection, matches.count - 1)].name
+    }
+
+    private func syncSelection(_ matches: [SlashCommandInfo]) {
+        let q = slashQuery()
+        if q != menuFilter {
+            menuFilter = q
+            menuSelection = 0
+        }
+        if menuSelection >= matches.count { menuSelection = max(0, matches.count - 1) }
+    }
+
+    // MARK: - Render
+
     func render(width: Int) -> [String] {
         let safeWidth = max(0, width)
-        let height = max(1, viewportHeight)
-        guard safeWidth > 0 else {
-            return Array(repeating: "", count: height)
+        guard safeWidth > 0 else { return [] }
+
+        let box = renderPromptBox(width: safeWidth)
+        let reserved = box.count
+        let available = max(0, viewportHeight - reserved)
+
+        var overlay: [String]
+        if let modalLines {
+            overlay = wrap(modalLines, width: safeWidth)
+            if overlay.count > available { overlay = Array(overlay.suffix(available)) }
+        } else {
+            var rows = wrap(liveLines, width: safeWidth)
+            // One blank line of breathing room above the footer slot. The
+            // overlay (slash popup or queue list) hugs the prompt box directly
+            // below it; the blank sits above the overlay, not between it and
+            // the box.
+            rows.append("")
+            // The footer slot directly above the prompt box shows ONE overlay.
+            // The slash-command popup takes priority; when it isn't open the
+            // pending queue list takes the same slot. (A modal replaces this
+            // whole branch.)
+            let menu = renderSlashMenu(width: safeWidth)
+            if !menu.isEmpty {
+                rows.append(contentsOf: menu)
+            } else {
+                rows.append(contentsOf: renderQueuedPrompts(width: safeWidth))
+            }
+            // Keep the most recent rows so the prompt box never gets pushed
+            // off the bottom of the terminal.
+            if rows.count > available { rows = Array(rows.suffix(available)) }
+            overlay = rows
         }
 
-        let header = renderHeader(width: safeWidth)
-        let footer = renderFooter(width: safeWidth)
-        let bodyHeight = max(0, height - header.count - footer.count)
-        let body = renderBody(width: safeWidth, height: bodyHeight)
-
-        var lines = header + body + footer
-        if lines.count > height {
-            lines = Array(lines.prefix(height))
-        }
-        while lines.count < height {
-            lines.append("")
-        }
-        return lines.map { ANSI.truncate($0, to: safeWidth) }
+        return (overlay + box).map { ANSI.truncate($0, to: safeWidth) }
     }
 
     func invalidate() {}
 
-    private func renderHeader(width: Int) -> [String] {
-        var lines: [String] = []
-
-        var title = Style.badge("kwwk", bg: 99)
-        title += Style.badge("fullscreen", bg: 24)
-        if !metadataLine.isEmpty {
-            title += metadataLine
-        }
-        lines.append(ANSI.truncate(title, to: width))
-
-        let cwdLine = Style.dimmed("  \(shortened(cwd, to: max(8, width - 2)))")
-        lines.append(ANSI.truncate(cwdLine, to: width))
-
-        if let resumedLine, !resumedLine.isEmpty {
-            lines.append(ANSI.truncate(Style.dimmed("  \(resumedLine)"), to: width))
-        }
-
-        return lines
-    }
-
-    private func renderBody(width: Int, height: Int) -> [String] {
-        guard height > 0 else { return [] }
-
-        let source: [String]
-        if let modalLines {
-            source = modalLines
-        } else {
-            source = historyLines + liveLines
-        }
-
-        var wrapped: [String] = []
-        if source.isEmpty {
-            wrapped.append(Style.dimmed("  ready"))
-        } else {
-            for line in source {
-                if line.isEmpty {
-                    wrapped.append("")
-                } else {
-                    wrapped.append(contentsOf: ANSI.wrap(line, width: width))
-                }
+    private func wrap(_ source: [String], width: Int) -> [String] {
+        var out: [String] = []
+        for line in source {
+            if line.isEmpty { out.append("") } else {
+                out.append(contentsOf: ANSI.wrap(line, width: width))
             }
         }
+        return out
+    }
 
-        let clipped = wrapped.count > height ? Array(wrapped.suffix(height)) : wrapped
-        if clipped.count < height {
-            return Array(repeating: "", count: height - clipped.count) + clipped
+    private func renderPromptBox(width: Int) -> [String] {
+        // Two-space left margin matches the welcome card, queue list, state
+        // line, and slash popup so every chrome element shares one gutter.
+        let margin = "  "
+        let boxWidth = max(0, width - 4)
+
+        guard boxWidth >= 6 else {
+            let promptLines = promptRow.render(width: width)
+            var out = promptLines.map { ANSI.truncate($0, to: width) }
+            if !stateLine.isEmpty { out.append(ANSI.truncate(stateLine, to: width)) }
+            return out
         }
-        return clipped
+
+        let promptLines = promptRow.render(width: max(1, boxWidth - 4))
+        var out: [String] = []
+        out.append(margin + Box.top(width: boxWidth, label: breadcrumb.isEmpty ? nil : breadcrumb))
+        for line in promptLines {
+            out.append(margin + Box.row(line, width: boxWidth))
+        }
+        out.append(margin + Box.bottom(width: boxWidth, rightLabel: metaRight.isEmpty ? nil : metaRight))
+        if !stateLine.isEmpty {
+            out.append("  " + ANSI.truncate(stateLine, to: max(0, width - 2)))
+        }
+        return out
     }
 
-    private func renderFooter(width: Int) -> [String] {
-        let promptLines = promptRow.render(width: width)
-        let state = stateLine.isEmpty ? Style.badge("ready", bg: 238) : stateLine
-        return [ANSI.truncate(state, to: width)] + promptLines.map { ANSI.truncate($0, to: width) }
+    /// The pending queued-prompt list shown above the prompt box while the
+    /// agent is busy. Each entry is one dim line; a footer hint advertises how
+    /// to edit/drop them. Mirrors omp's "pending messages" container.
+    private func renderQueuedPrompts(width: Int) -> [String] {
+        guard modalLines == nil, !queuedPrompts.isEmpty else { return [] }
+        let avail = max(0, width - 4)
+        var out: [String] = []
+        let label = queuedPrompts.count == 1 ? "queued" : "queued (\(queuedPrompts.count))"
+        out.append("  " + Theme.accentText("↓ \(label)", bold: false))
+        for prompt in queuedPrompts {
+            let body = prompt.isEmpty ? "(empty)" : prompt
+            out.append("  " + Theme.paint("↳ ", Theme.accentDim)
+                + ANSI.truncate(Theme.faintText(body), to: avail))
+        }
+        out.append("  " + Theme.faintText("⌥↑ edit · /queue clear to drop"))
+        return out
     }
 
-    private func shortened(_ path: String, to maxLen: Int) -> String {
-        guard path.count > maxLen, maxLen > 8 else { return path }
-        let headCount = max(1, maxLen / 2 - 1)
-        let tailCount = max(1, maxLen - headCount - 1)
-        return "\(path.prefix(headCount))…\(path.suffix(tailCount))"
+    /// The live slash-command preview that floats above the prompt box.
+    private func renderSlashMenu(width: Int) -> [String] {
+        guard slashQuery() != nil, modalLines == nil else { return [] }
+        let matches = filteredCommands()
+        guard !matches.isEmpty else {
+            return ["  " + Theme.faintText("no matching commands")]
+        }
+        syncSelection(matches)
+
+        let maxRows = min(Self.menuMaxRows, matches.count)
+        var start = 0
+        if menuSelection >= maxRows { start = menuSelection - maxRows + 1 }
+        start = min(start, max(0, matches.count - maxRows))
+        let visible = matches[start..<min(matches.count, start + maxRows)]
+
+        let nameW = min(18, (matches.map { ANSI.visibleWidth("/\($0.name)") }.max() ?? 0))
+        var out: [String] = []
+        for (offset, m) in visible.enumerated() {
+            let i = start + offset
+            let selected = i == menuSelection
+            let marker = selected ? Theme.accentText("❯ ", bold: false) : "  "
+            let nameRaw = "/\(m.name)"
+            let name = selected ? Theme.accentText(nameRaw, bold: true) : Theme.mutedText(nameRaw)
+            // 2-space gutter + 2-wide marker so the selected '❯' aligns under
+            // the queue list's "↓/↳" and unselected names align with bodies.
+            let descAvail = max(0, width - 2 - 2 - nameW - 2)
+            let desc = ANSI.truncate(Theme.faintText(m.description), to: descAvail)
+            out.append("  " + marker + Box.pad(name, to: nameW) + "  " + desc)
+        }
+        // Enter is rejected while the agent is busy (slash commands are
+        // idle-only), so don't advertise "↵ run" mid-stream — only Tab.
+        let runHint = isBusy ? "commands run when idle" : "↵ run"
+        if matches.count > maxRows {
+            out.append("  " + Theme.faintText("\(menuSelection + 1)/\(matches.count) · ↑↓ move · Tab complete · \(runHint)"))
+        } else {
+            out.append("  " + Theme.faintText("↑↓ move · Tab complete · \(runHint)"))
+        }
+        return out
     }
 }
