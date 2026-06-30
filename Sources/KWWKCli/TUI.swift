@@ -170,12 +170,22 @@ final class TUI: @unchecked Sendable {
         pendingCommits.removeAll()
         lock.unlock()
 
+        // Collect rendered lines from children (the live zone). In inline
+        // mode leave the terminal's last column unused. Several terminals
+        // keep a deferred-wrap flag after printing into the final column;
+        // a following resize can then reflow the retained frame into extra
+        // physical rows that our logical-height clear pass cannot see.
+        let liveWidth = mode == .inline ? max(0, width - 1) : width
+
         // Collect rendered lines from children (the live zone). Cap to
         // terminal height; there's no point trying to show more live rows
         // than the terminal has.
         var rendered: [String] = []
         for child in snapshotChildren {
-            rendered.append(contentsOf: child.render(width: width))
+            rendered.append(contentsOf: child.render(width: liveWidth))
+        }
+        if mode == .inline {
+            rendered = rendered.map { ANSI.truncate($0, to: liveWidth) }
         }
         if rendered.count > termHeight {
             rendered = Array(rendered.suffix(termHeight))

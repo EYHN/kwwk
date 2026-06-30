@@ -149,7 +149,11 @@ final class PromptRow: Component, Focusable, @unchecked Sendable {
     }
 
     func render(width: Int) -> [String] {
+        guard width > 0 else { return [""] }
         let promptWidth = ANSI.visibleWidth(prompt)
+        if width <= promptWidth {
+            return [ANSI.truncate(prompt, to: width)]
+        }
         let innerWidth = max(1, width - promptWidth)
         let inner = renderInputRows(width: innerWidth)
         guard !inner.isEmpty else { return [prompt] }

@@ -249,12 +249,26 @@ struct CodingLayoutTests {
         #expect(rendered.contains(Style.dim))
         #expect(ANSI.visibleWidth(rendered) < 40)
     }
+
+    @Test("prompt row never exceeds extremely narrow widths")
+    func promptRowStaysWithinNarrowWidths() {
+        let input = InputComponent(initial: "/model")
+        let row = PromptRow(prompt: Style.prompt("❯ "), input: input)
+        row.focused = true
+        row.ghostHintProvider = { _ in " extra" }
+
+        for width in 0...2 {
+            let rendered = row.render(width: width)
+            #expect(!rendered.isEmpty)
+            #expect(rendered.allSatisfy { ANSI.visibleWidth($0) <= width })
+        }
+    }
 }
 
 @Suite("TUI inline resize reflow")
 struct TUIInlineResizeReflowTests {
-    @Test("live frame drawing disables autowrap around exact-width rows")
-    func liveFrameDisablesAutowrap() async {
+    @Test("live frame drawing leaves the last terminal column unused")
+    func liveFrameLeavesLastColumnUnused() async {
         let terminal = VirtualTerminal(width: 5, height: 20)
         let tui = TUI(terminal: terminal)
         tui.addChild(HorizontalRule("─"))
@@ -264,7 +278,7 @@ struct TUIInlineResizeReflowTests {
         let writes = terminal.getWrites()
         let disable = "\u{1B}[?7l"
         let enable = "\u{1B}[?7h"
-        let rule = "─────"
+        let rule = "────"
         let disableIdx = writes.range(of: disable)?.lowerBound
         let ruleIdx = writes.range(of: rule)?.lowerBound
         let enableIdx = writes.range(of: enable, range: (ruleIdx ?? writes.startIndex)..<writes.endIndex)?.lowerBound
@@ -274,6 +288,21 @@ struct TUIInlineResizeReflowTests {
             #expect(disableIdx < ruleIdx)
             #expect(ruleIdx < enableIdx)
         }
+        #expect(!writes.contains("─────"))
+        tui.stop()
+    }
+
+    @Test("inline renderer clamps overflowing child rows before writing")
+    func inlineRendererClampsOverflowingChildRows() async {
+        let terminal = VirtualTerminal(width: 5, height: 20)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TestLinesComponent(["ABCDE"]))
+        tui.start()
+        await terminal.waitForRender()
+
+        let writes = terminal.getWrites()
+        #expect(writes.contains("ABCD"))
+        #expect(!writes.contains("ABCDE"))
         tui.stop()
     }
 
