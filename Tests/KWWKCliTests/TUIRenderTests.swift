@@ -183,6 +183,24 @@ struct CodingLayoutTests {
         tui.stop()
     }
 
+    @Test("prompt-only chrome does not install status or queue rows")
+    func promptOnlyChromeSkipsPersistentRows() async {
+        let terminal = VirtualTerminal(width: 20, height: 10)
+        let tui = TUI(terminal: terminal)
+        let layout = CodingLayout(statusRows: 2, chromeMode: .promptOnly)
+        layout.status.lines = ["meta"]
+        layout.setQueueLines(["queued"])
+        layout.install(into: tui)
+        tui.start()
+        await terminal.waitForRender()
+
+        let writes = terminal.getWrites()
+        #expect(!writes.contains("meta"))
+        #expect(!writes.contains("queued"))
+        #expect(layout.nonTailRows == 1)
+        tui.stop()
+    }
+
     @Test("status metadata is compact, badged, and never padded to terminal width")
     func statusMetadataIsNotPadded() {
         let model = Model(

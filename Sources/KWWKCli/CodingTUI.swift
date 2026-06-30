@@ -4,8 +4,8 @@ import KWWKAgent
 
 /// Internal implementation of the coding-agent TUI. Public entry points
 /// live on `KWWK` (see KWWK.swift) and resolve credentials before calling
-/// in here. `@MainActor` because `TranscriptRenderer`, `CodingStatusBar`,
-/// and the TUI layout mutate main-thread-only state.
+/// in here. `@MainActor` because `TranscriptRenderer` and the TUI layout
+/// mutate main-thread-only state.
 @MainActor
 func runCodingTUIInternal(
     model: Model,
@@ -93,7 +93,7 @@ func runCodingTUIInternal(
     // behavior). Pass `useAlternateScreen: true` if you want a blank
     // fullscreen buffer instead.
     let runner = TUIRunner(useAlternateScreen: false, hideCursor: false)
-    let layout = CodingLayout(statusRows: 2)
+    let layout = CodingLayout(statusRows: 0, chromeMode: .promptOnly)
     let renderer = TranscriptRenderer()
 
     // Print the header banner once, as ordinary terminal output. It
@@ -144,12 +144,13 @@ func runCodingTUIInternal(
     // idle state below so we never need to interleave them with
     // streaming output.
     //
-    // `recomputeTranscript` rebuilds the live tail (running tool markers)
-    // from the renderer's current state. Assistant text commits append-only
-    // in stable segments, letting the terminal handle native autowrap.
+    // `recomputeTranscript` deliberately leaves the live tail empty. The
+    // coding surface is append-only now: assistant text, tool output, slash
+    // command output, and notifications all flow through stdout so the
+    // terminal owns autowrap and resize reflow. The only retained rows are
+    // transient modal content and the editable prompt.
     let recomputeTranscript: @MainActor @Sendable () -> Void = {
-        renderer.applyLiveBudget(layout.liveTailBudget, reserved: 0)
-        layout.setLiveTail(renderer.liveLines)
+        layout.setLiveTail([])
     }
 
     // Modal overlay host — takes over the transcript area for selectors
@@ -185,50 +186,15 @@ func runCodingTUIInternal(
     /// While a modal is open we deliberately leave commits sitting in
     /// the renderer's buffer: flushing would print history lines above
     /// the modal and make the UI feel noisy. They drain on close.
-    let flushCommits: @MainActor @Sendable () -> Void = {
-        guard !modal.isOpen else { return }
+    let flushCommits: @MainActor @Sendable () -> Bool = {
+        guard !modal.isOpen else { return false }
         let committed = renderer.drainCommits()
         if !committed.isEmpty {
             runner.tui.commit(committed)
+            return true
         }
+        return false
     }
-
-    // Queue panel: a persistent listing of steering messages waiting
-    // for a turn boundary, rendered between the status bar and the
-    // prompt. Rebuilt from `agent.queuedSteeringMessages()` whenever
-    // something might have changed the queue:
-    //   - Enter handler after an implicit steer.
-    //   - `/queue clear` outcome.
-    //   - Every agent event (turn boundaries drain the queue).
-    //   - The 500ms poll tick already used by the status bar.
-    //
-    // The panel collapses to zero rows when empty, so the transcript
-    // reclaims the space — no wasted real estate when idle.
-    let refreshQueuePanel: @MainActor @Sendable () -> Void = {
-        let messages = agent.queuedSteeringMessages()
-        if messages.isEmpty {
-            layout.setQueueLines([])
-            return
-        }
-        var lines: [String] = [
-            Style.dimmed("  ↓ \(messages.count) queued \(messages.count == 1 ? "prompt" : "prompts"):")
-        ]
-        for (i, msg) in messages.enumerated() {
-            let preview = previewQueuedMessageLine(msg)
-            lines.append(Style.dimmed("    \(i + 1). \(preview)"))
-        }
-        layout.setQueueLines(lines)
-    }
-    refreshQueuePanel()
-
-    let statusBar = CodingStatusBar(
-        layout: layout,
-        runner: runner,
-        agent: agent,
-        bgManager: bgManager,
-        sessionId: sessionId
-    )
-    await statusBar.render()
 
     var isAutoCompacting = false
 
@@ -255,24 +221,21 @@ func runCodingTUIInternal(
             if !modal.isOpen {
                 recomputeTranscript()
             }
-            flushCommits()
+            var needsRender = flushCommits()
             switch event {
             case .agentStart:
-                statusBar.setMode(.streaming)
+                break
             case .agentEnd:
-                if !isAutoCompacting {
-                    statusBar.setMode(.idle)
-                }
+                break
             case .compactStart(let count, _):
                 isAutoCompacting = true
-                statusBar.setCompacting(messageCount: count)
                 runner.tui.commit([
                     "",
-                    Style.dimmed("  ◐ auto-compacting…"),
+                    Style.dimmed("  ◐ auto-compacting \(count) messages…"),
                 ])
+                needsRender = true
             case .compactEnd(let outcome):
                 isAutoCompacting = false
-                statusBar.setMode(.idle)
                 switch outcome {
                 case .compacted(let n, let hasLedger):
                     runner.tui.commit(renderCompactBoundary(
@@ -280,12 +243,14 @@ func runCodingTUIInternal(
                         hasRunningTasksLedger: hasLedger,
                         width: runner.terminal.width
                     ))
+                    needsRender = true
                 case .refusedAgentBusy:
                     runner.tui.commit([
                         "",
                         Style.error("  auto-compact: agent is busy; compact skipped"),
                         "",
                     ])
+                    needsRender = true
                 case .refusedTooFewMessages:
                     break
                 case .failed(let msg):
@@ -294,33 +259,19 @@ func runCodingTUIInternal(
                         Style.error("  auto-compact failed: \(msg)"),
                         "",
                     ])
+                    needsRender = true
                 }
-            case .streamRetry(let attempt, let delayMs, let reason):
-                statusBar.setRetrying(attempt: attempt, delayMs: delayMs, reason: reason)
+            case .streamRetry:
+                break
             case .messageStart, .messageUpdate:
-                // A new stream is producing output again — drop the
-                // retrying banner. We don't fall out of retrying on the
-                // next `streamRetry` (back-to-back failures): setRetrying
-                // simply overwrites the payload with fresher info.
-                statusBar.setMode(.streaming)
+                break
             default: break
             }
-            // The agent loop drains the steering queue at turn
-            // boundaries — refresh the panel on every event so a
-            // queued prompt disappears as soon as it enters context.
-            let usage = AgentContextCompactor.currentUsage(
-                messages: agent.state.messages,
-                model: agent.state.model
-            )
-            statusBar.setCapacityHint(formatCapacityHint(
-                usage: usage,
-                threshold: autoCompactThreshold
-            ))
-            refreshQueuePanel()
             layout.fitViewport(height: runner.terminal.height, width: runner.terminal.width)
-            runner.tui.requestRender()
+            if needsRender || modal.isOpen {
+                runner.tui.requestRender()
+            }
         }
-        await statusBar.render()
     }
 
     // Slash command registry. Handlers get a `SlashContext` with the
@@ -418,8 +369,7 @@ func runCodingTUIInternal(
             // user message so it runs at the next turn boundary. We
             // do NOT drop the typed text — starting a second
             // agent.prompt while the first is streaming would throw
-            // `alreadyRunning`. The queue panel above the input
-            // shows what's waiting.
+            // `alreadyRunning`.
             if case .prompt = parsed, busy {
                 let built = buildPromptWithAttachments(
                     text: text,
@@ -432,17 +382,19 @@ func runCodingTUIInternal(
                 agent.steer(.user(UserMessage(content: blocks)))
                 attachments.clear()
                 layout.input.value = ""
+                let queued = agent.queuedSteeringCount()
+                runner.tui.commit([
+                    "",
+                    Style.dimmed("  queued prompt\(queued > 1 ? " (\(queued) waiting)" : "")"),
+                ])
                 // Surface only attach problems — a clean queueing
-                // needs no confirmation, the queue panel already
-                // shows the pending item.
+                // otherwise stays as the one-line queued prompt above.
                 if let issues = built.issues {
                     runner.tui.commit([
                         "",
                         Style.error("  attach: " + issues),
-                        "",
                     ])
                 }
-                refreshQueuePanel()
                 runner.tui.requestRender()
                 return
             }
@@ -454,10 +406,6 @@ func runCodingTUIInternal(
             case .command(let name, let args):
                 if let cmd = slashRegistry.find(name) {
                     await cmd.handler(slashContext, args)
-                    // `/queue clear` (and maybe future commands) may
-                    // mutate the steering queue — refresh so the
-                    // panel above the input stays accurate.
-                    refreshQueuePanel()
                     runner.tui.requestRender()
                 } else {
                     runner.tui.commit([
@@ -493,7 +441,10 @@ func runCodingTUIInternal(
                         try await agent.prompt(promptText, images: promptImages)
                     } catch {
                         await MainActor.run {
-                            layout.status.lines = [Style.error("error: \(error)")]
+                            runner.tui.commit([
+                                "",
+                                Style.error("  error: \(error)"),
+                            ])
                             runner.tui.requestRender()
                         }
                     }
@@ -544,49 +495,32 @@ func runCodingTUIInternal(
             }
             if agent.state.isStreaming {
                 agent.abort()
-                statusBar.setMode(.aborting)
-                await statusBar.render()
+                runner.tui.commit([
+                    "",
+                    Style.dimmed("  aborting…"),
+                ])
+                runner.tui.requestRender()
                 return
             }
             let running = await bgManager.list(sessionId: sessionId)
                 .filter { $0.status == .running }.count
             if running > 0 {
                 await bgManager.killAll(sessionId: sessionId)
-                statusBar.flashKilled(count: running)
-                await statusBar.render()
+                runner.tui.commit([
+                    "",
+                    Style.dimmed("  killed \(running) background \(running == 1 ? "task" : "tasks")"),
+                ])
+                runner.tui.requestRender()
             }
             // No bg tasks, nothing streaming → Esc does nothing. The
             // user exits via Ctrl-C.
         }
     }
 
-    // Periodic refresh so the background-task count + queue panel stay
-    // live even when there aren't any agent events firing. 500ms is
-    // invisibly slow for a human but cheap — just an actor dict count
-    // and a queue snapshot.
-    let pollTask = Task.detached {
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            await statusBar.render()
-            await MainActor.run {
-                refreshQueuePanel()
-                // Tick the collapsed-thinking elapsed counter while a
-                // thinking block is open so seconds advance even without
-                // new provider deltas. No-op otherwise.
-                if renderer.hasActiveThinking {
-                    recomputeTranscript()
-                    runner.tui.requestRender()
-                }
-            }
-        }
-    }
-    defer { pollTask.cancel() }
-
     let shutdown: @MainActor @Sendable () async -> Void = {
         // Kill any still-running background tasks, close provider-held
         // session resources, and tear down the isolated tmux socket so we
         // don't leak processes after the user exits.
-        pollTask.cancel()
         await agent.abortAndKillBackgroundTasks()
         await agent.closeSession()
         await tmuxManager?.teardown()
@@ -674,24 +608,4 @@ func handlePastedBody(
     // Plain short paste: insert as-is, no transformation.
     input.insert(body)
     tui.requestRender()
-}
-
-/// Flatten a queued user message to a single truncated line for the
-/// queue panel above the input. Multi-line bodies collapse to spaces
-/// so the panel's row count stays predictable (1 per queued message
-/// plus a header line).
-func previewQueuedMessageLine(_ msg: Message, max: Int = 100) -> String {
-    let raw: String = {
-        switch msg {
-        case .user(let u):
-            return u.content.compactMap { block -> String? in
-                if case .text(let t) = block { return t.text }
-                return nil
-            }.joined(separator: " ")
-        default:
-            return "(\(msg.role.rawValue) message)"
-        }
-    }()
-    let flat = raw.replacingOccurrences(of: "\n", with: " ")
-    return flat.count <= max ? flat : String(flat.prefix(max)) + "…"
 }

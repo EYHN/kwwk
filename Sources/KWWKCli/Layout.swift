@@ -16,6 +16,16 @@ import Foundation
 ///                when empty so the layout collapses cleanly.
 ///   prompt     — the `❯ …` input row.
 final class CodingLayout: @unchecked Sendable {
+    enum ChromeMode {
+        /// Retain the historical multi-row chrome: live tail, status,
+        /// queue panel, and prompt. Useful for tests and full live UIs.
+        case full
+        /// Retain only transient modal content plus the editable prompt.
+        /// Transcript output flows through append-only stdout, so the
+        /// terminal owns wrapping and resize reflow.
+        case promptOnly
+    }
+
     let liveTail: TextComponent
     let status: TextComponent
     let queue: TextComponent
@@ -25,8 +35,9 @@ final class CodingLayout: @unchecked Sendable {
     /// How many rows the status block occupies. Defaults to 2: metadata
     /// line + state line.
     let statusRows: Int
+    let chromeMode: ChromeMode
 
-    init(statusRows: Int = 2) {
+    init(statusRows: Int = 2, chromeMode: ChromeMode = .full) {
         self.liveTail = TextComponent([])
         self.status = TextComponent([])
         self.queue = TextComponent([])
@@ -34,6 +45,7 @@ final class CodingLayout: @unchecked Sendable {
         self.promptRow = PromptRow(prompt: Style.prompt("❯ "), input: input)
 
         self.statusRows = statusRows
+        self.chromeMode = chromeMode
     }
 
     /// Install layout components into `tui` in display order. Call once at
@@ -44,8 +56,10 @@ final class CodingLayout: @unchecked Sendable {
     /// exact-width rows interact badly with terminal resize/reflow.
     func install(into tui: TUI) {
         tui.addChild(liveTail)
-        tui.addChild(status)
-        tui.addChild(queue)
+        if chromeMode == .full {
+            tui.addChild(status)
+            tui.addChild(queue)
+        }
         tui.addChild(promptRow)
     }
 
@@ -69,7 +83,8 @@ final class CodingLayout: @unchecked Sendable {
     /// The prompt row is multi-line once the user soft-wraps the input
     /// or hits Ctrl+Enter, so its height varies per render.
     var nonTailRows: Int {
-        statusRows + queue.lines.count + promptHeight
+        let chromeRows = chromeMode == .full ? statusRows + queue.lines.count : 0
+        return chromeRows + promptHeight
     }
 
     /// Visual height of the prompt row at the current terminal width.
