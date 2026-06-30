@@ -46,9 +46,20 @@ struct StdinBufferTests {
         #expect(buffer.feed("[A") == ["\u{1B}\u{1B}[A"])
     }
 
-    @Test("a genuine double-ESC flushes on timeout") func doubleEscTimeout() {
+    @Test("a genuine double-ESC flushes BOTH escapes on timeout") func doubleEscTimeout() {
         let buffer = StdinBuffer()
         #expect(buffer.feed("\u{1B}\u{1B}") == [])
-        #expect(buffer.flushOnTimeout() == ["\u{1B}"])
+        // Both escapes must be recovered; none stranded for a later timer.
+        #expect(buffer.flushOnTimeout() == ["\u{1B}", "\u{1B}"])
+        // Buffer fully drained: a second flush yields nothing.
+        #expect(buffer.flushOnTimeout() == [])
+    }
+
+    @Test("a stranded ESC does not corrupt a following arrow") func doubleEscThenArrow() {
+        let buffer = StdinBuffer()
+        #expect(buffer.feed("\u{1B}\u{1B}") == [])
+        #expect(buffer.flushOnTimeout() == ["\u{1B}", "\u{1B}"])
+        // After draining, an Up arrow decodes cleanly, not as Alt+Up.
+        #expect(buffer.feed("\u{1B}[A") == ["\u{1B}[A"])
     }
 }

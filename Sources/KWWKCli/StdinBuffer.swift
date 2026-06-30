@@ -34,11 +34,18 @@ final class StdinBuffer: @unchecked Sendable {
     func flushOnTimeout() -> [String] {
         lock.withLock {
             guard let first = buffer.first, first == 0x1B else { return [] }
-            // A lone ESC, or a `ESC ESC` that never grew into a meta-CSI
-            // (i.e. a genuine double-Escape): flush one ESC so the key isn't
-            // swallowed. A real meta-arrow would have completed via feed() by
-            // the time this timeout fires.
-            if buffer.count == 1 || (buffer.count == 2 && buffer[1] == 0x1B) {
+            // A genuine double-Escape that never grew into a meta-CSI: flush
+            // BOTH escapes so neither is swallowed nor stranded. If only one
+            // were drained, the second 0x1B would linger with no pending timer
+            // and later merge with an incoming arrow into a bogus meta-CSI.
+            // A real meta-arrow would have completed via feed() by the time
+            // this timeout fires.
+            if buffer.count == 2 && buffer[1] == 0x1B {
+                buffer.removeFirst(2)
+                return ["\u{1B}", "\u{1B}"]
+            }
+            // A lone ESC: flush it so the key isn't swallowed.
+            if buffer.count == 1 {
                 buffer.removeFirst()
                 return ["\u{1B}"]
             }
