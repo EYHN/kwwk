@@ -22,6 +22,16 @@ struct TranscriptCommitTests {
         )
     }
 
+    private func stubAssistant(blocks: [AssistantBlock], stop: StopReason = .stop) -> AssistantMessage {
+        AssistantMessage(
+            content: blocks,
+            api: "faux",
+            provider: "faux",
+            model: "faux",
+            stopReason: stop
+        )
+    }
+
     private func toolResult(_ text: String) -> AgentToolResult {
         AgentToolResult(content: [.text(TextContent(text: text))])
     }
@@ -50,8 +60,8 @@ struct TranscriptCommitTests {
     }
 
     @MainActor
-    @Test("assistant streaming stays live; commit fires on messageEnd")
-    func assistantSettlesOnEnd() {
+    @Test("assistant partial text is buffered until messageEnd")
+    func assistantPartialTextBuffersUntilEnd() {
         let r = TranscriptRenderer()
 
         r.apply(.messageStart(message: .assistant(stubAssistant(""))))
@@ -61,18 +71,87 @@ struct TranscriptCommitTests {
             assistantMessageEvent: .textDelta(contentIndex: 0, delta: "hello", partial: partial)
         ))
 
-        // Mid-stream: still in the live zone, nothing committed yet.
+        // Mid-stream without a stable segment boundary: no text is committed
+        // and no assistant text enters the retained live zone.
         #expect(r.drainCommits().isEmpty)
-        #expect(r.liveLines.contains(where: { $0.contains("hello") }))
+        #expect(!r.liveLines.contains(where: { $0.contains("hello") }))
 
-        // On end: body moves to the commit buffer with a leading blank
-        // (no trailing one), live goes empty.
+        // On end: the buffered tail moves to the commit buffer with a leading
+        // blank (no trailing one), live stays empty.
         r.apply(.messageEnd(message: .assistant(stubAssistant("hello"))))
         let commits = r.drainCommits()
-        #expect(commits.first == "")
-        #expect(commits.contains(where: { $0.contains("hello") }))
-        #expect(commits.last != "")
+        #expect(commits == ["", "hello"])
         #expect(r.liveLines.isEmpty)
+    }
+
+    @MainActor
+    @Test("assistant streaming commits complete hard lines")
+    func assistantStreamingCommitsCompleteHardLines() {
+        let r = TranscriptRenderer()
+
+        r.apply(.messageStart(message: .assistant(stubAssistant(""))))
+        let partial = stubAssistant("line1\nline2")
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "line1\nline2", partial: partial)
+        ))
+
+        #expect(r.drainCommits() == ["", "line1"])
+        #expect(r.liveLines.isEmpty)
+
+        r.apply(.messageEnd(message: .assistant(stubAssistant("line1\nline2"))))
+        #expect(r.drainCommits() == ["line2"])
+    }
+
+    @MainActor
+    @Test("assistant segment commits do not duplicate across updates")
+    func assistantSegmentCommitsDoNotDuplicate() {
+        let r = TranscriptRenderer()
+
+        r.apply(.messageStart(message: .assistant(stubAssistant(""))))
+        let first = stubAssistant("line1\nline2")
+        r.apply(.messageUpdate(
+            message: first,
+            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "line1\nline2", partial: first)
+        ))
+        #expect(r.drainCommits() == ["", "line1"])
+
+        let second = stubAssistant("line1\nline2\nline3")
+        r.apply(.messageUpdate(
+            message: second,
+            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "\nline3", partial: second)
+        ))
+        #expect(r.drainCommits() == ["line2"])
+
+        r.apply(.messageEnd(message: .assistant(stubAssistant("line1\nline2\nline3"))))
+        #expect(r.drainCommits() == ["line3"])
+    }
+
+    @MainActor
+    @Test("assistant preserves blank separators between text blocks")
+    func assistantPreservesBlankSeparatorsBetweenTextBlocks() {
+        let r = TranscriptRenderer()
+        r.apply(.messageStart(message: .assistant(stubAssistant(""))))
+
+        let first = stubAssistant(blocks: [.text(TextContent(text: "line1\n"))])
+        r.apply(.messageUpdate(
+            message: first,
+            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "line1\n", partial: first)
+        ))
+        #expect(r.drainCommits() == ["", "line1"])
+
+        let second = stubAssistant(blocks: [
+            .text(TextContent(text: "line1\n")),
+            .text(TextContent(text: "line2"))
+        ])
+        r.apply(.messageUpdate(
+            message: second,
+            assistantMessageEvent: .textStart(contentIndex: 1, partial: second)
+        ))
+        #expect(r.drainCommits() == [""])
+
+        r.apply(.messageEnd(message: .assistant(second)))
+        #expect(r.drainCommits() == ["line2"])
     }
 
     @MainActor
@@ -281,101 +360,19 @@ struct TranscriptCommitTests {
     }
 
     @MainActor
-    @Test("streaming body spills overflow into commits while staying live at the tail")
-    func streamingSpillsOverflow() {
+    @Test("live budget does not spill incomplete assistant text")
+    func liveBudgetDoesNotSpillIncompleteAssistantText() {
         let r = TranscriptRenderer()
         r.apply(.messageStart(message: .assistant(stubAssistant(""))))
-
-        // 20-line streaming body, budget of 5. The assistant block also
-        // carries a leading blank (convention), so `full` is 21 rows —
-        // overflow 16: the leading blank + line1…line15.
-        let body = (1...20).map { "line\($0)" }.joined(separator: "\n")
-        let partial = stubAssistant(body)
+        let partial = stubAssistant("unfinished text")
         r.apply(.messageUpdate(
             message: partial,
-            assistantMessageEvent: .textDelta(contentIndex: 0, delta: body, partial: partial)
+            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "unfinished text", partial: partial)
         ))
-        r.applyLiveBudget(5, reserved: 0)
 
-        let commits = r.drainCommits()
-        #expect(commits.count == 16)
-        #expect(commits.first == "")
-        #expect(commits[1] == "line1")
-        #expect(commits.last == "line15")
-        #expect(r.liveLines.count == 5)
-        #expect(r.liveLines.first == "line16")
-        #expect(r.liveLines.last == "line20")
-
-        // Calling spill again with the same budget is a no-op — already
-        // fits, so no extra commits leak out.
-        r.applyLiveBudget(5, reserved: 0)
+        r.applyLiveBudget(0, reserved: 0)
         #expect(r.drainCommits().isEmpty)
-    }
-
-    @MainActor
-    @Test("successive messageUpdates + spills don't re-commit the same lines")
-    func successiveSpillsDoNotDuplicate() {
-        let r = TranscriptRenderer()
-        r.apply(.messageStart(message: .assistant(stubAssistant(""))))
-
-        // Simulate the streaming stream arriving in two chunks. Each
-        // chunk is the FULL accumulated body so far (that's what
-        // renderAssistantLines produces). After each chunk we apply the
-        // same budget.
-        let chunk1 = (1...15).map { "line\($0)" }.joined(separator: "\n")
-        let m1 = stubAssistant(chunk1)
-        r.apply(.messageUpdate(
-            message: m1,
-            assistantMessageEvent: .textDelta(contentIndex: 0, delta: chunk1, partial: m1)
-        ))
-        r.applyLiveBudget(5, reserved: 0)
-        let firstCommits = r.drainCommits()
-        // First spill carries the leading blank + lines 1-10 (11 rows).
-        #expect(firstCommits == [""] + (1...10).map { "line\($0)" })
-
-        let chunk2 = (1...20).map { "line\($0)" }.joined(separator: "\n")
-        let m2 = stubAssistant(chunk2)
-        r.apply(.messageUpdate(
-            message: m2,
-            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "\nline16\nline17\nline18\nline19\nline20", partial: m2)
-        ))
-        r.applyLiveBudget(5, reserved: 0)
-        let secondCommits = r.drainCommits()
-        // Only the NEW overflow (lines 11-15) should spill now. The
-        // leading blank + lines 1-10 must NOT show up again in scrollback.
-        #expect(secondCommits == (11...15).map { "line\($0)" },
-                "regression: the already-spilled prefix must not re-commit on every update")
-        #expect(r.liveLines.count == 5)
-        #expect(r.liveLines.first == "line16")
-        #expect(r.liveLines.last == "line20")
-
-        // messageEnd should commit just the remaining tail (lines 16-20).
-        // No trailing blank under the new convention.
-        r.apply(.messageEnd(message: .assistant(stubAssistant(chunk2))))
-        let endCommits = r.drainCommits()
-        let expected = (16...20).map { "line\($0)" }
-        #expect(endCommits == expected)
-    }
-
-    @MainActor
-    @Test("streaming spill reserves room for the caller (e.g. notifications)")
-    func streamingSpillRespectsReserved() {
-        let r = TranscriptRenderer()
-        r.apply(.messageStart(message: .assistant(stubAssistant(""))))
-        let body = (1...10).map { "line\($0)" }.joined(separator: "\n")
-        let partial = stubAssistant(body)
-        r.apply(.messageUpdate(
-            message: partial,
-            assistantMessageEvent: .textDelta(contentIndex: 0, delta: body, partial: partial)
-        ))
-        // Budget 8, caller reserves 3 rows → streaming budget = 5.
-        // Body has leading blank + 10 lines = 11 rows; overflow = 6.
-        r.applyLiveBudget(8, reserved: 3)
-        #expect(r.liveLines.count == 5)
-        let commits = r.drainCommits()
-        #expect(commits.count == 6)
-        #expect(commits.first == "")
-        #expect(commits.last == "line5")
+        #expect(r.liveLines.isEmpty)
     }
 
     @MainActor
@@ -443,6 +440,42 @@ struct TUICommitTests {
         await terminal.waitForRender()
         let writes2 = terminal.getWrites()
         #expect(!writes2.contains("ONCE"))
+        tui.stop()
+    }
+
+    @Test("committed long lines are written raw for terminal autowrap")
+    func committedLongLinesWriteRaw() async {
+        let terminal = VirtualTerminal(width: 10, height: 20)
+        let tui = TUI(terminal: terminal)
+        let live = TestLinesComponent(["LIVE"])
+        tui.addChild(live)
+        tui.start()
+        await terminal.waitForRender()
+        terminal.clearWrites()
+
+        let long = "12345678901234567890"
+        tui.commit([long])
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        let writes = terminal.getWrites()
+        #expect(writes.contains(long))
+        if let longRange = writes.range(of: long) {
+            let enable = "\u{1B}[?7h"
+            let disable = "\u{1B}[?7l"
+            let enableBeforeCommit = writes.range(
+                of: enable,
+                options: .backwards,
+                range: writes.startIndex..<longRange.lowerBound
+            )
+            let disableAfterCommit = writes.range(
+                of: disable,
+                range: longRange.upperBound..<writes.endIndex
+            )
+
+            #expect(enableBeforeCommit != nil)
+            #expect(disableAfterCommit != nil)
+        }
         tui.stop()
     }
 

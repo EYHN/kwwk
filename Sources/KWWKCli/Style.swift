@@ -11,6 +11,10 @@ enum Style {
     static let magenta = "\u{1B}[35m"
     static let gray = "\u{1B}[90m"
 
+    static func badge(_ s: String, fg: Int = 255, bg: Int) -> String {
+        "\u{1B}[38;5;\(fg);48;5;\(bg)m \(s) \(reset)"
+    }
+
     static func dimmed(_ s: String) -> String { "\(dim)\(s)\(reset)" }
     static func header(_ s: String) -> String { "\(bold)\(magenta)\(s)\(reset)" }
     static func user(_ s: String) -> String { "\(bold)\(s)\(reset)" }

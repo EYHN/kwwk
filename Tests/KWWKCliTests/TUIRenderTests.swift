@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+@testable import KWWKAI
+@testable import KWWKAgent
 @testable import KWWKCli
 
 /// Small component whose lines can be mutated between renders.
@@ -125,6 +127,21 @@ struct TextComponentTests {
     }
 }
 
+@Suite("Horizontal rule")
+struct HorizontalRuleTests {
+    @Test("renders full viewport width")
+    func rendersFullWidth() {
+        let rendered = HorizontalRule("─").render(width: 5)
+        #expect(rendered == ["─────"])
+        #expect(ANSI.visibleWidth(rendered[0]) == 5)
+    }
+
+    @Test("zero width renders an empty line")
+    func zeroWidth() {
+        #expect(HorizontalRule("─").render(width: 0) == [""])
+    }
+}
+
 @Suite("Container")
 struct ContainerTests {
     @Test("stacks children vertically")
@@ -143,6 +160,139 @@ struct ContainerTests {
         container.clear()
         #expect(container.children.isEmpty)
         #expect(container.render(width: 10).isEmpty)
+    }
+}
+
+@Suite("Coding layout")
+struct CodingLayoutTests {
+    @Test("status row replaces the divider in the live zone")
+    func statusRowReplacesDivider() async {
+        let terminal = VirtualTerminal(width: 20, height: 10)
+        let tui = TUI(terminal: terminal)
+        let layout = CodingLayout(statusRows: 2)
+        layout.status.lines = [Style.dimmed("meta"), Style.dimmed("status")]
+        layout.install(into: tui)
+        tui.start()
+        await terminal.waitForRender()
+
+        let writes = terminal.getWrites()
+        #expect(writes.contains("meta"))
+        #expect(writes.contains("status"))
+        #expect(!writes.contains("────"))
+        #expect(layout.nonTailRows == 3)
+        tui.stop()
+    }
+
+    @Test("status metadata is compact, badged, and never padded to terminal width")
+    func statusMetadataIsNotPadded() {
+        let model = Model(
+            id: "gpt-5.4",
+            api: "chatgpt-codex",
+            provider: "chatgpt-codex",
+            reasoning: true
+        )
+
+        let line = statusMetadataLine(
+            model: model,
+            thinkingLevel: .medium,
+            thinkingDisplay: .collapsed,
+            capacityHint: Style.dimmed("42% ctx"),
+            width: 80
+        )
+
+        #expect(line.contains("gpt-5.4"))
+        #expect(!line.contains("chatgpt-codex"))
+        #expect(line.contains("reasoning medium"))
+        #expect(!line.contains("display collapsed"))
+        #expect(!line.contains("thoughts expanded"))
+        #expect(line.contains("42% ctx"))
+        #expect(line.contains("48;5;"))
+        #expect(!line.hasSuffix(" "))
+        #expect(ANSI.visibleWidth(line) < 80)
+    }
+
+    @Test("status metadata names expanded thoughts only when non-default")
+    func statusMetadataShowsExpandedThoughts() {
+        let model = Model(
+            id: "gpt-5.4",
+            api: "chatgpt-codex",
+            provider: "chatgpt-codex",
+            reasoning: true
+        )
+
+        let line = statusMetadataLine(
+            model: model,
+            thinkingLevel: .medium,
+            thinkingDisplay: .expanded,
+            capacityHint: "",
+            width: 80
+        )
+
+        #expect(line.contains("thoughts expanded"))
+        #expect(!line.contains("display expanded"))
+        #expect(line.contains("48;5;"))
+        #expect(!line.hasSuffix(" "))
+    }
+
+    @Test("prompt row renders slash completion as a dimmed ghost suffix")
+    func promptRowRendersSlashCompletionHint() {
+        let input = InputComponent(initial: "/mod")
+        let row = PromptRow(prompt: Style.prompt("❯ "), input: input)
+        row.focused = true
+        row.ghostHintProvider = { value in
+            slashCompletion(for: value, commandNames: ["model", "queue"])?.suffix
+        }
+
+        let rendered = row.render(width: 40).joined(separator: "\n")
+        #expect(rendered.contains("/mod"))
+        #expect(rendered.contains("el"))
+        #expect(rendered.contains(Style.dim))
+        #expect(ANSI.visibleWidth(rendered) < 40)
+    }
+}
+
+@Suite("TUI inline resize reflow")
+struct TUIInlineResizeReflowTests {
+    @Test("live frame drawing disables autowrap around exact-width rows")
+    func liveFrameDisablesAutowrap() async {
+        let terminal = VirtualTerminal(width: 5, height: 20)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(HorizontalRule("─"))
+        tui.start()
+        await terminal.waitForRender()
+
+        let writes = terminal.getWrites()
+        let disable = "\u{1B}[?7l"
+        let enable = "\u{1B}[?7h"
+        let rule = "─────"
+        let disableIdx = writes.range(of: disable)?.lowerBound
+        let ruleIdx = writes.range(of: rule)?.lowerBound
+        let enableIdx = writes.range(of: enable, range: (ruleIdx ?? writes.startIndex)..<writes.endIndex)?.lowerBound
+
+        #expect(disableIdx != nil && ruleIdx != nil && enableIdx != nil)
+        if let disableIdx, let ruleIdx, let enableIdx {
+            #expect(disableIdx < ruleIdx)
+            #expect(ruleIdx < enableIdx)
+        }
+        tui.stop()
+    }
+
+    @Test("shrinking width does not expand clear range to terminal reflow height")
+    func shrinkKeepsLogicalClearHeight() async {
+        let terminal = VirtualTerminal(width: 12, height: 20)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TestLinesComponent([String(repeating: "─", count: 11)]))
+        tui.start()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        terminal.resize(width: 4, height: 20)
+        await terminal.waitForRender()
+
+        let writes = terminal.getWrites()
+        #expect(!writes.contains("\u{1B}[2A"))
+        #expect(!writes.contains("\r\n\u{1B}[2K"))
+        tui.stop()
     }
 }
 

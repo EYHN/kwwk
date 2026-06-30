@@ -39,6 +39,9 @@ final class TUI: @unchecked Sendable {
     private var renderMode: RenderMode = .inline
     private var hideCursor: Bool = false
 
+    private static let disableAutowrap = "\u{1B}[?7l"
+    private static let enableAutowrap = "\u{1B}[?7h"
+
     init(terminal: Terminal) {
         self.terminal = terminal
     }
@@ -98,7 +101,7 @@ final class TUI: @unchecked Sendable {
         resizeUnsubscribe = nil
         if wasStarted {
             let (mode, hide) = lock.withLock { (renderMode, hideCursor) }
-            var epilogue = ""
+            var epilogue = TUI.enableAutowrap
             if hide { epilogue += "\u{1B}[?25h" }
             if mode == .alternate {
                 epilogue += "\u{1B}[?1049l"
@@ -118,9 +121,10 @@ final class TUI: @unchecked Sendable {
     }
 
     /// Queue `lines` to be written as append-only output above the live
-    /// zone on the next render. Each line becomes one terminal row; they
-    /// scroll into native scrollback as the live zone below pushes them
-    /// up, exactly like normal stdout output would.
+    /// zone on the next render. Lines are written raw; if a committed line is
+    /// wider than the terminal, the terminal's native autowrap owns the visual
+    /// continuation rows. This is safe for committed output because it is never
+    /// redrawn as part of the retained live frame.
     ///
     /// In `.alternate` mode there's no scrollback to target, so this is
     /// a no-op. Callers that want to display the same content in both
@@ -215,7 +219,7 @@ final class TUI: @unchecked Sendable {
         forceFullRedraw: Bool,
         shrinking: Bool
     ) -> String {
-        var out = "\u{1B}[H"
+        var out = TUI.disableAutowrap + "\u{1B}[H"
         if forceFullRedraw {
             out += "\u{1B}[2J\u{1B}[H"
         }
@@ -234,6 +238,7 @@ final class TUI: @unchecked Sendable {
         if let target = cursorTarget {
             out += "\u{1B}[\(target.row);\(target.col)H"
         }
+        out += TUI.enableAutowrap
         return out
     }
 
@@ -261,6 +266,7 @@ final class TUI: @unchecked Sendable {
 
         // Step 1: rewind to the top of the previous live zone.
         if oldHeight > 0 {
+            out += TUI.disableAutowrap
             out += "\r"
             if oldHeight > 1 {
                 out += "\u{1B}[\(oldHeight - 1)A"
@@ -269,17 +275,20 @@ final class TUI: @unchecked Sendable {
             // bleed through when the new frame is shorter than the old.
             for i in 0..<oldHeight {
                 out += "\u{1B}[2K"
-                if i < oldHeight - 1 { out += "\r\n" }
+                if i < oldHeight - 1 { out += "\u{1B}[B" }
             }
             // Back to the top of the cleared area.
             out += "\r"
             if oldHeight > 1 {
                 out += "\u{1B}[\(oldHeight - 1)A"
             }
+            out += TUI.enableAutowrap
         }
 
-        // Step 2: emit committed lines as permanent output. Each line
-        // ends in \r\n so the cursor advances to a fresh row afterwards.
+        // Step 2: emit committed lines as permanent output. Lines are written
+        // raw so the terminal can autowrap long output exactly like stdout.
+        // Each line ends in \r\n so the cursor advances to a fresh row
+        // afterwards.
         // If the total committed + live output is taller than what fits
         // below the current cursor, the terminal's built-in scroll
         // behavior kicks in — rows at the top slide up into scrollback,
@@ -294,22 +303,30 @@ final class TUI: @unchecked Sendable {
         // `\r\n` so the cursor lands at the end of the last line, where
         // we may further position it for the focused component.
         var cursorTarget: (rowFromTop: Int, col: Int)?
-        for (i, rawLine) in rendered.enumerated() {
-            let (cleanLine, col) = TUI.extractCursor(rawLine)
-            if let col, cursorTarget == nil { cursorTarget = (i, col) }
-            out += "\u{1B}[2K"
-            out += cleanLine
-            if i < rendered.count - 1 { out += "\r\n" }
-        }
+        if !rendered.isEmpty {
+            // The retained live frame owns its rows and repaints them by
+            // logical height. Temporarily disable terminal autowrap so
+            // exact-width live rows do not become soft-wrapped scrollback
+            // lines during terminal resize.
+            out += TUI.disableAutowrap
+            for (i, rawLine) in rendered.enumerated() {
+                let (cleanLine, col) = TUI.extractCursor(rawLine)
+                if let col, cursorTarget == nil { cursorTarget = (i, col) }
+                out += "\u{1B}[2K"
+                out += cleanLine
+                if i < rendered.count - 1 { out += "\r\n" }
+            }
 
-        // Step 4: reposition the hardware cursor to wherever the focused
-        // component asked. Cursor is currently at (bottom_row,
-        // visibleWidth(lastLine)) of the live zone.
-        if let target = cursorTarget {
-            let upBy = (rendered.count - 1) - target.rowFromTop
-            if upBy > 0 { out += "\u{1B}[\(upBy)A" }
-            out += "\r"
-            if target.col > 0 { out += "\u{1B}[\(target.col)C" }
+            // Step 4: reposition the hardware cursor to wherever the focused
+            // component asked. Cursor is currently at (bottom_row,
+            // visibleWidth(lastLine)) of the live zone.
+            if let target = cursorTarget {
+                let upBy = (rendered.count - 1) - target.rowFromTop
+                if upBy > 0 { out += "\u{1B}[\(upBy)A" }
+                out += "\r"
+                if target.col > 0 { out += "\u{1B}[\(target.col)C" }
+            }
+            out += TUI.enableAutowrap
         }
 
         _ = forceFullRedraw

@@ -1,9 +1,13 @@
 import Foundation
 import KWWKAgent
+import KWWKAI
 
-/// One-line state bar. The line itself carries the contextual keyboard
-/// hint so we don't burn a second row on a static "Ctrl-C: quit" banner.
+/// Two-line status block. The first row is compact metadata badges (model,
+/// reasoning, capacity); the second row is the transient
+/// operational state.
 ///
+///   model gpt-5.4  reasoning medium  42% ctx
+///   model gpt-5.4  reasoning medium  thoughts expanded  42% ctx
 ///   ● generating…  · Esc to cancel  · N bg tasks running
 ///   ● aborting…    · Ctrl-C to force quit
 ///   ○ 3 background tasks running  · Esc to stop them
@@ -31,7 +35,7 @@ final class CodingStatusBar {
     /// the 500ms poll re-renders a live countdown without needing a
     /// dedicated timer. Populated via `setRetrying(...)`.
     private var retryInfo: (attempt: Int, until: Date, reason: String)?
-    /// Optional capacity suffix (e.g. `42% ctx`) appended to the status
+    /// Optional capacity suffix (e.g. `42% ctx`) appended to the metadata
     /// line when non-empty. Updated by the auto-compact controller via
     /// `setCapacityHint`.
     private var capacityHint: String = ""
@@ -101,7 +105,7 @@ final class CodingStatusBar {
         }
     }
 
-    /// Recompute the two status lines and re-render.
+    /// Recompute the metadata + state status lines and re-render.
     func render() async {
         let running = await bgManager.list(sessionId: sessionId)
             .filter { $0.status == .running }.count
@@ -111,7 +115,7 @@ final class CodingStatusBar {
         // idle and no background tasks are running, the line is blank —
         // there's nothing for the user to act on, so don't add visual
         // chrome. The row is still reserved by the layout so everything
-        // below it (prompt, divider) doesn't jitter.
+        // below it (prompt) doesn't jitter.
         // Queue visibility lives in its own panel above the prompt
         // (see `refreshQueuePanel` in CodingTUI.swift). The status bar
         // stays focused on "what's the agent doing right now" so the
@@ -170,18 +174,20 @@ final class CodingStatusBar {
             line = ""
         }
 
-        // Right-align the capacity hint so the status row reads as a
-        // balanced band: state/hints hug the left edge, `42% ctx` hugs
-        // the right edge. When only one side has content the other side
-        // is empty padding — visually that still reads as a single
-        // working line instead of "mostly empty space".
-        let fullLine = padBetween(
-            left: line,
-            right: capacityHint,
-            width: terminal.width
+        // Do not right-pad or fill either row. The live TUI must never emit
+        // layout spaces out to the terminal edge; resize/reflow can preserve
+        // those cells as stale wrapped lines in scrollback.
+        let statusWidth = max(0, terminal.width - 1)
+        let metadata = statusMetadataLine(
+            model: agent.state.model,
+            thinkingLevel: agent.state.thinkingLevel,
+            thinkingDisplay: agent.state.thinkingDisplay,
+            capacityHint: capacityHint,
+            width: statusWidth
         )
+        let state = ANSI.truncate(line, to: statusWidth)
 
-        let newLines = [fullLine]
+        let newLines = [metadata, state]
         if newLines != lastRenderedLines {
             lastRenderedLines = newLines
             layout.status.lines = newLines
@@ -190,22 +196,26 @@ final class CodingStatusBar {
     }
 }
 
-/// Pad `left` and `right` out to `width` visible columns so `right` sits
-/// at the right edge and `left` at the left. Falls back to either side
-/// alone when the other is empty. If the two together already exceed the
-/// width we concatenate with a single space — truncation is left to the
-/// TUI's per-line width-clip.
-func padBetween(left: String, right: String, width: Int) -> String {
-    if left.isEmpty && right.isEmpty { return "" }
-    if right.isEmpty { return left }
-    if left.isEmpty {
-        let pad = max(0, width - ANSI.visibleWidth(right))
-        return String(repeating: " ", count: pad) + right
+func statusMetadataLine(
+    model: Model,
+    thinkingLevel: ThinkingLevel,
+    thinkingDisplay: ThinkingDisplay,
+    capacityHint: String,
+    width: Int
+) -> String {
+    var parts = [Style.badge("model \(model.id)", bg: 61)]
+
+    let effectiveReasoning = model.reasoning ? thinkingLevel.rawValue : ThinkingLevel.off.rawValue
+    let reasoningBg = effectiveReasoning == ThinkingLevel.off.rawValue ? 238 : 64
+    parts.append(Style.badge("reasoning \(effectiveReasoning)", bg: reasoningBg))
+    if model.reasoning && thinkingDisplay == .expanded {
+        parts.append(Style.badge("thoughts expanded", bg: 96))
     }
-    let combined = ANSI.visibleWidth(left) + ANSI.visibleWidth(right)
-    if combined + 1 >= width {
-        return left + " " + right
+    let capacityText = ANSI.stripEscapes(capacityHint)
+    if !capacityText.isEmpty {
+        let capacityBg = capacityText.hasPrefix("●") ? 130 : 238
+        parts.append(Style.badge(capacityText, bg: capacityBg))
     }
-    let spaces = width - combined
-    return left + String(repeating: " ", count: spaces) + right
+
+    return ANSI.truncate(parts.joined(), to: max(0, width))
 }

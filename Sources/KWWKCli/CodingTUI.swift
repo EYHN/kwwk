@@ -93,7 +93,7 @@ func runCodingTUIInternal(
     // behavior). Pass `useAlternateScreen: true` if you want a blank
     // fullscreen buffer instead.
     let runner = TUIRunner(useAlternateScreen: false, hideCursor: false)
-    let layout = CodingLayout(statusRows: 1)
+    let layout = CodingLayout(statusRows: 2)
     let renderer = TranscriptRenderer()
 
     // Print the header banner once, as ordinary terminal output. It
@@ -135,13 +135,6 @@ func runCodingTUIInternal(
             tui: runner.tui
         )
     }
-    _ = runner.terminal.onResize { w, h in
-        Task { @MainActor in
-            layout.fitViewport(height: h, width: w)
-            runner.tui.requestRender()
-        }
-    }
-
     // Non-LLM messages the coding TUI wants to surface ("switched to
     // gpt-5.4", "unknown slash command /foo", attach issues, etc.) are
     // committed directly to scrollback via `runner.tui.commit(...)`.
@@ -151,12 +144,9 @@ func runCodingTUIInternal(
     // idle state below so we never need to interleave them with
     // streaming output.
     //
-    // `recomputeTranscript` rebuilds the live tail (streaming body +
-    // running tool markers) from the renderer's current state. Before
-    // reading the tail we let the renderer spill any streaming-body
-    // overflow into its commit buffer — that way long assistant turns
-    // scroll into native scrollback as they stream instead of just
-    // clipping at the top of the viewport.
+    // `recomputeTranscript` rebuilds the live tail (running tool markers)
+    // from the renderer's current state. Assistant text commits append-only
+    // in stable segments, letting the terminal handle native autowrap.
     let recomputeTranscript: @MainActor @Sendable () -> Void = {
         renderer.applyLiveBudget(layout.liveTailBudget, reserved: 0)
         layout.setLiveTail(renderer.liveLines)
@@ -177,6 +167,16 @@ func runCodingTUIInternal(
         },
         requestRender: { runner.tui.requestRender() }
     )
+
+    _ = runner.terminal.onResize { w, h in
+        Task { @MainActor in
+            layout.fitViewport(height: h, width: w)
+            if !modal.isOpen {
+                recomputeTranscript()
+            }
+            runner.tui.requestRender()
+        }
+    }
 
     /// Drain the renderer's commit buffer and forward to the TUI so the
     /// newly-settled lines show up above the live zone on the next
@@ -337,6 +337,10 @@ func runCodingTUIInternal(
     // can't shadow a core command; their handlers render the template against
     // the invocation args and submit it as an ordinary prompt.
     CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd)
+    let slashCommandNames = slashRegistry.all.map(\.name)
+    layout.promptRow.ghostHintProvider = { input in
+        slashCompletion(for: input, commandNames: slashCommandNames)?.suffix
+    }
     let slashContext = SlashContext(
         agent: agent,
         modal: modal,
@@ -495,6 +499,20 @@ func runCodingTUIInternal(
                     }
                 }
             }
+        }
+    }
+
+    runner.bind(.init("tab")) { _ in
+        Task { @MainActor in
+            guard !modal.isOpen else { return }
+            if layout.input.cursor == layout.input.value.count,
+               let completion = slashCompletion(for: layout.input.value, commandNames: slashCommandNames) {
+                layout.input.value = completion.completedInput
+                layout.input.moveEnd()
+            } else {
+                layout.input.insert("\t")
+            }
+            runner.tui.requestRender()
         }
     }
 

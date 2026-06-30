@@ -11,15 +11,19 @@ import KWWKAgent
 ///   terminal's native scrollback and stay there forever). CodingTUI
 ///   drains this on every agent event and passes it to `tui.commit(_:)`.
 ///
-/// * `liveLines` — the in-progress tail: streaming assistant text plus
-///   any running tool headers + their result previews. This is what
-///   `CodingLayout.liveTail` shows, redrawn in place each frame.
+/// * `liveLines` — the mutable in-progress tail: running tool headers
+///   + their result previews. Assistant text is not retained here; it is
+///   committed append-only at stable segment boundaries so the terminal's
+///   native autowrap handles long lines.
 ///
 /// Settlement points:
 ///   - `messageStart(.user)` → commit the user prompt row + a blank
 ///     (user input never streams).
-///   - `messageEnd(.assistant)` → commit the assistant turn's body
-///     (plus any aborted/error line) + a blank. Clear streaming tail.
+///   - `messageUpdate(.assistant)` → commit assistant text that has
+///     reached a stable hard-line boundary. Keep the trailing partial
+///     segment buffered.
+///   - `messageEnd(.assistant)` → commit the remaining buffered segment
+///     plus any aborted/error line. Clear assistant segment state.
 ///   - `toolExecutionEnd` → commit the tool header + result lines +
 ///     a blank, but **only after every earlier-started tool has also
 ///     settled** — preserves visual ordering when tools finish out of
@@ -33,23 +37,27 @@ final class TranscriptRenderer {
     /// Drained by CodingTUI via `drainCommits()` on every agent event.
     private var pendingCommits: [String] = []
 
-    /// The current in-progress tail. Recomputed from `streamingBody` +
-    /// `toolSlots` on every change.
+    /// The current in-progress tail. Assistant text is deliberately not
+    /// retained here: stable text segments are committed append-only so the
+    /// terminal can handle native autowrap. The live tail is for mutable tool
+    /// slots and transient status only.
     private(set) var liveLines: [String] = []
 
     /// True while an assistant message is mid-stream.
     private var streaming: Bool = false
-    /// Current rendered lines of the streaming assistant turn, **minus**
-    /// any head that was already spilled to the commit buffer. The
-    /// spilled prefix count is tracked in `streamingCommittedPrefix`; on
-    /// every `messageUpdate` we recompute the full body and then drop
-    /// the first `streamingCommittedPrefix` lines so we never re-emit
-    /// them.
-    private var streamingBody: [String] = []
-    /// Lines of the current turn's body that have already been flushed
-    /// to the commit buffer (i.e. are in terminal scrollback, not in
-    /// the live zone). Reset to 0 on every `messageStart(.assistant)`.
-    private var streamingCommittedPrefix: Int = 0
+    /// Number of characters from the latest full assistant text snapshot that
+    /// have been ingested into `assistantSegmentBuffer` or committed. Provider
+    /// deltas arrive with the accumulated partial message, so this prevents
+    /// duplicate commits without relying on terminal width.
+    private var assistantIngestedCharacters: Int = 0
+    /// Tail of the assistant text that has not reached a stable segment
+    /// boundary yet. It is flushed on newline boundaries while streaming and
+    /// fully flushed on `messageEnd`.
+    private var assistantSegmentBuffer: String = ""
+    /// Whether this assistant turn has already emitted any text/error marker
+    /// into scrollback. Used to prepend the block's leading separator exactly
+    /// once.
+    private var assistantCommittedDuringTurn: Bool = false
 
     /// Verbose diagnostics that arrived while the assistant body was live.
     /// They are committed after `messageEnd` so provider logs don't interleave
@@ -104,50 +112,12 @@ final class TranscriptRenderer {
         return out
     }
 
-    /// Spill the streaming assistant body's head into the commit buffer
-    /// when it would otherwise exceed `budget` rows after accounting for
-    /// `reserved` caller-owned rows (typically notifications) and the
-    /// space running tool slots will consume.
-    ///
-    /// Committed lines are removed from `streamingBody` so future
-    /// `messageUpdate`s don't re-emit them. Tool slots stay live even
-    /// under pressure — they can still mutate (running → result) and
-    /// committing them early would dump a `running…` placeholder into
-    /// scrollback.
-    ///
-    /// Call this from the UI layer every time the live tail is about to
-    /// be recomputed; it's idempotent once the body fits.
+    /// Assistant text is committed in append-only segments, not retained in
+    /// the live zone, so there is no assistant-body budget to spill here.
+    /// Kept as the UI-layer hook for future live-tail budgeting.
     func applyLiveBudget(_ budget: Int, reserved: Int = 0) {
-        let toolLines = toolSlotsRenderedLineCount()
-        let streamingBudget = max(0, budget - reserved - toolLines)
-        guard streamingBody.count > streamingBudget else { return }
-        let overflow = streamingBody.count - streamingBudget
-        commit(Array(streamingBody.prefix(overflow)))
-        streamingBody = Array(streamingBody.suffix(streamingBudget))
-        // Remember how much of this turn's rendered body is now in
-        // scrollback so the next `messageUpdate` knows to skip it
-        // (otherwise we'd re-commit the same prefix every token).
-        streamingCommittedPrefix += overflow
-        recomputeLive()
-    }
-
-    /// How many rows running tool slots contribute to the live zone.
-    /// Mirrors `recomputeLive`'s tool rendering so the budget math in
-    /// `applyLiveBudget` matches what the user actually sees.
-    private func toolSlotsRenderedLineCount() -> Int {
-        var n = 0
-        for slot in toolSlots {
-            n += 1  // leading blank separator (one block per tool)
-            n += 1  // header
-            if let resolved = slot.resolution {
-                n += max(0, resolved.count - 2)  // body (skip leading blank + header)
-            } else if let partial = slot.partial {
-                n += formatToolResult(partial, isError: false).count
-            } else {
-                n += 1  // "running…"
-            }
-        }
-        return n
+        _ = budget
+        _ = reserved
     }
 
     func apply(_ event: AgentEvent) {
@@ -169,8 +139,9 @@ final class TranscriptRenderer {
                 }
             case .assistant:
                 streaming = true
-                streamingBody = []
-                streamingCommittedPrefix = 0
+                assistantIngestedCharacters = 0
+                assistantSegmentBuffer = ""
+                assistantCommittedDuringTurn = false
                 // New turn — drop any prior turn's thinking timings.
                 // Re-populated from `.thinkingStart` events below.
                 thinkingTimings.removeAll()
@@ -196,12 +167,7 @@ final class TranscriptRenderer {
             default:
                 break
             }
-            let full = renderAssistantLines(assistant)
-            // Drop the already-spilled head so we don't round-trip
-            // those lines on every token. `streamingCommittedPrefix`
-            // grows monotonically per turn; assistant output is
-            // append-only under our agent so this is safe.
-            streamingBody = Array(full.dropFirst(streamingCommittedPrefix))
+            ingestAssistantText(assistant, flushAll: false)
             recomputeLive()
 
         case .messageEnd(let message):
@@ -213,18 +179,21 @@ final class TranscriptRenderer {
                 for (idx, t) in thinkingTimings where t.end == nil {
                     thinkingTimings[idx] = (start: t.start, end: DispatchTime.now())
                 }
-                let full = renderAssistantLines(a)
-                var tail = Array(full.dropFirst(streamingCommittedPrefix))
+                ingestAssistantText(a, flushAll: true)
+                var tail: [String] = []
                 if a.stopReason == .aborted {
                     tail.append(Style.dimmed("⋯ aborted"))
                 }
                 if let err = a.errorMessage, a.stopReason == .error {
                     tail.append(Style.error("✗ \(err)"))
                 }
-                commit(tail)
+                if !tail.isEmpty {
+                    commitAssistantLines(tail)
+                }
                 streaming = false
-                streamingBody = []
-                streamingCommittedPrefix = 0
+                assistantIngestedCharacters = 0
+                assistantSegmentBuffer = ""
+                assistantCommittedDuringTurn = false
                 recomputeLive()
                 flushQueuedVerbose()
             case .toolResult, .user:
@@ -266,18 +235,18 @@ final class TranscriptRenderer {
 
         case .streamRewind:
             // A retryable error killed the stream mid-flight. Clear the
-            // live-zone partial so the retry's `messageStart` paints a
-            // clean slate. If we already spilled head-of-body into
-            // committed scrollback (`applyLiveBudget` does that on long
-            // turns), those lines are irrevocable — terminals can't
-            // un-scroll. Drop a visible marker so the user knows the
-            // earlier output was from a failed attempt; the retry's
-            // body will follow after the next messageStart.
-            if streamingCommittedPrefix > 0 {
+            // segment buffer so the retry's `messageStart` paints a clean
+            // slate. If we already committed completed segments into
+            // scrollback, those lines are irrevocable — terminals can't
+            // un-scroll. Drop a visible marker so the user knows the earlier
+            // output was from a failed attempt; the retry's body will follow
+            // after the next messageStart.
+            if assistantCommittedDuringTurn {
                 commit([Style.dimmed("  ⋯ retry — prior partial above is discarded")])
             }
-            streamingBody = []
-            streamingCommittedPrefix = 0
+            assistantIngestedCharacters = 0
+            assistantSegmentBuffer = ""
+            assistantCommittedDuringTurn = false
             queuedVerboseLines.removeAll()
             recomputeLive()
 
@@ -319,20 +288,13 @@ final class TranscriptRenderer {
         queuedVerboseLines.removeAll()
     }
 
-    /// Rebuild `liveLines` from the current streaming body + any
-    /// still-live tool slots. Slots that have resolved but are blocked
+    /// Rebuild `liveLines` from any still-live tool slots. Slots that have
+    /// resolved but are blocked
     /// behind an earlier running slot still render here as their final
     /// result — so the user sees the complete output as soon as it's
     /// known, even before the commit happens.
     private func recomputeLive() {
         var out: [String] = []
-        if !streamingBody.isEmpty {
-            for raw in streamingBody {
-                for sub in raw.split(separator: "\n", omittingEmptySubsequences: false) {
-                    out.append(String(sub))
-                }
-            }
-        }
         for slot in toolSlots {
             // Each tool execution is its own block — leading blank
             // separator keeps parallel tools from stacking against the
@@ -385,34 +347,25 @@ final class TranscriptRenderer {
         }.joined(separator: " ")
     }
 
-    private func renderAssistantLines(_ a: AssistantMessage) -> [String] {
-        // Every scrollback block opens with a leading blank row and never
-        // closes with one — so the next block brings its own separator.
-        var out: [String] = [""]
+    private func assistantTextSnapshot(_ a: AssistantMessage) -> String {
+        var out = ""
         var renderedAny = false
-        var thinkingIndex = 0
         for block in a.content {
             switch block {
             case .text(let t):
                 if t.text.isEmpty { continue }
-                if renderedAny { out.append("") }
-                out.append(contentsOf: t.text.components(separatedBy: "\n"))
-                renderedAny = true
-            case .thinking(let th):
-                defer { thinkingIndex += 1 }
-                if th.thinking.isEmpty { continue }
-                if renderedAny { out.append("") }
-                switch thinkingDisplay {
-                case .collapsed:
-                    out.append(Style.dimmed(collapsedThinkingLabel(blockIndex: thinkingIndex)))
-                case .expanded:
-                    out.append(Style.dimmed(expandedThinkingHeader(blockIndex: thinkingIndex)))
-                    for line in th.thinking.components(separatedBy: "\n") {
-                        out.append(Style.dimmed("  " + line))
+                if renderedAny {
+                    if out.hasSuffix("\n\n") {
+                        // Already separated by a blank line.
+                    } else if out.hasSuffix("\n") {
+                        out += "\n"
+                    } else {
+                        out += "\n\n"
                     }
                 }
+                out += t.text
                 renderedAny = true
-            case .toolCall:
+            case .thinking, .toolCall:
                 // Tool calls render via toolExecutionStart so the `⎿` result
                 // lines attach to the same `●` header. Skip here to avoid a
                 // duplicate line during streaming.
@@ -420,6 +373,50 @@ final class TranscriptRenderer {
             }
         }
         return out
+    }
+
+    private func ingestAssistantText(_ assistant: AssistantMessage, flushAll: Bool) {
+        let snapshot = assistantTextSnapshot(assistant)
+        if assistantIngestedCharacters > snapshot.count {
+            assistantIngestedCharacters = 0
+            assistantSegmentBuffer = ""
+        }
+        if assistantIngestedCharacters < snapshot.count {
+            let start = snapshot.index(snapshot.startIndex, offsetBy: assistantIngestedCharacters)
+            assistantSegmentBuffer += snapshot[start...]
+            assistantIngestedCharacters = snapshot.count
+        }
+        drainAssistantSegmentBuffer(flushAll: flushAll)
+    }
+
+    private func drainAssistantSegmentBuffer(flushAll: Bool) {
+        let segment: String
+        if flushAll {
+            guard !assistantSegmentBuffer.isEmpty else { return }
+            segment = assistantSegmentBuffer
+            assistantSegmentBuffer = ""
+        } else {
+            guard let boundary = assistantSegmentBuffer.lastIndex(of: "\n") else { return }
+            segment = String(assistantSegmentBuffer[..<boundary])
+            assistantSegmentBuffer = String(assistantSegmentBuffer[assistantSegmentBuffer.index(after: boundary)...])
+        }
+        if segment.isEmpty {
+            if assistantCommittedDuringTurn {
+                commit([""])
+            }
+            return
+        }
+        commitAssistantLines(segment.components(separatedBy: "\n"))
+    }
+
+    private func commitAssistantLines(_ lines: [String]) {
+        guard !lines.isEmpty else { return }
+        if assistantCommittedDuringTurn {
+            commit(lines)
+        } else {
+            commit([""] + lines)
+            assistantCommittedDuringTurn = true
+        }
     }
 
     /// One-liner for a thinking block in collapsed mode.

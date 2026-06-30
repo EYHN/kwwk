@@ -108,6 +108,11 @@ struct SlashCommand: Sendable {
     let handler: SlashHandler
 }
 
+struct SlashCompletion: Equatable {
+    let suffix: String
+    let completedInput: String
+}
+
 /// Lookup table for slash commands. Single-threaded: all registration and
 /// dispatch happens on the MainActor.
 @MainActor
@@ -125,4 +130,26 @@ final class SlashCommandRegistry {
     var all: [SlashCommand] {
         Array(commands.values).sorted { $0.name < $1.name }
     }
+}
+
+@MainActor
+func slashCompletion(for input: String, registry: SlashCommandRegistry) -> SlashCompletion? {
+    slashCompletion(for: input, commandNames: registry.all.map(\.name))
+}
+
+func slashCompletion(for input: String, commandNames: [String]) -> SlashCompletion? {
+    guard input.hasPrefix("/") else { return nil }
+    let body = String(input.dropFirst())
+    guard !body.contains(where: { $0 == " " || $0 == "\t" || $0 == "\n" }) else {
+        return nil
+    }
+
+    let matches = commandNames.sorted().filter { $0.hasPrefix(body) }
+    guard let match = matches.first else { return nil }
+    if match == body {
+        return input.hasSuffix(" ") ? nil : SlashCompletion(suffix: "", completedInput: "/\(match) ")
+    }
+
+    let suffix = String(match.dropFirst(body.count))
+    return SlashCompletion(suffix: suffix, completedInput: "/\(match) ")
 }

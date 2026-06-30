@@ -43,6 +43,22 @@ struct SlashInputParseTests {
     func middleSlashIsPrompt() {
         #expect(SlashInput.parse("a/b") == .prompt(text: "a/b"))
     }
+
+    @Test("slash command completion returns ghost suffix and completed input")
+    func completion() {
+        let names = ["model", "compact", "queue"]
+
+        #expect(slashCompletion(for: "/mod", commandNames: names) == SlashCompletion(
+            suffix: "el",
+            completedInput: "/model "
+        ))
+        #expect(slashCompletion(for: "/model", commandNames: names) == SlashCompletion(
+            suffix: "",
+            completedInput: "/model "
+        ))
+        #expect(slashCompletion(for: "/model claude", commandNames: names) == nil)
+        #expect(slashCompletion(for: "hello /mod", commandNames: names) == nil)
+    }
 }
 
 @Suite("/verbose command")

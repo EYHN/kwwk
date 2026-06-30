@@ -10,28 +10,24 @@ import Foundation
 ///   liveTail   — streaming assistant text + running tool placeholders +
 ///                transient notifications. Height is bounded (rendered
 ///                content only, no viewport padding).
-///   divider    — thin separator above the status bar.
-///   status     — state line + contextual hints.
+///   status     — compact metadata line + state line. This also acts as
+///                the visual separator above the prompt area.
 ///   queue      — persistent list of queued steering messages. Zero rows
 ///                when empty so the layout collapses cleanly.
-///   blank      — breathing room above the prompt.
 ///   prompt     — the `❯ …` input row.
 final class CodingLayout: @unchecked Sendable {
     let liveTail: TextComponent
-    let divider: HorizontalRule
     let status: TextComponent
     let queue: TextComponent
     let input: InputComponent
     let promptRow: PromptRow
 
-    /// How many rows the status block occupies. Defaults to 1; pass 2 when
-    /// rendering a two-row status (state line + keyboard hints) so the
-    /// live-tail clip budget leaves room for both.
+    /// How many rows the status block occupies. Defaults to 2: metadata
+    /// line + state line.
     let statusRows: Int
 
-    init(statusRows: Int = 1) {
+    init(statusRows: Int = 2) {
         self.liveTail = TextComponent([])
-        self.divider = HorizontalRule("─")
         self.status = TextComponent([])
         self.queue = TextComponent([])
         self.input = InputComponent()
@@ -43,13 +39,11 @@ final class CodingLayout: @unchecked Sendable {
     /// Install layout components into `tui` in display order. Call once at
     /// setup time.
     ///
-    /// There's no dedicated blank row between `status` and `promptRow` —
-    /// the divider above `status` already provides the visual break, and
-    /// a second empty line above the prompt just reads as wasted real
-    /// estate.
+    /// The status row is the separator between transcript output and input.
+    /// A full-width divider is intentionally avoided in inline mode because
+    /// exact-width rows interact badly with terminal resize/reflow.
     func install(into tui: TUI) {
         tui.addChild(liveTail)
-        tui.addChild(divider)
         tui.addChild(status)
         tui.addChild(queue)
         tui.addChild(promptRow)
@@ -69,13 +63,13 @@ final class CodingLayout: @unchecked Sendable {
     private var tailLines: [String] = []
 
     /// Rows consumed by the non-tail parts of the live zone at the
-    /// last-observed terminal size: divider(1) + status(statusRows) +
+    /// last-observed terminal size: status(statusRows) +
     /// queue.lines.count + promptRow.height.
     ///
     /// The prompt row is multi-line once the user soft-wraps the input
     /// or hits Ctrl+Enter, so its height varies per render.
     var nonTailRows: Int {
-        1 + statusRows + queue.lines.count + promptHeight
+        statusRows + queue.lines.count + promptHeight
     }
 
     /// Visual height of the prompt row at the current terminal width.
@@ -147,6 +141,7 @@ final class PromptRow: Component, Focusable, @unchecked Sendable {
     let prompt: String
     let input: InputComponent
     var wantsKeyRelease: Bool { input.wantsKeyRelease }
+    var ghostHintProvider: ((String) -> String?)?
 
     init(prompt: String, input: InputComponent) {
         self.prompt = prompt
@@ -155,7 +150,8 @@ final class PromptRow: Component, Focusable, @unchecked Sendable {
 
     func render(width: Int) -> [String] {
         let promptWidth = ANSI.visibleWidth(prompt)
-        let inner = input.render(width: max(1, width - promptWidth))
+        let innerWidth = max(1, width - promptWidth)
+        let inner = renderInputRows(width: innerWidth)
         guard !inner.isEmpty else { return [prompt] }
         let indent = String(repeating: " ", count: promptWidth)
         var out: [String] = []
@@ -171,5 +167,29 @@ final class PromptRow: Component, Focusable, @unchecked Sendable {
     var focused: Bool {
         get { input.focused }
         set { input.focused = newValue }
+    }
+
+    private func renderInputRows(width: Int) -> [String] {
+        var rows = input.render(width: width)
+        guard focused,
+              input.cursor == input.value.count,
+              let hint = ghostHintProvider?(input.value),
+              !hint.isEmpty,
+              var last = rows.popLast()
+        else { return rows }
+
+        let available = max(0, width - ANSI.visibleWidth(last))
+        guard available > 0 else {
+            rows.append(last)
+            return rows
+        }
+        let visibleHint = ANSI.truncate(hint, to: available)
+        guard !visibleHint.isEmpty else {
+            rows.append(last)
+            return rows
+        }
+        last += Style.dimmed(visibleHint)
+        rows.append(last)
+        return rows
     }
 }
