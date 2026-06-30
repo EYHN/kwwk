@@ -49,6 +49,11 @@ enum Keys {
                 // Ctrl+letter
                 let letter = Character(UnicodeScalar(b + 0x60))
                 return KeyEvent(name: String(letter), ctrl: true, raw: data)
+            case 0x1F:
+                // Ctrl+_ (US, unit separator). Also emitted by Ctrl+/ on many
+                // terminals. Surfaced as a named control so the editor can
+                // bind it to undo.
+                return KeyEvent(name: "_", ctrl: true, raw: data)
             default:
                 let scalar = UnicodeScalar(b)
                 let char = Character(scalar)
@@ -61,6 +66,16 @@ enum Keys {
         }
         // ESC-prefixed sequences — CSI, SS3, or alt+<x>.
         if bytes[0] == 0x1B {
+            // Meta-prefixed sequence: `ESC ESC …` (Option+Arrow on terminals
+            // using "Option as Meta"). Parse the inner sequence and flag it
+            // alt-modified.
+            if bytes.count >= 3, bytes[1] == 0x1B {
+                let inner = String(decoding: bytes[1...], as: UTF8.self)
+                guard var ev = parse(inner) else { return nil }
+                ev.alt = true
+                ev.raw = data
+                return ev
+            }
             if bytes.count == 2 {
                 // ESC + single-byte keypress = Alt-modified version of
                 // that key. Translate common control bytes to their

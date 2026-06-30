@@ -33,4 +33,22 @@ struct StdinBufferTests {
         #expect(buffer.feed("\u{1B}") == [])
         #expect(buffer.flushOnTimeout() == ["\u{1B}"])
     }
+
+    @Test("assembles a meta-prefixed Option+Arrow as one sequence") func metaArrow() {
+        let buffer = StdinBuffer()
+        // ESC ESC [ A delivered whole — Option+Up with "Option as Meta".
+        #expect(buffer.feed("\u{1B}\u{1B}[A") == ["\u{1B}\u{1B}[A"])
+    }
+
+    @Test("waits for a meta-prefixed arrow split across chunks") func metaArrowChunks() {
+        let buffer = StdinBuffer()
+        #expect(buffer.feed("\u{1B}\u{1B}") == [])
+        #expect(buffer.feed("[A") == ["\u{1B}\u{1B}[A"])
+    }
+
+    @Test("a genuine double-ESC flushes on timeout") func doubleEscTimeout() {
+        let buffer = StdinBuffer()
+        #expect(buffer.feed("\u{1B}\u{1B}") == [])
+        #expect(buffer.flushOnTimeout() == ["\u{1B}"])
+    }
 }

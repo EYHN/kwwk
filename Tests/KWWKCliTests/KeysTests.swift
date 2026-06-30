@@ -23,6 +23,23 @@ struct KeysTests {
         #expect(Keys.parse("\u{1B}[D")?.name == "left")
     }
 
+    @Test("parses Option+Arrow via xterm modifier (ESC[1;3A)") func altArrowXterm() {
+        let up = Keys.parse("\u{1B}[1;3A")
+        #expect(up?.name == "up")
+        #expect(up?.alt == true)
+    }
+
+    @Test("parses Option+Arrow via meta prefix (ESC ESC [ A)") func altArrowMetaPrefix() {
+        // Terminals with "Option as Meta" send a leading ESC before the
+        // normal arrow CSI. Both the CSI and SS3 forms must resolve to alt+up.
+        let csi = Keys.parse("\u{1B}\u{1B}[A")
+        #expect(csi?.name == "up")
+        #expect(csi?.alt == true)
+        let ss3 = Keys.parse("\u{1B}\u{1B}OA")
+        #expect(ss3?.name == "up")
+        #expect(ss3?.alt == true)
+    }
+
     @Test("parses Kitty CSI-u Ctrl+C") func kittyCtrlC() {
         let event = Keys.parse("\u{1B}[99;5u")
         #expect(event?.name == "c")

@@ -101,6 +101,181 @@ struct InputComponentTests {
     }
 }
 
+@Suite("Editor history recall")
+struct InputHistoryTests {
+    @Test("addToHistory + Up/Down walk newest-first") func recall() {
+        let input = InputComponent()
+        input.addToHistory("first")
+        input.addToHistory("second")
+        // Up from empty → most recent.
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "second")
+        // Up again → older.
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "first")
+        // No older entry — refuse and keep the buffer.
+        #expect(input.navigateHistory(-1) == false)
+        #expect(input.value == "first")
+        // Down → newer.
+        #expect(input.navigateHistory(1) == true)
+        #expect(input.value == "second")
+        // Down past newest → back to the empty draft.
+        #expect(input.navigateHistory(1) == true)
+        #expect(input.value == "")
+    }
+
+    @Test("addToHistory trims, drops empties and consecutive dupes") func dedupe() {
+        let input = InputComponent()
+        input.addToHistory("  hi  ")
+        input.addToHistory("hi")     // consecutive dupe (after trim) — ignored
+        input.addToHistory("   ")    // empty — ignored
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "hi")
+        // Only one entry recorded.
+        #expect(input.navigateHistory(-1) == false)
+    }
+
+    @Test("navigateHistory is a no-op with empty history") func emptyHistory() {
+        let input = InputComponent(initial: "draft")
+        #expect(input.navigateHistory(-1) == false)
+        #expect(input.value == "draft")
+    }
+
+    @Test("typing exits history browse mode") func typingExits() {
+        let input = InputComponent()
+        input.addToHistory("recalled")
+        _ = input.navigateHistory(-1)
+        #expect(input.value == "recalled")
+        input.handleInput("!")
+        #expect(input.value == "recalled!")
+        // Back at the live draft: Up recalls from the top again, not "older".
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "recalled")
+    }
+
+    @Test("Up gated to first hard row, Down to last") func rowGating() {
+        let input = InputComponent(initial: "line1\nline2")
+        input.addToHistory("prev")
+        // Cursor at end → on last hard row → Down is allowed but there's no
+        // newer entry, so it's a no-op; Up is blocked (not first row).
+        input.moveEnd()
+        #expect(input.navigateHistoryUp() == false)
+        #expect(input.value == "line1\nline2")
+        // Move to the very start → first row → Up recalls.
+        input.moveHome()
+        #expect(input.navigateHistoryUp() == true)
+        #expect(input.value == "prev")
+    }
+}
+
+@Suite("Editor word editing + kill ring")
+struct InputWordEditTests {
+    @Test("Ctrl+W deletes the word before the cursor") func ctrlW() {
+        let input = InputComponent(initial: "hello world")
+        input.handleInput("\u{17}")  // Ctrl+W
+        #expect(input.value == "hello ")
+        #expect(input.cursor == 6)
+    }
+
+    @Test("Alt+Backspace deletes word backward") func altBackspace() {
+        let input = InputComponent(initial: "foo bar")
+        input.handleInput("\u{1B}\u{7F}")  // ESC + DEL = Alt+Backspace
+        #expect(input.value == "foo ")
+    }
+
+    @Test("Alt+D deletes the word after the cursor") func altD() {
+        let input = InputComponent(initial: "hello world")
+        input.moveHome()
+        input.handleInput("\u{1B}d")  // Alt+D
+        #expect(input.value == " world")
+        #expect(input.cursor == 0)
+    }
+
+    @Test("Alt+B / Alt+F move by word") func altWordMove() {
+        let input = InputComponent(initial: "alpha beta gamma")
+        input.handleInput("\u{1B}b")  // Alt+B → start of "gamma"
+        #expect(input.cursor == 11)
+        input.handleInput("\u{1B}b")  // → start of "beta"
+        #expect(input.cursor == 6)
+        input.handleInput("\u{1B}f")  // → end of "beta"
+        #expect(input.cursor == 10)
+    }
+
+    @Test("word boundaries keep apostrophe joiners inside a word") func joiner() {
+        let input = InputComponent(initial: "don't stop")
+        #expect(input.wordBoundaryLeft(from: 5) == 0)   // back over "don't"
+    }
+
+    @Test("CJK runs are their own boundary") func cjk() {
+        let input = InputComponent(initial: "你好 world")
+        // Right from start consumes the CJK run, stopping at the space.
+        #expect(input.wordBoundaryRight(from: 0) == 2)
+    }
+
+    @Test("Ctrl+Y yanks the last kill back") func yank() {
+        let input = InputComponent(initial: "hello world")
+        input.handleInput("\u{17}")   // Ctrl+W → kill "world"
+        #expect(input.value == "hello ")
+        input.handleInput("\u{19}")   // Ctrl+Y → yank it back
+        #expect(input.value == "hello world")
+    }
+
+    @Test("consecutive Ctrl+W accumulate into one yank") func accumulate() {
+        let input = InputComponent(initial: "one two three")
+        input.handleInput("\u{17}")   // kill "three"
+        input.handleInput("\u{17}")   // kill "two " (prepended)
+        #expect(input.value == "one ")
+        input.handleInput("\u{19}")   // yank both at once
+        #expect(input.value == "one two three")
+    }
+
+    @Test("Ctrl+U routes through the kill ring") func ctrlUYankable() {
+        let input = InputComponent(initial: "discard keep")
+        // Move to just before "keep" so Ctrl+U kills "discard ".
+        input.moveHome()
+        for _ in 0..<8 { input.moveCursor(1) }
+        input.handleInput("\u{15}")   // Ctrl+U
+        #expect(input.value == "keep")
+        input.handleInput("\u{19}")   // Ctrl+Y restores it
+        #expect(input.value == "discard keep")
+    }
+}
+
+@Suite("Editor undo")
+struct InputUndoTests {
+    @Test("Ctrl+Z restores text removed by a kill") func undoKill() {
+        let input = InputComponent(initial: "hello world")
+        input.handleInput("\u{17}")   // Ctrl+W → "hello "
+        #expect(input.value == "hello ")
+        input.handleInput("\u{1A}")   // Ctrl+Z → undo
+        #expect(input.value == "hello world")
+    }
+
+    @Test("Ctrl+_ also undoes") func underscoreUndo() {
+        let input = InputComponent(initial: "abc")
+        input.handleInput("\u{15}")   // Ctrl+U → ""
+        #expect(input.value == "")
+        input.handleInput("\u{1F}")   // Ctrl+_ → undo
+        #expect(input.value == "abc")
+    }
+
+    @Test("a run of typed characters undoes as one step") func coalesceTyping() {
+        let input = InputComponent()
+        input.handleInput("a")
+        input.handleInput("b")
+        input.handleInput("c")
+        #expect(input.value == "abc")
+        input.undo()
+        #expect(input.value == "")
+    }
+
+    @Test("undo with nothing on the stack is a no-op") func emptyUndo() {
+        let input = InputComponent(initial: "x")
+        input.undo()
+        #expect(input.value == "x")
+    }
+}
+
 @Suite("Keybinding matching")
 struct KeybindingTests {
     @Test("plain Enter binding does not match Shift+Enter") func enterBindingRejectsShift() {

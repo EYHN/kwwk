@@ -33,8 +33,12 @@ final class StdinBuffer: @unchecked Sendable {
     /// Force-flush a lingering `ESC` that arrived without further bytes.
     func flushOnTimeout() -> [String] {
         lock.withLock {
-            guard let first = buffer.first else { return [] }
-            if first == 0x1B && buffer.count == 1 {
+            guard let first = buffer.first, first == 0x1B else { return [] }
+            // A lone ESC, or a `ESC ESC` that never grew into a meta-CSI
+            // (i.e. a genuine double-Escape): flush one ESC so the key isn't
+            // swallowed. A real meta-arrow would have completed via feed() by
+            // the time this timeout fires.
+            if buffer.count == 1 || (buffer.count == 2 && buffer[1] == 0x1B) {
                 buffer.removeFirst()
                 return ["\u{1B}"]
             }
@@ -60,6 +64,28 @@ final class StdinBuffer: @unchecked Sendable {
         if first == 0x1B {
             if buffer.count == 1 { return nil } // wait for more
             let second = buffer[1]
+            // Meta-prefixed CSI/SS3: `ESC ESC [ … ` or `ESC ESC O X`. macOS
+            // terminals using "Option as Meta" encode Option+Arrow this way
+            // (a leading ESC modifier in front of the normal arrow sequence).
+            // Assemble the whole inner sequence so Keys.parse can mark it alt.
+            if second == 0x1B {
+                if buffer.count < 3 { return nil } // wait — meta-CSI in transit
+                if buffer[2] == 0x5B || buffer[2] == 0x4F {
+                    var i = 3
+                    while i < buffer.count {
+                        let b = buffer[i]
+                        if b >= 0x40 && b <= 0x7E {
+                            let bytes = Array(buffer[..<(i + 1)])
+                            return (i + 1, String(data: Data(bytes), encoding: .utf8))
+                        }
+                        i += 1
+                    }
+                    return nil // final byte not here yet
+                }
+                // `ESC ESC <other>`: flush the leading ESC on its own; the
+                // remainder parses on the next pass.
+                return (1, "\u{1B}")
+            }
             if second == 0x5B || second == 0x4F {
                 // CSI or SS3 — wait for a final byte (0x40...0x7E).
                 var i = 2
