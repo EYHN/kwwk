@@ -511,7 +511,13 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         for scalar in ch.unicodeScalars {
             w += ANSI.columnWidth(of: scalar.value)
         }
-        return max(1, w)
+        // A grapheme whose scalars are *all* zero-width (a lone combining mark
+        // or ZWSP — reachable when a bracketed paste is inserted verbatim)
+        // genuinely occupies no columns. `insertCursorMarker` accounts it as 0
+        // too, so we must NOT floor it to 1 here: flooring would advance the
+        // layout column past where the marker pass lands, dropping the cursor
+        // one column too far right. Normal text (width ≥ 1) is unaffected.
+        return w
     }
 
     /// Insert a zero-width cursor marker into `line` at the given

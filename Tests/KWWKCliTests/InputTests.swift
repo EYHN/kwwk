@@ -90,6 +90,25 @@ struct InputComponentTests {
         #expect(input.value == "ab\n")
     }
 
+    @Test("cursor column is correct after a standalone zero-width grapheme") func zeroWidthGraphemeCursor() {
+        // A lone combining mark (U+0301) is a zero-width grapheme on its own —
+        // reachable when a bracketed paste is inserted verbatim. With the
+        // cursor sitting *between* the mark and the 'a', the cursor's visual
+        // column is 0 (the mark contributes no width). The layout pass and the
+        // marker-insertion pass must agree, or the marker lands past the 'a'.
+        let input = InputComponent(initial: "\u{0301}a")
+        input.focused = true
+        input.moveHome()
+        input.moveCursor(1)   // cursor index 1: between the combining mark and 'a'
+        #expect(input.cursor == 1)
+        let row = input.render(width: 40).first ?? ""
+        let parts = row.components(separatedBy: CURSOR_MARKER)
+        #expect(parts.count == 2)
+        // Visible width before the marker == the cursor's visual column.
+        let prefixWidth = parts[0].unicodeScalars.reduce(0) { $0 + ANSI.columnWidth(of: $1.value) }
+        #expect(prefixWidth == 0)
+    }
+
     @Test("cursor placed on the correct visual row after a hard break") func cursorMultiRow() {
         let input = InputComponent(initial: "hi\nx")
         input.focused = true
@@ -241,6 +260,60 @@ struct InputWordEditTests {
     }
 }
 
+@Suite("Editor yank-pop")
+struct InputYankPopTests {
+    /// Seed the kill ring with three *distinct* (non-accumulating) entries —
+    /// oldest "one", newest "three". The `value` setter resets `lastAction`,
+    /// so each Ctrl+U pushes a fresh ring entry instead of accumulating.
+    private func ringOfThree() -> InputComponent {
+        let input = InputComponent()
+        for word in ["one", "two", "three"] {
+            input.value = word
+            input.moveEnd()
+            input.handleInput("\u{15}")   // Ctrl+U → kill the whole buffer
+        }
+        return input
+    }
+
+    @Test("Alt+Y after Ctrl+Y cycles through the kills and wraps") func cycleAndWrap() {
+        let input = ringOfThree()
+        input.handleInput("\u{19}")    // Ctrl+Y → yank newest
+        #expect(input.value == "three")
+        input.handleInput("\u{1B}y")   // Alt+Y → next older
+        #expect(input.value == "two")
+        input.handleInput("\u{1B}y")
+        #expect(input.value == "one")
+        input.handleInput("\u{1B}y")   // wraps back to the newest
+        #expect(input.value == "three")
+    }
+
+    @Test("Alt+Y is a no-op when the last action was not a yank") func noPopWithoutYank() {
+        let input = ringOfThree()       // ring has >1 entry, but no yank yet
+        input.value = "kept"            // value setter clears lastAction
+        input.moveEnd()
+        input.handleInput("\u{1B}y")    // Alt+Y → guard: lastAction != .yank
+        #expect(input.value == "kept")
+    }
+
+    @Test("Alt+Y is a no-op when the ring holds a single kill") func noPopSingleKill() {
+        let input = InputComponent(initial: "hello world")
+        input.moveEnd()
+        input.handleInput("\u{17}")     // Ctrl+W → kill "world" (ring count == 1)
+        input.handleInput("\u{19}")     // Ctrl+Y → "hello world", lastAction .yank
+        input.handleInput("\u{1B}y")    // Alt+Y → guard: count not > 1
+        #expect(input.value == "hello world")
+    }
+
+    @Test("Alt+Y is a no-op once the cursor leaves the yanked text") func noPopAfterCursorMove() {
+        let input = ringOfThree()       // ring count > 1
+        input.handleInput("\u{19}")     // Ctrl+Y → "three"
+        #expect(input.value == "three")
+        input.handleInput("\u{1B}[D")   // Left → cursor no longer abuts the yank
+        input.handleInput("\u{1B}y")    // Alt+Y → pre-cursor text no longer == last yank
+        #expect(input.value == "three")
+    }
+}
+
 @Suite("Editor undo")
 struct InputUndoTests {
     @Test("Ctrl+Z restores text removed by a kill") func undoKill() {
@@ -273,6 +346,42 @@ struct InputUndoTests {
         let input = InputComponent(initial: "x")
         input.undo()
         #expect(input.value == "x")
+    }
+
+    @Test("undo stack is capped at maxUndoStack") func undoCap() {
+        let input = InputComponent()
+        // Each multi-char insert is its own undo step (no typed-run coalescing),
+        // so 60 inserts record 60 snapshots — only the last 50 survive the cap.
+        for i in 0..<60 { input.insert("\(i),") }
+        let full = (0..<60).map { "\($0)," }.joined()
+        #expect(input.value == full)
+        // Undoing 50 times unwinds to the snapshot taken before the 11th insert
+        // (i.e. with inserts 0–9 applied); the older 10 snapshots were dropped.
+        for _ in 0..<50 { input.undo() }
+        let kept = (0..<10).map { "\($0)," }.joined()
+        #expect(input.value == kept)
+        // Stack exhausted — a further undo is a no-op (it can't go back further).
+        input.undo()
+        #expect(input.value == kept)
+    }
+
+    @Test("undo after yank-pop restores cleanly") func undoAfterYankPop() {
+        let input = InputComponent()
+        for word in ["one", "two"] {       // ring: oldest "one", newest "two"
+            input.value = word
+            input.moveEnd()
+            input.handleInput("\u{15}")    // Ctrl+U
+        }
+        input.value = "tail"
+        input.moveEnd()
+        input.handleInput("\u{19}")        // Ctrl+Y → "tailtwo"
+        #expect(input.value == "tailtwo")
+        input.handleInput("\u{1B}y")       // Alt+Y → "tailone"
+        #expect(input.value == "tailone")
+        input.handleInput("\u{1A}")        // Ctrl+Z → undo the pop → "tailtwo"
+        #expect(input.value == "tailtwo")
+        input.handleInput("\u{1A}")        // Ctrl+Z → undo the yank → "tail"
+        #expect(input.value == "tail")
     }
 }
 
