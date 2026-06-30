@@ -366,6 +366,55 @@ struct TUIInlineResizeReflowTests {
         tui.stop()
     }
 
+    @Test("multiplexer resize repaints the viewport in place without clearing scrollback")
+    func multiplexerResizeRepaintsInPlace() async {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TextComponent(["❯ "]))
+        tui.start()
+        await terminal.waitForRender()
+
+        tui.commit(["alpha line", "beta line"])
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        // tmux/screen/zellij path: clear only the visible pane (ED2) and home,
+        // never the scrollback (ED3 is hostile in a multiplexer), then reprint
+        // the recent committed tail + live zone.
+        tui.triggerMultiplexerRepaintForTesting()
+        let writes = terminal.getWrites()
+        #expect(writes.contains("\u{1B}[H\u{1B}[2J"))
+        #expect(!writes.contains("\u{1B}[3J"))
+        #expect(writes.contains("beta line"))
+        #expect(terminal.getViewport().joined(separator: "\n").contains("❯"))
+        tui.stop()
+    }
+
+    @Test("multiplexer resize snaps to the recent tail without re-scrolling old history")
+    func multiplexerResizeSnapsTail() async {
+        let terminal = VirtualTerminal(width: 40, height: 6)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TextComponent(["❯ "]))
+        tui.start()
+        await terminal.waitForRender()
+
+        tui.commit((0..<20).map { "history \($0)" })
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        tui.triggerMultiplexerRepaintForTesting()
+        let writes = terminal.getWrites()
+        // Only the tail that fits the window is reprinted...
+        #expect(writes.contains("history 19"))
+        // ...older history that scrolled off long ago is NOT re-emitted, so a
+        // resize never duplicates the transcript into the pane's scrollback.
+        // ("history 0" is a substring of none of the reprinted tail lines.)
+        #expect(!writes.contains("history 0"))
+        tui.stop()
+    }
+
     @Test("stop exits below live zone when cursor is parked above bottom")
     func stopDropsCursorToLiveZoneBottom() async {
         let terminal = VirtualTerminal(width: 40, height: 10)
