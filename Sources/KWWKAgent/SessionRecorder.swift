@@ -155,4 +155,23 @@ public final class SessionRecorder: @unchecked Sendable {
             pendingCompactionUsage = usage
         }
     }
+
+    /// Persist a user-set session title (append-only `meta` entry). Chained
+    /// after any queued message writes so it can't reorder ahead of the
+    /// transcript. Backs `/rename`.
+    public func recordTitle(_ title: String) async {
+        let work: Task<Void, Never> = lock.withLock {
+            let previous = appendChain
+            let store = self.store
+            let sessionId = self.sessionId
+            let cwd = self.cwd
+            let next = Task<Void, Never> {
+                await previous?.value
+                _ = try? await store.setTitle(id: sessionId, cwd: cwd, title: title)
+            }
+            appendChain = next
+            return next
+        }
+        await work.value
+    }
 }

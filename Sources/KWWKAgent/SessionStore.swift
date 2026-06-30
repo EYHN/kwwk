@@ -117,11 +117,11 @@ public actor SessionStore {
     /// a metadata update, or a context compaction marker.
     public enum Entry: Codable, Sendable, Hashable {
         case message(timestamp: Int64, message: Message)
-        case meta(timestamp: Int64, model: String?, provider: String?, thinkingLevel: String?)
+        case meta(timestamp: Int64, model: String?, provider: String?, thinkingLevel: String?, title: String?)
         case compaction(timestamp: Int64, compaction: Compaction)
 
         private enum CodingKeys: String, CodingKey {
-            case type, timestamp, message, model, provider, thinkingLevel
+            case type, timestamp, message, model, provider, thinkingLevel, title
             case replacementMessages, messagesCompacted, firstKeptMessageIndex
             case tokensBefore, contextWindow
         }
@@ -138,7 +138,8 @@ public actor SessionStore {
                     timestamp: timestamp,
                     model: try c.decodeIfPresent(String.self, forKey: .model),
                     provider: try c.decodeIfPresent(String.self, forKey: .provider),
-                    thinkingLevel: try c.decodeIfPresent(String.self, forKey: .thinkingLevel)
+                    thinkingLevel: try c.decodeIfPresent(String.self, forKey: .thinkingLevel),
+                    title: try c.decodeIfPresent(String.self, forKey: .title)
                 )
             case .compaction:
                 self = .compaction(
@@ -163,12 +164,13 @@ public actor SessionStore {
                 try c.encode(Kind.message, forKey: .type)
                 try c.encode(timestamp, forKey: .timestamp)
                 try c.encode(message, forKey: .message)
-            case .meta(let timestamp, let model, let provider, let thinkingLevel):
+            case .meta(let timestamp, let model, let provider, let thinkingLevel, let title):
                 try c.encode(Kind.meta, forKey: .type)
                 try c.encode(timestamp, forKey: .timestamp)
                 try c.encodeIfPresent(model, forKey: .model)
                 try c.encodeIfPresent(provider, forKey: .provider)
                 try c.encodeIfPresent(thinkingLevel, forKey: .thinkingLevel)
+                try c.encodeIfPresent(title, forKey: .title)
             case .compaction(let timestamp, let compaction):
                 try c.encode(Kind.compaction, forKey: .type)
                 try c.encode(timestamp, forKey: .timestamp)
@@ -197,6 +199,8 @@ public actor SessionStore {
         public var provider: String?
         /// Latest thinking level seen, if any `meta` entry recorded one.
         public var thinkingLevel: String?
+        /// Latest user-set session title, if any `meta` entry recorded one.
+        public var title: String?
 
         public init(
             header: Header,
@@ -205,7 +209,8 @@ public actor SessionStore {
             persistedContextCount: Int? = nil,
             model: String?,
             provider: String?,
-            thinkingLevel: String?
+            thinkingLevel: String?,
+            title: String? = nil
         ) {
             self.header = header
             self.messages = messages
@@ -214,6 +219,7 @@ public actor SessionStore {
             self.model = model
             self.provider = provider
             self.thinkingLevel = thinkingLevel
+            self.title = title
         }
     }
 
@@ -229,6 +235,8 @@ public actor SessionStore {
         /// "most recently active" sessions.
         public var updatedAt: Int64
         public var messageCount: Int
+        /// Latest user-set session title, if any `meta` entry recorded one.
+        public var title: String?
         public var path: URL
 
         public init(
@@ -239,6 +247,7 @@ public actor SessionStore {
             provider: String?,
             updatedAt: Int64,
             messageCount: Int,
+            title: String? = nil,
             path: URL
         ) {
             self.id = id
@@ -248,6 +257,7 @@ public actor SessionStore {
             self.provider = provider
             self.updatedAt = updatedAt
             self.messageCount = messageCount
+            self.title = title
             self.path = path
         }
     }
@@ -349,14 +359,26 @@ public actor SessionStore {
         id: String,
         model: String? = nil,
         provider: String? = nil,
-        thinkingLevel: String? = nil
+        thinkingLevel: String? = nil,
+        title: String? = nil
     ) throws {
         try appendEntry(id: id, .meta(
             timestamp: Timestamp.now(),
             model: model,
             provider: provider,
-            thinkingLevel: thinkingLevel
+            thinkingLevel: thinkingLevel,
+            title: title
         ))
+    }
+
+    /// Record a user-set session title as an append-only `meta` entry,
+    /// creating the file (with a header) on demand. Backs `/rename`.
+    public func setTitle(id: String, cwd: String, title: String) throws {
+        let url = try path(for: id)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try create(id: id, cwd: cwd)
+        }
+        try appendMeta(id: id, title: title)
     }
 
     /// Record a context compaction without rewriting prior message entries.
@@ -428,6 +450,7 @@ public actor SessionStore {
         var model = header.model
         var provider = header.provider
         var thinkingLevel: String?
+        var title: String?
 
         for line in lines.dropFirst() {
             guard let data = String(line).data(using: .utf8),
@@ -440,10 +463,11 @@ public actor SessionStore {
             case .message(_, let message):
                 transcriptMessages.append(message)
                 messages.append(message)
-            case .meta(_, let m, let p, let t):
+            case .meta(_, let m, let p, let t, let ti):
                 if let m { model = m }
                 if let p { provider = p }
                 if let t { thinkingLevel = t }
+                if let ti { title = ti }
             case .compaction(_, let compaction):
                 messages = compaction.replacementMessages
             }
@@ -456,7 +480,8 @@ public actor SessionStore {
             persistedContextCount: messages.count,
             model: model,
             provider: provider,
-            thinkingLevel: thinkingLevel
+            thinkingLevel: thinkingLevel,
+            title: title
         )
     }
 
@@ -517,6 +542,7 @@ public actor SessionStore {
 
         var model = header.model
         var provider = header.provider
+        var title: String?
         var messageCount = 0
         for line in lines.dropFirst() {
             guard let data = String(line).data(using: .utf8),
@@ -524,9 +550,10 @@ public actor SessionStore {
             switch entry {
             case .message:
                 messageCount += 1
-            case .meta(_, let m, let p, _):
+            case .meta(_, let m, let p, _, let ti):
                 if let m { model = m }
                 if let p { provider = p }
+                if let ti { title = ti }
             case .compaction:
                 continue
             }
@@ -544,6 +571,7 @@ public actor SessionStore {
             provider: provider,
             updatedAt: updatedAt,
             messageCount: messageCount,
+            title: title,
             path: url
         )
     }

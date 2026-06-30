@@ -237,6 +237,26 @@ struct SessionStoreTests {
         #expect(loaded.messages.count == 1)
     }
 
+    @Test("setTitle persists a session title that load and list surface")
+    func titleRoundTrip() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-title"
+        try await store.append(id: id, cwd: "/w", message: userMsg("hi"))
+        try await store.setTitle(id: id, cwd: "/w", title: "My feature work")
+        // A later title wins (append-only, latest meta entry).
+        try await store.setTitle(id: id, cwd: "/w", title: "Renamed")
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.title == "Renamed")
+        // Title meta entries are not transcript messages.
+        #expect(loaded.messages.count == 1)
+
+        let info = await store.list().first { $0.id == id }
+        #expect(info?.title == "Renamed")
+    }
+
     @Test("load projects the latest compaction entry as resumable context")
     func loadProjectsCompaction() async throws {
         let (store, dir) = tempStore()

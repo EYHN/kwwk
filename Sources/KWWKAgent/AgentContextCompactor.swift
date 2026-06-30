@@ -328,6 +328,70 @@ public enum AgentContextCompactor {
         }
         return String(text.prefix(limit)) + "... [\(text.count - limit) chars elided]"
     }
+
+    // MARK: - Shake (non-LLM tool-output trim)
+
+    /// Default character ceiling for `shakeToolOutputs`. Tool results whose
+    /// joined `.text` exceeds this are collapsed into a placeholder.
+    public static let shakeToolOutputCharacterLimit = 1000
+
+    /// Leading marker on a collapsed tool result. Used to keep
+    /// `shakeToolOutputs` idempotent — a result already carrying this prefix
+    /// is left alone so repeated `/shake` calls don't recount or re-elide.
+    static let shakePlaceholderPrefix = "[tool result elided to reclaim context"
+
+    /// Strip heavy tool-result output from a live transcript without any LLM
+    /// call (unlike `compactMessages`, which summarizes via the model). Walks
+    /// `messages`; for each `.toolResult` whose joined `.text` blocks exceed
+    /// `limit`, the text is replaced by a single short placeholder. Every
+    /// other field on the `ToolResultMessage` (toolName, toolCallId, isError,
+    /// details, timestamp) is preserved, and `.image` blocks are kept — only
+    /// the oversized text is collapsed.
+    ///
+    /// Idempotent: a result already collapsed by a previous pass (detected by
+    /// `shakePlaceholderPrefix`) is skipped, so calling this repeatedly is a
+    /// no-op after the first trim. Pure: no I/O, no model round-trip.
+    ///
+    /// Returns the rewritten messages and how many tool results were elided.
+    public static func shakeToolOutputs(
+        _ messages: [Message],
+        keepingUnder limit: Int = shakeToolOutputCharacterLimit
+    ) -> (messages: [Message], elidedCount: Int) {
+        var elidedCount = 0
+        let rewritten = messages.map { message -> Message in
+            guard case .toolResult(var result) = message else { return message }
+            // Idempotent: leave an already-collapsed result untouched.
+            if isShakePlaceholder(result.content) { return message }
+
+            let joined = result.content.compactMap { block -> String? in
+                if case .text(let text) = block { return text.text }
+                return nil
+            }.joined(separator: "\n")
+            guard joined.count > limit else { return message }
+
+            // Collapse the bulky text into one placeholder block; carry any
+            // images through unchanged (they don't hold the bulk).
+            var rebuilt: [ToolResultBlock] = [
+                .text(TextContent(text: "\(shakePlaceholderPrefix) — was \(joined.count) chars]"))
+            ]
+            for block in result.content {
+                if case .image = block { rebuilt.append(block) }
+            }
+            result.content = rebuilt
+            elidedCount += 1
+            return .toolResult(result)
+        }
+        return (rewritten, elidedCount)
+    }
+
+    private static func isShakePlaceholder(_ content: [ToolResultBlock]) -> Bool {
+        for block in content {
+            if case .text(let text) = block, text.text.hasPrefix(shakePlaceholderPrefix) {
+                return true
+            }
+        }
+        return false
+    }
 }
 
 public struct AgentContextCompactionResult: Sendable, Equatable {

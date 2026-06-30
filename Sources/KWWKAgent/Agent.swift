@@ -243,6 +243,21 @@ public final class Agent: @unchecked Sendable {
     /// underlying array so the caller can iterate without racing a drain.
     public func queuedSteeringMessages() -> [Message] { steeringQueue.snapshot() }
 
+    /// Remove and return the most recently queued steering message (LIFO).
+    /// Returns nil when the queue is empty. Powers the TUI's Alt+↑ "edit the
+    /// last queued prompt" action — the popped message goes back to the input.
+    @discardableResult
+    public func popLastSteeringMessage() -> Message? { steeringQueue.popLast() }
+
+    /// Push a message back onto the front of the steering queue. Powers the
+    /// TUI's Alt+↑ dequeue-cycle: when the user keeps pressing Alt+↑, the
+    /// prompt currently in the editor is returned to the front so the next
+    /// `popLastSteeringMessage()` surfaces the prior item, rotating through
+    /// the queue without losing any prompt.
+    public func pushFrontSteeringMessage(_ message: Message) {
+        steeringQueue.enqueueFront(message)
+    }
+
     public var steeringMode: QueueMode {
         get { steeringQueue.mode }
         set { steeringQueue.mode = newValue }

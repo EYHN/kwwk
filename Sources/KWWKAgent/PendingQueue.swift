@@ -21,6 +21,14 @@ final class PendingMessageQueue: @unchecked Sendable {
         lock.withLock { messages.append(message) }
     }
 
+    /// Insert at the head (FIFO front). Used by the TUI's Alt+↑ dequeue-cycle:
+    /// a prompt the user is cycling past is pushed back to the front so the
+    /// next `popLast()` returns the prior item, rotating through the queue
+    /// without dropping anything. Atomic so it can't interleave with `drain()`.
+    func enqueueFront(_ message: Message) {
+        lock.withLock { messages.insert(message, at: 0) }
+    }
+
     func hasItems() -> Bool {
         lock.withLock { !messages.isEmpty }
     }
@@ -35,6 +43,13 @@ final class PendingMessageQueue: @unchecked Sendable {
     /// can be drained independently without invalidating the snapshot.
     func snapshot() -> [Message] {
         lock.withLock { messages }
+    }
+
+    /// Remove and return the most recently enqueued message (LIFO). Used by
+    /// the TUI's "pop the last queued prompt back into the editor" affordance
+    /// (Alt+↑) so the user can edit or drop a prompt they just queued.
+    func popLast() -> Message? {
+        lock.withLock { messages.popLast() }
     }
 
     func drain() -> [Message] {

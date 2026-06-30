@@ -35,6 +35,102 @@ struct AgentContextCompactorTests {
         #expect(!rendered.contains("private reasoning"))
     }
 
+    @Test("shakeToolOutputs collapses oversized results, keeps small ones, is idempotent")
+    func shakeToolOutputsTrimsHeavyResults() {
+        let big = String(repeating: "x", count: 5000)
+        let messages: [Message] = [
+            .user(UserMessage(text: "run the thing")),
+            .assistant(AssistantMessage(
+                content: [.toolCall(ToolCall(id: "big", name: "bash", arguments: .object([:])))],
+                api: "faux", provider: "faux", model: "faux"
+            )),
+            .toolResult(ToolResultMessage(
+                toolCallId: "big",
+                toolName: "bash",
+                content: [.text(TextContent(text: big))],
+                isError: false
+            )),
+            .toolResult(ToolResultMessage(
+                toolCallId: "small",
+                toolName: "read",
+                content: [.text(TextContent(text: "tiny output"))]
+            )),
+        ]
+
+        let beforeChars = toolResultChars(messages)
+        let (trimmed, elided) = AgentContextCompactor.shakeToolOutputs(messages, keepingUnder: 1000)
+
+        // Only the oversized result was collapsed.
+        #expect(elided == 1)
+        // The big result's text is now a short placeholder; metadata preserved.
+        guard case .toolResult(let bigResult) = trimmed[2] else {
+            Issue.record("expected tool result at index 2")
+            return
+        }
+        #expect(bigResult.toolName == "bash")
+        #expect(bigResult.toolCallId == "big")
+        #expect(bigResult.content.count == 1)
+        if case .text(let t) = bigResult.content.first {
+            #expect(t.text.hasPrefix("[tool result elided to reclaim context"))
+            #expect(t.text.contains("5000 chars"))
+        } else {
+            Issue.record("expected a placeholder text block")
+        }
+        // The small result is untouched.
+        #expect(trimmed[3] == messages[3])
+
+        // Token/char footprint drops after the trim.
+        let afterChars = toolResultChars(trimmed)
+        #expect(afterChars < beforeChars)
+
+        // Idempotent: a second pass elides nothing and changes nothing.
+        let (again, elidedAgain) = AgentContextCompactor.shakeToolOutputs(trimmed, keepingUnder: 1000)
+        #expect(elidedAgain == 0)
+        #expect(again == trimmed)
+    }
+
+    @Test("shakeToolOutputs keeps image blocks while collapsing oversized text")
+    func shakeToolOutputsKeepsImages() {
+        let big = String(repeating: "y", count: 4000)
+        let messages: [Message] = [
+            .toolResult(ToolResultMessage(
+                toolCallId: "shot",
+                toolName: "screenshot",
+                content: [
+                    .text(TextContent(text: big)),
+                    .image(ImageContent(data: "AAAA", mimeType: "image/png")),
+                ]
+            )),
+        ]
+
+        let (trimmed, elided) = AgentContextCompactor.shakeToolOutputs(messages, keepingUnder: 1000)
+        #expect(elided == 1)
+        guard case .toolResult(let result) = trimmed[0] else {
+            Issue.record("expected tool result")
+            return
+        }
+        // One placeholder text block + the preserved image.
+        #expect(result.content.count == 2)
+        var hasImage = false
+        for block in result.content {
+            if case .image(let image) = block {
+                hasImage = true
+                #expect(image.data == "AAAA")
+            }
+        }
+        #expect(hasImage)
+    }
+
+    private func toolResultChars(_ messages: [Message]) -> Int {
+        messages.reduce(0) { total, message in
+            guard case .toolResult(let result) = message else { return total }
+            return total + result.content.reduce(0) { sub, block in
+                if case .text(let t) = block { return sub + t.text.count }
+                return sub
+            }
+        }
+    }
+
     @Test("compactAgent summarizes and replaces the transcript")
     func compactAgentReplacesTranscript() async {
         let faux = await registerFauxProvider()
