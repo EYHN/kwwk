@@ -24,24 +24,48 @@ public struct LocalEditOperations: EditOperations {
         try content.write(to: URL(fileURLWithPath: absolutePath), options: .atomic)
     }
     public func access(_ absolutePath: String) async throws {
+        try checkPOSIXAccess(absolutePath, mode: editAccessExistsMode)
+
         var isDirectory: ObjCBool = false
-        if !FileManager.default.fileExists(atPath: absolutePath, isDirectory: &isDirectory) {
-            throw POSIXError(.ENOENT)
-        }
-        if isDirectory.boolValue {
+        if FileManager.default.fileExists(atPath: absolutePath, isDirectory: &isDirectory), isDirectory.boolValue {
             throw POSIXError(.EISDIR)
         }
-        #if canImport(Darwin)
-        let accessResult = Darwin.access(absolutePath, R_OK | W_OK)
-        #elseif canImport(Glibc)
-        let accessResult = Glibc.access(absolutePath, R_OK | W_OK)
-        #else
-        let accessResult = FileManager.default.isReadableFile(atPath: absolutePath)
+
+        try checkPOSIXAccess(absolutePath, mode: editAccessReadWriteMode)
+    }
+}
+
+#if canImport(Darwin) || canImport(Glibc)
+private let editAccessExistsMode: Int32 = F_OK
+private let editAccessReadWriteMode: Int32 = R_OK | W_OK
+#else
+private let editAccessExistsMode: Int32 = 0
+private let editAccessReadWriteMode: Int32 = 6
+#endif
+
+private func checkPOSIXAccess(_ absolutePath: String, mode: Int32) throws {
+    #if canImport(Darwin)
+    let accessResult = Darwin.access(absolutePath, mode)
+    #elseif canImport(Glibc)
+    let accessResult = Glibc.access(absolutePath, mode)
+    #else
+    let accessResult: Int32
+    if mode == editAccessExistsMode {
+        accessResult = FileManager.default.fileExists(atPath: absolutePath) ? 0 : -1
+    } else {
+        accessResult = FileManager.default.isReadableFile(atPath: absolutePath)
             && FileManager.default.isWritableFile(atPath: absolutePath) ? 0 : -1
+    }
+    #endif
+    if accessResult != 0 {
+        #if canImport(Darwin)
+        let errorCode = errno
+        #elseif canImport(Glibc)
+        let errorCode = errno
+        #else
+        let errorCode = mode == editAccessExistsMode ? ENOENT : EACCES
         #endif
-        if accessResult != 0 {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EACCES)
-        }
+        throw POSIXError(POSIXErrorCode(rawValue: errorCode) ?? .EACCES)
     }
 }
 

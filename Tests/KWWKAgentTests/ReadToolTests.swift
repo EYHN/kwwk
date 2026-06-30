@@ -316,6 +316,32 @@ struct EditToolTests {
         }
     }
 
+    @Test("permission target error includes POSIX code")
+    func permissionTargetIncludesPOSIXCode() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("no-access.txt")
+        try write("hello", to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+
+        let tool = createEditTool(cwd: dir.path)
+        let edits: JSONValue = .array([
+            .object(["oldText": .string("hello"), "newText": .string("world")])
+        ])
+        do {
+            _ = try await tool.execute(
+                "call-permission-target",
+                .object(["path": .string(file.path), "edits": edits]),
+                nil, nil
+            )
+            Issue.record("expected permission target to throw")
+        } catch {
+            let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+            #expect(message.contains("Could not edit file: \(file.path). Error code: EACCES."))
+        }
+    }
+
     @Test("allows explicit edits outside cwd")
     func allowsOutsideCwd() async throws {
         let dir = makeTempDir()

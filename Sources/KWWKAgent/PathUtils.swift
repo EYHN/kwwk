@@ -6,7 +6,7 @@ public enum PathUtils {
             + (0x2000...0x200A).map(UInt32.init)
     )
 
-    /// Resolve a possibly-relative path against `cwd` and expand leading `~`.
+    /// Resolve a possibly-relative path against `cwd`, expanding only `~` and `~/...`.
     public static func resolveToCwd(_ path: String, cwd: String) -> String {
         let p = expandPath(path)
         let resolved: String
