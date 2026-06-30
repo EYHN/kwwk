@@ -242,6 +242,13 @@ func runCodingTUIInternal(
     var isAutoCompacting = false
     updateFrameStatus()
 
+    // Retry bookkeeping for `/retry`: remembers the last submitted prompt and
+    // whether its turn failed/aborted so it can be resubmitted on request.
+    // Declared before the agent subscription so the `.agentEnd` listener can
+    // flip `failed` when a run reports `.error` / `.aborted` — the genuine
+    // failure signal lives on the event stream, not on a thrown error.
+    let retry = TurnRetryState()
+
     // Keep the renderer's display mode in sync with the agent's state on
     // every event, so `/thinking show|hide` (which only mutates agent
     // state) takes effect on the next turn without extra plumbing.
@@ -260,8 +267,17 @@ func runCodingTUIInternal(
             switch event {
             case .agentStart:
                 break
-            case .agentEnd:
+            case .agentEnd(_, let summary):
                 frameMode = .idle
+                // A genuine failure (retries exhausted, turn cap, abort) returns
+                // NORMALLY from `agent.prompt()` — the executor error is caught
+                // inside `runLifecycle` and surfaced as a synthetic `.agentEnd`
+                // whose `summary.finalStopReason` is `.error` / `.aborted`. The
+                // detached-task `catch` only fires for `AgentError.alreadyRunning`,
+                // so this is the primary place `/retry` learns a turn failed.
+                if turnEndedRetryable(summary) {
+                    retry.failed = true
+                }
             case .compactStart(let count, _):
                 isAutoCompacting = true
                 frameMode = .compacting(messageCount: count)
@@ -310,10 +326,6 @@ func runCodingTUIInternal(
             runner.tui.requestRender()
         }
     }
-
-    // Retry bookkeeping for `/retry`: remembers the last submitted prompt and
-    // whether its turn failed/aborted so it can be resubmitted on request.
-    let retry = TurnRetryState()
 
     // Single submission path. Fires the prompt on a detached task (so the UI
     // keeps pumping while it streams), records it for `/retry`, and flips the
@@ -414,43 +426,20 @@ func runCodingTUIInternal(
         description: "Start a fresh session",
         aliases: ["clear"],
         handler: { _, _ in
-            let newId = UUID().uuidString
-
-            // Repoint persistence at a brand-new session file.
-            recorderBox.unsubscribe()
-            let recorder = SessionRecorder(
-                store: sessionStore,
-                sessionId: newId,
+            await performNewSession(
+                recorderBox: recorderBox,
+                sessionStore: sessionStore,
+                agent: agent,
                 cwd: cwd,
-                model: agent.state.model.id,
-                provider: agent.state.model.provider,
-                persistedCount: 0
+                attachments: attachments,
+                retry: retry,
+                frame: frame,
+                width: runner.terminal.width,
+                commit: { runner.tui.commit($0) },
+                recompute: recomputeTranscript,
+                updateStatus: updateFrameStatus,
+                requestRender: { runner.tui.requestRender() }
             )
-            await recorder.ensureCreated()
-            recorderBox.recorder = recorder
-            recorderBox.unsubscribe = recorder.attach(to: agent)
-            recorderBox.sessionId = newId
-
-            // Reset the live context. Native scrollback can't be cleared, so
-            // the prior conversation stays above a labeled separator and the
-            // fresh session begins below it.
-            agent.state.messages = []
-            agent.clearSteeringQueue()
-            attachments.clear()
-            frame.input.value = ""
-            retry.failed = false
-            retry.lastText = nil
-            retry.lastImages = []
-
-            runner.tui.commit([
-                "",
-                Theme.borderText(String(repeating: "─", count: max(8, runner.terminal.width - 2))),
-                Theme.accentText("✦ new session \(newId.prefix(8))", bold: false),
-            ])
-
-            recomputeTranscript()
-            updateFrameStatus()
-            runner.tui.requestRender()
         }
     ))
 
@@ -582,6 +571,12 @@ func runCodingTUIInternal(
                 var blocks: [UserBlock] = [.text(TextContent(text: built.text))]
                 for img in built.images { blocks.append(.image(img)) }
                 agent.steer(.user(UserMessage(content: blocks)))
+                // Record the steered prompt as the most-recent submission so
+                // `/retry` (after an Esc-abort of this turn) resubmits what was
+                // actually queued, not the prior direct prompt. `submitBuiltPrompt`
+                // only records on the idle path, so the steer branch must do it.
+                retry.lastText = built.text
+                retry.lastImages = built.images
                 attachments.clear()
                 frame.input.addToHistory(text)
                 frame.input.value = ""
@@ -697,23 +692,12 @@ func runCodingTUIInternal(
     runner.bind(.alt("up")) { _ in
         Task { @MainActor in
             guard !modal.isOpen, !frame.slashMenuActive else { return }
-            let current = frame.input.value
-            let matchesLast = dequeueCycle.last.map {
-                current == queuedMessageBodyText($0).replacingOccurrences(of: "\n", with: " ")
-            } ?? false
-            guard current.isEmpty || matchesLast else { return }
-            // Cycling onward: return the unedited prompt to the front so the
-            // next pop walks back to the prior item rather than re-popping it.
-            if matchesLast, let last = dequeueCycle.last {
-                agent.pushFrontSteeringMessage(last)
-            }
-            guard let msg = agent.popLastSteeringMessage() else {
-                dequeueCycle.last = nil
-                return
-            }
-            dequeueCycle.last = msg
-            frame.input.value = queuedMessageBodyText(msg)
-                .replacingOccurrences(of: "\n", with: " ")
+            guard let newValue = dequeueCycleStep(
+                input: frame.input.value,
+                state: dequeueCycle,
+                agent: agent
+            ) else { return }
+            frame.input.value = newValue
             frame.input.moveEnd()
             updateFrameStatus()
             runner.tui.requestRender()
@@ -762,7 +746,10 @@ func runCodingTUIInternal(
                 agent.abort()
                 frameMode = .aborting
                 // The active turn was interrupted — mark it retryable so
-                // `/retry` can resubmit the prompt that was streaming.
+                // `/retry` can resubmit the prompt that was streaming. The
+                // resulting `.agentEnd(.aborted)` also flips this flag via
+                // `turnEndedRetryable`; setting it here too is idempotent and
+                // gives immediate feedback before the loop unwinds.
                 retry.failed = true
                 runner.tui.commit([
                     "",
@@ -921,6 +908,101 @@ private enum CodingFrameMode {
 @MainActor
 final class DequeueCycleState {
     var last: Message?
+}
+
+/// Whether a finished run should be marked retryable for `/retry`: true when it
+/// ended in a hard error (retries exhausted / turn cap / synthetic failure) or
+/// was aborted by the user. This is the authoritative failure signal — genuine
+/// failures return normally from `agent.prompt()` and surface only as an
+/// `.agentEnd` whose `summary.finalStopReason` is `.error` / `.aborted`.
+func turnEndedRetryable(_ summary: AgentRunSummary) -> Bool {
+    summary.finalStopReason == .error || summary.finalStopReason == .aborted
+}
+
+/// Start a fresh, empty session in place: repoint persistence at a brand-new
+/// session file, clear the live agent context + steering queue, reset retry and
+/// attachment state, and commit a labeled separator to scrollback. Extracted
+/// from the `/new` handler so the reset is unit-testable.
+@MainActor
+func performNewSession(
+    newId: String = UUID().uuidString,
+    recorderBox: RecorderBox,
+    sessionStore: SessionStore,
+    agent: Agent,
+    cwd: String,
+    attachments: AttachmentStore,
+    retry: TurnRetryState,
+    frame: CodingFrame,
+    width: Int,
+    commit: ([String]) -> Void,
+    recompute: () -> Void,
+    updateStatus: () -> Void,
+    requestRender: () -> Void
+) async {
+    // Repoint persistence at a brand-new session file.
+    recorderBox.unsubscribe()
+    let recorder = SessionRecorder(
+        store: sessionStore,
+        sessionId: newId,
+        cwd: cwd,
+        model: agent.state.model.id,
+        provider: agent.state.model.provider,
+        persistedCount: 0
+    )
+    await recorder.ensureCreated()
+    recorderBox.recorder = recorder
+    recorderBox.unsubscribe = recorder.attach(to: agent)
+    recorderBox.sessionId = newId
+
+    // Reset the live context. Native scrollback can't be cleared, so the prior
+    // conversation stays above a labeled separator and the fresh session begins
+    // below it.
+    agent.state.messages = []
+    agent.clearSteeringQueue()
+    attachments.clear()
+    frame.input.value = ""
+    retry.failed = false
+    retry.lastText = nil
+    retry.lastImages = []
+
+    commit([
+        "",
+        Theme.borderText(String(repeating: "─", count: max(8, width - 2))),
+        Theme.accentText("✦ new session \(newId.prefix(8))", bold: false),
+    ])
+
+    recompute()
+    updateStatus()
+    requestRender()
+}
+
+/// One Alt+↑ dequeue-cycle step. Returns the new single-line input value to
+/// install, or `nil` for a no-op (the editor holds an edited draft, or the
+/// steering queue is empty). Extracted from the keybinding so the cycle logic —
+/// draft protection, LIFO rotation, and newline flattening — is unit-testable.
+///
+/// `input` is the current editor text; `state.last` is the prompt most recently
+/// popped back into the editor. When `input` still equals that popped prompt
+/// (unedited), the prompt is returned to the front of the queue before the next
+/// pop, so repeated presses rotate through every queued item without loss.
+@MainActor
+func dequeueCycleStep(input: String, state: DequeueCycleState, agent: Agent) -> String? {
+    let matchesLast = state.last.map {
+        input == queuedMessageBodyText($0).replacingOccurrences(of: "\n", with: " ")
+    } ?? false
+    // Never clobber a draft the user is mid-composing.
+    guard input.isEmpty || matchesLast else { return nil }
+    // Cycling onward: return the unedited prompt to the front so the next pop
+    // walks back to the prior item rather than re-popping it.
+    if matchesLast, let last = state.last {
+        agent.pushFrontSteeringMessage(last)
+    }
+    guard let msg = agent.popLastSteeringMessage() else {
+        state.last = nil
+        return nil
+    }
+    state.last = msg
+    return queuedMessageBodyText(msg).replacingOccurrences(of: "\n", with: " ")
 }
 
 /// Top-border breadcrumb for the prompt box: the live model id, then the

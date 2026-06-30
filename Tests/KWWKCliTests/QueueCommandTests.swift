@@ -174,6 +174,72 @@ struct AgentQueueIntrospectionTests {
         let remaining = Set(agent.queuedSteeringMessages().map { queuedMessageBodyText($0) } + [queuedMessageBodyText(last!)])
         #expect(remaining == ["a", "b", "c"], "no prompt is ever lost during cycling")
     }
+
+    @MainActor
+    @Test("dequeueCycleStep rotates through every queued prompt without loss")
+    func dequeueCycleStepRotates() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+        agent.steer(.user(UserMessage(text: "a")))
+        agent.steer(.user(UserMessage(text: "b")))
+        agent.steer(.user(UserMessage(text: "c")))
+
+        let state = DequeueCycleState()
+        var input = ""
+        var seen: [String] = []
+        // Four presses: pop c, then rotate c→b→a→c, feeding each returned value
+        // back as the editor contents (the unedited-draft path).
+        for _ in 0..<4 {
+            guard let next = dequeueCycleStep(input: input, state: state, agent: agent) else { break }
+            input = next
+            seen.append(next)
+        }
+        #expect(seen == ["c", "b", "a", "c"], "cycle rotates in reverse and wraps")
+        let remaining = Set(agent.queuedSteeringMessages().map { queuedMessageBodyText($0) } + [input])
+        #expect(remaining == ["a", "b", "c"], "no prompt is lost across the cycle")
+    }
+
+    @MainActor
+    @Test("dequeueCycleStep refuses to clobber an edited draft")
+    func dequeueCycleStepBlocksEditedDraft() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+        agent.steer(.user(UserMessage(text: "only")))
+
+        let state = DequeueCycleState()
+        // First press on an empty editor pops the queued prompt.
+        #expect(dequeueCycleStep(input: "", state: state, agent: agent) == "only")
+        #expect(agent.queuedSteeringCount() == 0)
+
+        // The user edits the draft → the next press is a no-op and the queue is
+        // left untouched.
+        #expect(dequeueCycleStep(input: "my own new draft", state: state, agent: agent) == nil)
+        #expect(agent.queuedSteeringCount() == 0, "blocked cycle must not mutate the queue")
+    }
+
+    @MainActor
+    @Test("dequeueCycleStep flattens multi-line queued prompts to spaces")
+    func dequeueCycleStepFlattensNewlines() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+        agent.steer(.user(UserMessage(text: "line1\nline2\nline3")))
+
+        let state = DequeueCycleState()
+        #expect(dequeueCycleStep(input: "", state: state, agent: agent) == "line1 line2 line3")
+    }
+
+    @MainActor
+    @Test("dequeueCycleStep no-ops on an empty queue")
+    func dequeueCycleStepEmptyQueue() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+        let state = DequeueCycleState()
+        #expect(dequeueCycleStep(input: "", state: state, agent: agent) == nil)
+    }
 }
 
 // MARK: - Helpers
