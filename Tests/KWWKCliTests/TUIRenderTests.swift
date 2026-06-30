@@ -429,6 +429,28 @@ struct TUIInlineResizeReflowTests {
         #expect(terminal.getWrites().contains("\u{1B}[2B\r\n"))
     }
 
+    @Test("second inline frame drops to live-zone bottom using the prior cursor offset")
+    func inlineFrameUsesPriorCursorOffset() async {
+        // The cursor parks on row 0 (the marker) with two rows below it, so
+        // the first frame records a cursor-up offset of 2. renderInline no
+        // longer reads/writes the `lastCursorUpBy` stored property directly —
+        // render() snapshots the prior offset under lock and passes it in, then
+        // stores the returned offset under lock. The next frame must therefore
+        // still drop back down by 2 (CSI 2 B) before rewinding to the top.
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TestLinesComponent([CURSOR_MARKER + "input", "border", "state"]))
+        tui.start()
+        await terminal.waitForRender()
+
+        terminal.clearWrites()
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        #expect(terminal.getWrites().contains("\u{1B}[2B"))
+        tui.stop()
+    }
+
     @Test("inline renderer clamps overflowing child rows before writing")
     func inlineRendererClampsOverflowingChildRows() async {
         let terminal = VirtualTerminal(width: 5, height: 20)

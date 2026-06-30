@@ -205,6 +205,7 @@ final class TUI: @unchecked Sendable {
         let width: Int
         let termHeight: Int
         let history: [String]
+        let header: [String]
         lock.lock()
         snapshotChildren = children
         width = terminal.width
@@ -215,6 +216,10 @@ final class TUI: @unchecked Sendable {
         // the write without replaying the same logical lines twice.
         pendingCommits.removeAll()
         history = committedLines
+        // Capture the decorative header under lock (mirrors multiplexerRepaint).
+        // `headerEmitted`/`headerProvider` are shared render-state, and this
+        // repaint can run off the main thread via the resize/escape-flush path.
+        header = (headerEmitted ? headerProvider?(width) : nil) ?? []
         lock.unlock()
 
         let liveWidth = max(0, width - 1)
@@ -237,10 +242,8 @@ final class TUI: @unchecked Sendable {
         out += TUI.enableAutowrap
         // Re-render the decorative header fresh at the new width so its
         // fixed-width box re-fits instead of reflowing into broken borders.
-        if headerEmitted, let header = headerProvider {
-            for line in header(width) {
-                out += "\u{1B}[2K" + line + "\r\n"
-            }
+        for line in header {
+            out += "\u{1B}[2K" + line + "\r\n"
         }
         // Replay history with autowrap on so the terminal re-wraps each
         // logical line to the new width. Overflow scrolls into native
@@ -337,6 +340,7 @@ final class TUI: @unchecked Sendable {
         let width: Int
         let termHeight: Int
         let oldHeight: Int
+        let prevCursorUpBy: Int
         let clearOnShrinkEnabled: Bool
         var committed: [String]
 
@@ -345,6 +349,7 @@ final class TUI: @unchecked Sendable {
         width = terminal.width
         termHeight = terminal.height
         oldHeight = lastFrameHeight
+        prevCursorUpBy = lastCursorUpBy
         clearOnShrinkEnabled = clearOnShrink
         committed = pendingCommits
         pendingCommits.removeAll()
@@ -379,17 +384,21 @@ final class TUI: @unchecked Sendable {
 
         let shrinking = rendered.count < oldHeight && clearOnShrinkEnabled
 
+        let (frame, newCursorUpBy) = renderInline(
+            rendered: rendered,
+            oldHeight: oldHeight,
+            committed: committed,
+            prevCursorUpBy: prevCursorUpBy
+        )
+
         lock.withLock {
             lastRenderedLines = rendered
             lastFrameHeight = rendered.count
+            lastCursorUpBy = newCursorUpBy
             if shrinking { _fullRedraws += 1 }
         }
 
-        terminal.write(renderInline(
-            rendered: rendered,
-            oldHeight: oldHeight,
-            committed: committed
-        ))
+        terminal.write(frame)
     }
 
     // MARK: - Inline rendering
@@ -406,11 +415,18 @@ final class TUI: @unchecked Sendable {
     // into scrollback — which is exactly what we want for committed output
     // to persist as viewable history.
 
+    /// Pure with respect to shared render-state: it reads the previous
+    /// cursor-up offset via `prevCursorUpBy` and returns the new offset rather
+    /// than touching the `lastCursorUpBy` stored property. Because `render()`
+    /// can run off the main thread (the escape-flush path schedules a flush on
+    /// a global queue), all shared-state access stays under the caller's lock —
+    /// this function mutates nothing observable.
     private func renderInline(
         rendered: [String],
         oldHeight: Int,
-        committed: [String]
-    ) -> String {
+        committed: [String],
+        prevCursorUpBy: Int
+    ) -> (String, cursorUpBy: Int) {
         var out = ""
 
         // Step 1: rewind to the top of the previous live zone.
@@ -419,8 +435,8 @@ final class TUI: @unchecked Sendable {
             // The previous frame may have parked the cursor above the live
             // zone bottom (focused row isn't the last row). Drop back down to
             // the bottom first so the rewind below lands on the right row.
-            if lastCursorUpBy > 0 {
-                out += "\u{1B}[\(lastCursorUpBy)B"
+            if prevCursorUpBy > 0 {
+                out += "\u{1B}[\(prevCursorUpBy)B"
             }
             out += "\r"
             if oldHeight > 1 {
@@ -457,9 +473,8 @@ final class TUI: @unchecked Sendable {
         // Step 3+4: draw the live frame and park the cursor.
         let (live, upBy) = emitLiveZone(rendered)
         out += live
-        lastCursorUpBy = upBy
 
-        return out
+        return (out, upBy)
     }
 
     /// Emit the live-zone rows at the current cursor (assumed to be at the
