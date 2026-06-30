@@ -1,16 +1,49 @@
 import Foundation
 
 public enum PathUtils {
-    /// Resolve a possibly-relative path against `cwd` and expand leading `~`.
+    private static let unicodeSpaceScalars = Set<UInt32>(
+        [UInt32(0x00A0), UInt32(0x202F), UInt32(0x205F), UInt32(0x3000)]
+            + (0x2000...0x200A).map(UInt32.init)
+    )
+
+    /// Resolve a possibly-relative path against `cwd`, expanding only `~` and `~/...`.
     public static func resolveToCwd(_ path: String, cwd: String) -> String {
-        var p = path
-        if p.hasPrefix("~") {
-            let home = NSHomeDirectory()
-            let suffix = p.dropFirst()
-            p = home + suffix
+        let p = expandPath(path)
+        let resolved: String
+        if p.hasPrefix("/") {
+            resolved = p
+        } else {
+            let base = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
+            resolved = "\(base)/\(p)"
         }
-        if (p as NSString).isAbsolutePath { return p }
-        return (cwd as NSString).appendingPathComponent(p)
+        return URL(fileURLWithPath: resolved).standardized.path
+    }
+
+    /// Normalize model/user path spelling the same way pi's `expandPath` does:
+    /// strip a leading `@`, normalize Unicode spaces, and expand `~`/`~/...`.
+    public static func expandPath(_ path: String) -> String {
+        var p = path.hasPrefix("@") ? String(path.dropFirst()) : path
+        p = normalizeUnicodeSpaces(p)
+        if p == "~" {
+            return NSHomeDirectory()
+        }
+        if p.hasPrefix("~/") {
+            return NSHomeDirectory() + String(p.dropFirst())
+        }
+        return p
+    }
+
+    public static func normalizeUnicodeSpaces(_ path: String) -> String {
+        var out = ""
+        out.reserveCapacity(path.count)
+        for scalar in path.unicodeScalars {
+            if unicodeSpaceScalars.contains(scalar.value) {
+                out.append(" ")
+            } else {
+                out.unicodeScalars.append(scalar)
+            }
+        }
+        return out
     }
 
     /// Detect a supported image MIME type by sniffing leading magic bytes.

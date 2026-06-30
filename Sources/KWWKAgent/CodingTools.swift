@@ -56,6 +56,7 @@ public protocol WriteOperations: Sendable {
 public protocol EditOperations: Sendable {
     func readFile(_ absolutePath: String) async throws -> Data
     func writeFile(_ absolutePath: String, content: Data) async throws
+    func access(_ absolutePath: String) async throws
 }
 
 public protocol BashOperations: Sendable {
@@ -163,5 +164,11 @@ public struct ReadToolDetails: Sendable, Codable, Equatable {
 
 public struct EditToolDetails: Sendable, Codable, Equatable {
     public var diff: String
-    public init(diff: String) { self.diff = diff }
+    public var patch: String?
+    public var firstChangedLine: Int?
+    public init(diff: String, patch: String? = nil, firstChangedLine: Int? = nil) {
+        self.diff = diff
+        self.patch = patch
+        self.firstChangedLine = firstChangedLine
+    }
 }
