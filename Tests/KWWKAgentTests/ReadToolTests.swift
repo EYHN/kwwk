@@ -322,10 +322,11 @@ struct EditToolTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("no-access.txt")
         try write("hello", to: file)
-        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
-        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
 
-        let tool = createEditTool(cwd: dir.path)
+        let tool = createEditTool(
+            cwd: dir.path,
+            options: EditToolOptions(operations: AccessDeniedEditOperations())
+        )
         let edits: JSONValue = .array([
             .object(["oldText": .string("hello"), "newText": .string("world")])
         ])
@@ -464,6 +465,21 @@ private final class EditUpdateCapture: @unchecked Sendable {
 
     func uiDisplays() -> [String] {
         lock.withLock { updates.flatMap { $0.uiDisplay ?? [] } }
+    }
+}
+
+private struct AccessDeniedEditOperations: EditOperations {
+    func readFile(_ absolutePath: String) async throws -> Data {
+        Issue.record("readFile should not be called after access fails")
+        return Data()
+    }
+
+    func writeFile(_ absolutePath: String, content: Data) async throws {
+        Issue.record("writeFile should not be called after access fails")
+    }
+
+    func access(_ absolutePath: String) async throws {
+        throw POSIXError(.EACCES)
     }
 }
 
