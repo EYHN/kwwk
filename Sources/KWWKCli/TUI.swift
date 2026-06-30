@@ -116,7 +116,7 @@ final class TUI: @unchecked Sendable {
     // MARK: - Rendering
 
     func requestRender() {
-        render(forceFullRedraw: false)
+        render()
     }
 
     /// Queue `lines` to be written as append-only output above the live
@@ -152,6 +152,13 @@ final class TUI: @unchecked Sendable {
         fullRepaint()
     }
 
+    /// Test hook: synchronously run the multiplexer in-place repaint (normally
+    /// fired on a SIGWINCH inside tmux/screen/zellij). Lets tests exercise the
+    /// snap-and-repaint path without setting environment variables.
+    func triggerMultiplexerRepaintForTesting() {
+        multiplexerRepaint()
+    }
+
     /// User-driven full repaint (bound to Ctrl+L). Clears the screen +
     /// scrollback and replays the retained transcript, header, and live zone
     /// at the current width — the conventional "redraw" escape hatch for when
@@ -174,8 +181,8 @@ final class TUI: @unchecked Sendable {
             fullRepaint()
         } else {
             // Multiplexer (tmux/screen/zellij): ED3 is hostile and the pane
-            // reflows its own visible window, so repaint in place.
-            render(forceFullRedraw: true)
+            // reflows its own visible window, so snap + repaint it in place.
+            multiplexerRepaint()
         }
     }
 
@@ -255,7 +262,77 @@ final class TUI: @unchecked Sendable {
         terminal.write(out)
     }
 
-    private func render(forceFullRedraw: Bool) {
+    /// Resize repaint for a terminal multiplexer (tmux/screen/zellij). ED3
+    /// (scrollback clear) is hostile in a multiplexer, and replaying the whole
+    /// transcript would re-scroll it into the pane's native scrollback on every
+    /// resize step (duplicating history). So instead we SNAP the viewport,
+    /// exactly like omp's non-clearScrollback full paint (pi-tui emitFullPaint:
+    /// `ESC[2J ESC[H` then committed-prefix + window): clear only the visible
+    /// pane and reprint its bottom `height` rows — the most recent committed
+    /// tail (re-wrapped to the new width) plus the live zone, with the
+    /// decorative header re-rendered fresh when it still falls inside that
+    /// window. Older history stays in the pane's scrollback, reflowed by the
+    /// multiplexer (the same constraint omp accepts — we never ED3 here).
+    private func multiplexerRepaint() {
+        let snapshotChildren: [Component]
+        let width: Int
+        let termHeight: Int
+        let history: [String]
+        let header: [String]
+        lock.lock()
+        snapshotChildren = children
+        width = terminal.width
+        termHeight = terminal.height
+        // A resize can arrive before the next normal render drains
+        // `pendingCommits`; this repaint owns the write, so clear the queue to
+        // avoid replaying the same logical lines twice.
+        pendingCommits.removeAll()
+        history = committedLines
+        header = (headerEmitted ? headerProvider?(width) : nil) ?? []
+        lock.unlock()
+
+        let liveWidth = max(0, width - 1)
+        var rendered: [String] = []
+        for child in snapshotChildren {
+            rendered.append(contentsOf: child.render(width: liveWidth))
+        }
+        rendered = rendered.map { ANSI.truncate($0, to: liveWidth) }
+        if rendered.count > termHeight {
+            rendered = Array(rendered.suffix(termHeight))
+        }
+
+        // Physical rows available above the live zone in the visible window.
+        // Re-wrap header + committed history to the new width and keep only the
+        // tail that fits, so the live zone lands at the window bottom and
+        // nothing is pushed (duplicated) into the multiplexer's scrollback.
+        let available = max(0, termHeight - rendered.count)
+        var historyPhysical: [String] = []
+        for line in header + history {
+            if line.isEmpty { historyPhysical.append("") }
+            else { historyPhysical.append(contentsOf: ANSI.wrap(line, width: width)) }
+        }
+        let onScreen = available > 0 ? Array(historyPhysical.suffix(available)) : []
+
+        var out = "\u{1B}[?2026h"          // begin synchronized output
+        out += "\u{1B}[H\u{1B}[2J"         // home + clear viewport (NOT scrollback)
+        out += TUI.disableAutowrap         // rows are pre-wrapped to width
+        for line in onScreen {
+            out += "\u{1B}[2K" + line + "\r\n"
+        }
+        let (live, upBy) = emitLiveZone(rendered)
+        out += live
+        out += "\u{1B}[?2026l"             // end synchronized output
+
+        lock.withLock {
+            lastRenderedLines = rendered
+            lastFrameHeight = rendered.count
+            lastCursorUpBy = upBy
+            _fullRedraws += 1
+        }
+        terminal.write(out)
+    }
+
+    private func render() {
         let snapshotChildren: [Component]
         let width: Int
         let termHeight: Int
@@ -301,19 +378,17 @@ final class TUI: @unchecked Sendable {
         }
 
         let shrinking = rendered.count < oldHeight && clearOnShrinkEnabled
-        let doFullRedraw = forceFullRedraw || shrinking
 
         lock.withLock {
             lastRenderedLines = rendered
             lastFrameHeight = rendered.count
-            if doFullRedraw { _fullRedraws += 1 }
+            if shrinking { _fullRedraws += 1 }
         }
 
         terminal.write(renderInline(
             rendered: rendered,
             oldHeight: oldHeight,
-            committed: committed,
-            forceFullRedraw: forceFullRedraw
+            committed: committed
         ))
     }
 
@@ -334,8 +409,7 @@ final class TUI: @unchecked Sendable {
     private func renderInline(
         rendered: [String],
         oldHeight: Int,
-        committed: [String],
-        forceFullRedraw: Bool
+        committed: [String]
     ) -> String {
         var out = ""
 
@@ -385,7 +459,6 @@ final class TUI: @unchecked Sendable {
         out += live
         lastCursorUpBy = upBy
 
-        _ = forceFullRedraw
         return out
     }
 
