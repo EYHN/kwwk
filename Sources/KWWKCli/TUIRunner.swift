@@ -120,6 +120,38 @@ final class TUIRunner: @unchecked Sendable {
         cont?.resume()
     }
 
+    /// Hand the terminal back for a full-screen sub-flow that runs its own
+    /// runner (the `/login` OAuth handoff spins up a fresh `TUIRunner`). Drops
+    /// raw stdin (restoring cooked termios via `RawStdin.deinit`), leaves the
+    /// input modes, stops the frame, and cancels signal handling so only the
+    /// sub-flow's runner owns SIGINT/SIGTERM. Pair with `resume()`.
+    func suspend() {
+        terminal.write("\u{1B}[?2004l")
+        terminal.write("\u{1B}[<u")
+        tui.stop()
+        lock.withLock {
+            sigintSource?.cancel()
+            sigtermSource?.cancel()
+            sigintSource = nil
+            sigtermSource = nil
+            pendingEscapeFlush?.cancel()
+            pendingEscapeFlush = nil
+            stdin = nil     // triggers RawStdin deinit → restores termios
+        }
+    }
+
+    /// Re-acquire the terminal after `suspend()`: reinstall signal handling
+    /// and raw stdin, re-enable bracketed paste + Kitty keyboard modes, and
+    /// repaint the frame from scratch.
+    func resume() throws {
+        try installSignalHandlers()
+        tui.start()
+        terminal.write("\u{1B}[?2004h")
+        terminal.write("\u{1B}[>1u")
+        try installStdin()
+        tui.requestRender()
+    }
+
     // MARK: - Lifecycle helpers
 
     private func installSignalHandlers() throws {

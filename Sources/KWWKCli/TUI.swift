@@ -344,6 +344,13 @@ final class TUI: @unchecked Sendable {
         let clearOnShrinkEnabled: Bool
         var committed: [String]
 
+        // Suppress all frame output while stopped/suspended (e.g. during a
+        // `/login` sub-flow that hands the terminal to another runner). A
+        // background spinner tick or agent event could otherwise fire a
+        // render straight into the sub-flow's screen. Pending commits stay
+        // buffered and flush on the first render after `start()` resumes.
+        guard lock.withLock({ isStarted }) else { return }
+
         lock.lock()
         snapshotChildren = children
         width = terminal.width
