@@ -99,6 +99,13 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
     private var history: [String] = []
     private var historyIndex: Int = -1
 
+    // The live draft stashed the moment Up recall first steps off the buffer
+    // (historyIndex -1 → a real entry). Stepping back Down to the newest entry
+    // restores it verbatim instead of blanking an unsent draft. Nil whenever
+    // not browsing; refreshed on each fresh move off the draft, so a stale
+    // draft can never resurrect.
+    private var pendingDraft: [Character]?
+
     // Emacs kill-ring + the last edit category that drives accumulation,
     // yank-pop eligibility, and undo coalescing.
     private var killRing = KillRing()
@@ -124,6 +131,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
             // A programmatic replace is a fresh editing context: leave history
             // browse mode, drop the undo stack, and reset the edit category.
             historyIndex = -1
+            pendingDraft = nil
             undoStack.removeAll()
             lastAction = nil
             invalidate()
@@ -314,9 +322,15 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         guard !history.isEmpty else { return false }
         let newIndex = historyIndex - direction
         guard newIndex >= -1, newIndex < history.count else { return false }
+        // Leaving the live draft (index -1) for a real entry: stash the draft
+        // (refreshing any prior stash) so a later Down restores it verbatim.
+        if historyIndex == -1, newIndex >= 0 {
+            pendingDraft = chars
+        }
         historyIndex = newIndex
         if historyIndex == -1 {
-            setBufferInternal("")
+            setBufferInternal(String(pendingDraft ?? []))
+            pendingDraft = nil
         } else {
             setBufferInternal(history[historyIndex])
         }
