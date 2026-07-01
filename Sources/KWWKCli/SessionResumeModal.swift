@@ -41,7 +41,7 @@ final class SessionResumeModal: Modal {
 
     func cancel() { onCancel() }
 
-    func render() -> [String] {
+    func render(maxRows: Int) -> [String] {
         var out: [String] = []
         out.append("")
         out.append(Theme.accentText("  Resume a session"))
@@ -49,12 +49,13 @@ final class SessionResumeModal: Modal {
         if sessions.isEmpty {
             out.append(Theme.faintText("  no saved sessions for this project yet"))
         } else {
-            // Window the list so a long history stays on screen.
-            let maxRows = 10
+            // Window the list so a long history stays on screen — sized to the
+            // terminal (chrome: blank + title + blank + blank + footer = 5).
+            let rows = max(3, maxRows - 5)
             var start = 0
-            if selectedIndex >= maxRows { start = selectedIndex - maxRows + 1 }
-            start = min(start, max(0, sessions.count - maxRows))
-            for i in start..<min(sessions.count, start + maxRows) {
+            if selectedIndex >= rows { start = selectedIndex - rows + 1 }
+            start = min(start, max(0, sessions.count - rows))
+            for i in start..<min(sessions.count, start + rows) {
                 let info = sessions[i]
                 let selected = i == selectedIndex
                 let marker = selected ? Theme.accentText("  ❯ ", bold: false) : "    "

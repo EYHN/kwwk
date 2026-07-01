@@ -11,7 +11,10 @@ protocol Modal: AnyObject {
     func confirm()
     func cancel()
     /// Lines to render in place of the transcript while the modal is open.
-    func render() -> [String]
+    /// `maxRows` is the height budget (terminal rows available above the
+    /// prompt box); modals with long lists must window their content to fit
+    /// and keep the selection visible rather than overflow the viewport.
+    func render(maxRows: Int) -> [String]
 }
 
 /// Owns the "one modal at a time" invariant. The coding TUI's arrow /
@@ -28,15 +31,20 @@ final class ModalHost {
     /// so the user goes back to exactly what was on screen before the modal.
     private let restoreTranscript: () -> Void
     private let requestRender: () -> Void
+    /// Height budget (terminal rows available for the modal above the prompt
+    /// box), queried fresh on every redraw so windowing tracks resizes.
+    private let availableRows: () -> Int
 
     init(
         renderModalLines: @escaping ([String]?) -> Void,
         restoreTranscript: @escaping () -> Void,
-        requestRender: @escaping () -> Void
+        requestRender: @escaping () -> Void,
+        availableRows: @escaping () -> Int = { 24 }
     ) {
         self.renderModalLines = renderModalLines
         self.restoreTranscript = restoreTranscript
         self.requestRender = requestRender
+        self.availableRows = availableRows
     }
 
     func open(_ modal: Modal) {
@@ -63,7 +71,7 @@ final class ModalHost {
 
     private func redraw() {
         guard let active else { return }
-        renderModalLines(active.render())
+        renderModalLines(active.render(maxRows: max(4, availableRows())))
         requestRender()
     }
 }

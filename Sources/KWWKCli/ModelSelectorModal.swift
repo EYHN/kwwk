@@ -18,6 +18,10 @@ final class ModelSelectorModal: Modal {
     /// alone is ambiguous; this pins the initially-selected row.
     private let currentIndex: Int?
     private var selectedIndex: Int
+    /// Top display-line of the visible window. Persistent so the list scrolls
+    /// only when the selection crosses an edge (rather than re-centering on
+    /// every keypress).
+    private var scroll = 0
     private let onSelect: @MainActor (Model) -> Void
     private let onCancel: @MainActor () -> Void
 
@@ -65,34 +69,68 @@ final class ModelSelectorModal: Modal {
         onCancel()
     }
 
-    func render() -> [String] {
+    func render(maxRows: Int) -> [String] {
         var out: [String] = []
         out.append("")
         out.append(Style.header("  \(title)"))
-        out.append("")
-        if models.isEmpty {
+        guard !models.isEmpty else {
+            out.append("")
             out.append(Style.dimmed("  (no models available for this provider)"))
-        } else {
-            var lastGroup: String?
-            for (i, model) in models.enumerated() {
-                if let group = groupLabels?[i], group != lastGroup {
-                    if lastGroup != nil { out.append("") }
-                    out.append(Style.dimmed("  ── \(group) ──"))
-                    lastGroup = group
-                }
-                let prefix = i == selectedIndex ? Style.prompt("  ❯ ") : "    "
-                // The active row is pinned by index (ids repeat across
-                // providers); tag only that exact row as current.
-                let isCurrent = currentIndex != nil ? (i == currentIndex) : (model.id == currentModelId)
-                let currentTag = isCurrent ? Style.dimmed("  · current") : ""
-                let body = i == selectedIndex
-                    ? Style.prompt(model.id) + "  " + Style.dimmed(model.name)
-                    : model.id + "  " + Style.dimmed(model.name)
-                out.append(prefix + body + currentTag)
-            }
+            out.append("")
+            out.append(Style.dimmed("  ↑/↓: move   Enter: confirm   Esc: cancel"))
+            return out
         }
+
+        // Expand to display lines (group headers interleaved with rows),
+        // tracking where the selected row lands so the window keeps it in view.
+        var lines: [(text: String, isHeader: Bool, group: String?)] = []
+        var selectedLine = 0
+        var lastGroup: String?
+        for (i, model) in models.enumerated() {
+            if let group = groupLabels?[i], group != lastGroup {
+                lines.append((Style.dimmed("  ── \(group) ──"), true, group))
+                lastGroup = group
+            }
+            let selected = i == selectedIndex
+            if selected { selectedLine = lines.count }
+            let prefix = selected ? Style.prompt("  ❯ ") : "    "
+            // Ids repeat across providers, so tag only the exact active row.
+            let isCurrent = currentIndex != nil ? (i == currentIndex) : (model.id == currentModelId)
+            let currentTag = isCurrent ? Style.dimmed("  · current") : ""
+            let body = selected
+                ? Style.prompt(model.id) + "  " + Style.dimmed(model.name)
+                : model.id + "  " + Style.dimmed(model.name)
+            lines.append((prefix + body + currentTag, false, groupLabels?[i]))
+        }
+
+        // Body height budget = total minus chrome (blank + title + blank +
+        // blank + footer = 5). Window the list so the prompt box is never
+        // pushed off-screen and the selection stays reachable.
+        let bodyBudget = max(3, maxRows - 5)
+        let windowed = lines.count > bodyBudget
+        // Reserve one line for the synthetic context header we may prepend when
+        // the window opens mid-group, so the scroll window (and therefore the
+        // selected row) is never squeezed out by it.
+        let windowRows = windowed ? max(1, bodyBudget - 1) : bodyBudget
+
+        // Scroll only at the edges.
+        if selectedLine < scroll { scroll = selectedLine }
+        else if selectedLine >= scroll + windowRows { scroll = selectedLine - windowRows + 1 }
+        scroll = max(0, min(scroll, max(0, lines.count - windowRows)))
+
+        var visible = Array(lines[scroll ..< min(lines.count, scroll + windowRows)])
+        // If the window opens mid-group (its header scrolled off), prepend the
+        // active group header for context. The reserved row above keeps this
+        // within budget without dropping the selected row.
+        if windowed, let first = visible.first, !first.isHeader, let group = first.group {
+            visible.insert((Style.dimmed("  ── \(group) ──"), true, group), at: 0)
+        }
+
         out.append("")
-        out.append(Style.dimmed("  ↑/↓: move   Enter: confirm   Esc: cancel"))
+        for line in visible { out.append(line.text) }
+        out.append("")
+        let move = "↑/↓: move   Enter: confirm   Esc: cancel"
+        out.append(Style.dimmed(windowed ? "  \(selectedIndex + 1)/\(models.count)   \(move)" : "  \(move)"))
         return out
     }
 }

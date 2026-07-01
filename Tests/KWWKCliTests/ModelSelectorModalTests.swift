@@ -95,11 +95,40 @@ struct ModelSelectorModalTests {
             onSelect: { _ in },
             onCancel: {}
         )
-        let lines = modal.render()
+        let lines = modal.render(maxRows: 40)
         // Current (`b`) should get the pre-selection + "· current" tag.
         let bLine = lines.first(where: { $0.contains("b") && !$0.contains("Pick one") })
         #expect(bLine?.contains("current") == true)
         #expect(bLine?.contains("❯") == true)
+    }
+
+    @MainActor
+    @Test("long list windows to maxRows and keeps the selection visible")
+    func windowsToHeight() {
+        let models = (0..<50).map { model("m\($0)") }
+        let modal = ModelSelectorModal(
+            title: "Pick one",
+            models: models,
+            currentModelId: nil,
+            onSelect: { _ in },
+            onCancel: {}
+        )
+        let maxRows = 12
+        func strip(_ s: String) -> String {
+            s.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
+        }
+        // At every scroll position the render must fit the budget AND keep the
+        // selected row visible — including mid-list, where a context header may
+        // be prepended.
+        for step in 0..<50 {
+            let lines = modal.render(maxRows: maxRows).map(strip)
+            #expect(lines.count <= maxRows, "overflow at selection \(step)")
+            #expect(lines.contains(where: { $0.contains("❯ m\(step)  ") }),
+                    "selected row m\(step) must be within the window")
+            modal.down()
+        }
+        // Position indicator shows while windowed.
+        #expect(modal.render(maxRows: maxRows).contains(where: { $0.contains("/50") }))
     }
 
     @MainActor
@@ -117,7 +146,7 @@ struct ModelSelectorModalTests {
         // Safe to call navigation/confirm on an empty list.
         modal.up(); modal.down(); modal.confirm()
         #expect(picked.value == nil)
-        let lines = modal.render()
+        let lines = modal.render(maxRows: 40)
         #expect(lines.contains(where: { $0.contains("no models") }))
     }
 }

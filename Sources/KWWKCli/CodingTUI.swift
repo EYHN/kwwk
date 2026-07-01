@@ -210,7 +210,10 @@ func runCodingTUIInternal(
             recomputeTranscript()
             updateFrameStatus()
         },
-        requestRender: { runner.tui.requestRender() }
+        requestRender: { runner.tui.requestRender() },
+        // Rows available for the modal above the prompt box. Reserve ~4 for
+        // the prompt box + a margin; queried per redraw so it tracks resizes.
+        availableRows: { max(4, runner.terminal.height - 4) }
     )
 
     _ = runner.terminal.onResize { w, h in
