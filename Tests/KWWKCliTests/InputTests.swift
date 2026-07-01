@@ -172,6 +172,58 @@ struct InputHistoryTests {
         #expect(input.value == "recalled")
     }
 
+    @Test("Up then Down restores an unsent draft") func draftPreserved() {
+        let input = InputComponent()
+        input.addToHistory("old")
+        // Live, unsent draft with a seeded prior history entry.
+        input.handleInput("d")
+        input.handleInput("r")
+        input.handleInput("f")
+        #expect(input.value == "drf")
+        // Up recalls the prior entry, stashing the draft.
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "old")
+        // Down past the newest entry restores the draft verbatim.
+        #expect(input.navigateHistory(1) == true)
+        #expect(input.value == "drf")
+    }
+
+    @Test("multi-step Up/Down preserves the draft") func draftPreservedMultiStep() {
+        let input = InputComponent()
+        input.addToHistory("first")
+        input.addToHistory("second")
+        // Live draft over two seeded entries.
+        input.value = "keep me"
+        #expect(input.value == "keep me")
+        // Walk up through both entries, then back down through them.
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "second")
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "first")
+        #expect(input.navigateHistory(1) == true)
+        #expect(input.value == "second")
+        // Down past the newest → the original draft, not a blank buffer.
+        #expect(input.navigateHistory(1) == true)
+        #expect(input.value == "keep me")
+    }
+
+    @Test("editing while browsing refreshes the stashed draft") func draftRefreshedAfterEdit() {
+        let input = InputComponent()
+        input.addToHistory("old")
+        input.value = "draft"
+        // Up stashes "draft" and shows the entry; typing exits browse mode.
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "old")
+        input.handleInput("!")
+        #expect(input.value == "old!")
+        // Up again recaptures the new live buffer as the draft.
+        #expect(input.navigateHistory(-1) == true)
+        #expect(input.value == "old")
+        // Down restores the refreshed draft, never the stale "draft".
+        #expect(input.navigateHistory(1) == true)
+        #expect(input.value == "old!")
+    }
+
     @Test("Up gated to first hard row, Down to last") func rowGating() {
         let input = InputComponent(initial: "line1\nline2")
         input.addToHistory("prev")
