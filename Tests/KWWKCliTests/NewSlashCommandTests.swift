@@ -74,10 +74,19 @@ struct NewSlashCommandTests {
     }
 
     @MainActor
-    @Test("/copy copies the last assistant reply")
+    @Test("/copy copies the LAST assistant reply's real text")
     func copyLastReply() async {
         let (ctx, notifier) = await makeContext()
+        // Seed two assistant replies of different lengths; /copy must pick the
+        // last one. "an earlier, much longer reply" != "the answer" (10 chars),
+        // so grabbing the wrong message yields a different char count.
         ctx.agent.state.messages = [
+            .assistant(AssistantMessage(
+                content: [.text(TextContent(text: "an earlier, much longer reply"))],
+                api: "test",
+                provider: "test",
+                model: ctx.agent.state.model.id
+            )),
             .assistant(AssistantMessage(
                 content: [.text(TextContent(text: "the answer"))],
                 api: "test",
@@ -87,6 +96,12 @@ struct NewSlashCommandTests {
         ]
         await runCommand("copy", ctx: ctx)
         #expect(notifier.joined.contains("copied last reply"))
+        // "the answer" is exactly 10 characters — pins that the last reply's
+        // real text (not the earlier, longer one) is what got copied.
+        #expect(notifier.joined.contains("(10 chars)"))
+        // And the copied payload itself equals the last reply text.
+        #expect(ClipboardWriter.osc52Sequence(for: "the answer")
+            .contains(Data("the answer".utf8).base64EncodedString()))
     }
 
     @MainActor

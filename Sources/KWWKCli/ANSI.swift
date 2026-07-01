@@ -124,8 +124,10 @@ enum ANSI {
         if width <= 0 { return "" }
         var out = ""
         var visible = 0
-        var hadStyle = false
-        var hadClose = false
+        // Single current-pen state, mirroring how `wrap` tracks `activeSGR`:
+        // any non-reset SGR opens the pen, a reset (`ESC[0m`/`ESC[m`) closes
+        // it. We append a trailing reset iff the pen is still open at the cut.
+        var styleOpen = false
         let scalars = Array(s.unicodeScalars)
         var i = 0
         while i < scalars.count {
@@ -134,15 +136,14 @@ enum ANSI {
                 let end = skipEscape(scalars, from: i)
                 for k in i..<end { out.unicodeScalars.append(scalars[k]) }
                 if let final = scalars[safe: end - 1]?.value, final == 0x6D {
+                    var params = ""
                     let paramStart = i + 2
                     if paramStart < end {
-                        var params = ""
                         for k in paramStart..<(end - 1) {
                             params.unicodeScalars.append(scalars[k])
                         }
-                        if params == "0" || params == "" { hadClose = true }
-                        else { hadStyle = true }
                     }
+                    styleOpen = !(params == "0" || params.isEmpty)
                 }
                 i = end
                 continue
@@ -154,7 +155,7 @@ enum ANSI {
             visible += cw
             i += 1
         }
-        if hadStyle && !hadClose {
+        if styleOpen {
             out += "\u{1B}[0m"
         }
         return out

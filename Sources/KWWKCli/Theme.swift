@@ -121,9 +121,12 @@ enum Box {
         let inner = width - 2
         var mid: String
         if let label, !label.isEmpty {
-            let tag = " \(label) "
-            let tagWidth = ANSI.visibleWidth(tag)
             let lead = 1
+            // Clamp the label to the inner span (minus the lead rule and the
+            // two padding spaces) so an over-long breadcrumb can't overflow
+            // the border past `width` and drop the corner.
+            let tag = " " + ANSI.truncate(label, to: max(0, inner - lead - 2)) + " "
+            let tagWidth = ANSI.visibleWidth(tag)
             let rest = max(0, inner - lead - tagWidth)
             mid = Theme.borderText(String(repeating: h, count: lead))
                 + tag
@@ -141,9 +144,12 @@ enum Box {
         let inner = width - 2
         var mid: String
         if let rightLabel, !rightLabel.isEmpty {
-            let tag = " \(rightLabel) "
-            let tagWidth = ANSI.visibleWidth(tag)
             let trail = 1
+            // Clamp the label to the inner span (minus the trailing rule and
+            // the two padding spaces) so an over-long label can't overflow the
+            // border past `width` and drop the corner.
+            let tag = " " + ANSI.truncate(rightLabel, to: max(0, inner - trail - 2)) + " "
+            let tagWidth = ANSI.visibleWidth(tag)
             let rest = max(0, inner - trail - tagWidth)
             mid = Theme.borderText(String(repeating: h, count: rest))
                 + tag
