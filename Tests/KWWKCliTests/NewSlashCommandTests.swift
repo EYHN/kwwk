@@ -94,14 +94,18 @@ struct NewSlashCommandTests {
                 model: ctx.agent.state.model.id
             )),
         ]
+        // The selection logic `/copy` feeds to ClipboardWriter must resolve to
+        // the LAST reply's real text, not the earlier, longer one.
+        #expect(lastAssistantText(ctx.agent.state.messages) == "the answer")
         await runCommand("copy", ctx: ctx)
         #expect(notifier.joined.contains("copied last reply"))
-        // "the answer" is exactly 10 characters — pins that the last reply's
-        // real text (not the earlier, longer one) is what got copied.
+        // "the answer" is exactly 10 characters — the reported count pins that
+        // the last reply (not the 29-char earlier one) is what got copied.
         #expect(notifier.joined.contains("(10 chars)"))
-        // And the copied payload itself equals the last reply text.
+        // Sanity-check the OSC52 encoder against a hand-computed base64 (not a
+        // literal-on-both-sides tautology): "the answer" → "dGhlIGFuc3dlcg==".
         #expect(ClipboardWriter.osc52Sequence(for: "the answer")
-            .contains(Data("the answer".utf8).base64EncodedString()))
+            == "\u{1B}]52;c;dGhlIGFuc3dlcg==\u{07}")
     }
 
     @MainActor

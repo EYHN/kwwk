@@ -647,7 +647,8 @@ private func clipboardVia(_ outcome: ClipboardWriter.Outcome) -> String {
 }
 
 /// Plain text of the most recent assistant message (its text blocks joined).
-private func lastAssistantText(_ messages: [Message]) -> String? {
+/// Internal (not private) so tests can pin exactly what `/copy` selects.
+func lastAssistantText(_ messages: [Message]) -> String? {
     for message in messages.reversed() {
         if case .assistant(let a) = message {
             let text = a.content.compactMap { block -> String? in

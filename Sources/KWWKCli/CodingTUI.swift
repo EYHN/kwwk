@@ -361,7 +361,12 @@ func runCodingTUIInternal(
                 try await agent.prompt(text, images: images)
             } catch {
                 await MainActor.run {
-                    retry.failed = true
+                    // Do NOT arm /retry here. The only error escaping prompt()
+                    // is `alreadyRunning` (a submit that never started, e.g. a
+                    // double-Enter race) — the turn that IS running arms /retry
+                    // via its own `.agentEnd`. Arming here would flip failed=true
+                    // without refreshing the arm-time-derived target, so /retry
+                    // could resurrect a stale, unrelated prompt.
                     runner.tui.commit([
                         "",
                         Style.error("  error: \(error)"),
