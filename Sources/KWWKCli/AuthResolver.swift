@@ -56,12 +56,17 @@ enum AuthResolveError: Error, LocalizedError {
 }
 
 /// Resolve credentials:
-///   1. `OAuthStore` has exactly one provider (kwwk login is exclusive) →
-///      route based on that provider id.
-///   2. Throw `noCredentials`.
+///   1. If `OAuthStore` holds any logins, register ALL of them via
+///      `registerAllStored` (each scoped by `model.provider`) and build a
+///      unified cross-provider resolver; same-scope dual logins are
+///      de-duplicated by priority. The highest-priority (or `provider/model`
+///      override's) provider is the active model.
+///   2. Otherwise fall back to environment API keys (lowest priority).
+///   3. Throw `noCredentials`.
 ///
-/// Registers the chosen provider on `APIRegistry.shared` as a side effect so
-/// the returned model can be used immediately.
+/// Registers every resolved provider on `APIRegistry.shared` as a side effect
+/// so the returned model — and any `/model` switch to another logged-in
+/// provider — can be used immediately.
 ///
 /// `modelOverride` (optional) replaces the provider's hardcoded default model
 /// id — catalog metadata is still resolved from `ModelsCatalog`, falling back
@@ -97,7 +102,7 @@ func resolveAgentAuth(
         // `/login` can add a stored provider mid-session.
         let slot = ProviderSlot(
             storeId: "env:\(env.model.provider)",
-            catalogProvider: catalogProvider(forCatalogKey: env.model.provider),
+            catalogProvider: catalogProviderKey(forAgentProvider: env.model.provider),
             displayName: providerDisplayName(forStoreId: "env:\(env.model.provider)"),
             template: env.model
         )
@@ -115,12 +120,6 @@ func resolveAgentAuth(
     }
 
     throw AuthResolveError.noCredentials
-}
-
-/// For env-auth the model's `provider` is already the catalog key (e.g.
-/// `openai`, `google`, `anthropic`), except the Codex variant. Normalize it.
-private func catalogProvider(forCatalogKey key: String) -> String {
-    key == "chatgpt-codex" ? "openai-codex" : key
 }
 
 /// Register **every** stored provider on `APIRegistry.shared` (each scoped by
@@ -257,8 +256,14 @@ func registerStoredProviderLive(
     guard let resolved = try? await registerStored(
         storeId: storeId, store: store, modelOverride: nil, context1m: context1m
     ) else { return nil }
+    // Keep the scope's provider instance and its resolver consistent: an
+    // OAuth provider installs a resolver; a static api-key provider has none
+    // and must clear any stale resolver left under this scope, else the next
+    // request would send a token through the wrong provider instance.
     if let r = resolved.authResolver {
         await authResolvers.set(scope: resolved.model.provider, r)
+    } else {
+        await authResolvers.remove(scope: resolved.model.provider)
     }
     return ProviderSlot(
         storeId: storeId,
@@ -659,9 +664,11 @@ private func registerGitHubCopilot(
 
     // Register one provider per wire format. Copilot's catalog mixes all
     // three: Claude models use anthropic-messages, GPT-4.x and Gemini use
-    // openai-completions, GPT-5 family uses openai-responses. With
-    // single-provider login (`setExclusive`) these don't collide with the
-    // direct-API providers; they replace them for this session.
+    // openai-completions, GPT-5 family uses openai-responses. All register
+    // under scope "github-copilot", so they live in the provider-scoped map
+    // and COEXIST with (rather than replace) the direct-API anthropic/openai
+    // providers — dispatch prefers the scoped instance only for models whose
+    // `provider == "github-copilot"`, falling back to the flat map otherwise.
     await APIRegistry.shared.register(ProviderVariants.githubCopilot(
         sessionToken: nil,
         integrationID: "vscode-chat",

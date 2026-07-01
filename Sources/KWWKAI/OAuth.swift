@@ -125,14 +125,6 @@ public actor OAuthStore {
         try persist()
     }
 
-    /// Replace the entire store with a single provider's credentials. Used by
-    /// `kwwk login` to enforce a single active provider — logging in with a
-    /// new provider drops any previously-saved ones in one atomic write.
-    public func setExclusive(_ credentials: OAuthCredentials, for providerId: String) throws {
-        self.credentials = [providerId: credentials]
-        try persist()
-    }
-
     public func remove(_ providerId: String) throws {
         credentials.removeValue(forKey: providerId)
         try persist()

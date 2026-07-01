@@ -168,6 +168,20 @@ final class TUI: @unchecked Sendable {
         fullRepaint()
     }
 
+    /// Drop retained live-zone geometry so the next render anchors fresh at the
+    /// current cursor instead of rewinding over rows that no longer exist.
+    /// Called by `TUIRunner.resume()` after a full-screen sub-flow (`/login`)
+    /// printed its own output where the live zone used to be — without this,
+    /// the first post-resume render would clear `lastFrameHeight` rows relative
+    /// to the new cursor and erase the sub-flow's output.
+    func resetFrameGeometryForResume() {
+        lock.withLock {
+            lastFrameHeight = 0
+            lastCursorUpBy = 0
+            lastRenderedLines = []
+        }
+    }
+
     private func handleResize() {
         let snapshotChildren: [Component] = lock.withLock { children }
         for child in snapshotChildren { child.invalidate() }

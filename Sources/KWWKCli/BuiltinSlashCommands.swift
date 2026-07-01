@@ -231,6 +231,20 @@ private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
         ctx.notify(Style.dimmed("  /login: no provider logged in"))
         return
     }
+    // Same-scope dedup, mirroring launch-time registerAllStored: two store ids
+    // can share one wire scope (Anthropic OAuth + Anthropic API key both →
+    // `anthropic`). Don't let a second same-scope login clobber the active
+    // provider's registration/resolver this session. The credentials are still
+    // saved on disk; priority order decides on the next launch.
+    let newScope = modelProviderScope(forStoreId: storeId)
+    if let existing = ctx.sessionProviders.slots.first(where: {
+        $0.storeId != storeId && modelProviderScope(forStoreId: $0.storeId) == newScope
+    }) {
+        ctx.notify(Style.dimmed(
+            "  /login: saved \(storeId), but it shares a provider slot with the active \(existing.storeId) — /logout \(existing.storeId) first to use it"
+        ))
+        return
+    }
     guard let slot = await registerStoredProviderLive(
         storeId: storeId, authResolvers: authResolvers
     ) else {
@@ -272,14 +286,28 @@ private func handleLogoutCommand(_ ctx: SlashContext, _ args: String) async {
         return
     }
 
-    try? await store.remove(target)
     let scope = modelProviderScope(forStoreId: target)
+    // Only the store id that actually OWNS this session's slot for the scope
+    // may tear down the scope's live registration. A shadowed same-scope login
+    // (e.g. logging out `anthropic-api-key` while `anthropic` OAuth owns the
+    // `anthropic` scope) was never registered — removing it from disk is
+    // enough; touching the scope would wrongly unregister the active provider.
+    let ownsSlot = ctx.sessionProviders.slot(forStoreId: target) != nil
+    try? await store.remove(target)
+
+    guard ownsSlot else {
+        ctx.notify(Style.dimmed("  /logout: removed \(target) (was shadowed by a same-vendor login)"))
+        return
+    }
+
     await APIRegistry.shared.unregisterScope(scope)
     if let ar = ctx.authResolvers { await ar.remove(scope: scope) }
     ctx.sessionProviders.remove(storeId: target)
 
     // If the removed provider was the one in use, switch to a survivor so the
-    // next request doesn't hit a now-unregistered provider.
+    // next request doesn't hit a now-unregistered provider. (A same-vendor
+    // login still on disk isn't re-homed this session — it's available on the
+    // next launch, where priority order re-registers it.)
     if ctx.agent.state.model.provider == scope {
         if let next = ctx.sessionProviders.slots.first {
             ctx.agent.state.model = next.template

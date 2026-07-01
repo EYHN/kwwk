@@ -306,7 +306,7 @@ private func runOAuthFlow(providerId: String) async throws {
         throw LoginError.oauthFailed(error.localizedDescription)
     }
 
-    try await persistExclusive(credentials, providerId: providerId)
+    try await persistCredentials(credentials, providerId: providerId)
 
     // GitHub Copilot post-login: opt the account in on every Copilot model
     // we know about. Claude/Grok/Gemini require this one-shot enable before
@@ -395,14 +395,14 @@ private func runAPIKeyFlow(
         expires: .max,
         extras: extras
     )
-    try await persistExclusive(credentials, providerId: storeId)
+    try await persistCredentials(credentials, providerId: storeId)
 }
 
 /// Save `credentials` under `providerId`, **keeping** any other providers
 /// already in the store (additive multi-login). Logging into the same
 /// provider again overwrites just that entry (re-auth / token refresh).
 /// Prints a confirmation line and lists the other providers still logged in.
-private func persistExclusive(
+private func persistCredentials(
     _ credentials: OAuthCredentials,
     providerId: String
 ) async throws {

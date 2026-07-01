@@ -142,9 +142,12 @@ final class TUIRunner: @unchecked Sendable {
 
     /// Re-acquire the terminal after `suspend()`: reinstall signal handling
     /// and raw stdin, re-enable bracketed paste + Kitty keyboard modes, and
-    /// repaint the frame from scratch.
+    /// repaint the frame with a fresh anchor. The geometry reset MUST happen
+    /// before `start()` (whose own render would otherwise rewind over the
+    /// sub-flow's output using the stale pre-suspend live-zone height).
     func resume() throws {
         try installSignalHandlers()
+        tui.resetFrameGeometryForResume()
         tui.start()
         terminal.write("\u{1B}[?2004h")
         terminal.write("\u{1B}[>1u")
