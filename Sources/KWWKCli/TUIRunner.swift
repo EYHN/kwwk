@@ -49,8 +49,17 @@ final class TUIRunner: @unchecked Sendable {
         self.terminal = StdoutTerminal()
         self.tui = TUI(terminal: terminal)
         self.keybindings = KeybindingRegistry()
+        // Main-confinement invariant: all rendering happens on the main
+        // queue. The stdin read source, SIGWINCH, and the spinner tick are
+        // already main-confined, so the escape flush must be too — its work
+        // item runs handleSequences → requestRender → terminal.write, which
+        // would corrupt the frame if it raced a main-thread render. `main`
+        // (not `global`) keeps every render path serialized on one queue.
+        // `asyncAfter` is non-blocking, so scheduling from the main queue
+        // introduces no reentrancy or deadlock. The scheduler stays injectable
+        // so tests can drive the timer synchronously.
         self.escapeFlushScheduler = escapeFlushScheduler ?? { delayMs, work in
-            DispatchQueue.global().asyncAfter(
+            DispatchQueue.main.asyncAfter(
                 deadline: .now() + .milliseconds(delayMs),
                 execute: work
             )
