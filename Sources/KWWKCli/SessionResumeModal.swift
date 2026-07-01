@@ -42,16 +42,19 @@ final class SessionResumeModal: Modal {
     func cancel() { onCancel() }
 
     func render(maxRows: Int) -> [String] {
+        // Drop the cosmetic blank spacers on short terminals so the render
+        // stays within `maxRows` (title + body + footer is the minimum).
+        let roomy = maxRows >= 9
         var out: [String] = []
-        out.append("")
+        if roomy { out.append("") }
         out.append(Theme.accentText("  Resume a session"))
-        out.append("")
+        if roomy { out.append("") }
         if sessions.isEmpty {
             out.append(Theme.faintText("  no saved sessions for this project yet"))
         } else {
             // Window the list so a long history stays on screen — sized to the
-            // terminal (chrome: blank + title + blank + blank + footer = 5).
-            let rows = max(3, maxRows - 5)
+            // terminal (chrome: title + footer, plus two blanks when roomy).
+            let rows = max(1, maxRows - (roomy ? 4 : 2))
             var start = 0
             if selectedIndex >= rows { start = selectedIndex - rows + 1 }
             start = min(start, max(0, sessions.count - rows))
@@ -71,7 +74,7 @@ final class SessionResumeModal: Modal {
                 out.append(marker + name + "  " + meta + current)
             }
         }
-        out.append("")
+        if roomy { out.append("") }
         out.append(Theme.faintText("  ↑/↓ move · ↵ resume · Esc cancel"))
         return out
     }

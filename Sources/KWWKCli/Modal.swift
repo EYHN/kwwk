@@ -64,6 +64,11 @@ final class ModalHost {
     // Key routing. These are no-ops when no modal is open, so callers can
     // wire them unconditionally and let the host decide.
 
+    /// Re-render the open modal at the current height budget. Called on a
+    /// terminal resize so a windowed list re-fits immediately instead of
+    /// lagging a frame behind until the next keypress.
+    func reflow() { guard isOpen else { return }; redraw() }
+
     func routeUp() { guard isOpen else { return }; active?.up(); redraw() }
     func routeDown() { guard isOpen else { return }; active?.down(); redraw() }
     func routeConfirm() { guard isOpen else { return }; active?.confirm() }
