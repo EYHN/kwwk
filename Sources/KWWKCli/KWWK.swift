@@ -48,6 +48,8 @@ public enum KWWK {
             tools: tools,
             builtinSubagents: builtinSubagents,
             authResolver: resolved.authResolver,
+            providerSlots: resolved.providerSlots,
+            authResolvers: resolved.authResolvers,
             autoCompactThreshold: autoCompactThreshold,
             thinkingLevel: thinkingLevel,
             resume: resume

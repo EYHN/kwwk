@@ -14,6 +14,8 @@ func runCodingTUIInternal(
     tools: CodingTools,
     builtinSubagents: BuiltinSubagentSelection = .all,
     authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+    providerSlots: [ProviderSlot] = [],
+    authResolvers: SessionAuthResolvers? = nil,
     autoCompactThreshold: Double? = 0.75,
     thinkingLevel: ThinkingLevel = .medium,
     resume: SessionResume = .none
@@ -506,6 +508,9 @@ func runCodingTUIInternal(
         guard !frame.slashMenuActive else { return nil }
         return slashCompletion(for: input, commands: slashCommandInfos)?.suffix
     }
+    // Providers logged in this session — read by `/model` to list + route
+    // across accounts, mutated by `/login` / `/logout`.
+    let sessionProviders = SessionProviders(providerSlots)
     let slashContext = SlashContext(
         agent: agent,
         modal: modal,
@@ -542,6 +547,19 @@ func runCodingTUIInternal(
         },
         setSessionTitle: { title in
             await recorderBox.recorder.recordTitle(title)
+        },
+        sessionProviders: sessionProviders,
+        authResolvers: authResolvers,
+        withSuspendedTUI: { body in
+            // Release the terminal so a full-screen sub-flow (the `/login`
+            // OAuth handoff, which runs its own TUIRunner) owns it cleanly,
+            // then repaint the coding frame when it returns.
+            runner.suspend()
+            await body()
+            try? runner.resume()
+            recomputeTranscript()
+            updateFrameStatus()
+            runner.tui.requestRender()
         }
     )
 
