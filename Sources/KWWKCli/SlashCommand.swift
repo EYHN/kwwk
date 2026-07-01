@@ -70,6 +70,18 @@ final class SlashContext {
     /// Persist a user-set session title to the live session file. Backed by
     /// the SessionRecorder in the TUI; a no-op in headless/test contexts.
     let setSessionTitle: @MainActor (_ title: String) async -> Void
+    /// Providers logged in this session — read by `/model` to list + route
+    /// across accounts, mutated by `/login` / `/logout`. Empty in headless /
+    /// test contexts that don't wire it up.
+    let sessionProviders: SessionProviders
+    /// Mutable resolver map the agent delegates to; `/login` installs a
+    /// newly-authenticated provider's resolver here. Nil in headless/tests.
+    let authResolvers: SessionAuthResolvers?
+    /// Suspend the coding TUI (release raw stdin + terminal modes), run
+    /// `body` with the terminal in cooked state (for a full-screen sub-flow
+    /// like the `/login` OAuth handoff), then restore the TUI and repaint.
+    /// A no-op passthrough in headless / test contexts.
+    let withSuspendedTUI: @MainActor (_ body: @escaping @MainActor () async -> Void) async -> Void
 
     init(
         agent: Agent,
@@ -80,7 +92,10 @@ final class SlashContext {
         commitScrollback: @MainActor @escaping ((Int) -> [String]) -> Void,
         refreshTranscript: @MainActor @escaping () -> Void,
         recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in },
-        setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in }
+        setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in },
+        sessionProviders: SessionProviders = SessionProviders(),
+        authResolvers: SessionAuthResolvers? = nil,
+        withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() }
     ) {
         self.agent = agent
         self.modal = modal
@@ -91,6 +106,9 @@ final class SlashContext {
         self.refreshTranscript = refreshTranscript
         self.recordCompaction = recordCompaction
         self.setSessionTitle = setSessionTitle
+        self.sessionProviders = sessionProviders
+        self.authResolvers = authResolvers
+        self.withSuspendedTUI = withSuspendedTUI
     }
 
     /// Single-line convenience: one-off status messages (`/model switched

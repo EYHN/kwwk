@@ -159,15 +159,21 @@ enum LoginError: Error, LocalizedError {
 ///   1. Arrow-key selector over the known providers (OAuth + API-key).
 ///   2. Enter → tear down the TUI and run the chosen entry's flow:
 ///      OAuth = browser PKCE / device flow; API-key = small TUI form.
-///   3. Persist the resulting credentials exclusively — any previously
-///      logged-in provider is dropped so `AuthResolver` can't hit ambiguity.
+///   3. Persist the resulting credentials additively — other providers stay
+///      logged in so the user can keep several accounts and switch between
+///      them with `/model` / `/login`. Re-logging the same provider just
+///      refreshes its entry.
 ///
 /// The TUI is intentionally torn down before the OAuth flow begins so that
 /// the browser handoff + stderr progress logs don't fight the raw-mode
 /// terminal.
-func runLoginInternal() async throws {
+/// Returns the OAuth-store id the credentials were saved under (e.g.
+/// `anthropic`, `openai-codex`, `anthropic-api-key`), so an in-session
+/// `/login` caller can activate exactly that provider.
+@discardableResult
+func runLoginInternal() async throws -> String {
     let choice = try await selectProviderTUI()
-    try await runLoginFlow(entry: choice)
+    return try await runLoginFlow(entry: choice)
 }
 
 // MARK: - Selector TUI
@@ -264,10 +270,11 @@ private func renderSelectorMenu(into menu: TextComponent, state: SelectorState) 
 
 // MARK: - Flow dispatch
 
-private func runLoginFlow(entry: LoginEntry) async throws {
+private func runLoginFlow(entry: LoginEntry) async throws -> String {
     switch entry.flow {
     case .oauth:
         try await runOAuthFlow(providerId: entry.id)
+        return entry.id
     case .apiKey(let storeId, let fields, let extrasKeys):
         try await runAPIKeyFlow(
             providerId: entry.id,
@@ -275,6 +282,7 @@ private func runLoginFlow(entry: LoginEntry) async throws {
             fields: fields,
             extrasKeys: extrasKeys
         )
+        return storeId
     }
 }
 
@@ -390,20 +398,22 @@ private func runAPIKeyFlow(
     try await persistExclusive(credentials, providerId: storeId)
 }
 
-/// Save `credentials` under `providerId` as the only entry in the store,
-/// print a confirmation line and list any replaced entries.
+/// Save `credentials` under `providerId`, **keeping** any other providers
+/// already in the store (additive multi-login). Logging into the same
+/// provider again overwrites just that entry (re-auth / token refresh).
+/// Prints a confirmation line and lists the other providers still logged in.
 private func persistExclusive(
     _ credentials: OAuthCredentials,
     providerId: String
 ) async throws {
     let store = OAuthStore(url: OAuthStore.defaultURL())
-    let previous = await store.all().keys.filter { $0 != providerId }.sorted()
-    try await store.setExclusive(credentials, for: providerId)
+    let others = await store.all().keys.filter { $0 != providerId }.sorted()
+    try await store.set(credentials, for: providerId)
     let path = await store.url.path
     print("")
     print(Style.prompt("✓ saved \(providerId) credentials"))
     print(Style.dimmed("  → \(path)"))
-    if !previous.isEmpty {
-        print(Style.dimmed("  (replaced previous credentials: \(previous.joined(separator: ", ")))"))
+    if !others.isEmpty {
+        print(Style.dimmed("  (also logged in: \(others.joined(separator: ", ")) — switch with /model or /login)"))
     }
 }
