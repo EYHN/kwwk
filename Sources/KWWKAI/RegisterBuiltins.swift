@@ -89,18 +89,22 @@ public enum Models {
         maxTokens: 128_000
     )
 
-    public static let claudeSonnet46 = Model(
-        id: "claude-sonnet-4-6",
-        name: "Claude Sonnet 4.6",
+    public static let claudeSonnet5 = Model(
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
         api: "anthropic-messages",
         provider: "anthropic",
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
         input: [.text, .image],
-        cost: ModelCost(input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75),
+        cost: ModelCost(input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5),
         contextWindow: 1_000_000,
-        maxTokens: 64_000
+        maxTokens: 128_000,
+        compat: { var c = ModelCompat(); c.forceAdaptiveThinking = true; return c }()
     )
+
+    @available(*, deprecated, renamed: "claudeSonnet5")
+    public static let claudeSonnet46 = claudeSonnet5
 
     public static let claudeHaiku45 = Model(
         id: "claude-haiku-4-5",

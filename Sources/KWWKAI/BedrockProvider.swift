@@ -367,7 +367,8 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
     private static func supportsAdaptiveThinking(_ model: Model) -> Bool {
         let c = modelMatchCandidates(model)
         return c.contains { $0.contains("opus-4-6") || $0.contains("opus-4-7")
-            || $0.contains("opus-4-8") || $0.contains("sonnet-4-6") || $0.contains("fable-5") }
+            || $0.contains("opus-4-8") || $0.contains("sonnet-4-6")
+            || $0.contains("sonnet-5") || $0.contains("fable-5") }
     }
 
     private static func supportsNativeXhighEffort(_ model: Model) -> Bool {

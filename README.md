@@ -93,7 +93,7 @@ await registerBuiltins(anthropic: anthropicAPIKey)
 
 // 2. Build a coding agent scoped to a working directory.
 let agent = await makeCodingAgent(CodingAgentConfig(
-    model: Models.claudeSonnet46,
+    model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .readOnly,
     bashEnvironment: [:]
@@ -129,7 +129,7 @@ let reviewer = SubagentDefinition(
 let bg = BackgroundTaskManager()
 let shellEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
 let agent = await makeCodingAgent(CodingAgentConfig(
-    model: Models.claudeSonnet46,
+    model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
     backgroundManager: bg,
@@ -145,7 +145,7 @@ copying prompts:
 
 ```swift
 let agent = await makeCodingAgent(CodingAgentConfig(
-    model: Models.claudeSonnet46,
+    model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
     backgroundManager: BackgroundTaskManager(),
@@ -159,7 +159,7 @@ SDK users can also run a subagent directly:
 let runner = SubagentRunner(
     cwd: FileManager.default.currentDirectoryPath,
     subagents: [.plan()],
-    parentModel: Models.claudeSonnet46,
+    parentModel: Models.claudeSonnet5,
     parentTools: .readOnly,
     bashEnvironment: [:]
 )
@@ -284,7 +284,7 @@ let weather = AgentTool(
 )
 
 let agent = Agent(initialState: AgentInitialState(
-    model: Models.claudeSonnet46,
+    model: Models.claudeSonnet5,
     tools: [weather]
 ))
 try await agent.prompt("Is it warmer in Tokyo or Oslo right now?")
@@ -297,7 +297,7 @@ them to enforce policy without forking the loop:
 
 ```swift
 let options = AgentOptions(
-    initialState: AgentInitialState(model: Models.claudeSonnet46, tools: [...]),
+    initialState: AgentInitialState(model: Models.claudeSonnet5, tools: [...]),
     // Block or rewrite a tool call before it runs.
     beforeToolCall: { ctx, _ in
         if ctx.toolCall.name == "bash",
@@ -340,7 +340,7 @@ agent.steer(UserMessage(text: "also add tests as you go"))
 and Google Gemini from explicit keys. For CLI-style environment discovery,
 call `registerBuiltinsFromEnvironment(env:)` with an environment snapshot.
 `Models` exposes a small curated catalog
-(`claudeSonnet45`, `gpt5`, `gemini25Pro`, …) or you can construct
+(`claudeSonnet5`, `gpt55`, `gemini35Flash`, …) or you can construct
 `Model` values by hand. For OpenAI-compatible endpoints (xAI, Groq,
 OpenRouter) there are `Models.xaiGrok(id:)`, `Models.groq(id:)`,
 `Models.openRouter(id:)` helpers.
