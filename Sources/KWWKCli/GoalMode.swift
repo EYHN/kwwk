@@ -13,9 +13,13 @@ enum GoalMode {
     /// scrollback; we clamp on `/goal set`.
     static let maxObjectiveChars = 4000
 
-    /// Sentinel embedded in every hidden continuation steer. The transcript
-    /// renderer suppresses any user message containing it; the session recorder
-    /// skips persisting it (see `goalContinuationMarker` in KWWKAgent).
+    /// Sentinel embedded in every hidden continuation steer. Both the transcript
+    /// renderer (display) and the session recorder (persistence) recognize a
+    /// hidden continuation via `isHiddenGoalContinuation` — a lone text block
+    /// whose text *begins* with this marker. The renderer skips rendering it; the
+    /// recorder redacts it to a marker-only placeholder on disk (keeping goal
+    /// state in-memory while preserving user→assistant alternation). See
+    /// `goalContinuationMarker` / `redactedForPersistence` in KWWKAgent.
     static let continuationMarker = goalContinuationMarker
 
     /// Neutralize an objective so it cannot close the `<objective>`/

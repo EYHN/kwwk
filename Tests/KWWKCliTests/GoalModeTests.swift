@@ -83,5 +83,13 @@ struct GoalModeTests {
         let normal = UserMessage(content: [.text(TextContent(text: "hello"))])
         r.apply(.messageStart(message: .user(normal)))
         #expect(!r.drainCommits().isEmpty)
+        // A real multi-block message that merely STARTS with the marker (plus an
+        // image) is not a synthetic continuation — it must still render.
+        let multi = UserMessage(content: [
+            .text(TextContent(text: "\(GoalMode.continuationMarker) look at this")),
+            .image(ImageContent(data: "AAAA", mimeType: "image/png")),
+        ])
+        r.apply(.messageStart(message: .user(multi)))
+        #expect(!r.drainCommits().isEmpty)
     }
 }
