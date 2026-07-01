@@ -28,6 +28,11 @@ struct NewSessionResetTests {
         retry.failed = true
         retry.lastText = "stale prompt"
         retry.lastImages = []
+        retry.trackedActive = true
+
+        // A stale dequeue cursor from the outgoing session must also be cleared.
+        let dequeueCycle = DequeueCycleState()
+        dequeueCycle.last = .user(UserMessage(text: "queued one"))
 
         let frame = CodingFrame()
         frame.input.value = "draft in progress"
@@ -65,6 +70,7 @@ struct NewSessionResetTests {
             cwd: dir.path,
             attachments: attachments,
             retry: retry,
+            dequeueCycle: dequeueCycle,
             frame: frame,
             width: 60,
             commit: { lines in committed.lines.append(contentsOf: lines) },
@@ -78,6 +84,8 @@ struct NewSessionResetTests {
         #expect(retry.failed == false)
         #expect(retry.lastText == nil)
         #expect(retry.lastImages.isEmpty)
+        #expect(retry.trackedActive == false, "the in-flight tracking flag is cleared")
+        #expect(dequeueCycle.last == nil, "the dequeue cursor is forgotten")
         #expect(frame.input.value == "", "the in-progress draft is discarded")
         #expect(recorderBox.sessionId == newId, "persistence repointed at the new id")
         #expect(committed.joined.contains("new session \(newId.prefix(8))"),

@@ -249,6 +249,12 @@ func runCodingTUIInternal(
     // failure signal lives on the event stream, not on a thrown error.
     let retry = TurnRetryState()
 
+    // Alt+↑ dequeue-cycle bookkeeping. Declared here (before the `/new` and
+    // `/resume` handlers) so those session-swap closures can reset it via
+    // `resetSessionTransientState` — a stale cursor into a drained queue must
+    // not survive into a fresh or restored session.
+    let dequeueCycle = DequeueCycleState()
+
     // Keep the renderer's display mode in sync with the agent's state on
     // every event, so `/thinking show|hide` (which only mutates agent
     // state) takes effect on the next turn without extra plumbing.
@@ -275,9 +281,21 @@ func runCodingTUIInternal(
                 // whose `summary.finalStopReason` is `.error` / `.aborted`. The
                 // detached-task `catch` only fires for `AgentError.alreadyRunning`,
                 // so this is the primary place `/retry` learns a turn failed.
-                if turnEndedRetryable(summary) {
+                // Only user-initiated turns (trackedActive) arm /retry, and the
+                // target is derived from the message actually executed — never a
+                // separately-recorded copy that a steer or command could stale.
+                if let t = retryArmTarget(
+                    summary: summary,
+                    aborted: false,
+                    trackedActive: retry.trackedActive,
+                    messages: agent.state.messages
+                ) {
+                    retry.lastText = t.text
+                    retry.lastImages = t.images
                     retry.failed = true
                 }
+                // Consume the tracking flag: the turn is over either way.
+                retry.trackedActive = false
             case .compactStart(let count, _):
                 isAutoCompacting = true
                 frameMode = .compacting(messageCount: count)
@@ -333,8 +351,10 @@ func runCodingTUIInternal(
     // here so a resubmit drives the exact same streaming/steering UI as a fresh
     // submission.
     let submitBuiltPrompt: @MainActor @Sendable (String, [ImageContent]) -> Void = { text, images in
-        retry.lastText = text
-        retry.lastImages = images
+        // Mark this as a user-initiated turn eligible for /retry, and clear any
+        // prior failure. The retry target is NOT recorded here — it's derived at
+        // arm time (.agentEnd / Esc-abort) from the message actually executed.
+        retry.trackedActive = true
         retry.failed = false
         Task.detached {
             do {
@@ -397,6 +417,15 @@ func runCodingTUIInternal(
                         // the prior conversation stays above and the restored
                         // one is appended below a labeled separator.
                         agent.state.messages = loaded.messages
+                        // Clear per-session transient state so a pending /retry,
+                        // queued steer, attachment, or dequeue cursor from the
+                        // outgoing session can't leak into the restored one.
+                        resetSessionTransientState(
+                            agent: agent,
+                            retry: retry,
+                            attachments: attachments,
+                            dequeueCycle: dequeueCycle
+                        )
                         var recap: [String] = [
                             "",
                             Theme.borderText(String(repeating: "─", count: max(8, runner.terminal.width - 2))),
@@ -433,6 +462,7 @@ func runCodingTUIInternal(
                 cwd: cwd,
                 attachments: attachments,
                 retry: retry,
+                dequeueCycle: dequeueCycle,
                 frame: frame,
                 width: runner.terminal.width,
                 commit: { runner.tui.commit($0) },
@@ -571,12 +601,12 @@ func runCodingTUIInternal(
                 var blocks: [UserBlock] = [.text(TextContent(text: built.text))]
                 for img in built.images { blocks.append(.image(img)) }
                 agent.steer(.user(UserMessage(content: blocks)))
-                // Record the steered prompt as the most-recent submission so
-                // `/retry` (after an Esc-abort of this turn) resubmits what was
-                // actually queued, not the prior direct prompt. `submitBuiltPrompt`
-                // only records on the idle path, so the steer branch must do it.
-                retry.lastText = built.text
-                retry.lastImages = built.images
+                // A steered follow-up is still a user-initiated turn eligible for
+                // /retry. Mark it tracked, but do NOT record a retry target here —
+                // it's derived at arm time from the message actually executing, so
+                // an Esc-abort resubmits the real in-flight prompt (never the
+                // queued-but-undrained steer).
+                retry.trackedActive = true
                 attachments.clear()
                 frame.input.addToHistory(text)
                 frame.input.value = ""
@@ -688,7 +718,6 @@ func runCodingTUIInternal(
     // the front of the queue and the next item is surfaced, rotating through
     // all queued prompts without losing any. The popped text is flattened to a
     // single line for the one-line editor.
-    let dequeueCycle = DequeueCycleState()
     runner.bind(.alt("up")) { _ in
         Task { @MainActor in
             guard !modal.isOpen, !frame.slashMenuActive else { return }
@@ -745,12 +774,25 @@ func runCodingTUIInternal(
             if agent.state.isStreaming {
                 agent.abort()
                 frameMode = .aborting
-                // The active turn was interrupted — mark it retryable so
-                // `/retry` can resubmit the prompt that was streaming. The
-                // resulting `.agentEnd(.aborted)` also flips this flag via
-                // `turnEndedRetryable`; setting it here too is idempotent and
-                // gives immediate feedback before the loop unwinds.
-                retry.failed = true
+                // Drop any queued-but-unstarted steer messages so they can't
+                // double-drain: without this the initial steering drain would
+                // still inject them AND /retry would resubmit, sending twice.
+                agent.clearSteeringQueue()
+                // Arm /retry from the message actually in flight (the last user
+                // message in the transcript), gated to user-initiated turns. The
+                // trailing `.agentEnd(.aborted)` won't re-arm because we consume
+                // trackedActive here.
+                if let t = retryArmTarget(
+                    summary: nil,
+                    aborted: true,
+                    trackedActive: retry.trackedActive,
+                    messages: agent.state.messages
+                ) {
+                    retry.lastText = t.text
+                    retry.lastImages = t.images
+                    retry.failed = true
+                }
+                retry.trackedActive = false
                 runner.tui.commit([
                     "",
                     Style.dimmed("  aborting…"),
@@ -860,6 +902,12 @@ final class TurnRetryState {
     /// True when the last turn ended in error or was aborted — the only state
     /// in which `/retry` resubmits.
     var failed = false
+    /// True while a user-initiated turn (direct submit or steer) is in flight
+    /// and eligible for `/retry`. Command-driven prompts (`/init`, custom
+    /// commands) never set this, so a failure on one of those internal turns
+    /// can't arm `/retry` with a stale internal prompt. Consumed (reset to
+    /// false) at every `.agentEnd` and on Esc-abort.
+    var trackedActive = false
 }
 
 /// Concatenated text of a queued user message's text blocks (image blocks
@@ -919,6 +967,67 @@ func turnEndedRetryable(_ summary: AgentRunSummary) -> Bool {
     summary.finalStopReason == .error || summary.finalStopReason == .aborted
 }
 
+/// Derive the `/retry` target for a just-finished (or just-aborted) turn, or
+/// `nil` when the turn must not arm `/retry`. Two gates must both hold:
+///
+///   1. The turn is *retryable*: it was aborted by the user (`aborted`), or its
+///      `summary.finalStopReason` is `.error` / `.aborted` (see
+///      `turnEndedRetryable`).
+///   2. The turn was *user-initiated*: `trackedActive` is true. Command-driven
+///      turns (`/init`, custom commands) never set it, so a failed internal
+///      prompt can't leak into `/retry`.
+///
+/// When both hold, the target is derived from the LAST `.user` message actually
+/// in `messages` — the message the agent was executing — so a direct submit, a
+/// steered follow-up, or a `/retry` resubmit all resolve to the real prompt in
+/// flight rather than any separately-recorded copy. Text is the message's
+/// `.text` blocks joined with newlines; images are its `.image` blocks.
+@MainActor
+func retryArmTarget(
+    summary: AgentRunSummary?,
+    aborted: Bool,
+    trackedActive: Bool,
+    messages: [Message]
+) -> (text: String, images: [ImageContent])? {
+    guard trackedActive else { return nil }
+    let retryable = aborted || (summary.map(turnEndedRetryable) ?? false)
+    guard retryable else { return nil }
+    guard let last = messages.last(where: { if case .user = $0 { return true } else { return false } }),
+          case .user(let u) = last else { return nil }
+    let text = u.content.compactMap { block -> String? in
+        if case .text(let t) = block { return t.text }
+        return nil
+    }.joined(separator: "\n")
+    let images = u.content.compactMap { block -> ImageContent? in
+        if case .image(let i) = block { return i }
+        return nil
+    }
+    return (text: text, images: images)
+}
+
+/// Reset the per-session transient state that must not survive a session swap
+/// (`/new` or `/resume`): drain the steering queue, clear the `/retry` record,
+/// drop pending attachments, and forget the Alt+↑ dequeue cursor. Shared by both
+/// session-swap paths so neither leaks stale state into the incoming session
+/// (e.g. a `failed`/`lastText` record that `/retry` would resubmit into the
+/// wrong transcript). Does NOT touch `agent.state.messages` or the input
+/// buffer — each caller manages those (clear vs. load).
+@MainActor
+func resetSessionTransientState(
+    agent: Agent,
+    retry: TurnRetryState,
+    attachments: AttachmentStore,
+    dequeueCycle: DequeueCycleState
+) {
+    agent.clearSteeringQueue()
+    retry.failed = false
+    retry.lastText = nil
+    retry.lastImages = []
+    retry.trackedActive = false
+    attachments.clear()
+    dequeueCycle.last = nil
+}
+
 /// Start a fresh, empty session in place: repoint persistence at a brand-new
 /// session file, clear the live agent context + steering queue, reset retry and
 /// attachment state, and commit a labeled separator to scrollback. Extracted
@@ -932,6 +1041,7 @@ func performNewSession(
     cwd: String,
     attachments: AttachmentStore,
     retry: TurnRetryState,
+    dequeueCycle: DequeueCycleState,
     frame: CodingFrame,
     width: Int,
     commit: ([String]) -> Void,
@@ -958,12 +1068,13 @@ func performNewSession(
     // conversation stays above a labeled separator and the fresh session begins
     // below it.
     agent.state.messages = []
-    agent.clearSteeringQueue()
-    attachments.clear()
+    resetSessionTransientState(
+        agent: agent,
+        retry: retry,
+        attachments: attachments,
+        dequeueCycle: dequeueCycle
+    )
     frame.input.value = ""
-    retry.failed = false
-    retry.lastText = nil
-    retry.lastImages = []
 
     commit([
         "",
