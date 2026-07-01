@@ -113,22 +113,26 @@ struct ModelSelectorModalTests {
             onSelect: { _ in },
             onCancel: {}
         )
-        let maxRows = 12
         func strip(_ s: String) -> String {
             s.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
         }
-        // At every scroll position the render must fit the budget AND keep the
-        // selected row visible — including mid-list, where a context header may
-        // be prepended.
-        for step in 0..<50 {
-            let lines = modal.render(maxRows: maxRows).map(strip)
-            #expect(lines.count <= maxRows, "overflow at selection \(step)")
-            #expect(lines.contains(where: { $0.contains("❯ m\(step)  ") }),
-                    "selected row m\(step) must be within the window")
-            modal.down()
+        // At every scroll position, and across a range of terminal heights
+        // (including tiny ones), the render must fit the budget AND keep the
+        // selected row visible — including mid-list, where a context header
+        // may be prepended.
+        for maxRows in [4, 6, 9, 12, 40] {
+            // 50 downs on a 50-item list wraps back to selection 0, so each
+            // outer iteration starts from the top.
+            for step in 0..<50 {
+                let lines = modal.render(maxRows: maxRows).map(strip)
+                #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows), selection \(step)")
+                #expect(lines.contains(where: { $0.contains("❯ m\(step)  ") }),
+                        "selected row m\(step) must be within the window at maxRows \(maxRows)")
+                modal.down()
+            }
         }
         // Position indicator shows while windowed.
-        #expect(modal.render(maxRows: maxRows).contains(where: { $0.contains("/50") }))
+        #expect(modal.render(maxRows: 12).contains(where: { $0.contains("/50") }))
     }
 
     @MainActor

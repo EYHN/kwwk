@@ -70,13 +70,17 @@ final class ModelSelectorModal: Modal {
     }
 
     func render(maxRows: Int) -> [String] {
+        // Cosmetic blank spacers (above the list and above the footer) are
+        // dropped on short terminals so the render stays within `maxRows` —
+        // title + body + footer is the irreducible minimum.
+        let roomy = maxRows >= 9
         var out: [String] = []
-        out.append("")
+        if roomy { out.append("") }
         out.append(Style.header("  \(title)"))
         guard !models.isEmpty else {
-            out.append("")
+            if roomy { out.append("") }
             out.append(Style.dimmed("  (no models available for this provider)"))
-            out.append("")
+            if roomy { out.append("") }
             out.append(Style.dimmed("  ↑/↓: move   Enter: confirm   Esc: cancel"))
             return out
         }
@@ -103,10 +107,12 @@ final class ModelSelectorModal: Modal {
             lines.append((prefix + body + currentTag, false, groupLabels?[i]))
         }
 
-        // Body height budget = total minus chrome (blank + title + blank +
-        // blank + footer = 5). Window the list so the prompt box is never
-        // pushed off-screen and the selection stays reachable.
-        let bodyBudget = max(3, maxRows - 5)
+        // Body height budget = total minus chrome. Chrome is title + footer
+        // (2), plus the two blank spacers when roomy (4). Window the list so
+        // the prompt box is never pushed off-screen and the selection stays
+        // reachable — and the whole render stays within `maxRows`.
+        let chrome = roomy ? 4 : 2
+        let bodyBudget = max(1, maxRows - chrome)
         let windowed = lines.count > bodyBudget
         // Reserve one line for the synthetic context header we may prepend when
         // the window opens mid-group, so the scroll window (and therefore the
@@ -126,9 +132,9 @@ final class ModelSelectorModal: Modal {
             visible.insert((Style.dimmed("  ── \(group) ──"), true, group), at: 0)
         }
 
-        out.append("")
+        if roomy { out.append("") }
         for line in visible { out.append(line.text) }
-        out.append("")
+        if roomy { out.append("") }
         let move = "↑/↓: move   Enter: confirm   Esc: cancel"
         out.append(Style.dimmed(windowed ? "  \(selectedIndex + 1)/\(models.count)   \(move)" : "  \(move)"))
         return out

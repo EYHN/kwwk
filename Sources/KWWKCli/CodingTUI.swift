@@ -220,7 +220,11 @@ func runCodingTUIInternal(
         Task { @MainActor in
             frame.setViewport(height: h)
             renderer.displayWidth = w
-            if !modal.isOpen {
+            if modal.isOpen {
+                // Re-window the open modal to the new height so a long list
+                // re-fits this frame rather than lagging until the next key.
+                modal.reflow()
+            } else {
                 recomputeTranscript()
             }
             updateFrameStatus()
