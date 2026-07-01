@@ -42,6 +42,10 @@ final class CodingFrame: Component, @unchecked Sendable {
     /// above the prompt box.
     var slashCommands: [SlashCommandInfo] = []
     private var menuSelection = 0
+    /// Top index of the visible slash-menu window. Persistent state so the
+    /// window scrolls only when the selection crosses an edge (rather than
+    /// pinning the selection to the bottom row and scrolling on every step).
+    private var menuScroll = 0
     private var menuFilter: String?
     private static let menuMaxRows = 8
 
@@ -123,6 +127,7 @@ final class CodingFrame: Component, @unchecked Sendable {
         if q != menuFilter {
             menuFilter = q
             menuSelection = 0
+            menuScroll = 0
         }
         if menuSelection >= matches.count { menuSelection = max(0, matches.count - 1) }
     }
@@ -233,9 +238,17 @@ final class CodingFrame: Component, @unchecked Sendable {
         syncSelection(matches)
 
         let maxRows = min(Self.menuMaxRows, matches.count)
-        var start = 0
-        if menuSelection >= maxRows { start = menuSelection - maxRows + 1 }
-        start = min(start, max(0, matches.count - maxRows))
+        // Scroll only at the edges: keep the current window unless the selection
+        // has moved above its top or below its bottom, then shift by the minimum.
+        // Up/Down thus move the highlight within the window first and only scroll
+        // once it reaches an edge.
+        if menuSelection < menuScroll {
+            menuScroll = menuSelection
+        } else if menuSelection >= menuScroll + maxRows {
+            menuScroll = menuSelection - maxRows + 1
+        }
+        menuScroll = max(0, min(menuScroll, max(0, matches.count - maxRows)))
+        let start = menuScroll
         let visible = matches[start..<min(matches.count, start + maxRows)]
 
         let nameW = min(18, (matches.map { ANSI.visibleWidth("/\($0.name)") }.max() ?? 0))

@@ -218,6 +218,39 @@ struct CodingFrameTests {
         #expect(lines.count <= 6 + 2) // tail clipped to the viewport budget
     }
 
+    @Test("slash menu scrolls only when the selection reaches a window edge")
+    func slashMenuScrollsAtEdges() {
+        let frame = CodingFrame(viewportHeight: 24)
+        frame.slashCommands = (0..<12).map {
+            SlashCommandInfo(name: String(format: "cmd%02d", $0), description: "", aliases: [])
+        }
+        frame.input.value = "/"   // empty query → all 12, in order; window = 8 rows
+        func shown() -> String {
+            frame.render(width: 60).map { ANSI.stripEscapes($0) }.joined(separator: "\n")
+        }
+
+        // Initial window shows the first 8 (cmd00…cmd07), not cmd08.
+        #expect(shown().contains("cmd00"))
+        #expect(!shown().contains("cmd08"))
+
+        // Move the highlight down to index 8 → it crosses the bottom edge and
+        // the window scrolls by one: cmd08 appears, cmd00 scrolls off.
+        for _ in 0..<8 { frame.menuMove(1); _ = shown() }
+        #expect(shown().contains("cmd08"))
+        #expect(!shown().contains("cmd00"))
+
+        // Now press Up. The highlight walks back up WITHIN the window — cmd08
+        // stays visible and cmd00 stays hidden — until the selection reaches the
+        // top edge. Only the step that crosses the top scrolls cmd00 back in.
+        for _ in 0..<7 {              // index 8 → 1: all inside the window
+            frame.menuMove(-1)
+            #expect(shown().contains("cmd08"), "Up should move the highlight, not scroll, until an edge")
+            #expect(!shown().contains("cmd00"))
+        }
+        frame.menuMove(-1)            // index 1 → 0: crosses the top edge
+        #expect(shown().contains("cmd00"), "reaching the top edge scrolls the window back up")
+    }
+
     @Test("queued prompts render as a dim list above the prompt box")
     func queuedPromptsAboveBox() {
         let frame = CodingFrame(viewportHeight: 12)
