@@ -9,8 +9,18 @@ import KWWKAgent
 func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
     registry.register(SlashCommand(
         name: "model",
-        description: "Pick a model for this session",
+        description: "Pick a model for this session (across all logged-in providers)",
         handler: handleModelCommand
+    ))
+    registry.register(SlashCommand(
+        name: "login",
+        description: "Log in to another provider (kept alongside existing logins)",
+        handler: handleLoginCommand
+    ))
+    registry.register(SlashCommand(
+        name: "logout",
+        description: "Show logged-in providers / remove one",
+        handler: handleLogoutCommand
     ))
     registry.register(SlashCommand(
         name: "compact",
@@ -91,39 +101,74 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
     ))
 }
 
-/// `/model` — opens a modal with every model the currently-authenticated
-/// provider supports. Selection updates `agent.state.model` for the next
-/// LLM request; the swap is session-scoped (restart = back to default).
-///
-/// Cross-provider switching (Codex → Anthropic or vice versa) needs a
-/// second provider registered on APIRegistry at startup, which is out of
-/// scope for V1.
+/// `/model` — opens a modal listing every model across **all** providers
+/// logged in this session (grouped by provider), and switches to the picked
+/// one. The pick is routed through the target provider's session template
+/// (`adoptFields`) so its wire api / provider scope / baseUrl / headers are
+/// correct, then stored on `agent.state.model` for the next request. The swap
+/// is session-scoped (restart = back to the launch default).
 @MainActor
 private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
     let current = ctx.agent.state.model
-    let agentProvider = current.provider
-    let catalogKey = catalogProviderKey(forAgentProvider: agentProvider)
+    let slots = ctx.sessionProviders.slots
 
-    let available = ModelsCatalog.models(for: catalogKey)
-        .sorted { $0.id < $1.id }
+    // Build a flat, provider-grouped list of routed models. Each entry carries
+    // a model already stamped with its provider's routing (via `adoptFields`),
+    // so selection is a straight assignment.
+    var models: [Model] = []
+    var groups: [String] = []
+    var currentIndex: Int?
 
-    if available.isEmpty {
-        ctx.notify(Style.error("  /model: no catalog entries for provider '\(agentProvider)'"))
+    let slotList: [ProviderSlot] = slots.isEmpty
+        // No session slots (e.g. a test/headless path): fall back to the
+        // active provider's own catalog so `/model` still works.
+        ? [ProviderSlot(
+            storeId: current.provider,
+            catalogProvider: catalogProviderKey(forAgentProvider: current.provider),
+            displayName: current.provider,
+            template: current)]
+        : slots
+
+    for slot in slotList {
+        let catalog = ModelsCatalog.models(for: slot.catalogProvider)
+            .sorted { $0.id < $1.id }
+        // Providers whose active model isn't catalogued (custom openai-compatible
+        // endpoints) still get their template as a selectable row.
+        let base = catalog.isEmpty ? [slot.template] : catalog
+        for m in base {
+            let routed = adoptFields(from: slot.template, into: m)
+            if routed.provider == current.provider && routed.id == current.id {
+                currentIndex = models.count
+            }
+            models.append(routed)
+            groups.append(slot.displayName)
+        }
+    }
+
+    if models.isEmpty {
+        ctx.notify(Style.error("  /model: no models available for the logged-in providers"))
         return
     }
 
+    let multi = slotList.count > 1
+    let title = multi ? "Select a model  (\(slotList.count) providers)" : "Select a model"
     let modal = ModelSelectorModal(
-        title: "Select a model  (provider: \(agentProvider))",
-        models: available,
+        title: title,
+        models: models,
         currentModelId: current.id,
+        groupLabels: multi ? groups : nil,
+        currentIndex: currentIndex,
         onSelect: { [agent = ctx.agent, notifyBlock = ctx.notifyBlock, modal = ctx.modal] picked in
-            let rebuilt = adoptFields(from: current, into: picked)
-            agent.state.model = rebuilt
+            let previous = agent.state.model
+            agent.state.model = picked
             modal.close()
-            if picked.id == current.id {
+            let switchedProvider = picked.provider != previous.provider
+            if picked.id == previous.id && !switchedProvider {
                 notifyBlock([Style.dimmed("  /model: already on \(picked.id)")])
+            } else if switchedProvider {
+                notifyBlock([Style.dimmed("  /model: switched to \(picked.id) · \(providerDisplayName(forCatalogScope: picked.provider))")])
             } else {
-                notifyBlock([Style.dimmed("  /model: switched \(current.id) → \(picked.id)")])
+                notifyBlock([Style.dimmed("  /model: switched \(previous.id) → \(picked.id)")])
             }
         },
         onCancel: { [modal = ctx.modal, notifyBlock = ctx.notifyBlock] in
@@ -132,6 +177,119 @@ private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
         }
     )
     ctx.modal.open(modal)
+}
+
+/// Best-effort human label for a live `model.provider` scope, for the
+/// `/model` switch confirmation. Falls back to the raw scope.
+@MainActor
+func providerDisplayName(forCatalogScope scope: String) -> String {
+    switch scope {
+    case "chatgpt-codex": return "ChatGPT Codex"
+    case "anthropic": return "Anthropic"
+    case "openai": return "OpenAI"
+    case "google": return "Google"
+    case "github-copilot": return "GitHub Copilot"
+    case "openai-compatible": return "OpenAI-compatible"
+    default: return scope
+    }
+}
+
+// MARK: - /login  ·  /logout
+
+/// Captures the result of the suspended login sub-flow (the `withSuspendedTUI`
+/// body returns Void, so we thread the outcome through a box).
+@MainActor
+private final class LoginResultBox {
+    var storeId: String?
+    var error: String?
+}
+
+/// `/login` — suspends the coding TUI, runs the full `kwwk login` flow
+/// (provider selector → browser OAuth / API-key form), and — crucially —
+/// **keeps** any existing logins. The freshly-authenticated provider is
+/// registered live and becomes available to `/model` without a restart.
+@MainActor
+private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
+    guard let authResolvers = ctx.authResolvers else {
+        ctx.notify(Style.error("  /login: not available in this session"))
+        return
+    }
+    let box = LoginResultBox()
+    await ctx.withSuspendedTUI {
+        do {
+            box.storeId = try await runLoginInternal()
+        } catch {
+            box.error = error.localizedDescription
+        }
+    }
+    if let err = box.error {
+        // `.cancelled` (Esc) lands here too — a gentle note, not an error.
+        ctx.notify(Style.dimmed("  /login: \(err)"))
+        return
+    }
+    guard let storeId = box.storeId else {
+        ctx.notify(Style.dimmed("  /login: no provider logged in"))
+        return
+    }
+    guard let slot = await registerStoredProviderLive(
+        storeId: storeId, authResolvers: authResolvers
+    ) else {
+        ctx.notify(Style.error("  /login: '\(storeId)' logged in but couldn't be activated"))
+        return
+    }
+    ctx.sessionProviders.upsert(slot)
+    ctx.notify(Style.dimmed("  /login: \(slot.displayName) ready — /model to switch to it"))
+}
+
+/// `/logout` — with no argument lists the logged-in providers; with a provider
+/// id removes that login (from disk + this session's routing). Falls back to
+/// another logged-in provider if the active one is removed.
+@MainActor
+private func handleLogoutCommand(_ ctx: SlashContext, _ args: String) async {
+    let target = args.trimmingCharacters(in: .whitespacesAndNewlines)
+    let store = OAuthStore(url: OAuthStore.defaultURL())
+    let all = await store.all()
+    if all.isEmpty {
+        ctx.notify(Style.dimmed("  /logout: no stored logins (running on env keys or none)"))
+        return
+    }
+    let ids = storedProviderOrder(all)
+
+    if target.isEmpty {
+        var lines = [Style.dimmed("  logged-in providers:")]
+        for id in ids {
+            let isActive = ctx.agent.state.model.provider == modelProviderScope(forStoreId: id)
+            let tag = isActive ? Style.dimmed("  · active") : ""
+            lines.append("    " + id + "  " + Style.dimmed(providerDisplayName(forStoreId: id)) + tag)
+        }
+        lines.append(Style.dimmed("  /logout <provider> to remove one"))
+        ctx.notifyBlock(lines)
+        return
+    }
+
+    guard ids.contains(target) else {
+        ctx.notify(Style.error("  /logout: '\(target)' is not logged in — run /logout to list"))
+        return
+    }
+
+    try? await store.remove(target)
+    let scope = modelProviderScope(forStoreId: target)
+    await APIRegistry.shared.unregisterScope(scope)
+    if let ar = ctx.authResolvers { await ar.remove(scope: scope) }
+    ctx.sessionProviders.remove(storeId: target)
+
+    // If the removed provider was the one in use, switch to a survivor so the
+    // next request doesn't hit a now-unregistered provider.
+    if ctx.agent.state.model.provider == scope {
+        if let next = ctx.sessionProviders.slots.first {
+            ctx.agent.state.model = next.template
+            ctx.notify(Style.dimmed("  /logout: removed \(target); now on \(next.template.id) · \(next.displayName)"))
+        } else {
+            ctx.notify(Style.error("  /logout: removed \(target) — no providers left; /login to add one"))
+        }
+    } else {
+        ctx.notify(Style.dimmed("  /logout: removed \(target)"))
+    }
 }
 
 /// Map an in-session agent `Model.provider` to the key used in
