@@ -236,9 +236,14 @@ private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
     // `anthropic`). Don't let a second same-scope login clobber the active
     // provider's registration/resolver this session. The credentials are still
     // saved on disk; priority order decides on the next launch.
+    // Compare against each incumbent slot's ACTUAL registered scope
+    // (template.provider), not one re-derived from its storeId: an
+    // env-authenticated incumbent has storeId "env:<provider>" for which
+    // modelProviderScope has no case, but its template.provider is the real
+    // wire scope — so deriving from storeId would miss the collision.
     let newScope = modelProviderScope(forStoreId: storeId)
     if let existing = ctx.sessionProviders.slots.first(where: {
-        $0.storeId != storeId && modelProviderScope(forStoreId: $0.storeId) == newScope
+        $0.storeId != storeId && $0.template.provider == newScope
     }) {
         ctx.notify(Style.dimmed(
             "  /login: saved \(storeId), but it shares a provider slot with the active \(existing.storeId) — /logout \(existing.storeId) first to use it"
