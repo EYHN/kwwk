@@ -129,7 +129,11 @@ final class TranscriptRenderer {
                 // into the UI; detect them by the fixed lead-in the bridge
                 // emits (see `BackgroundTaskNotification.messageText()`)
                 // and fold them into a tool-result-style summary instead.
-                if let summary = BgNotificationSummary.parse(text) {
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix(GoalMode.continuationMarker) {
+                    // Hidden goal-continuation steer: role=user, suppressed from
+                    // the visible transcript. It still reaches the model and
+                    // agent.state.messages — only the render is skipped.
+                } else if let summary = BgNotificationSummary.parse(text) {
                     commit(summary.render())
                 } else {
                     commit([""] + Theme.userBar(text, width: displayWidth))

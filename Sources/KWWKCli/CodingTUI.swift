@@ -96,6 +96,60 @@ func runCodingTUIInternal(
     // `/thinking off` (or `high` / `xhigh` for thornier problems).
     agent.state.thinkingLevel = thinkingLevel
 
+    // --- goal mode (in-memory, session-scoped) --------------------------
+    // Shared by the `goal` tool, the `/goal` command, the status line, and
+    // the agent-end continuation loop. Evaporates on process exit.
+    let goalStore = GoalStore()
+    // Expose the `goal` tool to the model. The loop reads `state.tools` fresh
+    // each turn, so a post-build append is picked up without an agent rebuild.
+    do {
+        var goalTools = agent.state.tools
+        goalTools.append(createGoalTool(store: goalStore))
+        agent.state.tools = goalTools
+    }
+    // Base prompt captured once; the ACTIVE <goal_context> block is patched on
+    // top while a goal is active and stripped when it clears. The loop re-reads
+    // state.systemPrompt every turn, so this takes effect with no rebuild.
+    let baseSystemPrompt = agent.state.systemPrompt
+    let applyGoalContext: @MainActor @Sendable () -> Void = {
+        let snap = goalStore.snapshot()
+        agent.state.systemPrompt = snap.status == .active
+            ? baseSystemPrompt + "\n\n" + GoalMode.activeContext(objective: snap.objective)
+            : baseSystemPrompt
+    }
+    // Start one hidden continuation turn from idle. Delivered via `prompt` (not
+    // steer+continue): `continue()` only runs when the last message is an
+    // assistant reply, so a goal started in a fresh session — no messages yet —
+    // would silently queue forever. `prompt` starts a turn from any state; the
+    // marker in the text keeps it out of the visible transcript (see
+    // TranscriptRenderer). We wait for runLifecycle teardown first so a kick at
+    // .agentEnd doesn't collide with the just-ending run (`alreadyRunning`).
+    // This is the ONLY site that increments the cap counter, so agentEnd /
+    // `/goal set` / `/goal resume` all share one path.
+    let kickGoalContinuation: @MainActor @Sendable () -> Void = {
+        Task.detached {
+            await agent.waitForIdle()
+            // Re-check on the far side of the idle wait: `/goal off`, a cap
+            // pause, completion, or a replaced objective may have landed while
+            // we waited. Read the current objective so we never fire a stale
+            // one. This narrows — but cannot fully close — the check-then-prompt
+            // window: if `/goal off` lands between here and `prompt()` below, at
+            // most one continuation runs, and its own `.agentEnd` then sees the
+            // goal inactive and stops. That single self-healing turn is
+            // acceptable versus the complexity of an abortable atomic start.
+            let snap = goalStore.snapshot()
+            guard snap.status == .active else { return }
+            goalStore.recordAutoContinue()
+            do {
+                try await agent.prompt(GoalMode.continuationText(objective: snap.objective))
+            } catch {
+                // Lost the race to a user prompt / another kick (alreadyRunning)
+                // — no turn started, so don't spend a cap slot on it.
+                goalStore.undoAutoContinue()
+            }
+        }
+    }
+
     // --- TUI (inline, native-scroll) ------------------------------------
     //
     // Coding renders inline. Settled transcript
@@ -179,11 +233,13 @@ func runCodingTUIInternal(
             thinkingLevel: agent.state.thinkingLevel,
             capacityHint: capacityHint
         )
+        let goalSnap = goalStore.snapshot()
         frame.stateLine = codingFrameStateLine(
             mode: frameMode,
             isStreaming: agent.state.isStreaming,
             runningBackgroundTasks: runningBackgroundTasks,
             queuedPrompts: agent.queuedSteeringCount(),
+            goalObjective: goalSnap.status == .active ? goalSnap.objective : nil,
             spinner: frame.spinner
         )
         // Surface the pending queue as a live list above the input (omp-style).
@@ -305,6 +361,65 @@ func runCodingTUIInternal(
                 }
                 // Consume the tracking flag: the turn is over either way.
                 retry.trackedActive = false
+
+                // --- goal mode autonomous loop ---
+                let gsnap = goalStore.snapshot()
+                if gsnap.status == .complete {
+                    // The model called goal({op:"complete"}) during this turn.
+                    // Drop the goal so this branch fires exactly once — .complete
+                    // has no other exit transition, so without clearing it the
+                    // done notice would re-print on every subsequent turn.
+                    goalStore.stop()
+                    applyGoalContext()
+                    runner.tui.commit([
+                        "",
+                        Style.dimmed("  🎯 goal complete — autonomous loop stopped."),
+                    ])
+                } else {
+                    switch goalLoopDecision(
+                        isActive: gsnap.status == .active,
+                        stopReason: summary.finalStopReason,
+                        alreadyContinued: gsnap.autoContinueCount,
+                        cap: GoalMode.autoContinueCap
+                    ) {
+                    case .inject:
+                        kickGoalContinuation()
+                    case .pauseCap:
+                        goalStore.pauseForCap()
+                        // Strip the ACTIVE <goal_context> from the system prompt
+                        // to match the paused state — otherwise the next user
+                        // message still ships "Goal mode is active" at
+                        // system-prompt priority while the status line shows no
+                        // goal (the .stop path already does this).
+                        applyGoalContext()
+                        runner.tui.commit([
+                            "",
+                            Style.error("  goal: hit auto-continue cap (\(GoalMode.autoContinueCap)) — paused. /goal resume to keep going, /goal off to stop."),
+                        ])
+                    case .stop:
+                        // The loop was active but the turn ended on a non-natural
+                        // stop reason (abort / provider error / output-length cap).
+                        // Pause the goal so the status line stops advertising it
+                        // as actively working and the user gets a resume affordance
+                        // instead of a silent stall. A plain no-goal turn (status
+                        // not active) falls through with no notice.
+                        if gsnap.status == .active {
+                            goalStore.pauseForCap()
+                            applyGoalContext()
+                            let reason: String
+                            switch summary.finalStopReason {
+                            case .aborted: reason = "interrupted"
+                            case .length: reason = "output limit reached"
+                            case .error: reason = "provider error"
+                            default: reason = "turn did not complete"
+                            }
+                            runner.tui.commit([
+                                "",
+                                Style.error("  goal: autonomous loop stopped (\(reason)) — /goal resume to keep going, /goal off to stop."),
+                            ])
+                        }
+                    }
+                }
             case .compactStart(let count, _):
                 isAutoCompacting = true
                 frameMode = .compacting(messageCount: count)
@@ -365,6 +480,7 @@ func runCodingTUIInternal(
         // arm time (.agentEnd / Esc-abort) from the message actually executed.
         retry.trackedActive = true
         retry.failed = false
+        goalStore.resetAutoContinue()
         Task.detached {
             do {
                 try await agent.prompt(text, images: images)
@@ -440,6 +556,12 @@ func runCodingTUIInternal(
                             attachments: attachments,
                             dequeueCycle: dequeueCycle
                         )
+                        // Goals are session-scoped: drop the outgoing session's
+                        // goal and strip its <goal_context> so it can't drive the
+                        // restored session. A pending continuation kick re-checks
+                        // goalStore after its idle wait and bails once inactive.
+                        goalStore.stop()
+                        applyGoalContext()
                         var recap: [String] = [
                             "",
                             Theme.borderText(String(repeating: "─", count: max(8, runner.terminal.width - 2))),
@@ -469,6 +591,10 @@ func runCodingTUIInternal(
         description: "Start a fresh session",
         aliases: ["clear"],
         handler: { _, _ in
+            // A fresh session starts with no goal — drop any active one (and its
+            // <goal_context>) before minting the new id so it can't carry over.
+            goalStore.stop()
+            applyGoalContext()
             await performNewSession(
                 recorderBox: recorderBox,
                 sessionStore: sessionStore,
@@ -500,6 +626,86 @@ func runCodingTUIInternal(
             }
             ctx.notify(Style.dimmed("  ↻ retrying…"))
             submitBuiltPrompt(text, retry.lastImages)
+        }
+    ))
+
+    // `/goal` — autonomous goal mode (in-memory, session-scoped).
+    //   /goal <text>      set + start the objective (kicks the loop)
+    //   /goal             show the current goal
+    //   /goal off|stop    clear the goal
+    //   /goal resume      un-pause after the guardrail cap tripped
+    slashRegistry.register(SlashCommand(
+        name: "goal",
+        description: "Set/show/stop an autonomous goal the agent pursues across turns",
+        handler: { ctx, args in
+            let arg = args.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = arg.lowercased()
+
+            // Show current goal.
+            if arg.isEmpty {
+                let s = goalStore.snapshot()
+                switch s.status {
+                case .active:
+                    ctx.notify(Style.dimmed("  🎯 goal (active): \(s.objective)"))
+                case .paused:
+                    ctx.notify(Style.dimmed("  🎯 goal (paused — cap hit): \(s.objective) · /goal resume to keep going"))
+                case .complete:
+                    ctx.notify(Style.dimmed("  🎯 goal: complete"))
+                case .dropped:
+                    ctx.notify(Style.dimmed("  /goal: no active goal — /goal <objective> to start one"))
+                }
+                return
+            }
+
+            // Stop / clear.
+            if lower == "off" || lower == "stop" {
+                goalStore.stop()
+                // A continuation kick already in flight re-checks goalStore after
+                // its idle wait and bails when the goal isn't active, so stopping
+                // here is enough — no need to touch the user's steering queue.
+                applyGoalContext()
+                updateFrameStatus()
+                runner.tui.requestRender()
+                ctx.notify(Style.dimmed("  🎯 goal cleared"))
+                return
+            }
+
+            // Resume after a cap pause.
+            if lower == "resume" {
+                let s = goalStore.snapshot()
+                guard s.status == .paused else {
+                    ctx.notify(Style.dimmed("  /goal resume: no paused goal to resume"))
+                    return
+                }
+                goalStore.resume()
+                applyGoalContext()
+                updateFrameStatus()
+                runner.tui.requestRender()
+                ctx.notify(Style.dimmed("  🎯 goal resumed"))
+                if !agent.state.isStreaming { kickGoalContinuation() }
+                return
+            }
+
+            // Set + start a new objective. Clamp its length first so a pasted
+            // mega-string can't bloat the system prompt / every continuation.
+            // Any continuation kick still pending from a prior objective re-checks
+            // goalStore after its idle wait and picks up this new objective (or
+            // bails), so there's nothing to drop.
+            var objective = arg
+            if objective.count > GoalMode.maxObjectiveChars {
+                objective = String(objective.prefix(GoalMode.maxObjectiveChars))
+                ctx.notify(Style.dimmed("  /goal: objective truncated to \(GoalMode.maxObjectiveChars) characters"))
+            }
+            goalStore.start(objective)
+            applyGoalContext()
+            updateFrameStatus()
+            runner.tui.requestRender()
+            // Echo a bounded preview — the full objective can be long.
+            let echo = objective.count > 120 ? String(objective.prefix(120)) + "…" : objective
+            ctx.notify(Style.dimmed("  🎯 goal set: \(echo)"))
+            // Kick the loop now if idle; otherwise the running turn already sees
+            // the ACTIVE context and its .agentEnd will continue.
+            if !agent.state.isStreaming { kickGoalContinuation() }
         }
     ))
 
@@ -637,6 +843,7 @@ func runCodingTUIInternal(
                 // an Esc-abort resubmits the real in-flight prompt (never the
                 // queued-but-undrained steer).
                 retry.trackedActive = true
+                goalStore.resetAutoContinue()
                 attachments.clear()
                 frame.input.addToHistory(text)
                 frame.input.value = ""
@@ -1180,9 +1387,13 @@ private func codingFrameStateLine(
     isStreaming: Bool,
     runningBackgroundTasks: Int,
     queuedPrompts: Int,
+    goalObjective: String?,
     spinner: String
 ) -> String {
     var parts: [String] = []
+    if let goalObjective, !goalObjective.isEmpty {
+        parts.append(GoalMode.statusSegment(objective: goalObjective))
+    }
 
     switch mode {
     case .compacting(let count):

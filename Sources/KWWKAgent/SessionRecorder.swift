@@ -86,7 +86,12 @@ public final class SessionRecorder: @unchecked Sendable {
         // `messageEnd`/`turnEnd` fire concurrently.
         let work: Task<Void, Never>? = lock.withLock {
             guard messages.count > persistedCount else { return nil }
-            let tail = Array(messages[persistedCount...])
+            // Redact hidden goal continuations before writing: replace each with
+            // a marker-only stand-in that keeps goal state (the objective) off
+            // disk while preserving the `user` role, so the persisted transcript
+            // stays valid user→assistant alternation for `/resume`. We map (not
+            // filter) so we never orphan the assistant reply that followed.
+            let tail = messages[persistedCount...].map(redactedForPersistence)
             persistedCount = messages.count
             let previous = appendChain
             let store = self.store
@@ -124,6 +129,9 @@ public final class SessionRecorder: @unchecked Sendable {
             let usage = pendingCompactionUsage
             pendingCompactionUsage = nil
             persistedCount = replacementMessages.count
+            // Apply the same redaction to the compacted projection so goal
+            // internals don't leak in through the compaction path either.
+            let redactedReplacement = replacementMessages.map(redactedForPersistence)
 
             let previous = appendChain
             let store = self.store
@@ -136,7 +144,7 @@ public final class SessionRecorder: @unchecked Sendable {
                 try? await store.appendCompaction(
                     id: sessionId,
                     cwd: cwd,
-                    replacementMessages: replacementMessages,
+                    replacementMessages: redactedReplacement,
                     messagesCompacted: messagesCompacted,
                     tokensBefore: tokensBefore ?? usage?.tokens,
                     contextWindow: contextWindow ?? usage?.window,
