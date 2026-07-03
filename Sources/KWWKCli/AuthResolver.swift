@@ -43,17 +43,31 @@ enum AuthResolveError: Error, LocalizedError {
             return """
             No credentials configured.
 
-            Run `kwwk login` to pick a provider (OAuth subscription or
-            API key).
+            Launch `kwwk` and run `/login` to pick a provider (OAuth
+            subscription or API key), or export a supported API-key
+            environment variable (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+            GEMINI_API_KEY, OPENROUTER_API_KEY, ...).
             """
         case .unsupportedProvider(let id):
             return """
             Stored credentials for '\(id)' are not yet wired up in the
-            kwwk CLI. Run `kwwk login` and pick a different provider.
+            kwwk CLI. Launch `kwwk` and run `/login` to pick a different
+            provider.
             """
         }
     }
 }
+
+/// Sentinel `Model` a logged-out interactive session starts on (no stored
+/// logins, no env keys). The empty `id` / `provider` match no catalog entry
+/// and no `APIRegistry` scope; the TUI gates prompt submission and `/model`
+/// while the session's provider-slot list is empty, so this model is never
+/// sent to a provider. The first successful `/login` replaces it with the
+/// fresh slot's template; `/logout` of the last provider restores it.
+let loggedOutModel = Model(id: "", api: "", provider: "", contextWindow: 0, maxTokens: 0)
+
+/// Prompt-box / status label for the logged-out state.
+let loggedOutModelLabel = "no provider — /login to sign in"
 
 /// Resolve credentials:
 ///   1. If `OAuthStore` holds any logins, register ALL of them via
@@ -92,7 +106,7 @@ func resolveAgentAuth(
     // No stored login: fall back to environment API keys (lowest priority),
     // matching pi. An exported OPENROUTER_API_KEY / GROQ_API_KEY / etc. (or
     // ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY) runs kwwk without
-    // an interactive `kwwk login`.
+    // an interactive `/login`.
     if let env = await resolveEnvAuth(
         modelOverride: modelOverride,
         environment: ProcessInfo.processInfo.environment
@@ -233,6 +247,8 @@ func registerStored(
         return try await registerOpenAICompatible(creds: creds, modelOverride: modelOverride)
     case "google-api-key":
         return await registerGoogleAPIKey(creds: creds, modelOverride: modelOverride)
+    case "openrouter":
+        return await registerOpenRouter(creds: creds, modelOverride: modelOverride)
     case "github-copilot":
         return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride)
     default:
@@ -245,14 +261,16 @@ func registerStored(
 
 /// Register a single freshly-logged-in provider mid-session: scoped provider
 /// on `APIRegistry`, resolver into `authResolvers`, and a `ProviderSlot` for
-/// `/model`. Returns nil if the provider isn't stored / wired up.
+/// `/model`. Returns nil if the provider isn't stored / wired up. `store`
+/// defaults to the real `~/.kwwk/oauth.json`; tests inject a temp one.
 @MainActor
 func registerStoredProviderLive(
     storeId: String,
     authResolvers: SessionAuthResolvers,
-    context1m: Bool = false
+    context1m: Bool = false,
+    store: OAuthStore? = nil
 ) async -> ProviderSlot? {
-    let store = OAuthStore(url: OAuthStore.defaultURL())
+    let store = store ?? OAuthStore(url: OAuthStore.defaultURL())
     guard let resolved = try? await registerStored(
         storeId: storeId, store: store, modelOverride: nil, context1m: context1m
     ) else { return nil }
@@ -479,59 +497,6 @@ private func registerEnvProvider(api: String, provider: String, apiKey: String) 
         return true
     default:
         return false
-    }
-}
-
-/// Deterministic priority order for the stored provider ids that are actually
-/// present. OAuth subscriptions first, then api keys; the first entry is the
-/// default *active* provider at launch, and the order also breaks same-scope
-/// ties (e.g. Anthropic OAuth wins over Anthropic API key). Unknown ids sort
-/// last so they surface a clear "not wired up" notice rather than a silent
-/// miss.
-private let storedProviderPriority = [
-    "openai-codex",
-    "anthropic",
-    "anthropic-api-key",
-    "openai-api-key",
-    "openai-compatible",
-    "google-api-key",
-    "github-copilot",
-]
-
-func storedProviderOrder(_ all: [String: OAuthCredentials]) -> [String] {
-    var order = storedProviderPriority.filter { all[$0] != nil }
-    let extras = all.keys.filter { !storedProviderPriority.contains($0) }.sorted()
-    order.append(contentsOf: extras)
-    return order
-}
-
-/// The `model.provider` scope a stored provider registers under on
-/// `APIRegistry` — the key `stream` dispatches on. Several store ids collapse
-/// onto the same catalog provider (`anthropic` OAuth and `anthropic-api-key`
-/// both drive Anthropic's `anthropic-messages` wire), so this is intentionally
-/// many-to-one; `registerAllStored` skips the later of any collision.
-func modelProviderScope(forStoreId storeId: String) -> String {
-    switch storeId {
-    case "openai-codex": return "chatgpt-codex"
-    case "anthropic", "anthropic-api-key": return "anthropic"
-    case "openai-api-key": return "openai"
-    case "google-api-key": return "google"
-    case "openai-compatible": return "openai-compatible"
-    default: return storeId  // github-copilot, and any future 1:1 ids
-    }
-}
-
-/// The `ModelsCatalog.byProvider` key holding a stored provider's models —
-/// used to list a provider's models for `/model` and to match a
-/// `provider/model` launch override to a logged-in account.
-func catalogProvider(forStoreId storeId: String) -> String {
-    switch storeId {
-    case "openai-codex": return "openai-codex"
-    case "anthropic", "anthropic-api-key": return "anthropic"
-    case "openai-api-key": return "openai"
-    case "google-api-key": return "google"
-    case "openai-compatible": return "openai-compatible"
-    default: return storeId  // github-copilot
     }
 }
 
@@ -822,6 +787,51 @@ private func registerGoogleAPIKey(
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · Google AI Studio",
+        authResolver: nil
+    )
+}
+
+// MARK: - OpenRouter (login form)
+
+private func registerOpenRouter(
+    creds: OAuthCredentials,
+    modelOverride: String? = nil
+) async -> ResolvedAuth {
+    await APIRegistry.shared.register(
+        OpenAICompletionsProvider(defaultAPIKey: creds.access),
+        scope: "openrouter"
+    )
+
+    let modelId = modelOverride
+        ?? stringExtra(creds, "defaultModel")
+        ?? "anthropic/claude-sonnet-5"
+    let catalog = ModelsCatalog.model(provider: "openrouter", id: modelId)
+    // Uncatalogued ids still route — OpenRouter fronts far more models than
+    // the bundled catalog. The fallback compat keeps reasoning deltas parsing
+    // via the OpenRouter thinking format.
+    let fallbackCompat: ModelCompat = {
+        var c = ModelCompat()
+        c.thinkingFormat = "openrouter"
+        return c
+    }()
+    let model = Model(
+        id: modelId,
+        name: catalog?.name ?? modelId,
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: catalog?.baseUrl ?? "https://openrouter.ai/api/v1",
+        reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text],
+        cost: catalog?.cost ?? ModelCost(),
+        contextWindow: catalog?.contextWindow ?? 131_072,
+        maxTokens: catalog?.maxTokens ?? 32_000,
+        headers: catalog?.headers,
+        compat: catalog?.compat ?? fallbackCompat,
+        thinkingLevelMap: catalog?.thinkingLevelMap
+    )
+    return ResolvedAuth(
+        model: model,
+        modelLabel: "\(modelId) · OpenRouter",
         authResolver: nil
     )
 }

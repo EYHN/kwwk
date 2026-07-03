@@ -135,6 +135,168 @@ struct ModelSelectorModalTests {
         #expect(modal.render(maxRows: 12).contains(where: { $0.contains("/50") }))
     }
 
+    // MARK: - Provider tab bar
+
+    /// Two providers sharing one model id, plus a provider-unique model each.
+    @MainActor
+    private func multiProviderFixture() -> (models: [Model], groups: [String]) {
+        let models = [
+            model("opus-4", provider: "anthropic"),
+            model("sonnet-4", provider: "anthropic"),
+            model("gpt-5", provider: "openai"),
+            model("sonnet-4", provider: "openai"),
+        ]
+        let groups = ["Anthropic", "Anthropic", "OpenAI", "OpenAI"]
+        return (models, groups)
+    }
+
+    private func strip(_ s: String) -> String {
+        s.replacingOccurrences(of: "\u{1B}\\[[0-9;]*m", with: "", options: .regularExpression)
+    }
+
+    @MainActor
+    @Test("multi-provider list renders the tab bar; tab cycles filters and wraps")
+    func tabCyclingFiltersAndWraps() {
+        let (models, groups) = multiProviderFixture()
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: "opus-4",
+            groupLabels: groups,
+            currentIndex: 0,
+            onSelect: { _ in },
+            onCancel: {}
+        )
+        func body() -> [String] { modal.render(maxRows: 40).map(strip) }
+
+        // "All" tab: every row + the tab bar with the filter hint.
+        var lines = body()
+        #expect(lines.contains(where: { $0.contains("All") && $0.contains("tab / ←→: filter provider") }))
+        #expect(lines.contains(where: { $0.contains("opus-4") }))
+        #expect(lines.contains(where: { $0.contains("gpt-5") }))
+
+        // Tab → Anthropic: OpenAI rows filtered out.
+        modal.tab()
+        lines = body()
+        #expect(lines.contains(where: { $0.contains("opus-4") }))
+        #expect(!lines.contains(where: { $0.contains("gpt-5") }))
+
+        // Tab → OpenAI: Anthropic-only rows filtered out.
+        modal.tab()
+        lines = body()
+        #expect(lines.contains(where: { $0.contains("gpt-5") }))
+        #expect(!lines.contains(where: { $0.contains("opus-4") }))
+
+        // Tab wraps back to "All".
+        modal.tab()
+        lines = body()
+        #expect(lines.contains(where: { $0.contains("opus-4") }))
+        #expect(lines.contains(where: { $0.contains("gpt-5") }))
+
+        // Left from "All" wraps to the last tab (OpenAI); right moves forward.
+        modal.left()
+        lines = body()
+        #expect(lines.contains(where: { $0.contains("gpt-5") }))
+        #expect(!lines.contains(where: { $0.contains("opus-4") }))
+        modal.right() // back to All (wrap)
+        lines = body()
+        #expect(lines.contains(where: { $0.contains("opus-4") }))
+    }
+
+    @MainActor
+    @Test("filtered tab confirm picks from the filtered rows")
+    func filteredConfirm() {
+        let (models, groups) = multiProviderFixture()
+        let picked = Ref<Model?>(nil)
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: "opus-4",
+            groupLabels: groups,
+            currentIndex: 0,
+            onSelect: { picked.value = $0 },
+            onCancel: {}
+        )
+        modal.tab(); modal.tab() // → OpenAI tab; current row not visible → first row
+        modal.confirm()
+        #expect(picked.value?.id == "gpt-5")
+        #expect(picked.value?.provider == "openai")
+    }
+
+    @MainActor
+    @Test("single provider renders exactly the ungrouped selector — no tab bar")
+    func singleProviderHidesTabBar() {
+        let models = [model("a"), model("b")]
+        let plain = ModelSelectorModal(
+            title: "t", models: models, currentModelId: "a",
+            onSelect: { _ in }, onCancel: {}
+        )
+        let grouped = ModelSelectorModal(
+            title: "t", models: models, currentModelId: "a",
+            groupLabels: ["Anthropic", "Anthropic"],
+            onSelect: { _ in }, onCancel: {}
+        )
+        #expect(!plain.render(maxRows: 40).contains(where: { $0.contains("filter provider") }))
+        #expect(!grouped.render(maxRows: 40).contains(where: { $0.contains("filter provider") }))
+        // A single-label grouping still renders its group header, as today —
+        // but tab/left/right are no-ops.
+        grouped.tab(); grouped.left(); grouped.right()
+        #expect(grouped.render(maxRows: 40).map(strip)
+            .contains(where: { $0.contains("── Anthropic ──") }))
+    }
+
+    @MainActor
+    @Test("current-model selection is preserved across tab switches when visible")
+    func currentSelectionSurvivesTabSwitch() {
+        let (models, groups) = multiProviderFixture()
+        // Current model is the OpenAI copy of sonnet-4 (index 3).
+        let picked = Ref<Model?>(nil)
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: "sonnet-4",
+            groupLabels: groups,
+            currentIndex: 3,
+            onSelect: { picked.value = $0 },
+            onCancel: {}
+        )
+        // All → OpenAI: the current row is visible under this tab → stays selected.
+        modal.tab(); modal.tab()
+        modal.confirm()
+        #expect(picked.value?.id == "sonnet-4")
+        #expect(picked.value?.provider == "openai")
+
+        // OpenAI → All: still pinned to the exact current row.
+        modal.tab()
+        modal.confirm()
+        #expect(picked.value?.provider == "openai")
+
+        // All → Anthropic: current row not visible → first row selected.
+        modal.tab()
+        modal.confirm()
+        #expect(picked.value?.id == "opus-4")
+        #expect(picked.value?.provider == "anthropic")
+    }
+
+    @MainActor
+    @Test("tab bar line is charged against the maxRows budget")
+    func tabBarWithinBudget() {
+        let models = (0..<30).map { model("a\($0)", provider: "anthropic") }
+            + (0..<30).map { model("o\($0)", provider: "openai") }
+        let groups = Array(repeating: "Anthropic", count: 30) + Array(repeating: "OpenAI", count: 30)
+        let modal = ModelSelectorModal(
+            title: "t", models: models, currentModelId: nil, groupLabels: groups,
+            onSelect: { _ in }, onCancel: {}
+        )
+        for maxRows in [4, 6, 9, 12, 40] {
+            for _ in 0..<60 {
+                let lines = modal.render(maxRows: maxRows)
+                #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows)")
+                modal.down()
+            }
+        }
+    }
+
     @MainActor
     @Test("empty models list renders a helpful message, doesn't crash")
     func emptyModels() {

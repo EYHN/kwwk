@@ -34,7 +34,6 @@ final class TUI: @unchecked Sendable {
     private var clearOnShrink: Bool = true
     private var resizeUnsubscribe: (() -> Void)?
     private var _fullRedraws: Int = 0
-    private var hideCursor: Bool = false
     /// Optional decorative header (the welcome card) rendered fresh at the
     /// current width. Emitted once into scrollback on the first frame, and
     /// re-rendered at the top on every resize full-repaint so its fixed-width
@@ -48,6 +47,10 @@ final class TUI: @unchecked Sendable {
     /// next frame can drop back to the live-zone bottom before rewinding —
     /// otherwise the rewind math is off and old rows leak as duplicates.
     private var lastCursorUpBy: Int = 0
+    /// Set by `clearFrame()` so `stop()` skips its trailing newline — the
+    /// erased live zone left the cursor exactly where the next output should
+    /// start. Reset whenever a render draws a fresh frame.
+    private var frameCleared = false
 
     private static let disableAutowrap = "\u{1B}[?7l"
     private static let enableAutowrap = "\u{1B}[?7h"
@@ -56,18 +59,10 @@ final class TUI: @unchecked Sendable {
         self.terminal = terminal
     }
 
-    func setHideCursor(_ value: Bool) {
-        lock.withLock { hideCursor = value }
-    }
-
     // MARK: - Tree manipulation
 
     func addChild(_ component: Component) {
         lock.withLock { children.append(component) }
-    }
-
-    func removeChild(_ component: Component) {
-        lock.withLock { children.removeAll { $0 === component } }
     }
 
     // MARK: - Lifecycle
@@ -79,11 +74,6 @@ final class TUI: @unchecked Sendable {
             return false
         }
         if alreadyStarted { return }
-
-        var prologue = ""
-        let hide = lock.withLock { hideCursor }
-        if hide { prologue += "\u{1B}[?25l" }
-        if !prologue.isEmpty { terminal.write(prologue) }
 
         resizeUnsubscribe = terminal.onResize { [weak self] _, _ in
             self?.handleResize()
@@ -100,15 +90,15 @@ final class TUI: @unchecked Sendable {
         resizeUnsubscribe?()
         resizeUnsubscribe = nil
         if wasStarted {
-            let (hide, cursorUpBy) = lock.withLock { (hideCursor, lastCursorUpBy) }
+            let (cursorUpBy, cleared) = lock.withLock { (lastCursorUpBy, frameCleared) }
             var epilogue = TUI.enableAutowrap
-            if hide { epilogue += "\u{1B}[?25h" }
             // The hardware cursor may be parked above the live-zone bottom
             // (inside a prompt box). Drop to the bottom before moving to a
             // fresh line so the shell prompt appears below the final frame,
-            // not inside it.
+            // not inside it. A `clearFrame()`-ed TUI has no final frame — the
+            // cursor already sits where the next output should start.
             if cursorUpBy > 0 { epilogue += "\u{1B}[\(cursorUpBy)B" }
-            epilogue += "\r\n"
+            if !cleared { epilogue += "\r\n" }
             if !epilogue.isEmpty { terminal.write(epilogue) }
         }
     }
@@ -180,6 +170,32 @@ final class TUI: @unchecked Sendable {
             lastCursorUpBy = 0
             lastRenderedLines = []
         }
+    }
+
+    /// Erase the live zone in place (rewind to its top, clear to end of
+    /// screen) and drop retained geometry. `TUIRunner.suspend()` calls this
+    /// before handing the terminal to a sub-flow (the `/login` OAuth
+    /// handoff) so the frame vanishes instead of freezing into scrollback
+    /// above the sub-flow's output. `stop()` sees `frameCleared` and skips
+    /// its trailing newline.
+    func clearFrame() {
+        let out: String? = lock.withLock {
+            guard isStarted, lastFrameHeight > 0 else { return nil }
+            var s = TUI.disableAutowrap
+            if lastCursorUpBy > 0 { s += "\u{1B}[\(lastCursorUpBy)B" }
+            s += "\r"
+            if lastFrameHeight > 1 { s += "\u{1B}[\(lastFrameHeight - 1)A" }
+            // The live zone is the bottommost content, so clearing from the
+            // cursor to end-of-screen wipes exactly the frame's rows.
+            s += "\u{1B}[0J"
+            s += TUI.enableAutowrap
+            lastFrameHeight = 0
+            lastCursorUpBy = 0
+            lastRenderedLines = []
+            frameCleared = true
+            return s
+        }
+        if let out { terminal.write(out) }
     }
 
     private func handleResize() {
@@ -274,6 +290,7 @@ final class TUI: @unchecked Sendable {
             lastRenderedLines = rendered
             lastFrameHeight = rendered.count
             lastCursorUpBy = upBy
+            frameCleared = false
             _fullRedraws += 1
         }
         terminal.write(out)
@@ -344,6 +361,7 @@ final class TUI: @unchecked Sendable {
             lastRenderedLines = rendered
             lastFrameHeight = rendered.count
             lastCursorUpBy = upBy
+            frameCleared = false
             _fullRedraws += 1
         }
         terminal.write(out)
@@ -416,6 +434,7 @@ final class TUI: @unchecked Sendable {
             lastRenderedLines = rendered
             lastFrameHeight = rendered.count
             lastCursorUpBy = newCursorUpBy
+            frameCleared = false
             if shrinking { _fullRedraws += 1 }
         }
 

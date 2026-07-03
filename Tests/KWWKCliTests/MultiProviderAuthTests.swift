@@ -3,7 +3,7 @@ import Testing
 @testable import KWWKAI
 @testable import KWWKCli
 
-@Suite("multi-provider auth")
+@Suite("multi-provider auth", .serialized)
 struct MultiProviderAuthTests {
 
     // MARK: - Store is additive
@@ -50,6 +50,83 @@ struct MultiProviderAuthTests {
         #expect(catalogProvider(forStoreId: "openai-codex") == "openai-codex")
         #expect(catalogProvider(forStoreId: "openai-api-key") == "openai")
         #expect(catalogProvider(forStoreId: "github-copilot") == "github-copilot")
+    }
+
+    // MARK: - OpenRouter (first-class provider)
+
+    @Test("openrouter maps 1:1 to scope + catalog and ranks after direct vendor keys")
+    func openRouterScopeCatalogOrder() {
+        #expect(modelProviderScope(forStoreId: "openrouter") == "openrouter")
+        #expect(catalogProvider(forStoreId: "openrouter") == "openrouter")
+        let all: [String: OAuthCredentials] = [
+            "openrouter": .init(access: "o", refresh: "", expires: .max),
+            "anthropic-api-key": .init(access: "a", refresh: "", expires: .max),
+        ]
+        #expect(storedProviderOrder(all) == ["anthropic-api-key", "openrouter"])
+    }
+
+    @Test("registerStored wires an OpenRouter login with catalog metadata")
+    func registerStoredOpenRouter() async throws {
+        try await withSharedAPIRegistry {
+            await APIRegistry.shared.unregisterScope("openrouter")
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-openrouter-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let store = OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            try await store.set(OAuthCredentials(
+                access: "sk-or-test", refresh: "", expires: .max,
+                extras: ["defaultModel": .string("z-ai/glm-5.2")]
+            ), for: "openrouter")
+
+            let resolved = try await registerStored(
+                storeId: "openrouter", store: store, modelOverride: nil, context1m: false
+            )
+            #expect(resolved?.model.id == "z-ai/glm-5.2")
+            #expect(resolved?.model.provider == "openrouter")
+            #expect(resolved?.model.api == "openai-completions")
+            #expect(resolved?.model.baseUrl == "https://openrouter.ai/api/v1")
+            // Catalog metadata — including the OpenRouter reasoning format the
+            // completions encoder needs — rides along. Compare against the live
+            // catalog entry (not a pinned number) so a catalog regeneration
+            // can't break this wiring test.
+            #expect(resolved?.model.compat?.thinkingFormat == "openrouter")
+            let catalogEntry = try #require(ModelsCatalog.model(provider: "openrouter", id: "z-ai/glm-5.2"))
+            #expect(resolved?.model.contextWindow == catalogEntry.contextWindow)
+            #expect(resolved?.modelLabel == "z-ai/glm-5.2 · OpenRouter")
+            let scoped = await APIRegistry.shared.provider(scope: "openrouter", api: "openai-completions")
+            #expect(scoped is OpenAICompletionsProvider)
+            await APIRegistry.shared.unregisterScope("openrouter")
+        }
+    }
+
+    @Test("registerStored openrouter defaults + uncatalogued ids keep the OpenRouter wire")
+    func registerStoredOpenRouterFallbacks() async throws {
+        try await withSharedAPIRegistry {
+            await APIRegistry.shared.unregisterScope("openrouter")
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-openrouter-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let store = OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            // No defaultModel stored → sensible default.
+            try await store.set(OAuthCredentials(
+                access: "sk-or-test", refresh: "", expires: .max
+            ), for: "openrouter")
+            let defaulted = try await registerStored(
+                storeId: "openrouter", store: store, modelOverride: nil, context1m: false
+            )
+            #expect(defaulted?.model.id == "anthropic/claude-sonnet-5")
+
+            // An uncatalogued override still routes through the OpenRouter
+            // endpoint with the OpenRouter thinking format.
+            let custom = try await registerStored(
+                storeId: "openrouter", store: store,
+                modelOverride: "somelab/brand-new-model", context1m: false
+            )
+            #expect(custom?.model.id == "somelab/brand-new-model")
+            #expect(custom?.model.baseUrl == "https://openrouter.ai/api/v1")
+            #expect(custom?.model.compat?.thinkingFormat == "openrouter")
+            await APIRegistry.shared.unregisterScope("openrouter")
+        }
     }
 
     // MARK: - Unified resolver dispatch
@@ -148,5 +225,23 @@ struct MultiProviderAuthTests {
         #expect(copilotRouted.provider == "github-copilot")
         #expect(copilotRouted.api == "anthropic-messages")
         #expect(copilotRouted.baseUrl == "https://api.business.githubcopilot.com")
+    }
+
+    @Test("adoptFields keeps per-model compat + thinkingLevelMap")
+    func adoptFieldsKeepsCompat() {
+        var compat = ModelCompat()
+        compat.thinkingFormat = "openrouter"
+        let template = Model(
+            id: "anthropic/claude-sonnet-5", api: "openai-completions",
+            provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1"
+        )
+        let picked = Model(
+            id: "z-ai/glm-5.2", api: "openai-completions",
+            provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1",
+            compat: compat, thinkingLevelMap: ["xhigh": "xhigh"]
+        )
+        let routed = adoptFields(from: template, into: picked)
+        #expect(routed.compat?.thinkingFormat == "openrouter")
+        #expect(routed.thinkingLevelMap == ["xhigh": "xhigh"])
     }
 }

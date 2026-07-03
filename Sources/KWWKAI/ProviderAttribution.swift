@@ -12,13 +12,16 @@ public enum ProviderAttribution {
     // MARK: - Display names
 
     /// Complete provider id → human-readable display name map. Ported from pi's
-    /// `BUILT_IN_PROVIDER_DISPLAY_NAMES`.
+    /// `BUILT_IN_PROVIDER_DISPLAY_NAMES`, plus the kwwk-specific ids the CLI
+    /// registers (`chatgpt-codex` wire scope, `openai-codex` catalog key,
+    /// `openai-compatible` custom endpoints).
     public static let displayNames: [String: String] = [
         "anthropic": "Anthropic",
         "amazon-bedrock": "Amazon Bedrock",
         "ant-ling": "Ant Ling",
         "azure-openai-responses": "Azure OpenAI Responses",
         "cerebras": "Cerebras",
+        "chatgpt-codex": "ChatGPT Codex",
         "cloudflare-ai-gateway": "Cloudflare AI Gateway",
         "cloudflare-workers-ai": "Cloudflare Workers AI",
         "deepseek": "DeepSeek",
@@ -38,6 +41,8 @@ public enum ProviderAttribution {
         "opencode": "OpenCode Zen",
         "opencode-go": "OpenCode Go",
         "openai": "OpenAI",
+        "openai-codex": "ChatGPT Codex",
+        "openai-compatible": "OpenAI-compatible",
         "openrouter": "OpenRouter",
         "together": "Together AI",
         "vercel-ai-gateway": "Vercel AI Gateway",

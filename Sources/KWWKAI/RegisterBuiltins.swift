@@ -1,3 +1,11 @@
+// SDK-facing convenience surface, documented in README's "The agent SDK"
+// section: `registerBuiltins` / `registerBuiltinsFromEnvironment` plus the
+// curated `Models` catalog are the library's public quick-start API for
+// embedding callers. The kwwk CLI does NOT use this file — it registers
+// providers itself via AuthResolver (`resolveAgentAuth`) with per-login
+// scoping and OAuth resolvers. Keep the `Models` entries consistent with
+// `Resources/models.json` when regenerating the catalog.
+
 import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
@@ -17,6 +25,8 @@ import FoundationNetworking
 ///
 /// Each provider is registered under the `sourceId` `"kw-builtins"` so
 /// callers can `APIRegistry.shared.unregisterSource("kw-builtins")` in tests.
+/// `registry` defaults to the shared instance; tests can pass a private
+/// `APIRegistry()` to avoid mutating global state.
 @discardableResult
 public func registerBuiltins(
     anthropic: String? = nil,
@@ -24,27 +34,28 @@ public func registerBuiltins(
     openaiResponses: String? = nil,
     google: String? = nil,
     sourceId: String = "kw-builtins",
-    client: HTTPClient = URLSessionHTTPClient()
+    client: HTTPClient = URLSessionHTTPClient(),
+    registry: APIRegistry = .shared
 ) async -> [String] {
     var registered: [String] = []
     if let key = anthropic {
         let provider = AnthropicProvider(client: client, defaultAPIKey: key)
-        await APIRegistry.shared.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId)
         registered.append(provider.api)
     }
     if let key = openaiCompletions {
         let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: key)
-        await APIRegistry.shared.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId)
         registered.append(provider.api)
     }
     if let key = openaiResponses {
         let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: key)
-        await APIRegistry.shared.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId)
         registered.append(provider.api)
     }
     if let key = google {
         let provider = GoogleGeminiProvider(client: client, defaultAPIKey: key)
-        await APIRegistry.shared.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId)
         registered.append(provider.api)
     }
     return registered
@@ -57,7 +68,8 @@ public func registerBuiltins(
 public func registerBuiltinsFromEnvironment(
     env: [String: String],
     sourceId: String = "kw-builtins",
-    client: HTTPClient = URLSessionHTTPClient()
+    client: HTTPClient = URLSessionHTTPClient(),
+    registry: APIRegistry = .shared
 ) async -> [String] {
     await registerBuiltins(
         anthropic: env["ANTHROPIC_API_KEY"],
@@ -65,7 +77,8 @@ public func registerBuiltinsFromEnvironment(
         openaiResponses: env["OPENAI_API_KEY"],
         google: env["GOOGLE_API_KEY"] ?? env["GEMINI_API_KEY"],
         sourceId: sourceId,
-        client: client
+        client: client,
+        registry: registry
     )
 }
 

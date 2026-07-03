@@ -73,6 +73,25 @@ struct OAuthStoreTests {
         #expect(loaded?.extras["projectId"] == .string("p-1"))
     }
 
+    @Test("a hand-edited store entry without `extras` still decodes")
+    func missingExtrasTolerated() async throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // One entry omits `extras` entirely — the whole store must still
+        // load (a strict decode would silently drop every login).
+        let raw = """
+        {"a": {"access": "ka", "refresh": "", "expires": 10},
+         "b": {"access": "kb", "refresh": "", "expires": 10, "extras": {"x": "y"}}}
+        """
+        try Data(raw.utf8).write(to: tmp)
+
+        let store = OAuthStore(url: tmp)
+        #expect(await store.get("a")?.extras == [:])
+        #expect(await store.get("b")?.extras["x"] == .string("y"))
+    }
+
     @Test("isExpired uses wall-clock milliseconds") func expiredFlag() {
         let past = OAuthCredentials(access: "a", refresh: "r", expires: 0)
         #expect(past.isExpired)

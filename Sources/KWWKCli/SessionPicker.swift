@@ -4,8 +4,9 @@ import KWWKAgent
 /// Interactive picker for `--resume`: lists every persisted session (across all
 /// projects, newest first) and lets the user choose one. Ports the intent of
 /// pi's `selectSession` / `SessionSelectorComponent` as a minimal numbered
-/// stdin prompt — kwwk has no reusable live-filtering selectable-list TUI, so
-/// this stays a plain prompt that's trivially unit-testable.
+/// stdin prompt — it runs before any TUI / ModalHost exists (the session must
+/// be picked before the coding TUI is built), so the reusable list modals
+/// don't apply and it stays a plain prompt that's trivially unit-testable.
 enum SessionPicker {
 
     /// Pure selection step: given the listed sessions and a single input line,

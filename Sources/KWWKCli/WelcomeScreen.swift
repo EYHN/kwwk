@@ -11,6 +11,9 @@ struct WelcomeContext: Sendable {
     var cwd: String
     var branch: String?
     var recentSessions: [RecentSession]
+    /// True when the session started with no credentials (sentinel model,
+    /// no provider slots) — the card adds a dim "/login" hint line.
+    var loggedOut: Bool = false
 
     struct RecentSession: Sendable {
         var name: String
@@ -66,6 +69,9 @@ enum WelcomeScreen {
         lines.append(margin + Box.row("", width: boxWidth))
         lines.append(margin + Box.bottom(width: boxWidth))
         lines.append("")
+        if ctx.loggedOut {
+            lines.append("  " + Theme.faintText("not signed in — run /login to pick a provider"))
+        }
         lines.append("  " + Theme.faintText(shorten(ctx.cwd, to: max(20, width - 4))))
         return lines
     }
@@ -74,7 +80,8 @@ enum WelcomeScreen {
 
     private static func leftColumn(_ ctx: WelcomeContext) -> [String] {
         var col: [String] = []
-        col.append(Theme.bodyText("Welcome back!"))
+        // "Welcome back!" would ring false on a logged-out first run.
+        col.append(Theme.bodyText(ctx.loggedOut ? "Welcome!" : "Welcome back!"))
         col.append("")
         for row in logo { col.append(Theme.gradient(row)) }
         col.append("")
@@ -127,6 +134,9 @@ enum WelcomeScreen {
             }
         }
         lines.append("")
+        if ctx.loggedOut {
+            lines.append("  " + Theme.faintText("not signed in — run /login to pick a provider"))
+        }
         lines.append("  " + Theme.faintText(shorten(ctx.cwd, to: max(20, width - 4))))
         return lines
     }

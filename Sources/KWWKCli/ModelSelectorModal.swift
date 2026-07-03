@@ -3,7 +3,13 @@ import KWWKAI
 
 /// Arrow-key list for picking a `Model` from a fixed menu. Stays visually
 /// minimal — one line per model, current selection flagged with `❯` +
-/// accent color, the already-active model tagged `(current)`.
+/// accent color, the already-active model tagged `(current)`. Selection,
+/// windowing, and rendering live in `ModalListCore`.
+///
+/// With more than one provider group a tab bar renders above the list —
+/// "All" plus one tab per provider — and Tab / ←→ filter the list to a
+/// single provider. With a single provider the tab bar is omitted and the
+/// render is identical to the ungrouped selector.
 @MainActor
 final class ModelSelectorModal: Modal {
     private let title: String
@@ -17,13 +23,18 @@ final class ModelSelectorModal: Modal {
     /// When the same model id appears under several providers, `currentModelId`
     /// alone is ambiguous; this pins the initially-selected row.
     private let currentIndex: Int?
-    private var selectedIndex: Int
-    /// Top display-line of the visible window. Persistent so the list scrolls
-    /// only when the selection crosses an edge (rather than re-centering on
-    /// every keypress).
-    private var scroll = 0
     private let onSelect: @MainActor (Model) -> Void
     private let onCancel: @MainActor () -> Void
+
+    /// Provider tabs: "All" first, then one tab per unique group label in
+    /// first-occurrence (slot) order. Empty when there are fewer than two
+    /// provider groups — the tab bar renders only when it disambiguates.
+    private let tabs: [String]
+    /// Index into `tabs`; 0 is "All".
+    private var activeTab = 0
+    /// Indices into `models` currently listed (filtered by the active tab).
+    private var visible: [Int]
+    private let core: ModalListCore
 
     init(
         title: String,
@@ -36,33 +47,88 @@ final class ModelSelectorModal: Modal {
     ) {
         self.title = title
         self.models = models
-        self.groupLabels = (groupLabels?.count == models.count) ? groupLabels : nil
+        let labels = (groupLabels?.count == models.count) ? groupLabels : nil
+        self.groupLabels = labels
         self.currentModelId = currentModelId
         self.currentIndex = currentIndex
-        // Start on the current row: an explicit index wins, else the first
-        // model matching currentModelId, else the top.
-        self.selectedIndex = currentIndex
-            ?? models.firstIndex(where: { $0.id == currentModelId })
-            ?? 0
         self.onSelect = onSelect
         self.onCancel = onCancel
+
+        // Unique group labels, first occurrence wins, slot order preserved.
+        var unique: [String] = []
+        for label in labels ?? [] where !unique.contains(label) {
+            unique.append(label)
+        }
+        self.tabs = unique.count > 1 ? ["All"] + unique : []
+
+        self.visible = Array(models.indices)
+        // Start on the current row: an explicit index wins, else the first
+        // model matching currentModelId, else the top.
+        let initial = currentIndex
+            ?? models.firstIndex(where: { $0.id == currentModelId })
+            ?? 0
+        self.core = ModalListCore(
+            rows: [],
+            selectedIndex: initial,
+            emptyMessage: "(no models available for this provider)"
+        )
+        core.setRows(rows(for: visible), selectedIndex: initial)
+    }
+
+    // MARK: - Filtering
+
+    /// Index of the active model in `models`, or nil when it isn't listed.
+    private var activeModelIndex: Int? {
+        currentIndex ?? models.firstIndex(where: { $0.id == currentModelId })
+    }
+
+    private func rows(for indices: [Int]) -> [ModalListCore.Row] {
+        let active = activeModelIndex
+        return indices.map { i in
+            ModalListCore.Row(
+                label: models[i].id,
+                detail: models[i].name,
+                // Group headers only make sense on the unfiltered list; a
+                // provider tab already names the single group it shows.
+                group: activeTab == 0 ? groupLabels?[i] : nil,
+                isCurrent: active != nil ? i == active : models[i].id == currentModelId
+            )
+        }
+    }
+
+    /// Re-derive the visible rows for `activeTab`. The active model's row
+    /// stays selected when it is visible under the tab; otherwise selection
+    /// falls back to the first row. Scroll resets with the new row set.
+    private func applyTabFilter() {
+        let indices: [Int]
+        if activeTab == 0 {
+            indices = Array(models.indices)
+        } else {
+            let label = tabs[activeTab]
+            indices = models.indices.filter { groupLabels?[$0] == label }
+        }
+        visible = indices
+        let selected = activeModelIndex.flatMap { indices.firstIndex(of: $0) } ?? 0
+        core.setRows(rows(for: indices), selectedIndex: selected)
+    }
+
+    private func moveTab(_ delta: Int) {
+        guard tabs.count > 1 else { return }
+        activeTab = (activeTab + delta + tabs.count) % tabs.count
+        applyTabFilter()
     }
 
     // MARK: - Modal
 
-    func up() {
-        guard !models.isEmpty else { return }
-        selectedIndex = (selectedIndex - 1 + models.count) % models.count
-    }
-
-    func down() {
-        guard !models.isEmpty else { return }
-        selectedIndex = (selectedIndex + 1) % models.count
-    }
+    func up() { core.up() }
+    func down() { core.down() }
+    func tab() { moveTab(+1) }
+    func left() { moveTab(-1) }
+    func right() { moveTab(+1) }
 
     func confirm() {
-        guard !models.isEmpty, models.indices.contains(selectedIndex) else { return }
-        onSelect(models[selectedIndex])
+        guard !core.isEmpty, visible.indices.contains(core.selectedIndex) else { return }
+        onSelect(models[visible[core.selectedIndex]])
     }
 
     func cancel() {
@@ -70,73 +136,17 @@ final class ModelSelectorModal: Modal {
     }
 
     func render(maxRows: Int) -> [String] {
-        // Cosmetic blank spacers (above the list and above the footer) are
-        // dropped on short terminals so the render stays within `maxRows` —
-        // title + body + footer is the irreducible minimum.
-        let roomy = maxRows >= 9
-        var out: [String] = []
-        if roomy { out.append("") }
-        out.append(Style.header("  \(title)"))
-        guard !models.isEmpty else {
-            if roomy { out.append("") }
-            out.append(Style.dimmed("  (no models available for this provider)"))
-            if roomy { out.append("") }
-            out.append(Style.dimmed("  ↑/↓: move   Enter: confirm   Esc: cancel"))
-            return out
+        core.render(title: title, header: tabBarLine(), maxRows: maxRows)
+    }
+
+    /// One-line provider tab bar (nil when a single provider makes it noise).
+    /// Selected tab in bold accent, the rest dim, plus a dim key hint.
+    private func tabBarLine() -> String? {
+        guard tabs.count > 1 else { return nil }
+        let rendered = tabs.enumerated().map { i, label in
+            i == activeTab ? Theme.accentText(label, bold: true) : Style.dimmed(label)
         }
-
-        // Expand to display lines (group headers interleaved with rows),
-        // tracking where the selected row lands so the window keeps it in view.
-        var lines: [(text: String, isHeader: Bool, group: String?)] = []
-        var selectedLine = 0
-        var lastGroup: String?
-        for (i, model) in models.enumerated() {
-            if let group = groupLabels?[i], group != lastGroup {
-                lines.append((Style.dimmed("  ── \(group) ──"), true, group))
-                lastGroup = group
-            }
-            let selected = i == selectedIndex
-            if selected { selectedLine = lines.count }
-            let prefix = selected ? Style.prompt("  ❯ ") : "    "
-            // Ids repeat across providers, so tag only the exact active row.
-            let isCurrent = currentIndex != nil ? (i == currentIndex) : (model.id == currentModelId)
-            let currentTag = isCurrent ? Style.dimmed("  · current") : ""
-            let body = selected
-                ? Style.prompt(model.id) + "  " + Style.dimmed(model.name)
-                : model.id + "  " + Style.dimmed(model.name)
-            lines.append((prefix + body + currentTag, false, groupLabels?[i]))
-        }
-
-        // Body height budget = total minus chrome. Chrome is title + footer
-        // (2), plus the two blank spacers when roomy (4). Window the list so
-        // the prompt box is never pushed off-screen and the selection stays
-        // reachable — and the whole render stays within `maxRows`.
-        let chrome = roomy ? 4 : 2
-        let bodyBudget = max(1, maxRows - chrome)
-        let windowed = lines.count > bodyBudget
-        // Reserve one line for the synthetic context header we may prepend when
-        // the window opens mid-group, so the scroll window (and therefore the
-        // selected row) is never squeezed out by it.
-        let windowRows = windowed ? max(1, bodyBudget - 1) : bodyBudget
-
-        // Scroll only at the edges.
-        if selectedLine < scroll { scroll = selectedLine }
-        else if selectedLine >= scroll + windowRows { scroll = selectedLine - windowRows + 1 }
-        scroll = max(0, min(scroll, max(0, lines.count - windowRows)))
-
-        var visible = Array(lines[scroll ..< min(lines.count, scroll + windowRows)])
-        // If the window opens mid-group (its header scrolled off), prepend the
-        // active group header for context. The reserved row above keeps this
-        // within budget without dropping the selected row.
-        if windowed, let first = visible.first, !first.isHeader, let group = first.group {
-            visible.insert((Style.dimmed("  ── \(group) ──"), true, group), at: 0)
-        }
-
-        if roomy { out.append("") }
-        for line in visible { out.append(line.text) }
-        if roomy { out.append("") }
-        let move = "↑/↓: move   Enter: confirm   Esc: cancel"
-        out.append(Style.dimmed(windowed ? "  \(selectedIndex + 1)/\(models.count)   \(move)" : "  \(move)"))
-        return out
+        return "  " + rendered.joined(separator: Style.dimmed(" · "))
+            + "   " + Style.dimmed("tab / ←→: filter provider")
     }
 }

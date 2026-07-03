@@ -242,12 +242,10 @@ final class CodingFrame: Component, @unchecked Sendable {
         // has moved above its top or below its bottom, then shift by the minimum.
         // Up/Down thus move the highlight within the window first and only scroll
         // once it reaches an edge.
-        if menuSelection < menuScroll {
-            menuScroll = menuSelection
-        } else if menuSelection >= menuScroll + maxRows {
-            menuScroll = menuSelection - maxRows + 1
-        }
-        menuScroll = max(0, min(menuScroll, max(0, matches.count - maxRows)))
+        menuScroll = edgeScrollOffset(
+            selection: menuSelection, count: matches.count,
+            windowSize: maxRows, previous: menuScroll
+        )
         let start = menuScroll
         let visible = matches[start..<min(matches.count, start + maxRows)]
 

@@ -2,7 +2,7 @@ import Foundation
 
 /// Provider → environment-variable API-key resolution, ported from pi's
 /// `env-api-keys.ts`. Lets an exported `OPENROUTER_API_KEY` / `GROQ_API_KEY` /
-/// etc. drive kwwk without an interactive `kwwk login`, matching pi's behavior
+/// etc. drive kwwk without an interactive `/login`, matching pi's behavior
 /// where env keys are the lowest-priority credential source.
 ///
 /// This reports *API-key* variables only; ambient credential sources (AWS

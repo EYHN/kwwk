@@ -50,6 +50,44 @@ struct TUIResizeTests {
     }
 }
 
+@Suite("TUI clearFrame")
+struct TUIClearFrameTests {
+    @Test("clearFrame erases the live zone in place")
+    func clearFrameErases() async throws {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        tui.addChild(TestLinesComponent(["menu 0", "menu 1", "menu 2"]))
+        tui.start()
+        await terminal.waitForRender()
+        #expect(terminal.getViewport()[0].contains("menu 0"))
+
+        tui.clearFrame()
+        tui.stop()
+        let viewport = terminal.getViewport()
+        #expect(viewport.allSatisfy { !$0.contains("menu") })
+    }
+
+    @Test("a render after clearFrame draws a fresh frame at the cursor")
+    func renderAfterClearFrame() async throws {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        let comp = TestLinesComponent(["old 0", "old 1"])
+        tui.addChild(comp)
+        tui.start()
+        await terminal.waitForRender()
+
+        tui.clearFrame()
+        comp.lines = ["fresh"]
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        let viewport = terminal.getViewport()
+        #expect(viewport[0].contains("fresh"))
+        #expect(viewport.allSatisfy { !$0.contains("old") })
+        tui.stop()
+    }
+}
+
 @Suite("TUI content shrinkage")
 struct TUIShrinkageTests {
     @Test("clears empty rows when content shrinks")
@@ -93,6 +131,58 @@ struct TUIShrinkageTests {
         let viewport = terminal.getViewport()
         #expect(viewport[0].contains("Only line"))
         #expect(viewport[1].trimmingCharacters(in: .whitespaces) == "")
+        tui.stop()
+    }
+}
+
+@Suite("TUI suspend/resume geometry")
+struct TUISuspendResumeTests {
+    /// The full `/login` OAuth handshake, in `TUIRunner.suspend()`/`resume()`
+    /// order: clearFrame + stop hand the terminal to a sub-flow that prints
+    /// its own output where the frame stood; resetFrameGeometryForResume MUST
+    /// run before the next render so it anchors fresh at the cursor instead
+    /// of rewinding `lastFrameHeight` rows over the sub-flow's output.
+    @Test("resume renders a fresh frame below sub-flow output without erasing it")
+    func suspendResumeHandshake() async throws {
+        let terminal = VirtualTerminal(width: 40, height: 12)
+        let tui = TUI(terminal: terminal)
+        let comp = TestLinesComponent(["frame 0", "frame 1", "frame 2"])
+        tui.addChild(comp)
+        tui.start()
+        await terminal.waitForRender()
+        #expect(terminal.getViewport()[0].contains("frame 0"))
+
+        // Suspend: erase the live zone and stop rendering.
+        tui.clearFrame()
+        tui.stop()
+        #expect(terminal.getViewport().allSatisfy { !$0.contains("frame") },
+                "clearFrame must wipe the old frame before the handoff")
+
+        // The sub-flow (OAuth handoff) writes directly to the terminal where
+        // the frame stood.
+        terminal.write("oauth: open this URL\r\n")
+        terminal.write("oauth: waiting for callback\r\n")
+
+        // Resume: geometry reset BEFORE the restart's render.
+        tui.resetFrameGeometryForResume()
+        tui.start()
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        let viewport = terminal.getViewport()
+        let subFlowRow = viewport.lastIndex { $0.contains("oauth:") }
+        let frameTopRow = viewport.firstIndex { $0.contains("frame 0") }
+        // The sub-flow output survived the resume…
+        #expect(viewport.contains { $0.contains("oauth: open this URL") })
+        #expect(viewport.contains { $0.contains("oauth: waiting for callback") })
+        // …and the fresh frame rendered below it, exactly once.
+        let subFlow = try #require(subFlowRow)
+        let frameTop = try #require(frameTopRow)
+        #expect(frameTop > subFlow, "the fresh frame must render below the sub-flow output")
+        #expect(viewport.filter { $0.contains("frame 0") }.count == 1,
+                "the pre-suspend frame must not linger as a duplicate")
+        #expect(viewport[frameTop + 1].contains("frame 1"))
+        #expect(viewport[frameTop + 2].contains("frame 2"))
         tui.stop()
     }
 }

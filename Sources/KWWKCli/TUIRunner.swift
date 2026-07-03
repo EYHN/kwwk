@@ -23,7 +23,6 @@ final class TUIRunner: @unchecked Sendable {
     private var stdin: RawStdin?
     private var stdinBuffer = StdinBuffer()
     private var focused: Component?
-    private var onExit: (@Sendable () -> Void)?
     private var sigintSource: DispatchSourceSignal?
     private var sigtermSource: DispatchSourceSignal?
     private var exitContinuation: CheckedContinuation<Void, Never>?
@@ -43,7 +42,6 @@ final class TUIRunner: @unchecked Sendable {
     private static let escapeFlushDelayMs: Int = 50
 
     init(
-        hideCursor: Bool = false,
         escapeFlushScheduler: EscapeFlushScheduler? = nil
     ) {
         self.terminal = StdoutTerminal()
@@ -64,7 +62,6 @@ final class TUIRunner: @unchecked Sendable {
                 execute: work
             )
         }
-        tui.setHideCursor(hideCursor)
     }
 
     func focus(_ component: Component) {
@@ -76,10 +73,6 @@ final class TUIRunner: @unchecked Sendable {
 
     func bind(_ binding: KeyBinding, _ handler: @escaping @Sendable (KeyEvent) -> Void) {
         keybindings.bind(binding, handler)
-    }
-
-    func setOnExit(_ handler: @escaping @Sendable () -> Void) {
-        lock.withLock { onExit = handler }
     }
 
     /// Start the TUI and suspend until `exit()` runs. Designed to be called
@@ -120,14 +113,22 @@ final class TUIRunner: @unchecked Sendable {
         cont?.resume()
     }
 
-    /// Hand the terminal back for a full-screen sub-flow that runs its own
-    /// runner (the `/login` OAuth handoff spins up a fresh `TUIRunner`). Drops
-    /// raw stdin (restoring cooked termios via `RawStdin.deinit`), leaves the
-    /// input modes, stops the frame, and cancels signal handling so only the
-    /// sub-flow's runner owns SIGINT/SIGTERM. Pair with `resume()`.
+    /// Hand the terminal back for a sub-flow that runs on a cooked terminal
+    /// (the `/login` OAuth handoff: stderr progress plus a cbreak `RawStdin`
+    /// watcher that maps Esc/Ctrl-C to cancellation — see `runOAuthFlow`).
+    /// Drops raw stdin (restoring cooked termios via `RawStdin.deinit`),
+    /// leaves the input modes, stops the frame, and cancels this runner's
+    /// signal sources. SIGINT stays SIG_IGN for the whole suspension — no
+    /// other runner takes it over; cancellation comes from the sub-flow's
+    /// stdin watcher. Pair with `resume()`.
     func suspend() {
         terminal.write("\u{1B}[?2004l")
         terminal.write("\u{1B}[<u")
+        // Erase the live zone (input box + status) before handing over: the
+        // sub-flow renders where the frame stood, and `resume()` repaints a
+        // fresh frame below its output. Leaving the old frame on screen would
+        // freeze it into scrollback as a duplicate input box.
+        tui.clearFrame()
         tui.stop()
         lock.withLock {
             sigintSource?.cancel()
@@ -206,7 +207,6 @@ final class TUIRunner: @unchecked Sendable {
             sigintSource = nil
             sigtermSource = nil
             stdin = nil     // triggers RawStdin deinit → restores termios
-            onExit?()
         }
     }
 
