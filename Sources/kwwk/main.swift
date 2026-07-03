@@ -9,8 +9,7 @@ import KWWKCli
 
 /// `kwwk` — coding-agent CLI. Dispatches on argv:
 ///
-///   kwwk                    → interactive coding TUI (uses creds from `kwwk login`)
-///   kwwk login              → TUI-driven OAuth / API-key login
+///   kwwk                    → interactive coding TUI (sign in via `/login`)
 ///   kwwk -p <prompt>        → one-shot, non-interactive run (stdout = reply)
 ///   kwwk --help             → usage
 ///
@@ -55,8 +54,6 @@ struct KwwkCLI {
                 context1m: context1m,
                 resume: resume
             ) }
-        case "login":
-            await runOrExit { try await KWWK.runLogin() }
         case "-p", "--print":
             await runPrint(
                 rest: Array(args.dropFirst()),
@@ -81,7 +78,6 @@ struct KwwkCLI {
 
         usage:
           kwwk                        launch the interactive coding TUI
-          kwwk login                  log in to an OAuth provider
           kwwk -p <prompt>            run a one-shot prompt and print the reply
           kwwk -p                     read the prompt from stdin
           kwwk --help                 show this message
@@ -107,8 +103,9 @@ struct KwwkCLI {
         append-only log and replayed on resume.
 
         Credentials are read from the OAuth store at ~/.kwwk/oauth.json,
-        with supported API-key environment variables as a fallback. Run
-        `kwwk login` once to register a provider explicitly.
+        with supported API-key environment variables as a fallback. With
+        neither configured, launch kwwk and run /login to sign in to a
+        provider (OAuth subscription or API key).
         """)
     }
 

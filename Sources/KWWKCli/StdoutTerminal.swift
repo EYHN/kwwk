@@ -77,7 +77,11 @@ final class RawStdin: @unchecked Sendable {
     private let fd: Int32
     private let dispatchSource: DispatchSourceRead
 
-    init(handler: @escaping @Sendable (Data) -> Void) throws {
+    /// `cbreak: true` is the light variant for non-TUI waits (the OAuth
+    /// browser handoff): byte-at-a-time input without echo, Ctrl-C delivered
+    /// as 0x03 instead of SIGINT, but output post-processing left on so
+    /// plain "\n"-terminated progress lines still render normally.
+    init(cbreak: Bool = false, handler: @escaping @Sendable (Data) -> Void) throws {
         self.fd = STDIN_FILENO
         var saved = termios()
         if tcgetattr(fd, &saved) != 0 {
@@ -86,10 +90,14 @@ final class RawStdin: @unchecked Sendable {
         self.savedTermios = saved
 
         var raw = saved
-        raw.c_lflag &= ~tcflag_t(ICANON | ECHO | IEXTEN | ISIG)
-        raw.c_iflag &= ~tcflag_t(IXON | ICRNL | BRKINT | INPCK | ISTRIP)
-        raw.c_oflag &= ~tcflag_t(OPOST)
-        raw.c_cflag |= tcflag_t(CS8)
+        if cbreak {
+            raw.c_lflag &= ~tcflag_t(ICANON | ECHO | ISIG)
+        } else {
+            raw.c_lflag &= ~tcflag_t(ICANON | ECHO | IEXTEN | ISIG)
+            raw.c_iflag &= ~tcflag_t(IXON | ICRNL | BRKINT | INPCK | ISTRIP)
+            raw.c_oflag &= ~tcflag_t(OPOST)
+            raw.c_cflag |= tcflag_t(CS8)
+        }
         if tcsetattr(fd, TCSANOW, &raw) != 0 {
             throw RawStdinError.cannotSetAttr
         }

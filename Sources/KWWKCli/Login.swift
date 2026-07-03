@@ -1,24 +1,24 @@
 import Foundation
 import KWWKAI
 
-/// Flow the login selector should run after the user picks an entry. OAuth
-/// entries dispatch to the browser-based PKCE flow; `apiKey` entries drop
-/// into a small TUI form asking for the key (and optionally base URL /
-/// default model), persisted to the same `OAuthStore` under a sentinel
+/// Flow a picked `/login` entry runs. OAuth entries dispatch to the
+/// browser-based PKCE flow (TUI suspended for the handoff); `apiKey` entries
+/// open an in-session `FormModal` asking for the key (and optionally base
+/// URL / default model), persisted to the same `OAuthStore` under a sentinel
 /// credentials shape (`refresh=""`, `expires=Int64.max`).
-private enum LoginFlow {
+enum LoginFlow {
     case oauth
-    case apiKey(storeId: String, fields: [APIKeyFormField], extrasKeys: [String])
+    case apiKey(fields: [APIKeyFormField], extrasKeys: [String])
 }
 
-private struct LoginEntry {
+struct LoginEntry {
     let id: String
     let display: String
     let flow: LoginFlow
 }
 
-/// Providers shown in the `kwwk login` selector. Order is display order.
-private let loginProviders: [LoginEntry] = [
+/// Providers shown in the `/login` picker. Order is display order.
+let loginProviders: [LoginEntry] = [
     LoginEntry(
         id: "openai-codex",
         display: "ChatGPT Codex (OpenAI Plus/Pro subscription)",
@@ -38,7 +38,6 @@ private let loginProviders: [LoginEntry] = [
         id: "anthropic-api-key",
         display: "Anthropic API key (api.anthropic.com)",
         flow: .apiKey(
-            storeId: "anthropic-api-key",
             fields: [
                 APIKeyFormField(
                     key: "apiKey",
@@ -63,7 +62,6 @@ private let loginProviders: [LoginEntry] = [
         id: "openai-api-key",
         display: "OpenAI API key (api.openai.com)",
         flow: .apiKey(
-            storeId: "openai-api-key",
             fields: [
                 APIKeyFormField(
                     key: "apiKey",
@@ -88,7 +86,6 @@ private let loginProviders: [LoginEntry] = [
         id: "google-api-key",
         display: "Google AI Studio API key (Gemini direct)",
         flow: .apiKey(
-            storeId: "google-api-key",
             fields: [
                 APIKeyFormField(
                     key: "apiKey",
@@ -110,10 +107,32 @@ private let loginProviders: [LoginEntry] = [
         )
     ),
     LoginEntry(
-        id: "openai-compatible",
-        display: "OpenAI-compatible endpoint (OpenRouter, vLLM, etc.)",
+        id: "openrouter",
+        display: "OpenRouter API key (openrouter.ai)",
         flow: .apiKey(
-            storeId: "openai-compatible",
+            fields: [
+                APIKeyFormField(
+                    key: "apiKey",
+                    label: "API key",
+                    hint: "from openrouter.ai/keys",
+                    placeholder: "sk-or-v1-…",
+                    required: true
+                ),
+                APIKeyFormField(
+                    key: "defaultModel",
+                    label: "Default model id",
+                    hint: "(optional)",
+                    placeholder: "anthropic/claude-sonnet-5",
+                    required: false
+                ),
+            ],
+            extrasKeys: ["defaultModel"]
+        )
+    ),
+    LoginEntry(
+        id: "openai-compatible",
+        display: "OpenAI-compatible endpoint (vLLM, custom proxies, etc.)",
+        flow: .apiKey(
             fields: [
                 APIKeyFormField(
                     key: "apiKey",
@@ -155,153 +174,59 @@ enum LoginError: Error, LocalizedError {
     }
 }
 
-/// Interactive `kwwk login`:
-///   1. Arrow-key selector over the known providers (OAuth + API-key).
-///   2. Enter → tear down the TUI and run the chosen entry's flow:
-///      OAuth = browser PKCE / device flow; API-key = small TUI form.
-///   3. Persist the resulting credentials additively — other providers stay
-///      logged in so the user can keep several accounts and switch between
-///      them with `/model` / `/login`. Re-logging the same provider just
-///      refreshes its entry.
-///
-/// The TUI is intentionally torn down before the OAuth flow begins so that
-/// the browser handoff + stderr progress logs don't fight the raw-mode
-/// terminal.
-/// Returns the OAuth-store id the credentials were saved under (e.g.
-/// `anthropic`, `openai-codex`, `anthropic-api-key`), so an in-session
-/// `/login` caller can activate exactly that provider.
-@discardableResult
-func runLoginInternal() async throws -> String {
-    let choice = try await selectProviderTUI()
-    return try await runLoginFlow(entry: choice)
+/// Human title for an API-key entry's `FormModal`, from the entry's
+/// `ProviderDescriptor.formTitle`. Falls back to the raw entry id for any
+/// future entry without a nicer name.
+func loginFormTitle(for entry: LoginEntry) -> String {
+    "Log in — " + (providerDescriptor(forStoreId: entry.id)?.formTitle ?? entry.id)
 }
 
-// MARK: - Selector TUI
+// MARK: - OAuth flow (TUI suspended)
 
-/// Small arrow-key selector built on top of TUIRunner. Returns the chosen
-/// entry, or throws `.cancelled` if the user hits Esc / Ctrl-C.
-@MainActor
-private func selectProviderTUI() async throws -> LoginEntry {
-    let runner = TUIRunner(hideCursor: true)
-
-    let header = TextComponent([
-        Style.header("✻ kwwk login"),
-        Style.dimmed("  choose a provider to log in"),
-        "",
-    ])
-    let menu = TextComponent([])
-    let footer = TextComponent([
-        "",
-        Style.dimmed("  ↑/↓: move   Enter: select   Esc/Ctrl-C: cancel"),
-    ])
-
-    let state = SelectorState(count: loginProviders.count)
-
-    renderSelectorMenu(into: menu, state: state)
-
-    runner.tui.addChild(header)
-    runner.tui.addChild(menu)
-    runner.tui.addChild(footer)
-
-    runner.bind(.init("up")) { _ in
-        Task { @MainActor in
-            state.selectedIndex = (state.selectedIndex - 1 + loginProviders.count) % loginProviders.count
-            renderSelectorMenu(into: menu, state: state)
-            runner.tui.requestRender()
-        }
-    }
-    runner.bind(.init("down")) { _ in
-        Task { @MainActor in
-            state.selectedIndex = (state.selectedIndex + 1) % loginProviders.count
-            renderSelectorMenu(into: menu, state: state)
-            runner.tui.requestRender()
-        }
-    }
-    runner.bind(.init("enter")) { _ in
-        Task { @MainActor in
-            state.submit(state.selectedIndex)
-            runner.exit()
-        }
-    }
-    runner.bind(.init("escape")) { _ in
-        Task { @MainActor in
-            state.cancel()
-            runner.exit()
-        }
-    }
-    runner.bind(.ctrl("c")) { _ in
-        Task { @MainActor in
-            state.cancel()
-            runner.exit()
-        }
-    }
-
-    try await runner.run()
-
-    guard let idx = state.chosen else { throw LoginError.cancelled }
-    return loginProviders[idx]
-}
-
-/// Mutable state shared between the key handlers and the caller.
-@MainActor
-private final class SelectorState {
-    var selectedIndex: Int = 0
-    var chosen: Int?
-    let count: Int
-    init(count: Int) { self.count = count }
-    func submit(_ index: Int) { chosen = index }
-    func cancel() { chosen = nil }
-}
-
-/// Regenerate the `menu` component's line strings based on the current
-/// `state.selectedIndex`. Pulled out as a module-level function (rather than a
-/// nested `func` inside `selectProviderTUI`) so the `@Sendable` key-binding
-/// closures can invoke it without capturing a non-Sendable function
-/// reference.
-@MainActor
-private func renderSelectorMenu(into menu: TextComponent, state: SelectorState) {
-    menu.lines = loginProviders.enumerated().map { i, provider in
-        let marker = i == state.selectedIndex ? Style.prompt("  ❯ ") : "    "
-        let label  = i == state.selectedIndex ? Style.prompt(provider.display) : provider.display
-        return marker + label
-    }
-    menu.invalidate()
-}
-
-// MARK: - Flow dispatch
-
-private func runLoginFlow(entry: LoginEntry) async throws -> String {
-    switch entry.flow {
-    case .oauth:
-        try await runOAuthFlow(providerId: entry.id)
-        return entry.id
-    case .apiKey(let storeId, let fields, let extrasKeys):
-        try await runAPIKeyFlow(
-            providerId: entry.id,
-            storeId: storeId,
-            fields: fields,
-            extrasKeys: extrasKeys
-        )
-        return storeId
-    }
-}
-
-private func runOAuthFlow(providerId: String) async throws {
+/// Browser-based OAuth login for `providerId`. Runs with the coding TUI
+/// suspended (cooked terminal): the handoff prints progress to stderr and a
+/// cbreak stdin watcher makes Esc / Ctrl-C cancel the flow. Persists the
+/// credentials (with a stdout confirmation — the terminal is ours here) and,
+/// for Copilot, runs the one-shot model policy enable.
+func runOAuthFlow(providerId: String) async throws {
     // Clear a line so the OAuth progress logs start fresh below the TUI.
-    FileHandle.standardError.write(Data("\nstarting \(providerId) login…\n".utf8))
+    FileHandle.standardError.write(Data("starting \(providerId) login…  (Esc/Ctrl-C to cancel)\n".utf8))
 
-    let credentials: OAuthCredentials
-    do {
+    let flow = Task {
         switch providerId {
         case "anthropic":
-            credentials = try await OAuthLogin.loginAnthropic()
+            return try await OAuthLogin.loginAnthropic()
         case "openai-codex":
-            credentials = try await OAuthLogin.loginOpenAICodex()
+            return try await OAuthLogin.loginOpenAICodex()
         case "github-copilot":
-            credentials = try await OAuthLogin.loginGitHubCopilot()
+            return try await OAuthLogin.loginGitHubCopilot()
         default:
             throw LoginError.unknownProvider(providerId)
         }
+    }
+    // While the browser handoff / device-code poll runs there is no TUI and
+    // SIGINT is still ignored (the suspended coding TUI's runner set SIG_IGN
+    // and only paused its own dispatch source), so without this watcher the
+    // flow is un-cancellable. cbreak stdin delivers Esc as 0x1B and Ctrl-C as
+    // 0x03; either cancels the login task, which unblocks the callback
+    // server / device poll with a `CancellationError`.
+    let watcher = try? RawStdin(cbreak: true) { data in
+        if data.contains(0x1B) || data.contains(0x03) {
+            flow.cancel()
+        }
+    }
+    // Keep the watcher (and its termios override) alive until the flow
+    // resolves; deinit at scope exit restores cooked mode before the main
+    // TUI resumes and installs its own raw stdin.
+    defer { _ = watcher }
+
+    let credentials: OAuthCredentials
+    do {
+        credentials = try await flow.value
+    } catch is CancellationError {
+        throw LoginError.cancelled
+    } catch let error as LoginError {
+        throw error
     } catch {
         throw LoginError.oauthFailed(error.localizedDescription)
     }
@@ -359,61 +284,64 @@ private func runCopilotPolicyEnable() async {
     )
 }
 
-/// API-key flow: show a form TUI, pack the result into `OAuthCredentials`
-/// (access = api key, refresh = "" sentinel, expires = Int64.max "never"),
-/// and persist.
-@MainActor
-private func runAPIKeyFlow(
-    providerId: String,
-    storeId: String,
-    fields: [APIKeyFormField],
-    extrasKeys: [String]
-) async throws {
-    let title = "kwwk login — " + {
-        switch providerId {
-        case "anthropic-api-key": return "Anthropic API key"
-        case "openai-api-key": return "OpenAI API key"
-        case "google-api-key": return "Google AI Studio API key"
-        case "openai-compatible": return "OpenAI-compatible endpoint"
-        default: return providerId
-        }
-    }()
+// MARK: - Credential persistence
 
-    let values = try await runAPIKeyForm(title: title, fields: fields)
-    guard let apiKey = values["apiKey"], !apiKey.isEmpty else {
-        throw LoginError.oauthFailed("API key required")
-    }
+/// Pack API-key form values into the sentinel `OAuthCredentials` shape
+/// (access = api key, refresh = "" , expires = Int64.max "never"), lifting
+/// each non-empty `extrasKeys` value into `extras`. Returns nil when the
+/// required `apiKey` value is missing/empty.
+func apiKeyCredentials(values: [String: String], extrasKeys: [String]) -> OAuthCredentials? {
+    guard let apiKey = values["apiKey"], !apiKey.isEmpty else { return nil }
     var extras: [String: JSONValue] = [:]
     for key in extrasKeys {
         if let v = values[key], !v.isEmpty {
             extras[key] = .string(v)
         }
     }
-    let credentials = OAuthCredentials(
-        access: apiKey,
-        refresh: "",
-        expires: .max,
-        extras: extras
-    )
-    try await persistCredentials(credentials, providerId: storeId)
+    return OAuthCredentials(access: apiKey, refresh: "", expires: .max, extras: extras)
+}
+
+/// What `saveCredentials` wrote, for the caller to present: the store path
+/// and the other providers still logged in alongside the new one.
+struct SavedLogin {
+    let path: String
+    let otherProviderIds: [String]
 }
 
 /// Save `credentials` under `providerId`, **keeping** any other providers
 /// already in the store (additive multi-login). Logging into the same
 /// provider again overwrites just that entry (re-auth / token refresh).
-/// Prints a confirmation line and lists the other providers still logged in.
+/// Pure persistence — no terminal output. The suspended OAuth path presents
+/// the result on stdout (`persistCredentials`); the in-session API-key modal
+/// path surfaces the same info via `ctx.notify` so nothing prints while the
+/// TUI is live.
+@discardableResult
+func saveCredentials(
+    _ credentials: OAuthCredentials,
+    providerId: String,
+    store: OAuthStore
+) async throws -> SavedLogin {
+    let others = await store.all().keys.filter { $0 != providerId }.sorted()
+    try await store.set(credentials, for: providerId)
+    return SavedLogin(path: await store.url.path, otherProviderIds: others)
+}
+
+/// OAuth-path persistence: save to the default store and print a
+/// confirmation. Only called while the TUI is suspended (cooked terminal),
+/// so stdout is safe here.
 private func persistCredentials(
     _ credentials: OAuthCredentials,
     providerId: String
 ) async throws {
-    let store = OAuthStore(url: OAuthStore.defaultURL())
-    let others = await store.all().keys.filter { $0 != providerId }.sorted()
-    try await store.set(credentials, for: providerId)
-    let path = await store.url.path
+    let saved = try await saveCredentials(
+        credentials,
+        providerId: providerId,
+        store: OAuthStore(url: OAuthStore.defaultURL())
+    )
     print("")
     print(Style.prompt("✓ saved \(providerId) credentials"))
-    print(Style.dimmed("  → \(path)"))
-    if !others.isEmpty {
-        print(Style.dimmed("  (also logged in: \(others.joined(separator: ", ")) — switch with /model or /login)"))
+    print(Style.dimmed("  → \(saved.path)"))
+    if !saved.otherProviderIds.isEmpty {
+        print(Style.dimmed("  (also logged in: \(saved.otherProviderIds.joined(separator: ", ")) — switch with /model or /login)"))
     }
 }

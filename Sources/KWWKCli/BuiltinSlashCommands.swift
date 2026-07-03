@@ -3,8 +3,9 @@ import KWWKAI
 import KWWKAgent
 
 /// Register the V1 set of builtin slash commands on `registry`. Keep these
-/// focused on things a user actually needs mid-session; heavier flows
-/// (login, config persistence) live on the `kwwk` binary instead.
+/// focused on things a user actually needs mid-session — including `/login`,
+/// which is the only way to add a provider (there is no standalone login
+/// subcommand).
 @MainActor
 func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
     registry.register(SlashCommand(
@@ -112,6 +113,16 @@ private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
     let current = ctx.agent.state.model
     let slots = ctx.sessionProviders.slots
 
+    // Logged-out session (sentinel model, no slots): the fallback below would
+    // list nothing useful — point at /login instead. The extra
+    // `current.provider.isEmpty` clause keeps the headless/test fallback
+    // below alive: a REAL model with no session slots (isLoggedOut, but not
+    // the sentinel) still gets its own provider's catalog listed.
+    if ctx.sessionProviders.isLoggedOut && current.provider.isEmpty {
+        ctx.notify(Style.dimmed("  /model: no provider configured — /login to sign in"))
+        return
+    }
+
     // Build a flat, provider-grouped list of routed models. Each entry carries
     // a model already stamped with its provider's routing (via `adoptFields`),
     // so selection is a straight assignment.
@@ -166,7 +177,7 @@ private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
             if picked.id == previous.id && !switchedProvider {
                 notifyBlock([Style.dimmed("  /model: already on \(picked.id)")])
             } else if switchedProvider {
-                notifyBlock([Style.dimmed("  /model: switched to \(picked.id) · \(providerDisplayName(forCatalogScope: picked.provider))")])
+                notifyBlock([Style.dimmed("  /model: switched to \(picked.id) · \(ProviderAttribution.getProviderDisplayName(picked.provider))")])
             } else {
                 notifyBlock([Style.dimmed("  /model: switched \(previous.id) → \(picked.id)")])
             }
@@ -179,24 +190,9 @@ private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
     ctx.modal.open(modal)
 }
 
-/// Best-effort human label for a live `model.provider` scope, for the
-/// `/model` switch confirmation. Falls back to the raw scope.
-@MainActor
-func providerDisplayName(forCatalogScope scope: String) -> String {
-    switch scope {
-    case "chatgpt-codex": return "ChatGPT Codex"
-    case "anthropic": return "Anthropic"
-    case "openai": return "OpenAI"
-    case "google": return "Google"
-    case "github-copilot": return "GitHub Copilot"
-    case "openai-compatible": return "OpenAI-compatible"
-    default: return scope
-    }
-}
-
 // MARK: - /login  ·  /logout
 
-/// Captures the result of the suspended login sub-flow (the `withSuspendedTUI`
+/// Captures the result of the suspended OAuth sub-flow (the `withSuspendedTUI`
 /// body returns Void, so we thread the outcome through a box).
 @MainActor
 private final class LoginResultBox {
@@ -204,20 +200,81 @@ private final class LoginResultBox {
     var error: String?
 }
 
-/// `/login` — suspends the coding TUI, runs the full `kwwk login` flow
-/// (provider selector → browser OAuth / API-key form), and — crucially —
-/// **keeps** any existing logins. The freshly-authenticated provider is
-/// registered live and becomes available to `/model` without a restart.
+/// `/login` — opens the provider picker as a modal (same look and feel as
+/// `/model`). Picking an API-key entry opens a `FormModal` in place, so the
+/// whole credential flow stays inside the live TUI; picking an OAuth entry
+/// closes the modal and suspends the TUI for the browser handoff (which
+/// needs a cooked terminal for its stderr progress + Esc/Ctrl-C watcher).
+/// Successful logins are additive — existing providers stay registered and
+/// the fresh one becomes available to `/model` without a restart. A
+/// logged-out session activates the new provider as the live model.
 @MainActor
 private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
     guard let authResolvers = ctx.authResolvers else {
         ctx.notify(Style.error("  /login: not available in this session"))
         return
     }
+    let picker = ListSelectorModal(
+        title: "Log in to a provider",
+        items: loginProviders.map { ListSelectorModal.Item(label: $0.display) },
+        onSelect: { [modal = ctx.modal] index in
+            let entry = loginProviders[index]
+            switch entry.flow {
+            case .oauth:
+                modal.close()
+                Task { @MainActor in
+                    await runOAuthLoginSuspended(
+                        providerId: entry.id, ctx: ctx, authResolvers: authResolvers
+                    )
+                }
+            case .apiKey(let fields, let extrasKeys):
+                let storeId = entry.id
+                // Replace the picker with the credential form (ModalHost.open
+                // swaps the active modal in place).
+                modal.open(FormModal(
+                    title: loginFormTitle(for: entry),
+                    fields: fields,
+                    onSubmit: { values in
+                        modal.close()
+                        Task { @MainActor in
+                            await completeAPIKeyLogin(
+                                values: values,
+                                storeId: storeId,
+                                extrasKeys: extrasKeys,
+                                ctx: ctx,
+                                authResolvers: authResolvers,
+                                store: OAuthStore(url: OAuthStore.defaultURL())
+                            )
+                        }
+                    },
+                    onCancel: {
+                        modal.close()
+                        ctx.notify(Style.dimmed("  /login: login cancelled"))
+                    }
+                ))
+            }
+        },
+        onCancel: { [modal = ctx.modal] in
+            modal.close()
+            ctx.notify(Style.dimmed("  /login: login cancelled"))
+        }
+    )
+    ctx.modal.open(picker)
+}
+
+/// OAuth leg of `/login`: suspend the TUI, run the browser flow (which
+/// persists credentials itself), then register the fresh provider live.
+@MainActor
+private func runOAuthLoginSuspended(
+    providerId: String,
+    ctx: SlashContext,
+    authResolvers: SessionAuthResolvers
+) async {
     let box = LoginResultBox()
     await ctx.withSuspendedTUI {
         do {
-            box.storeId = try await runLoginInternal()
+            try await runOAuthFlow(providerId: providerId)
+            box.storeId = providerId
         } catch {
             box.error = error.localizedDescription
         }
@@ -227,10 +284,54 @@ private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
         ctx.notify(Style.dimmed("  /login: \(err)"))
         return
     }
-    guard let storeId = box.storeId else {
-        ctx.notify(Style.dimmed("  /login: no provider logged in"))
+    guard let storeId = box.storeId else { return }
+    await activateFreshLogin(storeId: storeId, ctx: ctx, authResolvers: authResolvers)
+}
+
+/// API-key leg of `/login`: pack the submitted form values into sentinel
+/// credentials, persist them (no stdout — the TUI is live; confirmation goes
+/// through `ctx.notify`), then register the fresh provider live. `store` is
+/// injectable so tests can point it at a temp file instead of the user's
+/// real `~/.kwwk/oauth.json`.
+@MainActor
+func completeAPIKeyLogin(
+    values: [String: String],
+    storeId: String,
+    extrasKeys: [String],
+    ctx: SlashContext,
+    authResolvers: SessionAuthResolvers,
+    store: OAuthStore
+) async {
+    guard let credentials = apiKeyCredentials(values: values, extrasKeys: extrasKeys) else {
+        ctx.notify(Style.error("  /login: API key required"))
         return
     }
+    let saved: SavedLogin
+    do {
+        saved = try await saveCredentials(credentials, providerId: storeId, store: store)
+    } catch {
+        ctx.notify(Style.error("  /login: couldn't save credentials: \(error.localizedDescription)"))
+        return
+    }
+    var lines = [Style.dimmed("  /login: saved \(storeId) credentials → \(saved.path)")]
+    if !saved.otherProviderIds.isEmpty {
+        lines.append(Style.dimmed("    (also logged in: \(saved.otherProviderIds.joined(separator: ", ")))"))
+    }
+    ctx.notifyBlock(lines)
+    await activateFreshLogin(storeId: storeId, ctx: ctx, authResolvers: authResolvers, store: store)
+}
+
+/// Shared post-login registration for both `/login` legs: same-scope dedup,
+/// live registration, session-slot upsert, and — when this is the first
+/// provider of a logged-out session — activation of the fresh provider as
+/// the live model so the user can prompt immediately.
+@MainActor
+func activateFreshLogin(
+    storeId: String,
+    ctx: SlashContext,
+    authResolvers: SessionAuthResolvers,
+    store: OAuthStore? = nil
+) async {
     // Same-scope dedup, mirroring launch-time registerAllStored: two store ids
     // can share one wire scope (Anthropic OAuth + Anthropic API key both →
     // `anthropic`). Don't let a second same-scope login clobber the active
@@ -251,22 +352,37 @@ private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
         return
     }
     guard let slot = await registerStoredProviderLive(
-        storeId: storeId, authResolvers: authResolvers
+        storeId: storeId, authResolvers: authResolvers, context1m: ctx.context1m, store: store
     ) else {
         ctx.notify(Style.error("  /login: '\(storeId)' logged in but couldn't be activated"))
         return
     }
+    let wasLoggedOut = ctx.sessionProviders.slots.isEmpty
     ctx.sessionProviders.upsert(slot)
-    ctx.notify(Style.dimmed("  /login: \(slot.displayName) ready — /model to switch to it"))
+    if wasLoggedOut {
+        // First login of a logged-out session: replace the sentinel model so
+        // the user can prompt without an extra /model trip.
+        ctx.agent.state.model = slot.template
+        ctx.notify(Style.dimmed("  /login: \(slot.displayName) ready — now on \(slot.template.id)"))
+    } else {
+        ctx.notify(Style.dimmed("  /login: \(slot.displayName) ready — /model to switch to it"))
+    }
 }
 
 /// `/logout` — with no argument lists the logged-in providers; with a provider
 /// id removes that login (from disk + this session's routing). Falls back to
-/// another logged-in provider if the active one is removed.
+/// another logged-in provider if the active one is removed, or back to the
+/// logged-out sentinel state when the last provider goes.
 @MainActor
 private func handleLogoutCommand(_ ctx: SlashContext, _ args: String) async {
+    await performLogout(ctx, args, store: OAuthStore(url: OAuthStore.defaultURL()))
+}
+
+/// `/logout` body with the credential store injected, so tests can drive it
+/// against a temp file instead of the user's real `~/.kwwk/oauth.json`.
+@MainActor
+func performLogout(_ ctx: SlashContext, _ args: String, store: OAuthStore) async {
     let target = args.trimmingCharacters(in: .whitespacesAndNewlines)
-    let store = OAuthStore(url: OAuthStore.defaultURL())
     let all = await store.all()
     if all.isEmpty {
         ctx.notify(Style.dimmed("  /logout: no stored logins (running on env keys or none)"))
@@ -312,28 +428,20 @@ private func handleLogoutCommand(_ ctx: SlashContext, _ args: String) async {
     // If the removed provider was the one in use, switch to a survivor so the
     // next request doesn't hit a now-unregistered provider. (A same-vendor
     // login still on disk isn't re-homed this session — it's available on the
-    // next launch, where priority order re-registers it.)
+    // next launch, where priority order re-registers it.) With no survivor
+    // the session returns to the logged-out sentinel state: prompt submission
+    // and /model are gated on the empty slot list, and the next /login
+    // re-activates a live model.
     if ctx.agent.state.model.provider == scope {
         if let next = ctx.sessionProviders.slots.first {
             ctx.agent.state.model = next.template
             ctx.notify(Style.dimmed("  /logout: removed \(target); now on \(next.template.id) · \(next.displayName)"))
         } else {
-            ctx.notify(Style.error("  /logout: removed \(target) — no providers left; /login to add one"))
+            ctx.agent.state.model = loggedOutModel
+            ctx.notify(Style.dimmed("  /logout: removed \(target) — no providers left; /login to sign in"))
         }
     } else {
         ctx.notify(Style.dimmed("  /logout: removed \(target)"))
-    }
-}
-
-/// Map an in-session agent `Model.provider` to the key used in
-/// `ModelsCatalog.byProvider`. They're mostly identical except for Codex:
-/// the chatgpt.com variant registers as `chatgpt-codex` on the agent side,
-/// while the catalog lists its models under `openai-codex`.
-/// Internal (not private) so regression tests can pin the mapping.
-func catalogProviderKey(forAgentProvider provider: String) -> String {
-    switch provider {
-    case "chatgpt-codex": return "openai-codex"
-    default: return provider
     }
 }
 
@@ -380,7 +488,9 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
             cost: picked.cost,
             contextWindow: picked.contextWindow,
             maxTokens: picked.maxTokens,
-            headers: picked.headers
+            headers: picked.headers,
+            compat: picked.compat,
+            thinkingLevelMap: picked.thinkingLevelMap
         )
     }
     let resolvedMaxTokens = current.maxTokens == 0 ? 0 : picked.maxTokens
@@ -395,7 +505,9 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
         cost: picked.cost,
         contextWindow: picked.contextWindow,
         maxTokens: resolvedMaxTokens,
-        headers: current.headers
+        headers: current.headers,
+        compat: picked.compat,
+        thinkingLevelMap: picked.thinkingLevelMap
     )
 }
 
@@ -786,6 +898,7 @@ private func handleHotkeysCommand(_ ctx: SlashContext, _ args: String) async {
     let rows: [(String, String)] = [
         ("Enter", "submit prompt / run highlighted slash command"),
         ("Tab", "complete the slash command under the cursor"),
+        ("Tab / ← / →", "switch the provider tab in /model"),
         ("↑ / ↓", "recall prompt history · move in popups"),
         ("Alt/Option+↑", "pop a queued prompt back into the input to edit"),
         ("Esc", "stop the agent (and close an open popup/modal)"),

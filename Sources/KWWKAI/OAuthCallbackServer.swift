@@ -70,23 +70,30 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     }
 
     /// Resolve with whichever completes first: a callback request (query
-    /// parameters) or `cancel()` (throws `CancellationError`).
+    /// parameters), `cancel()`, or cancellation of the surrounding task —
+    /// the latter two throw `CancellationError`. Task-cancellation awareness
+    /// is what lets a login UI abort a browser handoff the user never
+    /// completes.
     public func waitForCallback() async throws -> [String: String] {
         try start()
-        return try await withCheckedThrowingContinuation { cont in
-            lock.lock()
-            if resolved {
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                lock.lock()
+                if resolved {
+                    lock.unlock()
+                    cont.resume(throwing: OAuthError.transport("callback server already resolved"))
+                    return
+                }
+                if cancelled {
+                    lock.unlock()
+                    cont.resume(throwing: CancellationError())
+                    return
+                }
+                continuation = cont
                 lock.unlock()
-                cont.resume(throwing: OAuthError.transport("callback server already resolved"))
-                return
             }
-            if cancelled {
-                lock.unlock()
-                cont.resume(throwing: CancellationError())
-                return
-            }
-            continuation = cont
-            lock.unlock()
+        } onCancel: {
+            cancel()
         }
     }
 

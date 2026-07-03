@@ -18,6 +18,7 @@ func runCodingTUIInternal(
     authResolvers: SessionAuthResolvers? = nil,
     autoCompactThreshold: Double? = 0.75,
     thinkingLevel: ThinkingLevel = .medium,
+    context1m: Bool = false,
     resume: SessionResume = .none
 ) async throws {
     // --- agent + background manager -------------------------------------
@@ -117,39 +118,6 @@ func runCodingTUIInternal(
             ? baseSystemPrompt + "\n\n" + GoalMode.activeContext(objective: snap.objective)
             : baseSystemPrompt
     }
-    // Start one hidden continuation turn from idle. Delivered via `prompt` (not
-    // steer+continue): `continue()` only runs when the last message is an
-    // assistant reply, so a goal started in a fresh session — no messages yet —
-    // would silently queue forever. `prompt` starts a turn from any state; the
-    // marker in the text keeps it out of the visible transcript (see
-    // TranscriptRenderer). We wait for runLifecycle teardown first so a kick at
-    // .agentEnd doesn't collide with the just-ending run (`alreadyRunning`).
-    // This is the ONLY site that increments the cap counter, so agentEnd /
-    // `/goal set` / `/goal resume` all share one path.
-    let kickGoalContinuation: @MainActor @Sendable () -> Void = {
-        Task.detached {
-            await agent.waitForIdle()
-            // Re-check on the far side of the idle wait: `/goal off`, a cap
-            // pause, completion, or a replaced objective may have landed while
-            // we waited. Read the current objective so we never fire a stale
-            // one. This narrows — but cannot fully close — the check-then-prompt
-            // window: if `/goal off` lands between here and `prompt()` below, at
-            // most one continuation runs, and its own `.agentEnd` then sees the
-            // goal inactive and stops. That single self-healing turn is
-            // acceptable versus the complexity of an abortable atomic start.
-            let snap = goalStore.snapshot()
-            guard snap.status == .active else { return }
-            goalStore.recordAutoContinue()
-            do {
-                try await agent.prompt(GoalMode.continuationText(objective: snap.objective))
-            } catch {
-                // Lost the race to a user prompt / another kick (alreadyRunning)
-                // — no turn started, so don't spend a cap slot on it.
-                goalStore.undoAutoContinue()
-            }
-        }
-    }
-
     // --- TUI (inline, native-scroll) ------------------------------------
     //
     // Coding renders inline. Settled transcript
@@ -158,7 +126,7 @@ func runCodingTUIInternal(
     // history with the trackpad. Only the live zone — running tool blocks,
     // the slash popup, and the prompt box — is redrawn in place each frame
     // by `frame`.
-    let runner = TUIRunner(hideCursor: false)
+    let runner = TUIRunner()
     let renderer = TranscriptRenderer()
     renderer.displayWidth = runner.terminal.width
     let frame = CodingFrame(viewportHeight: runner.terminal.height)
@@ -178,19 +146,40 @@ func runCodingTUIInternal(
             messageCount: info.messageCount
         )
     }
+    // Providers logged in this session — read by `/model` to list + route
+    // across accounts, mutated by `/login` / `/logout`. Created up front so
+    // the welcome header and the goal-continuation gate read live login state.
+    let sessionProviders = SessionProviders(providerSlots)
+
+    // Logged-out start: no provider slots and the sentinel model. The welcome
+    // card and prompt breadcrumb swap in a "/login to sign in" hint instead
+    // of rendering the sentinel's empty id.
+    let launchedLoggedOut = providerSlots.isEmpty && model.provider.isEmpty
     let welcomeCtx = WelcomeContext(
         version: KWWKBuild.version,
-        modelId: model.id,
-        providerName: ProviderAttribution.getProviderDisplayName(model.provider),
+        modelId: launchedLoggedOut ? "no provider" : model.id,
+        providerName: launchedLoggedOut
+            ? "not signed in"
+            : ProviderAttribution.getProviderDisplayName(model.provider),
         cwd: cwd,
         branch: gitBranch,
-        recentSessions: Array(recent)
+        recentSessions: Array(recent),
+        loggedOut: launchedLoggedOut
     )
     // The welcome card is a re-renderable header (not committed text): it
     // prints once into scrollback on the first frame and is re-rendered at
-    // the new width on resize so its box re-fits cleanly.
+    // the new width on resize so its box re-fits cleanly. It renders from a
+    // live snapshot, NOT the launch context: a resize full-repaint after
+    // `/login`, `/logout`, or a `/model` switch must not re-print a stale
+    // "not signed in" banner or model id. Sync contract: `headerProvider` is
+    // @Sendable and runs on the render path, so it never reads @MainActor
+    // state directly — it reads the lock-protected `WelcomeHeaderState`
+    // snapshot, which `updateFrameStatus` (the MainActor choke point every
+    // login/logout/model-switch notification already funnels through)
+    // refreshes before each repaint.
+    let welcomeHeader = WelcomeHeaderState(welcomeCtx)
     runner.tui.headerProvider = { width in
-        WelcomeScreen.render(welcomeCtx, width: width) + [""]
+        WelcomeScreen.render(welcomeHeader.snapshot(), width: width) + [""]
     }
     if resolvedResume.resumed {
         runner.tui.commit([
@@ -200,7 +189,9 @@ func runCodingTUIInternal(
     }
 
     runner.tui.addChild(frame)
-    runner.focus(frame.promptRow)
+    // Focus is installed below (after the modal host exists) via a
+    // ModalInputRouter that offers raw input to an open modal before the
+    // prompt row.
 
     // Paste plumbing: `onPaste` is called whenever the terminal
     // delivers a bracketed-paste sequence. We route it through the
@@ -246,6 +237,17 @@ func runCodingTUIInternal(
         frame.queuedPrompts = agent.queuedSteeringMessages().map { queuedPromptPreview($0) }
         // Slash commands are idle-only; mirror that into the popup footer hint.
         frame.isBusy = agent.state.isStreaming
+        // Keep the re-renderable welcome header in sync with live login/model
+        // state (same composite condition as the launch banner) so a resize
+        // repaint after /login, /logout, or /model reflects the current state.
+        var header = welcomeCtx
+        let loggedOut = sessionProviders.isLoggedOut && agent.state.model.provider.isEmpty
+        header.loggedOut = loggedOut
+        header.modelId = loggedOut ? "no provider" : agent.state.model.id
+        header.providerName = loggedOut
+            ? "not signed in"
+            : ProviderAttribution.getProviderDisplayName(agent.state.model.provider)
+        welcomeHeader.update(header)
     }
 
     let recomputeTranscript: @MainActor @Sendable () -> Void = {
@@ -271,6 +273,14 @@ func runCodingTUIInternal(
         // the prompt box + a margin; queried per redraw so it tracks resizes.
         availableRows: { max(4, runner.terminal.height - 4) }
     )
+
+    // Focus target: a thin router in front of the prompt row. While a modal
+    // is open, typed input (and the unbound ←/→ arrows) is offered to the
+    // modal first — form modals consume it, list modals decline and it falls
+    // through to the prompt editor exactly as before. With no modal open the
+    // router is a transparent pass-through, so prompt focus/cursor behavior
+    // is unchanged.
+    runner.focus(ModalInputRouter(host: modal, fallback: frame.promptRow))
 
     _ = runner.terminal.onResize { w, h in
         Task { @MainActor in
@@ -302,6 +312,58 @@ func runCodingTUIInternal(
             return true
         }
         return false
+    }
+
+    // Start one hidden continuation turn from idle. Delivered via `prompt` (not
+    // steer+continue): `continue()` only runs when the last message is an
+    // assistant reply, so a goal started in a fresh session — no messages yet —
+    // would silently queue forever. `prompt` starts a turn from any state; the
+    // marker in the text keeps it out of the visible transcript (see
+    // TranscriptRenderer). We wait for runLifecycle teardown first so a kick at
+    // .agentEnd doesn't collide with the just-ending run (`alreadyRunning`).
+    // This is the ONLY site that increments the cap counter, so agentEnd /
+    // `/goal set` / `/goal resume` all share one path.
+    let goalLoggedOutHint = GoalLoggedOutHintState()
+    let kickGoalContinuation: @MainActor @Sendable () -> Void = {
+        // Logged-out gate: with no registered provider a continuation turn on
+        // the sentinel model can only die with a provider error. Guarding at
+        // the single kick site covers every entry path — .agentEnd inject,
+        // `/goal set`, `/goal resume` — including a goal that outlives its
+        // provider (`/logout` of the last one mid-goal). The hint prints at
+        // most once per logged-out stretch so repeated kicks don't spam.
+        guard !sessionProviders.isLoggedOut else {
+            if !goalLoggedOutHint.shown {
+                goalLoggedOutHint.shown = true
+                runner.tui.commit([
+                    "",
+                    Style.dimmed("  goal: no provider configured — /login to sign in"),
+                ])
+                runner.tui.requestRender()
+            }
+            return
+        }
+        goalLoggedOutHint.shown = false
+        Task.detached {
+            await agent.waitForIdle()
+            // Re-check on the far side of the idle wait: `/goal off`, a cap
+            // pause, completion, or a replaced objective may have landed while
+            // we waited. Read the current objective so we never fire a stale
+            // one. This narrows — but cannot fully close — the check-then-prompt
+            // window: if `/goal off` lands between here and `prompt()` below, at
+            // most one continuation runs, and its own `.agentEnd` then sees the
+            // goal inactive and stops. That single self-healing turn is
+            // acceptable versus the complexity of an abortable atomic start.
+            let snap = goalStore.snapshot()
+            guard snap.status == .active else { return }
+            goalStore.recordAutoContinue()
+            do {
+                try await agent.prompt(GoalMode.continuationText(objective: snap.objective))
+            } catch {
+                // Lost the race to a user prompt / another kick (alreadyRunning)
+                // — no turn started, so don't spend a cap slot on it.
+                goalStore.undoAutoContinue()
+            }
+        }
     }
 
     var isAutoCompacting = false
@@ -513,200 +575,28 @@ func runCodingTUIInternal(
     // the invocation args and submit it as an ordinary prompt.
     CustomSlashCommandLoader.register(into: slashRegistry, cwd: cwd)
 
-    // `/resume` — restore a previous session into the running TUI. Opens an
-    // arrow-key picker; on confirm it repoints persistence at the chosen
-    // session file, swaps the agent's message history, and repaints a recap.
-    slashRegistry.register(SlashCommand(
-        name: "resume",
-        description: "Restore a previous session",
-        handler: { _, _ in
-            let sessions = await sessionStore.list()
-            let picker = SessionResumeModal(
-                sessions: sessions,
-                currentSessionId: recorderBox.sessionId,
-                onSelect: { info in
-                    Task { @MainActor in
-                        let loaded = await sessionStore.resolveResume(.id(info.id), cwd: cwd)
-
-                        // Repoint persistence at the restored session.
-                        recorderBox.unsubscribe()
-                        let recorder = SessionRecorder(
-                            store: sessionStore,
-                            sessionId: info.id,
-                            cwd: cwd,
-                            model: agent.state.model.id,
-                            provider: agent.state.model.provider,
-                            persistedCount: loaded.persistedCount
-                        )
-                        recorderBox.recorder = recorder
-                        recorderBox.unsubscribe = recorder.attach(to: agent)
-                        recorderBox.sessionId = info.id
-
-                        // Swap the live context + commit a readable recap to
-                        // scrollback. Native scrollback can't be cleared, so
-                        // the prior conversation stays above and the restored
-                        // one is appended below a labeled separator.
-                        agent.state.messages = loaded.messages
-                        // Clear per-session transient state so a pending /retry,
-                        // queued steer, attachment, or dequeue cursor from the
-                        // outgoing session can't leak into the restored one.
-                        resetSessionTransientState(
-                            agent: agent,
-                            retry: retry,
-                            attachments: attachments,
-                            dequeueCycle: dequeueCycle
-                        )
-                        // Goals are session-scoped: drop the outgoing session's
-                        // goal and strip its <goal_context> so it can't drive the
-                        // restored session. A pending continuation kick re-checks
-                        // goalStore after its idle wait and bails once inactive.
-                        goalStore.stop()
-                        applyGoalContext()
-                        var recap: [String] = [
-                            "",
-                            Theme.borderText(String(repeating: "─", count: max(8, runner.terminal.width - 2))),
-                            Theme.accentText("↻ resumed session \(info.id.prefix(8)) · \(loaded.messages.count) messages", bold: false),
-                        ]
-                        let snapshot = TranscriptSnapshot.render(loaded.messages, width: runner.terminal.width)
-                        if !snapshot.isEmpty { recap.append(contentsOf: [""] + snapshot) }
-                        runner.tui.commit(recap)
-
-                        modal.close()
-                        recomputeTranscript()
-                        updateFrameStatus()
-                        runner.tui.requestRender()
-                    }
-                },
-                onCancel: { modal.close() }
-            )
-            modal.open(picker)
-        }
-    ))
-
-    // `/new` (alias `/clear`) — start a fresh, empty session mid-run without
-    // leaving the TUI. Mirrors `/resume`'s persistence hot-swap but mints a
-    // brand-new id and clears the live context instead of loading one.
-    slashRegistry.register(SlashCommand(
-        name: "new",
-        description: "Start a fresh session",
-        aliases: ["clear"],
-        handler: { _, _ in
-            // A fresh session starts with no goal — drop any active one (and its
-            // <goal_context>) before minting the new id so it can't carry over.
-            goalStore.stop()
-            applyGoalContext()
-            await performNewSession(
-                recorderBox: recorderBox,
-                sessionStore: sessionStore,
-                agent: agent,
-                cwd: cwd,
-                attachments: attachments,
-                retry: retry,
-                dequeueCycle: dequeueCycle,
-                frame: frame,
-                width: runner.terminal.width,
-                commit: { runner.tui.commit($0) },
-                recompute: recomputeTranscript,
-                updateStatus: updateFrameStatus,
-                requestRender: { runner.tui.requestRender() }
-            )
-        }
-    ))
-
-    // `/retry` — resubmit the last prompt when its turn ended in error or was
-    // aborted. Idle-gated by the dispatcher; resubmission goes through the
-    // normal streaming path so queued/steer UI behaves identically.
-    slashRegistry.register(SlashCommand(
-        name: "retry",
-        description: "Resubmit the last failed/aborted prompt",
-        handler: { ctx, _ in
-            guard retry.failed, let text = retry.lastText else {
-                ctx.notify(Style.dimmed("  /retry: nothing to retry"))
-                return
-            }
-            ctx.notify(Style.dimmed("  ↻ retrying…"))
-            submitBuiltPrompt(text, retry.lastImages)
-        }
-    ))
-
-    // `/goal` — autonomous goal mode (in-memory, session-scoped).
-    //   /goal <text>      set + start the objective (kicks the loop)
-    //   /goal             show the current goal
-    //   /goal off|stop    clear the goal
-    //   /goal resume      un-pause after the guardrail cap tripped
-    slashRegistry.register(SlashCommand(
-        name: "goal",
-        description: "Set/show/stop an autonomous goal the agent pursues across turns",
-        handler: { ctx, args in
-            let arg = args.trimmingCharacters(in: .whitespacesAndNewlines)
-            let lower = arg.lowercased()
-
-            // Show current goal.
-            if arg.isEmpty {
-                let s = goalStore.snapshot()
-                switch s.status {
-                case .active:
-                    ctx.notify(Style.dimmed("  🎯 goal (active): \(s.objective)"))
-                case .paused:
-                    ctx.notify(Style.dimmed("  🎯 goal (paused — cap hit): \(s.objective) · /goal resume to keep going"))
-                case .complete:
-                    ctx.notify(Style.dimmed("  🎯 goal: complete"))
-                case .dropped:
-                    ctx.notify(Style.dimmed("  /goal: no active goal — /goal <objective> to start one"))
-                }
-                return
-            }
-
-            // Stop / clear.
-            if lower == "off" || lower == "stop" {
-                goalStore.stop()
-                // A continuation kick already in flight re-checks goalStore after
-                // its idle wait and bails when the goal isn't active, so stopping
-                // here is enough — no need to touch the user's steering queue.
-                applyGoalContext()
-                updateFrameStatus()
-                runner.tui.requestRender()
-                ctx.notify(Style.dimmed("  🎯 goal cleared"))
-                return
-            }
-
-            // Resume after a cap pause.
-            if lower == "resume" {
-                let s = goalStore.snapshot()
-                guard s.status == .paused else {
-                    ctx.notify(Style.dimmed("  /goal resume: no paused goal to resume"))
-                    return
-                }
-                goalStore.resume()
-                applyGoalContext()
-                updateFrameStatus()
-                runner.tui.requestRender()
-                ctx.notify(Style.dimmed("  🎯 goal resumed"))
-                if !agent.state.isStreaming { kickGoalContinuation() }
-                return
-            }
-
-            // Set + start a new objective. Clamp its length first so a pasted
-            // mega-string can't bloat the system prompt / every continuation.
-            // Any continuation kick still pending from a prior objective re-checks
-            // goalStore after its idle wait and picks up this new objective (or
-            // bails), so there's nothing to drop.
-            var objective = arg
-            if objective.count > GoalMode.maxObjectiveChars {
-                objective = String(objective.prefix(GoalMode.maxObjectiveChars))
-                ctx.notify(Style.dimmed("  /goal: objective truncated to \(GoalMode.maxObjectiveChars) characters"))
-            }
-            goalStore.start(objective)
-            applyGoalContext()
-            updateFrameStatus()
-            runner.tui.requestRender()
-            // Echo a bounded preview — the full objective can be long.
-            let echo = objective.count > 120 ? String(objective.prefix(120)) + "…" : objective
-            ctx.notify(Style.dimmed("  🎯 goal set: \(echo)"))
-            // Kick the loop now if idle; otherwise the running turn already sees
-            // the ACTIVE context and its .agentEnd will continue.
-            if !agent.state.isStreaming { kickGoalContinuation() }
-        }
+    // `/resume`, `/new`, `/retry`, `/goal` — session-lifecycle commands. Their
+    // handlers close over live session state (recorder box, goal store, retry
+    // record) and the TUI's repaint closures; see SessionSlashCommands.swift.
+    registerSessionSlashCommands(slashRegistry, ctx: SessionCommandContext(
+        agent: agent,
+        modal: modal,
+        frame: frame,
+        cwd: cwd,
+        sessionStore: sessionStore,
+        recorderBox: recorderBox,
+        goalStore: goalStore,
+        retry: retry,
+        attachments: attachments,
+        dequeueCycle: dequeueCycle,
+        terminalWidth: { runner.terminal.width },
+        commit: { runner.tui.commit($0) },
+        requestRender: { runner.tui.requestRender() },
+        recomputeTranscript: recomputeTranscript,
+        updateFrameStatus: updateFrameStatus,
+        applyGoalContext: applyGoalContext,
+        kickGoalContinuation: kickGoalContinuation,
+        submitBuiltPrompt: submitBuiltPrompt
     ))
 
     let slashCommandInfos = slashRegistry.all.map {
@@ -721,9 +611,6 @@ func runCodingTUIInternal(
         guard !frame.slashMenuActive else { return nil }
         return slashCompletion(for: input, commands: slashCommandInfos)?.suffix
     }
-    // Providers logged in this session — read by `/model` to list + route
-    // across accounts, mutated by `/login` / `/logout`.
-    let sessionProviders = SessionProviders(providerSlots)
     let slashContext = SlashContext(
         agent: agent,
         modal: modal,
@@ -763,10 +650,13 @@ func runCodingTUIInternal(
         },
         sessionProviders: sessionProviders,
         authResolvers: authResolvers,
+        context1m: context1m,
         withSuspendedTUI: { body in
-            // Release the terminal so a full-screen sub-flow (the `/login`
-            // OAuth handoff, which runs its own TUIRunner) owns it cleanly,
-            // then repaint the coding frame when it returns.
+            // Release the terminal so the `/login` OAuth handoff can run on a
+            // cooked terminal — stderr progress plus a cbreak RawStdin watcher
+            // that maps Esc/Ctrl-C to cancellation (see `runOAuthFlow`); no
+            // second TUIRunner is involved and SIGINT stays SIG_IGN throughout
+            // — then repaint the coding frame when it returns.
             runner.suspend()
             await body()
             try? runner.resume()
@@ -804,6 +694,21 @@ func runCodingTUIInternal(
 
             let parsed = SlashInput.parse(text)
             let busy = agent.state.isStreaming || isAutoCompacting
+
+            // Logged-out gate: with no registered provider a prompt has
+            // nowhere to route — surface the /login hint instead of letting
+            // agent.prompt fail on the sentinel model. The typed text stays
+            // in the input so it survives the /login round-trip; slash
+            // commands (notably /login itself) pass through.
+            if case .prompt = parsed,
+               gatePromptWhenLoggedOut(
+                   sessionProviders: sessionProviders,
+                   commit: { runner.tui.commit($0) }
+               ) {
+                updateFrameStatus()
+                runner.tui.requestRender()
+                return
+            }
 
             // Slash commands are idle-only. If the agent is mid-turn
             // we can't reliably run them (some mutate agent state, all
@@ -909,9 +814,14 @@ func runCodingTUIInternal(
         }
     }
 
+    // Tab. Modal open → the modal decides (tab-bar cycling / field focus);
+    // otherwise slash-menu completion, then literal insert, as before.
     runner.bind(.init("tab")) { _ in
         Task { @MainActor in
-            guard !modal.isOpen else { return }
+            if modal.isOpen {
+                modal.routeTab()
+                return
+            }
             // Slash popup open → complete to the highlighted command (which
             // may differ from the alphabetically-first ghost completion).
             if frame.slashMenuActive, let name = frame.selectedSlashCommandName() {
@@ -1030,10 +940,6 @@ func runCodingTUIInternal(
                     retry.failed = true
                 }
                 retry.trackedActive = false
-                runner.tui.commit([
-                    "",
-                    Style.dimmed("  aborting…"),
-                ])
                 updateFrameStatus()
                 runner.tui.requestRender()
                 return
@@ -1108,6 +1014,37 @@ func runCodingTUIInternal(
 }
 
 // MARK: - Helpers
+
+/// Lock-protected snapshot of the welcome card's context, bridging the
+/// MainActor (where login/logout/model-switch state changes) and the render
+/// path (where the @Sendable `headerProvider` re-renders the header on a
+/// resize full-repaint). Writers call `update` from the MainActor; readers
+/// take an immutable copy under the lock — no unsynchronized MainActor reads.
+final class WelcomeHeaderState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var context: WelcomeContext
+
+    init(_ context: WelcomeContext) {
+        self.context = context
+    }
+
+    func update(_ context: WelcomeContext) {
+        lock.withLock { self.context = context }
+    }
+
+    func snapshot() -> WelcomeContext {
+        lock.withLock { context }
+    }
+}
+
+/// Whether the goal-continuation loop's logged-out "/login" hint has already
+/// been shown for the current logged-out stretch. Reference type so the
+/// @MainActor `kickGoalContinuation` closure can mutate it (a captured `var`
+/// is rejected under Swift 6 strict concurrency).
+@MainActor
+final class GoalLoggedOutHintState {
+    var shown = false
+}
 
 /// Mutable holder for the live session recorder + its agent subscription.
 /// `/resume` swaps both to repoint persistence at the restored session file;
@@ -1353,10 +1290,31 @@ func dequeueCycleStep(input: String, state: DequeueCycleState, agent: Agent) -> 
     return queuedMessageBodyText(msg).replacingOccurrences(of: "\n", with: " ")
 }
 
+/// Gate a prompt submission when the session has no registered provider
+/// (logged-out): commits a "/login to sign in" notice and returns true, in
+/// which case the caller must not start a turn. Returns false (no output)
+/// whenever at least one provider slot exists. Extracted from the Enter
+/// keybinding so the gate is unit-testable.
+@MainActor
+func gatePromptWhenLoggedOut(
+    sessionProviders: SessionProviders,
+    commit: ([String]) -> Void
+) -> Bool {
+    guard sessionProviders.isLoggedOut else { return false }
+    commit([
+        "",
+        Style.dimmed("  no provider configured — /login to sign in"),
+    ])
+    return true
+}
+
 /// Top-border breadcrumb for the prompt box: the live model id, then the
-/// git branch when inside a repo. Already styled.
+/// git branch when inside a repo. Already styled. The logged-out sentinel
+/// (empty id) renders a "/login" hint instead of a blank label.
 private func promptBreadcrumb(model: Model, branch: String?) -> String {
-    var out = Theme.accentText(model.id, bold: false)
+    var out = model.id.isEmpty
+        ? Theme.faintText(loggedOutModelLabel)
+        : Theme.accentText(model.id, bold: false)
     if let branch, !branch.isEmpty {
         out += Theme.faintText("  ⎇ \(branch)")
     }

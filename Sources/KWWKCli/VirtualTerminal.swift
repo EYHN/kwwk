@@ -196,6 +196,16 @@ final class VirtualTerminal: Terminal, @unchecked Sendable {
             if first == 2 {
                 // Clear visible screen
                 for r in 0..<height { grid[r] = Array(repeating: " ", count: width) }
+            } else if first == 0 {
+                // Clear from cursor to end of screen
+                if row >= 0 && row < height {
+                    if col < width {
+                        for c in col..<width { grid[row][c] = " " }
+                    }
+                    for r in (row + 1)..<height {
+                        grid[r] = Array(repeating: " ", count: width)
+                    }
+                }
             }
             // 3 → clear scrollback (no-op in mock)
         case "K":

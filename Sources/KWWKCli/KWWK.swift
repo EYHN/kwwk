@@ -2,8 +2,8 @@ import Foundation
 import KWWKAgent
 
 /// Public entry points for the `kwwk` binary. Everything else in KWWKCli is
-/// internal — external consumers drive the CLI through these three
-/// functions. All three work on macOS and Linux: the OAuth callback server
+/// internal — external consumers drive the CLI through these two
+/// functions. Both work on macOS and Linux: the OAuth callback server
 /// is backed by SwiftNIO and the browser launcher falls back to `xdg-open`
 /// off-Apple, so no entry point is platform-gated.
 public enum KWWK {
@@ -13,8 +13,10 @@ public enum KWWK {
     ///
     /// Credentials are resolved automatically from the OAuth store
     /// (`~/.kwwk/oauth.json`) and then supported API-key environment
-    /// variables. Throws `AuthResolveError.noCredentials` with a message
-    /// pointing at `kwwk login` if none are configured.
+    /// variables. With none configured the TUI still starts, in a
+    /// logged-out state: prompt submission is gated behind a "/login to
+    /// sign in" notice, and running `/login` registers a provider live —
+    /// no restart needed.
     ///
     /// `tools` controls which coding tools the agent is given. Default is
     /// `.all` — read/write/edit/bash/grep/find/ls/task_status/wait_task.
@@ -37,10 +39,26 @@ public enum KWWK {
         resume: SessionResume = .none
     ) async throws {
         let workDir = cwd ?? FileManager.default.currentDirectoryPath
-        let resolved = try await resolveAgentAuth(
-            modelOverride: modelOverride,
-            context1m: context1m
-        )
+        let resolved: ResolvedAuth
+        do {
+            resolved = try await resolveAgentAuth(
+                modelOverride: modelOverride,
+                context1m: context1m
+            )
+        } catch AuthResolveError.noCredentials {
+            // Logged-out start: sentinel model, no provider slots, and a
+            // fresh resolver map so the first in-session `/login` can
+            // install its provider's token resolver without an agent
+            // rebuild. The TUI gates prompting on the empty slot list.
+            let authResolvers = SessionAuthResolvers()
+            resolved = ResolvedAuth(
+                model: loggedOutModel,
+                modelLabel: loggedOutModelLabel,
+                authResolver: authResolvers.delegatingResolver(),
+                providerSlots: [],
+                authResolvers: authResolvers
+            )
+        }
         try await runCodingTUIInternal(
             model: resolved.model,
             modelLabel: resolved.modelLabel,
@@ -52,18 +70,9 @@ public enum KWWK {
             authResolvers: resolved.authResolvers,
             autoCompactThreshold: autoCompactThreshold,
             thinkingLevel: thinkingLevel,
+            context1m: context1m,
             resume: resume
         )
-    }
-
-    /// Launch the interactive `kwwk login` flow: TUI selector over the
-    /// supported providers → browser OAuth or API-key form → persist
-    /// credentials to `~/.kwwk/oauth.json`. Works on macOS and Linux
-    /// (callback server runs on SwiftNIO; browser launcher uses
-    /// `/usr/bin/open` on macOS, `xdg-open` on Linux, and falls back to
-    /// printing the URL to stderr if neither is available).
-    public static func runLogin() async throws {
-        try await runLoginInternal()
     }
 
     /// One-shot, non-interactive coding-agent run. Backs the `kwwk -p <prompt>`
@@ -78,10 +87,11 @@ public enum KWWK {
     ///     one-line message to stderr;
     ///   - returns `0` on a clean stop, `1` on error / aborted / length-capped.
     ///
-    /// Credentials are resolved the same way as `runCodingTUI`: the OAuth
-    /// store at `~/.kwwk/oauth.json` first, then supported API-key
-    /// environment variables. Throws `AuthResolveError.noCredentials` with
-    /// a hint pointing at `kwwk login` if none are configured.
+    /// Credentials are resolved from the OAuth store at `~/.kwwk/oauth.json`
+    /// first, then supported API-key environment variables. Unlike
+    /// `runCodingTUI` there is no logged-out fallback — headless runs throw
+    /// `AuthResolveError.noCredentials` (launch `kwwk` and run `/login`, or
+    /// export a supported API key) when none are configured.
     public static func runHeadless(
         prompt: String,
         cwd: String? = nil,

@@ -3,7 +3,9 @@
 A Swift-native coding agent with two faces:
 
 - **`kwwk`** — an interactive coding CLI (TUI) that drives your existing
-  Anthropic, ChatGPT (Codex), Gemini, or GitHub Copilot subscription.
+  Anthropic, ChatGPT (Codex), or GitHub Copilot subscription — or an API
+  key for Anthropic, OpenAI, Google (Gemini), OpenRouter, or any
+  OpenAI-compatible endpoint.
 - **`KWWKAgent` / `KWWKAI`** — the agent runtime underneath, exposed as
   SwiftPM libraries so you can embed it in your own app, build custom
   tools, or swap the LLM provider.
@@ -36,15 +38,15 @@ cp .build/release/kwwk /usr/local/bin/
 
 ```
 kwwk              launch the interactive coding TUI
-kwwk login        log in to an OAuth provider
 kwwk --help       show this message
 ```
 
 Credentials come from the OAuth store at `~/.kwwk/oauth.json`; if no login
-exists, the CLI checks supported API-key environment variables. Run
-`kwwk login` once to register a provider explicitly (OAuth subscription
-like ChatGPT Codex, Gemini, Copilot, or Claude Code; or an API key for
-Anthropic, OpenAI, Google, or any OpenAI-compatible endpoint).
+exists, the CLI checks supported API-key environment variables. With
+neither configured, kwwk starts logged out — launch it and run `/login`
+to sign in to a provider (OAuth subscription like ChatGPT Codex, Copilot,
+or Claude Code; or an API key for Anthropic, OpenAI, Google (Gemini),
+OpenRouter, or any OpenAI-compatible endpoint).
 
 Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,
@@ -347,7 +349,7 @@ OpenRouter) there are `Models.xaiGrok(id:)`, `Models.groq(id:)`,
 
 To use a subscription (OAuth) token instead of a raw API key, drive the
 flow via `KWWKAI.OAuth` / `OAuthLogin` — the same code path the CLI's
-`kwwk login` command uses.
+in-session `/login` command uses.
 
 ### Updating the model catalog
 

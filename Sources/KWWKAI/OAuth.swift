@@ -25,6 +25,21 @@ public struct OAuthCredentials: Codable, Sendable, Hashable {
         self.extras = extras
     }
 
+    /// Tolerate a missing `extras` key (hand-edited stores commonly omit
+    /// it) — without this, one entry lacking `extras` fails the whole
+    /// `[String: OAuthCredentials]` decode and silently drops every login.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        access = try c.decode(String.self, forKey: .access)
+        refresh = try c.decode(String.self, forKey: .refresh)
+        expires = try c.decode(Int64.self, forKey: .expires)
+        extras = try c.decodeIfPresent([String: JSONValue].self, forKey: .extras) ?? [:]
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case access, refresh, expires, extras
+    }
+
     public var isExpired: Bool {
         Int64(Date().timeIntervalSince1970 * 1000) >= expires
     }

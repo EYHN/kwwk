@@ -2,13 +2,14 @@ import Foundation
 import KWWKAgent
 
 /// Arrow-key list for `/resume` — pick a prior session to restore into the
-/// running TUI. Rows show the working directory, relative age, and message
-/// count; the live session (if present in the list) is tagged `· current`.
+/// running TUI. Rows show the session title (or working-directory basename),
+/// relative age, and message count; the live session (if present in the list)
+/// is tagged `· current`. Selection, windowing, and rendering live in
+/// `ModalListCore`.
 @MainActor
 final class SessionResumeModal: Modal {
     private let sessions: [SessionStore.SessionInfo]
-    private let currentSessionId: String
-    private var selectedIndex = 0
+    private let core: ModalListCore
     private let onSelect: @MainActor (SessionStore.SessionInfo) -> Void
     private let onCancel: @MainActor () -> Void
 
@@ -19,63 +20,37 @@ final class SessionResumeModal: Modal {
         onCancel: @MainActor @escaping () -> Void
     ) {
         self.sessions = sessions
-        self.currentSessionId = currentSessionId
         self.onSelect = onSelect
         self.onCancel = onCancel
-    }
-
-    func up() {
-        guard !sessions.isEmpty else { return }
-        selectedIndex = (selectedIndex - 1 + sessions.count) % sessions.count
-    }
-
-    func down() {
-        guard !sessions.isEmpty else { return }
-        selectedIndex = (selectedIndex + 1) % sessions.count
-    }
-
-    func confirm() {
-        guard sessions.indices.contains(selectedIndex) else { return }
-        onSelect(sessions[selectedIndex])
-    }
-
-    func cancel() { onCancel() }
-
-    func render(maxRows: Int) -> [String] {
-        // Drop the cosmetic blank spacers on short terminals so the render
-        // stays within `maxRows` (title + body + footer is the minimum).
-        let roomy = maxRows >= 9
-        var out: [String] = []
-        if roomy { out.append("") }
-        out.append(Theme.accentText("  Resume a session"))
-        if roomy { out.append("") }
-        if sessions.isEmpty {
-            out.append(Theme.faintText("  no saved sessions for this project yet"))
-        } else {
-            // Window the list so a long history stays on screen — sized to the
-            // terminal (chrome: title + footer, plus two blanks when roomy).
-            let rows = max(1, maxRows - (roomy ? 4 : 2))
-            var start = 0
-            if selectedIndex >= rows { start = selectedIndex - rows + 1 }
-            start = min(start, max(0, sessions.count - rows))
-            for i in start..<min(sessions.count, start + rows) {
-                let info = sessions[i]
-                let selected = i == selectedIndex
-                let marker = selected ? Theme.accentText("  ❯ ", bold: false) : "    "
+        self.core = ModalListCore(
+            rows: sessions.map { info in
                 let base = (info.cwd as NSString).lastPathComponent
                 let dir = base.isEmpty ? info.cwd : base
                 // Prefer a user-set title (from /rename); fall back to the dir.
                 let label = info.title?.isEmpty == false ? info.title! : dir
                 let age = WelcomeScreen.relativeTime(fromMillis: info.updatedAt)
                 let count = "\(info.messageCount) msg\(info.messageCount == 1 ? "" : "s")"
-                let name = selected ? Theme.accentText(label, bold: true) : Theme.bodyText(label)
-                let meta = Theme.faintText("· \(age) · \(count)")
-                let current = info.id == currentSessionId ? Theme.faintText("  · current") : ""
-                out.append(marker + name + "  " + meta + current)
-            }
-        }
-        if roomy { out.append("") }
-        out.append(Theme.faintText("  ↑/↓ move · ↵ resume · Esc cancel"))
-        return out
+                return ModalListCore.Row(
+                    label: label,
+                    detail: "· \(age) · \(count)",
+                    isCurrent: info.id == currentSessionId
+                )
+            },
+            emptyMessage: "no saved sessions for this project yet"
+        )
+    }
+
+    func up() { core.up() }
+    func down() { core.down() }
+
+    func confirm() {
+        guard !core.isEmpty, sessions.indices.contains(core.selectedIndex) else { return }
+        onSelect(sessions[core.selectedIndex])
+    }
+
+    func cancel() { onCancel() }
+
+    func render(maxRows: Int) -> [String] {
+        core.render(title: "Resume a session", maxRows: maxRows)
     }
 }

@@ -28,6 +28,12 @@ struct ProviderSlot: Sendable {
 final class SessionProviders {
     private(set) var slots: [ProviderSlot]
 
+    /// The session's logged-out invariant: no provider slot is registered.
+    /// Single predicate shared by the prompt gate, `/goal`, `/model`, and the
+    /// goal-continuation loop so they can never drift onto different
+    /// definitions of "logged out".
+    var isLoggedOut: Bool { slots.isEmpty }
+
     init(_ slots: [ProviderSlot] = []) {
         self.slots = slots
     }
@@ -79,24 +85,5 @@ actor SessionAuthResolvers {
     /// agent's `authResolver`.
     nonisolated func delegatingResolver() -> @Sendable (Model, String?) async -> ResolvedProviderAuth? {
         { model, sid in await self.resolve(model, sid) }
-    }
-}
-
-/// Human-readable label for a stored provider id, shown in the `/model`
-/// group header and `/login` / `/logout` listings.
-func providerDisplayName(forStoreId storeId: String) -> String {
-    switch storeId {
-    case "anthropic": return "Anthropic (Claude Pro/Max)"
-    case "openai-codex": return "ChatGPT Codex"
-    case "github-copilot": return "GitHub Copilot"
-    case "anthropic-api-key": return "Anthropic (API key)"
-    case "openai-api-key": return "OpenAI (API key)"
-    case "google-api-key": return "Google AI Studio"
-    case "openai-compatible": return "OpenAI-compatible"
-    default:
-        if storeId.hasPrefix("env:") {
-            return String(storeId.dropFirst(4)) + " (env)"
-        }
-        return storeId
     }
 }

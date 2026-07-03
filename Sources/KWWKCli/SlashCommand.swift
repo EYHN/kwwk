@@ -77,6 +77,11 @@ final class SlashContext {
     /// Mutable resolver map the agent delegates to; `/login` installs a
     /// newly-authenticated provider's resolver here. Nil in headless/tests.
     let authResolvers: SessionAuthResolvers?
+    /// Launch-time `--context-1m` flag. `/login` forwards it into
+    /// `registerStoredProviderLive` so a provider added mid-session (including
+    /// the first login of a logged-out session) still opts into the Anthropic
+    /// 1M-context beta. False in headless/test contexts that don't wire it up.
+    let context1m: Bool
     /// Suspend the coding TUI (release raw stdin + terminal modes), run
     /// `body` with the terminal in cooked state (for a full-screen sub-flow
     /// like the `/login` OAuth handoff), then restore the TUI and repaint.
@@ -95,6 +100,7 @@ final class SlashContext {
         setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in },
         sessionProviders: SessionProviders = SessionProviders(),
         authResolvers: SessionAuthResolvers? = nil,
+        context1m: Bool = false,
         withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() }
     ) {
         self.agent = agent
@@ -108,6 +114,7 @@ final class SlashContext {
         self.setSessionTitle = setSessionTitle
         self.sessionProviders = sessionProviders
         self.authResolvers = authResolvers
+        self.context1m = context1m
         self.withSuspendedTUI = withSuspendedTUI
     }
 
