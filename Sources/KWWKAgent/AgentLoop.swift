@@ -415,21 +415,45 @@ public enum AgentLoop {
 
     private static let maxRetries = 5
 
-    private static func isRetryableError(_ message: String) -> Bool {
+    /// Whether a stream error looks transient enough to replay the turn.
+    /// Ordered like omp's classifier: timeouts always win, then retryable
+    /// HTTP statuses, then a validation short-circuit (a permanent 4xx-style
+    /// failure must not retry even if it also mentions "connection"), then
+    /// transport/overload patterns.
+    static func isRetryableError(_ message: String) -> Bool {
         let lower = message.lowercased()
-        return lower.contains("timeout")
-            || lower.contains("network")
-            || lower.contains("connection")
-            || lower.contains("429")
-            || lower.contains("rate limit")
-            || lower.contains("too many requests")
-            || lower.contains("502")
-            || lower.contains("503")
-            || lower.contains("504")
-            || lower.contains("internal server error")
-            || lower.contains("service unavailable")
-            || lower.contains("bad gateway")
-            || lower.contains("gateway timeout")
+
+        if lower.contains("timeout") || lower.contains("timed out") {
+            return true
+        }
+
+        for status in ["408", "429", "502", "503", "504", "529"] where lower.contains(status) {
+            return true
+        }
+
+        for fatal in [
+            "invalid", "validation", "bad request", "unsupported", "schema",
+            "missing required", "not found", "unauthorized", "forbidden",
+        ] where lower.contains(fatal) {
+            return false
+        }
+
+        // "connect" covers connection/connected/disconnect — including
+        // POSIX ENOTCONN's "Socket is not connected", which URLSession
+        // surfaces as an NSPOSIXErrorDomain error. "closed before" covers
+        // a WebSocket the server dropped mid-response.
+        for transient in [
+            "network", "connect", "nsposixerrordomain",
+            "econnreset", "enotconn", "epipe", "broken pipe", "reset by peer",
+            "socket closed", "socket error", "closed before", "closed unexpectedly",
+            "rate limit", "too many requests", "overloaded",
+            "internal error", "server error", "service unavailable", "bad gateway",
+            "temporarily", "stream stall", "fetch failed",
+        ] where lower.contains(transient) {
+            return true
+        }
+
+        return false
     }
 
     private static func streamAssistantResponse(
