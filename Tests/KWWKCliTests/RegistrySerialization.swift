@@ -35,8 +35,8 @@ actor SharedAPIRegistryLock {
 /// main-actor state without hopping executors.
 func withSharedAPIRegistry<T>(
     isolation: isolated (any Actor)? = #isolation,
-    _ body: () async throws -> T
-) async rethrows -> T {
+    _ body: () async throws -> sending T
+) async rethrows -> sending T {
     await SharedAPIRegistryLock.shared.acquire()
     do {
         let result = try await body()
