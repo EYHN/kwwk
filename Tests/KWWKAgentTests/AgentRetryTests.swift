@@ -148,6 +148,52 @@ struct AgentRetryTests {
     }
 }
 
+@Suite("Retry error classification")
+struct RetryClassificationTests {
+    @Test("POSIX socket deaths are retryable")
+    func posixSocketErrors() {
+        // The exact shape of the user-reported subagent failure.
+        #expect(AgentLoop.isRetryableError(
+            "WebSocket stream failed: Error Domain=NSPOSIXErrorDomain Code=57 \"Socket is not connected\""
+        ))
+        #expect(AgentLoop.isRetryableError(
+            "Error Domain=NSPOSIXErrorDomain Code=54 \"Connection reset by peer\""
+        ))
+        #expect(AgentLoop.isRetryableError("The network connection was lost."))
+        #expect(AgentLoop.isRetryableError("WebSocket stream closed before response.completed"))
+        #expect(AgentLoop.isRetryableError(
+            "WebSocket connection keepalive failed: no inbound traffic for 60s"
+        ))
+    }
+
+    @Test("timeouts and retryable statuses are retryable")
+    func transientStatuses() {
+        #expect(AgentLoop.isRetryableError("The request timed out."))
+        #expect(AgentLoop.isRetryableError("HTTP 429: rate limit exceeded"))
+        #expect(AgentLoop.isRetryableError("HTTP 503: service unavailable"))
+        #expect(AgentLoop.isRetryableError("HTTP 529: overloaded"))
+    }
+
+    @Test("validation and auth failures are not retryable")
+    func permanentFailures() {
+        #expect(!AgentLoop.isRetryableError("HTTP 400: invalid request body"))
+        #expect(!AgentLoop.isRetryableError("HTTP 401: unauthorized"))
+        #expect(!AgentLoop.isRetryableError("model not found"))
+        // Validation short-circuit wins even when the message also
+        // mentions a transport-ish word.
+        #expect(!AgentLoop.isRetryableError("invalid connection parameters"))
+        // ...but a timeout wins over everything.
+        #expect(AgentLoop.isRetryableError("invalid state: request timed out"))
+    }
+
+    @Test("in-flight session conflict is not retryable")
+    func busySessionNotRetryable() {
+        #expect(!AgentLoop.isRetryableError(
+            "OpenAI Responses WebSocket session already has an in-flight response for this sessionId. Use a distinct sessionId for parallel runs."
+        ))
+    }
+}
+
 actor RetryEventRecorder {
     struct Entry: Sendable {
         var attempt: Int

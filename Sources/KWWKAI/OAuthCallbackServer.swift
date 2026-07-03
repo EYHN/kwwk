@@ -49,12 +49,29 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     }
 
     /// Start listening. Idempotent.
+    ///
+    /// This synchronous compatibility entry point may block the calling thread
+    /// while NIO binds the socket. Async library flows should prefer
+    /// `waitForCallback()`, which starts via NIO's async future bridge and does
+    /// not block the caller's executor.
     public func start() throws {
         lock.lock()
         if channel != nil { lock.unlock(); return }
         lock.unlock()
 
-        let bootstrap = ServerBootstrap(group: group)
+        let ch = try makeBootstrap().bind(host: "127.0.0.1", port: Int(port)).wait()
+        lock.withLock { channel = ch }
+    }
+
+    private func startAsync() async throws {
+        if lock.withLock({ channel != nil }) { return }
+
+        let ch = try await makeBootstrap().bind(host: "127.0.0.1", port: Int(port)).get()
+        lock.withLock { channel = ch }
+    }
+
+    private func makeBootstrap() -> ServerBootstrap {
+        ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 4)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { [weak self] child in
@@ -64,9 +81,6 @@ public final class OAuthCallbackServer: @unchecked Sendable {
                 }
             }
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-
-        let ch = try bootstrap.bind(host: "127.0.0.1", port: Int(port)).wait()
-        lock.withLock { channel = ch }
     }
 
     /// Resolve with whichever completes first: a callback request (query
@@ -75,7 +89,7 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     /// is what lets a login UI abort a browser handoff the user never
     /// completes.
     public func waitForCallback() async throws -> [String: String] {
-        try start()
+        try await startAsync()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 lock.lock()

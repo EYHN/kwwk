@@ -95,16 +95,20 @@ private final class StreamingDelegate: NSObject, URLSessionDataDelegate, @unchec
 
     func awaitResponse() async throws -> HTTPURLResponse {
         try await withCheckedThrowingContinuation { cont in
-            lock.withLock {
+            let pending: Result<HTTPURLResponse, Error>? = lock.withLock {
                 if let pending = pendingHeaders {
                     pendingHeaders = nil
                     headerResolved = true
-                    switch pending {
-                    case .success(let http): cont.resume(returning: http)
-                    case .failure(let err):  cont.resume(throwing: err)
-                    }
+                    return pending
                 } else {
                     headerContinuation = cont
+                    return nil
+                }
+            }
+            if let pending {
+                switch pending {
+                case .success(let http): cont.resume(returning: http)
+                case .failure(let err):  cont.resume(throwing: err)
                 }
             }
         }
@@ -112,16 +116,20 @@ private final class StreamingDelegate: NSObject, URLSessionDataDelegate, @unchec
 
     func makeByteStream(onCancel: @escaping @Sendable () -> Void) -> AsyncThrowingStream<UInt8, Error> {
         AsyncThrowingStream<UInt8, Error> { continuation in
-            lock.withLock {
+            let pending: Error?? = lock.withLock {
                 bodyContinuation = continuation
                 // Replay a completion that landed before the consumer started
                 // draining — typical when the server closed the connection
                 // between `didReceive response:` and the caller hooking in.
                 if let pending = pendingCompletion {
                     pendingCompletion = nil
-                    if let err = pending { continuation.finish(throwing: err) }
-                    else { continuation.finish() }
+                    return .some(pending)
                 }
+                return nil
+            }
+            if let pending {
+                if let err = pending { continuation.finish(throwing: err) }
+                else { continuation.finish() }
             }
             continuation.onTermination = { _ in onCancel() }
         }
@@ -151,42 +159,66 @@ private final class StreamingDelegate: NSObject, URLSessionDataDelegate, @unchec
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        lock.withLock {
+        enum HeaderAction { case none, resume(CheckedContinuation<HTTPURLResponse, Error>, Error) }
+        enum BodyAction { case none, finish(AsyncThrowingStream<UInt8, Error>.Continuation, Error?) }
+
+        let actions: (HeaderAction, BodyAction) = lock.withLock {
+            var headerAction: HeaderAction = .none
+            var bodyAction: BodyAction = .none
+
             // If `didReceive response:` never fired (DNS/connect failure),
             // surface the error on the header continuation instead.
             if !headerResolved {
                 if let cont = headerContinuation {
                     headerContinuation = nil
                     headerResolved = true
-                    cont.resume(throwing: error ?? HTTPClientError.invalidResponse)
+                    headerAction = .resume(cont, error ?? HTTPClientError.invalidResponse)
                 } else {
                     pendingHeaders = .failure(error ?? HTTPClientError.invalidResponse)
                     headerResolved = true
                 }
             }
             if let body = bodyContinuation {
-                if let err = error { body.finish(throwing: err) }
-                else { body.finish() }
                 bodyContinuation = nil
+                bodyAction = .finish(body, error)
             } else {
                 pendingCompletion = .some(error)
             }
+            return (headerAction, bodyAction)
+        }
+
+        switch actions.0 {
+        case .none:
+            break
+        case .resume(let cont, let error):
+            cont.resume(throwing: error)
+        }
+        switch actions.1 {
+        case .none:
+            break
+        case .finish(let body, let error):
+            if let error { body.finish(throwing: error) }
+            else { body.finish() }
         }
         session.finishTasksAndInvalidate()
     }
 
     private func deliverHeader(_ result: Result<HTTPURLResponse, Error>) {
-        lock.withLock {
-            guard !headerResolved else { return }
+        let continuation: CheckedContinuation<HTTPURLResponse, Error>? = lock.withLock {
+            guard !headerResolved else { return nil }
             headerResolved = true
             if let cont = headerContinuation {
                 headerContinuation = nil
-                switch result {
-                case .success(let http): cont.resume(returning: http)
-                case .failure(let err):  cont.resume(throwing: err)
-                }
+                return cont
             } else {
                 pendingHeaders = result
+                return nil
+            }
+        }
+        if let continuation {
+            switch result {
+            case .success(let http): continuation.resume(returning: http)
+            case .failure(let err):  continuation.resume(throwing: err)
             }
         }
     }
