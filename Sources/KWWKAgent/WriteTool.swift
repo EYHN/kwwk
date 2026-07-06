@@ -14,7 +14,11 @@ public struct LocalWriteOperations: WriteOperations {
     public init() {}
 
     public func writeFile(_ absolutePath: String, content: Data) async throws {
-        try content.write(to: URL(fileURLWithPath: absolutePath), options: .atomic)
+        // In-place write (open + truncate): when the path is an existing file
+        // or symlink, this writes through it and preserves the inode, symlink
+        // target, hard links, and permissions rather than replacing them via an
+        // atomic rename. Mirrors pi's `fs.writeFile`.
+        try PathUtils.writeFileInPlace(absolutePath, data: content)
     }
 
     public func createParentDirectories(_ absolutePath: String) async throws {

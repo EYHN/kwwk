@@ -46,9 +46,9 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         self.defaultAPIKey = defaultAPIKey
         self.extraHeaders = extraHeaders
         self.urlBuilder = urlBuilder ?? { model, options, fallback, key in
-            var base = model.baseUrl.isEmpty ? fallback.absoluteString : model.baseUrl
+            var base = model.baseURL.isEmpty ? fallback.absoluteString : model.baseURL
             while base.hasSuffix("/") { base.removeLast() }
-            // pi-mono's models.json bakes the API version into the baseUrl
+            // pi-mono's models.json bakes the API version into the baseURL
             // (`.../v1beta`) for Gemini entries, while callers constructing
             // providers by hand typically pass just the host root. Accept
             // both by only appending `/v1beta` when it's not already there.
@@ -110,9 +110,19 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 url: url, method: "POST", headers: headers, body: body
             )
             if response.statusCode >= 400 {
+                // Surface the JSON error body like the other providers.
+                var bodyBytes = Data()
+                for try await chunk in stream {
+                    bodyBytes.append(chunk)
+                    if bodyBytes.count > 4096 { break }
+                }
+                let bodyText = String(data: bodyBytes, encoding: .utf8) ?? ""
+                let preview = bodyText.isEmpty
+                    ? ""
+                    : ": " + bodyText.replacingOccurrences(of: "\n", with: " ").prefix(500)
                 let msg = Self.makeError(
                     api: api, model: model,
-                    text: "Gemini returned status \(response.statusCode)"
+                    text: "Gemini returned status \(response.statusCode)\(preview)"
                 )
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
@@ -120,11 +130,22 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             }
             let state = GoogleGeminiState(api: api, provider: model.provider, modelId: model.id)
             state.signal = options?.cancellation
-            try await drive(events: parseSSE(bytes: stream), out: out, state: state)
+            // Bridge external cancellation to the in-flight request (see
+            // AnthropicProvider.run for the rationale).
+            let driveTask = Task { try await self.drive(events: parseSSE(bytes: stream), out: out, state: state) }
+            let cancelReg = options?.cancellation?.onCancel { _ in driveTask.cancel() }
+            defer { cancelReg?.cancel() }
+            try await driveTask.value
         } catch {
-            let msg = Self.makeError(api: api, model: model, text: "\(error)")
-            out.push(.error(reason: .error, error: msg))
-            out.end(msg)
+            if options?.cancellation?.isCancelled == true {
+                let aborted = Self.makeAborted(api: api, model: model)
+                out.push(.error(reason: .aborted, error: aborted))
+                out.end(aborted)
+            } else {
+                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+            }
         }
     }
 
@@ -235,6 +256,12 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             }
         }
 
+        if state.signal?.isCancelled == true {
+            let aborted = state.asAborted()
+            out.push(.error(reason: .aborted, error: aborted))
+            out.end(aborted)
+            return
+        }
         // Finalize any streamed text/thinking blocks.
         state.finalizeStreamingBlocks(emit: { event in out.push(event) })
         // If tool calls are present, Gemini expects `toolUse` semantics.
@@ -576,6 +603,19 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            timestamp: Timestamp.now()
+        )
+    }
+
+    private static func makeAborted(api: String, model: Model) -> AssistantMessage {
+        AssistantMessage(
+            content: [],
+            api: api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(),
+            stopReason: .aborted,
+            errorMessage: "Request was aborted",
             timestamp: Timestamp.now()
         )
     }

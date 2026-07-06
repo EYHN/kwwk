@@ -34,6 +34,14 @@ final class TUI: @unchecked Sendable {
     private var clearOnShrink: Bool = true
     private var resizeUnsubscribe: (() -> Void)?
     private var _fullRedraws: Int = 0
+    /// Coalesces a burst of SIGWINCH events into a single authoritative
+    /// repaint. A window drag fires many resize events per second; replaying
+    /// the whole retained transcript (up to `maxCommittedLines`) on each step
+    /// is wasteful, so we debounce and repaint once the drag settles, using the
+    /// final terminal size. Cancelled + rescheduled on every resize event.
+    private var pendingResizeWork: DispatchWorkItem?
+    private var lastResizeRepaintAt = Date.distantPast
+    private static let resizeDebounceMs: Int = 60
     /// Optional decorative header (the welcome card) rendered fresh at the
     /// current width. Emitted once into scrollback on the first frame, and
     /// re-rendered at the top on every resize full-repaint so its fixed-width
@@ -89,6 +97,12 @@ final class TUI: @unchecked Sendable {
         }
         resizeUnsubscribe?()
         resizeUnsubscribe = nil
+        // Drop any debounced resize repaint so it can't fire into a
+        // torn-down / suspended terminal.
+        lock.withLock {
+            pendingResizeWork?.cancel()
+            pendingResizeWork = nil
+        }
         if wasStarted {
             let (cursorUpBy, cleared) = lock.withLock { (lastCursorUpBy, frameCleared) }
             var epilogue = TUI.enableAutowrap
@@ -201,18 +215,55 @@ final class TUI: @unchecked Sendable {
     private func handleResize() {
         let snapshotChildren: [Component] = lock.withLock { children }
         for child in snapshotChildren { child.invalidate() }
-        let inlineDirect = !TUI.resizeRepaintsInPlace()
-        if inlineDirect {
-            // Direct terminal: authoritative repaint that clears scrollback and
-            // replays the whole transcript so every line re-wraps to the new
-            // width — synchronously on every SIGWINCH, no throttle, so resize
-            // tracks the drag with zero latency. Synchronized output keeps it
-            // flicker-free even at drag rates.
-            fullRepaint()
-        } else {
+        // Leading edge + trailing coalesce: an isolated SIGWINCH repaints
+        // immediately (snappy single resizes), while a drag's burst collapses
+        // into one trailing repaint at the settled size instead of replaying
+        // the whole transcript per step. The escape-flush timer already
+        // establishes that the main queue is serviced, so a main-queue
+        // `asyncAfter` fires reliably for the trailing edge.
+        let immediate: Bool = lock.withLock {
+            guard pendingResizeWork == nil,
+                  Date().timeIntervalSince(lastResizeRepaintAt) >= Double(TUI.resizeDebounceMs) / 1000
+            else { return false }
+            lastResizeRepaintAt = Date()
+            return true
+        }
+        if immediate {
+            repaintForResize()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in self?.performResizeRepaint() }
+        lock.withLock {
+            pendingResizeWork?.cancel()
+            pendingResizeWork = work
+        }
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + .milliseconds(TUI.resizeDebounceMs),
+            execute: work
+        )
+    }
+
+    private func performResizeRepaint() {
+        let cancelled = lock.withLock { () -> Bool in
+            if pendingResizeWork == nil { return true }
+            pendingResizeWork = nil
+            lastResizeRepaintAt = Date()
+            return false
+        }
+        if cancelled { return }
+        repaintForResize()
+    }
+
+    private func repaintForResize() {
+        if TUI.resizeRepaintsInPlace() {
             // Multiplexer (tmux/screen/zellij): ED3 is hostile and the pane
             // reflows its own visible window, so snap + repaint it in place.
             multiplexerRepaint()
+        } else {
+            // Direct terminal: authoritative repaint that clears scrollback and
+            // replays the whole transcript so every line re-wraps to the new
+            // width. Synchronized output keeps it flicker-free.
+            fullRepaint()
         }
     }
 
@@ -374,6 +425,7 @@ final class TUI: @unchecked Sendable {
         let oldHeight: Int
         let prevCursorUpBy: Int
         let clearOnShrinkEnabled: Bool
+        let oldRendered: [String]
         var committed: [String]
 
         // Suppress all frame output while stopped/suspended (e.g. during a
@@ -390,6 +442,7 @@ final class TUI: @unchecked Sendable {
         oldHeight = lastFrameHeight
         prevCursorUpBy = lastCursorUpBy
         clearOnShrinkEnabled = clearOnShrink
+        oldRendered = lastRenderedLines
         committed = pendingCommits
         pendingCommits.removeAll()
         let emitHeaderNow = !headerEmitted && headerProvider != nil
@@ -421,6 +474,34 @@ final class TUI: @unchecked Sendable {
             rendered = Array(rendered.suffix(termHeight))
         }
 
+        // No-op suppression: the live zone is byte-for-byte what is already on
+        // screen and there is nothing new to commit. The stored previous frame
+        // is the source of truth, and the hardware cursor is already parked
+        // correctly, so skip the write (and the terminal's repaint) entirely.
+        if committed.isEmpty, !emitHeaderNow, rendered == oldRendered {
+            return
+        }
+
+        // Same-height fast path: no committed lines and the live zone still has
+        // the same number of rows. Rewrite only the rows that actually changed
+        // instead of clearing and redrawing the whole zone — the spinner tick /
+        // single-token cases touch one line but used to repaint all of them.
+        if committed.isEmpty, !emitHeaderNow, oldHeight > 0, rendered.count == oldHeight {
+            let (frame, newCursorUpBy) = renderInlineDiff(
+                rendered: rendered,
+                oldRendered: oldRendered,
+                prevCursorUpBy: prevCursorUpBy
+            )
+            lock.withLock {
+                lastRenderedLines = rendered
+                lastFrameHeight = rendered.count
+                lastCursorUpBy = newCursorUpBy
+                frameCleared = false
+            }
+            terminal.write(frame)
+            return
+        }
+
         let shrinking = rendered.count < oldHeight && clearOnShrinkEnabled
 
         let (frame, newCursorUpBy) = renderInline(
@@ -438,7 +519,56 @@ final class TUI: @unchecked Sendable {
             if shrinking { _fullRedraws += 1 }
         }
 
-        terminal.write(frame)
+        // Wrap the live-zone update in synchronized output (DEC 2026) so the
+        // rewind-clear-redraw is presented atomically — no partial-frame flicker
+        // even under rapid streaming ticks. Terminals lacking support ignore the
+        // private-mode toggles. (The resize repaints wrap themselves.)
+        terminal.write("\u{1B}[?2026h" + frame + "\u{1B}[?2026l")
+    }
+
+    /// Same-height incremental repaint: rewind to the top of the live zone and
+    /// rewrite only the rows whose text differs from `oldRendered`, then re-park
+    /// the cursor. Wrapped in synchronized output. Requires
+    /// `rendered.count == oldRendered.count > 0`.
+    private func renderInlineDiff(
+        rendered: [String],
+        oldRendered: [String],
+        prevCursorUpBy: Int
+    ) -> (String, cursorUpBy: Int) {
+        let height = rendered.count
+        var out = "\u{1B}[?2026h" + TUI.disableAutowrap
+        // Drop to the live-zone bottom (the cursor may be parked above it),
+        // then rewind to the top-left.
+        if prevCursorUpBy > 0 { out += "\u{1B}[\(prevCursorUpBy)B" }
+        out += "\r"
+        if height > 1 { out += "\u{1B}[\(height - 1)A" }
+
+        var cursorTarget: (rowFromTop: Int, col: Int)?
+        for i in 0..<height {
+            let (cleanLine, col) = TUI.extractCursor(rendered[i])
+            if let col, cursorTarget == nil { cursorTarget = (i, col) }
+            let (oldClean, _) = TUI.extractCursor(oldRendered[i])
+            if cleanLine != oldClean {
+                // Cursor is at column 0 of row i; clear + rewrite it.
+                out += "\r\u{1B}[2K" + cleanLine
+            }
+            // Advance to column 0 of the next row (CR handles a row we just
+            // wrote mid-line; the LF steps down).
+            if i < height - 1 { out += "\r\n" }
+        }
+
+        // Re-park the hardware cursor onto the focused row/column.
+        var upBy = 0
+        if let target = cursorTarget {
+            upBy = max(0, (height - 1) - target.rowFromTop)
+            if upBy > 0 { out += "\u{1B}[\(upBy)A" }
+            out += "\r"
+            if target.col > 0 { out += "\u{1B}[\(target.col)C" }
+        } else {
+            out += "\r"
+        }
+        out += TUI.enableAutowrap + "\u{1B}[?2026l"
+        return (out, upBy)
     }
 
     // MARK: - Inline rendering

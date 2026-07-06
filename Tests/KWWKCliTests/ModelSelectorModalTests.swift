@@ -10,7 +10,7 @@ private func model(_ id: String, provider: String = "anthropic") -> Model {
         name: id,
         api: "anthropic-messages",
         provider: provider,
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: false,
         input: [.text],
         contextWindow: 0,

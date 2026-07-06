@@ -42,14 +42,14 @@ func runHeadlessInternal(
     // Resolve session persistence: a fresh id by default, or a stored
     // transcript when `--resume` / `--session` was passed.
     let store = SessionStore(directory: SessionStore.defaultDirectory())
-    let resolvedResume = await store.resolveResume(resume, cwd: cwd)
+    let resolvedResume = try await store.resolveResume(resume, cwd: cwd)
     let sessionId = resolvedResume.sessionId
 
     let environment = ProcessInfo.processInfo.environment
     let tmuxManager = tools.contains(.tmux)
         ? try cliTmuxManager(environment: environment)
         : nil
-    let agent = await makeCodingAgent(CodingAgentConfig(
+    let agent = try await makeCodingAgent(CodingAgentConfig(
         model: resolved.model,
         cwd: cwd,
         tools: tools,
@@ -63,7 +63,7 @@ func runHeadlessInternal(
         bashEnvironment: environment,
         bashShellPath: cliShellPath(environment: environment),
         tmuxManager: tmuxManager
-    ))
+    )).agent
     agent.state.thinkingLevel = thinkingLevel
 
     // Seed the transcript from disk when resuming so the model continues

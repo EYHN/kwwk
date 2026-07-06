@@ -49,6 +49,21 @@ struct APIRegistryScopeTests {
         #expect(stillFlat?.tag == "flat")
     }
 
+    @Test("a vendor-tagged flat provider refuses cross-vendor fallback")
+    func vendorTaggedFallbackIsGated() async {
+        let registry = APIRegistry()
+        // Flat Anthropic provider tagged to the `anthropic` vendor.
+        await registry.register(
+            TaggedProvider(api: "anthropic-messages", tag: "anthropic-flat"),
+            providerVendor: "anthropic"
+        )
+        // A same-vendor model resolves via the flat fallback.
+        let same = await registry.provider(scope: "anthropic", api: "anthropic-messages") as? TaggedProvider
+        #expect(same?.tag == "anthropic-flat")
+        // A foreign vendor sharing the wire must NOT route to Anthropic's key.
+        #expect(await registry.provider(scope: "github-copilot", api: "anthropic-messages") == nil)
+    }
+
     @Test("unregisterScope removes only that scope's entries")
     func unregisterScope() async {
         let registry = APIRegistry()

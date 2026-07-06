@@ -40,22 +40,22 @@ public func registerBuiltins(
     var registered: [String] = []
     if let key = anthropic {
         let provider = AnthropicProvider(client: client, defaultAPIKey: key)
-        await registry.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId, providerVendor: "anthropic")
         registered.append(provider.api)
     }
     if let key = openaiCompletions {
         let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: key)
-        await registry.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId, providerVendor: "openai")
         registered.append(provider.api)
     }
     if let key = openaiResponses {
         let provider = OpenAIResponsesProvider(client: client, defaultAPIKey: key)
-        await registry.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId, providerVendor: "openai")
         registered.append(provider.api)
     }
     if let key = google {
         let provider = GoogleGeminiProvider(client: client, defaultAPIKey: key)
-        await registry.register(provider, sourceId: sourceId)
+        await registry.register(provider, sourceId: sourceId, providerVendor: "google")
         registered.append(provider.api)
     }
     return registered
@@ -94,7 +94,7 @@ public enum Models {
         name: "Claude Opus 4.8",
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25),
@@ -107,7 +107,7 @@ public enum Models {
         name: "Claude Sonnet 5",
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5),
@@ -124,7 +124,7 @@ public enum Models {
         name: "Claude Haiku 4.5",
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25),
@@ -137,7 +137,7 @@ public enum Models {
         name: "GPT-5.5",
         api: "openai-responses",
         provider: "openai",
-        baseUrl: "https://api.openai.com",
+        baseURL: "https://api.openai.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0),
@@ -150,7 +150,7 @@ public enum Models {
         name: "GPT-5.4 mini",
         api: "openai-responses",
         provider: "openai",
-        baseUrl: "https://api.openai.com",
+        baseURL: "https://api.openai.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0),
@@ -163,7 +163,7 @@ public enum Models {
         name: "Gemini 3.5 Flash",
         api: "google-generative-ai",
         provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com",
+        baseURL: "https://generativelanguage.googleapis.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0),
@@ -176,7 +176,7 @@ public enum Models {
         name: "Gemini 3.1 Pro Preview",
         api: "google-generative-ai",
         provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com",
+        baseURL: "https://generativelanguage.googleapis.com",
         reasoning: true,
         input: [.text, .image],
         cost: ModelCost(input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0),
@@ -191,7 +191,7 @@ public enum Models {
             name: id,
             api: "openai-completions",
             provider: "xai",
-            baseUrl: "https://api.x.ai",
+            baseURL: "https://api.x.ai",
             reasoning: true,
             input: [.text],
             contextWindow: 131_072,
@@ -206,7 +206,7 @@ public enum Models {
             name: id,
             api: "openai-completions",
             provider: "groq",
-            baseUrl: "https://api.groq.com/openai",
+            baseURL: "https://api.groq.com/openai",
             reasoning: true,
             input: [.text],
             contextWindow: 131_072,
@@ -221,7 +221,7 @@ public enum Models {
             name: id,
             api: "openai-completions",
             provider: "openrouter",
-            baseUrl: "https://openrouter.ai/api",
+            baseURL: "https://openrouter.ai/api",
             reasoning: true,
             input: [.text],
             contextWindow: 131_072,

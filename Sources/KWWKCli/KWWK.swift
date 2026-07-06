@@ -19,7 +19,7 @@ public enum KWWK {
     /// no restart needed.
     ///
     /// `tools` controls which coding tools the agent is given. Default is
-    /// `.all` — read/write/edit/bash/grep/find/ls/task_status/wait_task.
+    /// `.standard` — read/write/edit/bash/grep/find/ls/task_status/wait_task.
     /// Pass `.readOnly` for a sandboxed reviewer-style agent. If `tools`
     /// contains `.tmux`, this CLI wrapper resolves `tmux` from `PATH` and
     /// passes the explicit executable path into the SDK.
@@ -30,7 +30,7 @@ public enum KWWK {
     /// `contextWindow`. Pass `nil` to disable.
     public static func runCodingTUI(
         cwd: String? = nil,
-        tools: CodingTools = .all,
+        tools: CodingTools = .standard,
         builtinSubagents: BuiltinSubagentSelection = .all,
         autoCompactThreshold: Double? = 0.75,
         thinkingLevel: ThinkingLevel = .medium,
@@ -95,7 +95,7 @@ public enum KWWK {
     public static func runHeadless(
         prompt: String,
         cwd: String? = nil,
-        tools: CodingTools = .all,
+        tools: CodingTools = .standard,
         builtinSubagents: BuiltinSubagentSelection = .all,
         thinkingLevel: ThinkingLevel = .medium,
         modelOverride: String? = nil,

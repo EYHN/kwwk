@@ -165,10 +165,16 @@ enum Keys {
         case 27: return "escape"
         case 32: return "space"
         case 127: return "backspace"
-        case 97...122:
-            return String(UnicodeScalar(code)!)
         case 65...90:
+            // Letters lower-case to a canonical name; the shift/ctrl flags
+            // carry the actual modifiers (see parseCSI).
             return String(UnicodeScalar(code)!).lowercased()
+        // Any other printable ASCII (digits + punctuation) decodes to its
+        // literal character. Whitelisting only letters dropped modified
+        // punctuation like Ctrl+_ / Ctrl+/ (undo) on kitty-protocol
+        // terminals kwwk opts into — decode from the codepoint instead.
+        case 0x21...0x7E:
+            return String(UnicodeScalar(code)!)
         default:
             return nil
         }

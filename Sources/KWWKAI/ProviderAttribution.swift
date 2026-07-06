@@ -69,28 +69,28 @@ public enum ProviderAttribution {
     private static let cloudflareAIGatewayHost = "gateway.ai.cloudflare.com"
     private static let vercelGatewayHost = "ai-gateway.vercel.sh"
 
-    private static func matchesHost(_ baseUrl: String, _ expectedHost: String) -> Bool {
-        guard let host = URLComponents(string: baseUrl)?.host else { return false }
+    private static func matchesHost(_ baseURL: String, _ expectedHost: String) -> Bool {
+        guard let host = URLComponents(string: baseURL)?.host else { return false }
         return host == expectedHost
     }
 
-    private static func isOpenRouter(provider: String, baseUrl: String) -> Bool {
-        provider == "openrouter" || baseUrl.contains(openRouterHost)
+    private static func isOpenRouter(provider: String, baseURL: String) -> Bool {
+        provider == "openrouter" || baseURL.contains(openRouterHost)
     }
 
-    private static func isNvidiaNim(provider: String, baseUrl: String) -> Bool {
-        provider == "nvidia" || matchesHost(baseUrl, nvidiaNimHost)
+    private static func isNvidiaNim(provider: String, baseURL: String) -> Bool {
+        provider == "nvidia" || matchesHost(baseURL, nvidiaNimHost)
     }
 
-    private static func isCloudflare(provider: String, baseUrl: String) -> Bool {
+    private static func isCloudflare(provider: String, baseURL: String) -> Bool {
         provider == "cloudflare-workers-ai"
             || provider == "cloudflare-ai-gateway"
-            || matchesHost(baseUrl, cloudflareAPIHost)
-            || matchesHost(baseUrl, cloudflareAIGatewayHost)
+            || matchesHost(baseURL, cloudflareAPIHost)
+            || matchesHost(baseURL, cloudflareAIGatewayHost)
     }
 
-    private static func isVercelGateway(provider: String, baseUrl: String) -> Bool {
-        provider == "vercel-ai-gateway" || matchesHost(baseUrl, vercelGatewayHost)
+    private static func isVercelGateway(provider: String, baseURL: String) -> Bool {
+        provider == "vercel-ai-gateway" || matchesHost(baseURL, vercelGatewayHost)
     }
 
     /// Branded attribution headers to merge into a request for `provider`,
@@ -101,22 +101,22 @@ public enum ProviderAttribution {
     /// headers (explicit per-model `Model.headers` should win on conflict).
     public static func attributionHeaders(
         provider: String,
-        baseUrl: String = ""
+        baseURL: String = ""
     ) -> [String: String]? {
-        if isOpenRouter(provider: provider, baseUrl: baseUrl) {
+        if isOpenRouter(provider: provider, baseURL: baseURL) {
             return [
                 "HTTP-Referer": "https://kwwk.dev",
                 "X-OpenRouter-Title": "kwwk",
                 "X-OpenRouter-Categories": "cli-agent",
             ]
         }
-        if isNvidiaNim(provider: provider, baseUrl: baseUrl) {
+        if isNvidiaNim(provider: provider, baseURL: baseURL) {
             return ["X-BILLING-INVOKE-ORIGIN": "kwwk"]
         }
-        if isCloudflare(provider: provider, baseUrl: baseUrl) {
+        if isCloudflare(provider: provider, baseURL: baseURL) {
             return ["User-Agent": "kwwk-coding-agent"]
         }
-        if isVercelGateway(provider: provider, baseUrl: baseUrl) {
+        if isVercelGateway(provider: provider, baseURL: baseURL) {
             return [
                 "http-referer": "https://kwwk.dev",
                 "x-title": "kwwk",
@@ -127,7 +127,7 @@ public enum ProviderAttribution {
 
     /// Convenience overload taking a `Model`.
     public static func attributionHeaders(for model: Model) -> [String: String]? {
-        attributionHeaders(provider: model.provider, baseUrl: model.baseUrl)
+        attributionHeaders(provider: model.provider, baseURL: model.baseURL)
     }
 
     /// Merge attribution headers for `model` with any caller-supplied header

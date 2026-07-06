@@ -13,18 +13,52 @@ enum ANSI {
         var width = 0
         let scalars = Array(s.unicodeScalars)
         var i = 0
+        // An emoji ZWJ sequence (base ZWJ base …) renders as a single glyph:
+        // the scalars after a Zero-Width Joiner fold into the preceding base
+        // and contribute no extra columns. Likewise a regional-indicator pair
+        // (a flag) is one 2-column glyph. Track the join state across scalars.
+        var prevWasZWJ = false
+        var prevWasRI = false
         while i < scalars.count {
             let v = scalars[i].value
             if v == 0x1B {
                 i = skipEscape(scalars, from: i)
+                prevWasZWJ = false; prevWasRI = false
                 continue
             }
             // Skip APC payload (BEL-terminated) + other C0 controls.
-            if v < 0x20 || v == 0x7F { i += 1; continue }
-            width += columnWidth(of: v)
+            if v < 0x20 || v == 0x7F { i += 1; prevWasZWJ = false; prevWasRI = false; continue }
+            if v == 0x200D { prevWasZWJ = true; prevWasRI = false; i += 1; continue }
+            let isRI = v >= 0x1F1E6 && v <= 0x1F1FF
+            if prevWasZWJ || (isRI && prevWasRI) {
+                // Joined into the previous glyph — no additional columns.
+            } else {
+                width += columnWidth(of: v)
+            }
+            prevWasZWJ = false
+            prevWasRI = isRI && !prevWasRI
             i += 1
         }
         return width
+    }
+
+    /// Visible column width of one grapheme cluster (a `Character`). An emoji
+    /// ZWJ sequence collapses to a single 2-column glyph; skin-tone modifiers
+    /// and variation selectors are zero-width; a regional-indicator pair is one
+    /// 2-column flag. Everything else is the sum of its scalar widths.
+    static func graphemeWidth(_ ch: Character) -> Int {
+        let scalars = ch.unicodeScalars
+        if scalars.contains(where: { $0.value == 0x200D }) { return 2 }
+        var w = 0
+        var prevWasRI = false
+        for s in scalars {
+            let v = s.value
+            let isRI = v >= 0x1F1E6 && v <= 0x1F1FF
+            if isRI && prevWasRI { prevWasRI = false; continue }
+            w += columnWidth(of: v)
+            prevWasRI = isRI
+        }
+        return w
     }
 
     /// Visible column width of a single Unicode scalar. Returns 0 for
@@ -51,6 +85,9 @@ enum ANSI {
             (0x2060, 0x206F),
             (0xFE00, 0xFE0F),   // Variation selectors
             (0xFE20, 0xFE2F),
+            (0x1F3FB, 0x1F3FF), // Emoji skin-tone modifiers — compose onto
+                                // their base emoji, so they add no columns.
+            (0xE0100, 0xE01EF), // Variation Selectors Supplement
         ]) { return 0 }
 
         // Wide (width 2) — condensed UAX-11 W/F ranges.
@@ -102,9 +139,18 @@ enum ANSI {
             (0xFE30, 0xFE6F),
             (0xFF00, 0xFF60),   // Fullwidth ASCII + punctuation
             (0xFFE0, 0xFFE6),
+            (0x1F004, 0x1F004), // Mahjong red dragon
+            (0x1F0CF, 0x1F0CF), // Playing card black joker
+            (0x1F18E, 0x1F18E), // Negative squared AB
+            (0x1F191, 0x1F19A), // Squared CL … VS
+            (0x1F1E6, 0x1F1FF), // Regional indicators (flags)
+            (0x1F200, 0x1F2FF), // Enclosed ideographic supplement
             (0x1F300, 0x1F64F), // Misc symbols + emoji
             (0x1F680, 0x1F6FF),
+            (0x1F7E0, 0x1F7EB), // Colored circles + squares
+            (0x1F7F0, 0x1F7F0),
             (0x1F900, 0x1F9FF),
+            (0x1FA70, 0x1FAFF), // Symbols and Pictographs Extended-A
             (0x20000, 0x2FFFD), // CJK Unified Ideographs Ext B..F
             (0x30000, 0x3FFFD),
         ]) { return 2 }

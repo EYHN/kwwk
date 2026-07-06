@@ -19,14 +19,14 @@ public struct AWSEventMessage: Sendable {
 /// We only decode string-typed values (type 7) and short values for the rest —
 /// everything Bedrock Converse Stream actually emits.
 public func parseAWSEventStream(
-    bytes: AsyncThrowingStream<UInt8, Error>
+    bytes: AsyncThrowingStream<Data, Error>
 ) -> AsyncThrowingStream<AWSEventMessage, Error> {
     AsyncThrowingStream { continuation in
         let task = Task {
             var buffer = Data()
             do {
-                for try await byte in bytes {
-                    buffer.append(byte)
+                for try await chunk in bytes {
+                    buffer.append(chunk)
                     while buffer.count >= 12 {
                         let totalLen = Int(readU32BE(buffer, offset: 0))
                         if totalLen <= 0 || totalLen > 1 << 20 {

@@ -204,8 +204,8 @@ struct AgentContextCompactorTests {
             ),
             streamFn: { model, context, options in
                 await capture.record(context: context, sessionId: options?.sessionId)
-                let stream = AssistantMessageStream()
-                stream.end(AssistantMessage(
+                let (stream, continuation) = AssistantMessageStream.makeStream()
+                continuation.end(AssistantMessage(
                     content: [.text(TextContent(text: "custom stream summary"))],
                     api: model.api,
                     provider: model.provider,

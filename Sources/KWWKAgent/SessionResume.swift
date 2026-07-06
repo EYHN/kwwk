@@ -57,13 +57,17 @@ public struct ResolvedResume: Sendable {
 
 extension SessionStore {
     /// Resolve a `SessionResume` for `cwd`, loading the stored transcript when
-    /// a matching session exists. A fresh `UUID` id is minted otherwise. Never
-    /// throws — an unreadable/missing target degrades to a fresh session.
+    /// a matching session exists. A fresh `UUID` id is minted for `.none` /
+    /// `.pickInteractive` / a `.latestForCwd` with no prior session. An
+    /// explicit `.id(...)` whose format is invalid throws
+    /// `SessionStoreError.invalidId` rather than silently substituting a random
+    /// session — a caller asking for a named session should hear about a typo,
+    /// not scatter transcripts across UUID files.
     public func resolveResume(
         _ resume: SessionResume,
         cwd: String,
         freshId: String = UUID().uuidString
-    ) async -> ResolvedResume {
+    ) async throws -> ResolvedResume {
         switch resume {
         case .none:
             return ResolvedResume(sessionId: freshId)
@@ -89,7 +93,7 @@ extension SessionStore {
 
         case .id(let id):
             guard SessionStore.isValidSessionId(id) else {
-                return ResolvedResume(sessionId: freshId)
+                throw SessionStoreError.invalidId(id)
             }
             do {
                 let loaded = try load(id: id)

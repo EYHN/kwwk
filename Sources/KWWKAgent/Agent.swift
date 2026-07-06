@@ -83,7 +83,7 @@ public struct AgentOptions: Sendable {
     /// Automatic context compaction. Disabled by default so SDK callers do
     /// not trigger extra model calls or transcript rewrites unless requested.
     public var autoCompact: AgentAutoCompactOptions?
-    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
 
     public init(
         initialState: AgentInitialState,
@@ -104,7 +104,7 @@ public struct AgentOptions: Sendable {
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
         autoCompact: AgentAutoCompactOptions? = nil,
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil
     ) {
         self.initialState = initialState
         self.streamFn = streamFn
@@ -139,25 +139,98 @@ public final class Agent: @unchecked Sendable {
     private var activeCancellation: CancellationHandle?
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
-    public var sessionId: String?
-    public var thinkingBudgets: ThinkingBudgets?
-    public var maxRetryDelayMs: Int?
-    public var maxTurns: Int?
-    public var toolExecution: ToolExecutionMode
-    public var toolChoice: ToolChoice?
-    public var parallelToolCalls: Bool?
-    public var beforeToolCall: BeforeToolCallHook?
-    public var afterToolCall: AfterToolCallHook?
-    public var userPromptSubmit: UserPromptSubmitHook?
-    public var convertToLlm: ConvertToLlmHook?
-    public var transformContext: TransformContextHook?
-    public var betweenTurns: BetweenTurnsHook?
-    public var autoCompact: AgentAutoCompactOptions?
-    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    /// Immutable session identity: one `Agent` == one session. Rotating to a
+    /// new session means building a fresh `Agent`/`SessionRecorder` through the
+    /// supported path (the CLI's `/new` and `/resume` re-point the recorder and
+    /// clear the live context). There is deliberately no in-place setter —
+    /// mutating it would leave tools, the recorder, and background attachments
+    /// scoped to different ids.
+    public let sessionId: String?
+
+    // Mutable run configuration. `loopConfig()` reads these on the run's task
+    // while the public setters may be invoked from any thread (steer() is
+    // documented "from any thread"), so every access funnels through `lock`.
+    // This is what justifies the `@unchecked Sendable` annotation — mirrors
+    // AgentState, whose fields are all lock-guarded the same way.
+    private var _thinkingBudgets: ThinkingBudgets?
+    private var _maxRetryDelayMs: Int?
+    private var _maxTurns: Int?
+    private var _toolExecution: ToolExecutionMode
+    private var _toolChoice: ToolChoice?
+    private var _parallelToolCalls: Bool?
+    private var _beforeToolCall: BeforeToolCallHook?
+    private var _afterToolCall: AfterToolCallHook?
+    private var _userPromptSubmit: UserPromptSubmitHook?
+    private var _convertToLlm: ConvertToLlmHook?
+    private var _transformContext: TransformContextHook?
+    private var _betweenTurns: BetweenTurnsHook?
+    private var _autoCompact: AgentAutoCompactOptions?
+    private var _authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
+    private var _retryBaseDelayMs: UInt64 = 1_000
+
+    public var thinkingBudgets: ThinkingBudgets? {
+        get { lock.withLock { _thinkingBudgets } }
+        set { lock.withLock { _thinkingBudgets = newValue } }
+    }
+    public var maxRetryDelayMs: Int? {
+        get { lock.withLock { _maxRetryDelayMs } }
+        set { lock.withLock { _maxRetryDelayMs = newValue } }
+    }
+    public var maxTurns: Int? {
+        get { lock.withLock { _maxTurns } }
+        set { lock.withLock { _maxTurns = newValue } }
+    }
+    public var toolExecution: ToolExecutionMode {
+        get { lock.withLock { _toolExecution } }
+        set { lock.withLock { _toolExecution = newValue } }
+    }
+    public var toolChoice: ToolChoice? {
+        get { lock.withLock { _toolChoice } }
+        set { lock.withLock { _toolChoice = newValue } }
+    }
+    public var parallelToolCalls: Bool? {
+        get { lock.withLock { _parallelToolCalls } }
+        set { lock.withLock { _parallelToolCalls = newValue } }
+    }
+    public var beforeToolCall: BeforeToolCallHook? {
+        get { lock.withLock { _beforeToolCall } }
+        set { lock.withLock { _beforeToolCall = newValue } }
+    }
+    public var afterToolCall: AfterToolCallHook? {
+        get { lock.withLock { _afterToolCall } }
+        set { lock.withLock { _afterToolCall = newValue } }
+    }
+    public var userPromptSubmit: UserPromptSubmitHook? {
+        get { lock.withLock { _userPromptSubmit } }
+        set { lock.withLock { _userPromptSubmit = newValue } }
+    }
+    public var convertToLlm: ConvertToLlmHook? {
+        get { lock.withLock { _convertToLlm } }
+        set { lock.withLock { _convertToLlm = newValue } }
+    }
+    public var transformContext: TransformContextHook? {
+        get { lock.withLock { _transformContext } }
+        set { lock.withLock { _transformContext = newValue } }
+    }
+    public var betweenTurns: BetweenTurnsHook? {
+        get { lock.withLock { _betweenTurns } }
+        set { lock.withLock { _betweenTurns = newValue } }
+    }
+    public var autoCompact: AgentAutoCompactOptions? {
+        get { lock.withLock { _autoCompact } }
+        set { lock.withLock { _autoCompact = newValue } }
+    }
+    public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? {
+        get { lock.withLock { _authResolver } }
+        set { lock.withLock { _authResolver = newValue } }
+    }
 
     /// Base delay (ms) used for exponential backoff between stream retries.
     /// Exposed internally so tests can shrink the 1-second default.
-    internal var retryBaseDelayMs: UInt64 = 1_000
+    internal var retryBaseDelayMs: UInt64 {
+        get { lock.withLock { _retryBaseDelayMs } }
+        set { lock.withLock { _retryBaseDelayMs = newValue } }
+    }
 
     private let steeringQueue: PendingMessageQueue
     private let followUpQueue: PendingMessageQueue
@@ -194,21 +267,24 @@ public final class Agent: @unchecked Sendable {
         self.streamFn = options.streamFn ?? { model, context, options in
             try await KWWKAI.stream(model: model, context: context, options: options)
         }
-        self.toolExecution = options.toolExecution
-        self.toolChoice = options.toolChoice
-        self.parallelToolCalls = options.parallelToolCalls
         self.sessionId = options.sessionId
-        self.thinkingBudgets = options.thinkingBudgets
-        self.maxRetryDelayMs = options.maxRetryDelayMs
-        self.maxTurns = options.maxTurns
-        self.beforeToolCall = options.beforeToolCall
-        self.afterToolCall = options.afterToolCall
-        self.userPromptSubmit = options.userPromptSubmit
-        self.convertToLlm = options.convertToLlm
-        self.transformContext = options.transformContext
-        self.betweenTurns = options.betweenTurns
-        self.autoCompact = options.autoCompact
-        self.authResolver = options.authResolver
+        // Assign backing storage directly — the public accessors are
+        // lock-guarded computed properties, so they can't be used until every
+        // stored property is initialized.
+        self._toolExecution = options.toolExecution
+        self._toolChoice = options.toolChoice
+        self._parallelToolCalls = options.parallelToolCalls
+        self._thinkingBudgets = options.thinkingBudgets
+        self._maxRetryDelayMs = options.maxRetryDelayMs
+        self._maxTurns = options.maxTurns
+        self._beforeToolCall = options.beforeToolCall
+        self._afterToolCall = options.afterToolCall
+        self._userPromptSubmit = options.userPromptSubmit
+        self._convertToLlm = options.convertToLlm
+        self._transformContext = options.transformContext
+        self._betweenTurns = options.betweenTurns
+        self._autoCompact = options.autoCompact
+        self._authResolver = options.authResolver
         self.steeringQueue = PendingMessageQueue(mode: options.steeringMode)
         self.followUpQueue = PendingMessageQueue(mode: options.followUpMode)
     }
@@ -224,8 +300,20 @@ public final class Agent: @unchecked Sendable {
     /// Queue a message to inject after the current assistant turn finishes.
     public func steer(_ message: Message) { steeringQueue.enqueue(message) }
 
+    /// Convenience: steer a plain-text user message.
+    public func steer(_ text: String) { steer(.user(UserMessage(text: text))) }
+
+    /// Convenience: steer a `UserMessage` without wrapping it in `.user(...)`.
+    public func steer(_ message: UserMessage) { steer(.user(message)) }
+
     /// Queue a message to run only after the agent would otherwise stop.
     public func followUp(_ message: Message) { followUpQueue.enqueue(message) }
+
+    /// Convenience: follow up with a plain-text user message.
+    public func followUp(_ text: String) { followUp(.user(UserMessage(text: text))) }
+
+    /// Convenience: follow up with a `UserMessage` without `.user(...)` wrapping.
+    public func followUp(_ message: UserMessage) { followUp(.user(message)) }
 
     public func clearSteeringQueue() { steeringQueue.clear() }
     public func clearFollowUpQueue() { followUpQueue.clear() }

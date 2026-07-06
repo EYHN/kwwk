@@ -59,28 +59,28 @@ struct BedrockRegionTests {
         // ARN wins over everything.
         #expect(BedrockRegion.resolve(
             modelId: "arn:aws:bedrock:eu-west-3:1:inference-profile/x",
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            baseURL: "https://bedrock-runtime.us-east-1.amazonaws.com",
             env: ["AWS_REGION": "us-west-2"]
         ) == "eu-west-3")
 
         // configuredRegion (env) wins over a standard endpoint host (pi order).
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
-            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            baseURL: "https://bedrock-runtime.ap-south-1.amazonaws.com",
             env: ["AWS_REGION": "us-west-2"]
         ) == "us-west-2")
 
         // Env wins when no ARN / standard host.
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
-            baseUrl: "https://proxy.internal",
+            baseURL: "https://proxy.internal",
             env: ["AWS_DEFAULT_REGION": "sa-east-1"]
         ) == "sa-east-1")
 
         // us-east-1 when nothing pins a region.
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
-            baseUrl: nil,
+            baseURL: nil,
             env: [:]
         ) == "us-east-1")
     }
@@ -89,7 +89,7 @@ struct BedrockRegionTests {
     func envOutranksEndpoint() {
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
-            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            baseURL: "https://bedrock-runtime.ap-south-1.amazonaws.com",
             env: ["AWS_REGION": "us-west-2"]
         ) == "us-west-2")
     }
@@ -98,13 +98,13 @@ struct BedrockRegionTests {
     func endpointOnlyWithoutConfigOrProfile() {
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
-            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            baseURL: "https://bedrock-runtime.ap-south-1.amazonaws.com",
             env: [:]
         ) == "ap-south-1")
         // Ambient profile present -> endpoint host NOT used as override.
         #expect(BedrockRegion.resolve(
             modelId: "anthropic.claude",
-            baseUrl: "https://bedrock-runtime.ap-south-1.amazonaws.com",
+            baseURL: "https://bedrock-runtime.ap-south-1.amazonaws.com",
             env: ["AWS_PROFILE": "work"],
             profileRegion: "eu-central-1"
         ) == "eu-central-1")
@@ -245,15 +245,15 @@ struct BedrockCacheAndAuthTests {
         init(body: Data) { self.body = body }
         func stream(
             url: URL, method: String, headers: [String: String], body requestBody: Data?
-        ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
+        ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
             lastRequest = (url, method, headers, requestBody)
             let response = HTTPURLResponse(
                 url: url, statusCode: 200, httpVersion: "HTTP/1.1",
                 headerFields: ["content-type": "application/vnd.amazon.eventstream"]
             )!
-            let bytes = Array(body)
-            let stream = AsyncThrowingStream<UInt8, Error> { cont in
-                Task { for b in bytes { cont.yield(b) }; cont.finish() }
+            let bodyData = body
+            let stream = AsyncThrowingStream<Data, Error> { cont in
+                Task { cont.yield(bodyData); cont.finish() }
             }
             return (response, stream)
         }

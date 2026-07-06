@@ -12,21 +12,21 @@ struct SubagentToolTests {
         let cwd = makeTempDir()
         defer { try? FileManager.default.removeItem(at: cwd) }
 
-        let withoutSubagents = await makeCodingAgent(CodingAgentConfig(
+        let withoutSubagents = try await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
             bashEnvironment: [:]
-        ))
+        )).agent
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent" })
 
-        let withSubagents = await makeCodingAgent(CodingAgentConfig(
+        let withSubagents = try await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
             subagents: [minimalSubagent()],
             bashEnvironment: [:]
-        ))
+        )).agent
         #expect(withSubagents.state.tools.contains { $0.name == "agent" })
     }
 
@@ -426,7 +426,7 @@ struct SubagentToolTests {
         ])
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
-            subagents: [minimalSubagent(tools: .all)],
+            subagents: [minimalSubagent(tools: .standard)],
             parentModel: faux.getModel(),
             parentTools: .readOnly,
             bashEnvironment: testBashEnvironment

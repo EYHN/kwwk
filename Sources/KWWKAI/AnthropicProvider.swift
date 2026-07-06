@@ -4,15 +4,15 @@ import FoundationNetworking
 #endif
 
 /// Anthropic Messages streaming provider. Implements the `anthropic-messages`
-/// API against a pluggable `HTTPClient`.
+/// API against a pluggable `HTTPClient`. Supports API-key and OAuth bearer auth
+/// (via `authHeaderBuilder`), `anthropic-beta` opt-in headers, prompt-cache
+/// breakpoints, and extended/adaptive thinking.
 ///
 /// Non-goals for this implementation:
-///  - OAuth bearer tokens, anthropic-beta opt-in headers
-///  - Cache-control placement heuristics
-///  - Rate-limit retry with `retry-after` parsing
+///  - Rate-limit retry with `retry-after` parsing (handled by the agent loop)
 ///
-/// These are tracked in follow-up work; for now the provider is testable via a
-/// URLProtocol mock and produces the standard AssistantMessageEvent stream.
+/// The provider is testable via a stub `HTTPClient` and produces the standard
+/// AssistantMessageEvent stream.
 public final class AnthropicProvider: APIProvider, @unchecked Sendable {
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
 
@@ -71,7 +71,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         options: StreamOptions?
     ) async {
         let url: URL = {
-            var base = model.baseUrl.isEmpty ? defaultBaseURL.absoluteString : model.baseUrl
+            var base = model.baseURL.isEmpty ? defaultBaseURL.absoluteString : model.baseURL
             while base.hasSuffix("/") { base.removeLast() }
             return URL(string: "\(base)/v1/messages") ?? defaultBaseURL.appendingPathComponent("v1/messages")
         }()
@@ -173,11 +173,23 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 modelId: model.id
             )
             state.signal = options?.cancellation
-            try await drive(events: parseSSE(bytes: stream), out: out, state: state)
+            // Bridge external cancellation to the in-flight request: cancelling
+            // the drive task tears down the SSE/byte streams, which aborts the
+            // underlying URLSession task even during a silent stream gap.
+            let driveTask = Task { try await self.drive(events: parseSSE(bytes: stream), out: out, state: state) }
+            let cancelReg = options?.cancellation?.onCancel { _ in driveTask.cancel() }
+            defer { cancelReg?.cancel() }
+            try await driveTask.value
         } catch {
-            let msg = Self.makeError(model: model, api: api, text: "\(error)")
-            out.push(.error(reason: .error, error: msg))
-            out.end(msg)
+            if options?.cancellation?.isCancelled == true {
+                let aborted = Self.makeAborted(model: model, api: api)
+                out.push(.error(reason: .aborted, error: aborted))
+                out.end(aborted)
+            } else {
+                let msg = Self.makeError(model: model, api: api, text: "\(error)")
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+            }
         }
     }
 
@@ -282,7 +294,13 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             case "message_delta":
                 if case .object(let delta) = obj["delta"] ?? .null,
                    case .string(let reason) = delta["stop_reason"] ?? .null {
-                    state.stopReason = mapStopReason(reason)
+                    let mapped = mapStopReason(reason)
+                    state.stopReason = mapped
+                    // A `refusal`/`sensitive`/unknown stop reason is not a clean
+                    // completion — record it so `message_stop` surfaces `.error`.
+                    if mapped == .error {
+                        state.errorMessage = "Anthropic stop reason: \(reason)"
+                    }
                 }
                 if case .object(let usage) = obj["usage"] ?? .null {
                     state.applyUsageDelta(usage)
@@ -290,7 +308,11 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
 
             case "message_stop":
                 let final = state.finalize()
-                out.push(.done(reason: final.stopReason, message: final))
+                if final.stopReason == .error {
+                    out.push(.error(reason: .error, error: final))
+                } else {
+                    out.push(.done(reason: final.stopReason, message: final))
+                }
                 out.end(final)
                 return
 
@@ -309,10 +331,19 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             }
         }
 
-        // Upstream closed without message_stop.
-        let final = state.finalize()
-        out.push(.done(reason: final.stopReason, message: final))
-        out.end(final)
+        // Loop ended without message_stop.
+        if state.signal?.isCancelled == true {
+            let aborted = state.asAborted()
+            out.push(.error(reason: .aborted, error: aborted))
+            out.end(aborted)
+            return
+        }
+        // A clean half-close mid-message is a truncated turn, not a success —
+        // surface it as an error so the agent loop can retry, mirroring
+        // OpenAICompletionsProvider's missing-finish_reason handling.
+        let err = state.asError(text: "Anthropic stream ended before message_stop")
+        out.push(.error(reason: .error, error: err))
+        out.end(err)
     }
 
     // MARK: - Helpers
@@ -594,6 +625,19 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             timestamp: Timestamp.now()
         )
     }
+
+    private static func makeAborted(model: Model, api: String) -> AssistantMessage {
+        AssistantMessage(
+            content: [],
+            api: api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(),
+            stopReason: .aborted,
+            errorMessage: "Request was aborted",
+            timestamp: Timestamp.now()
+        )
+    }
 }
 
 /// Mutable state the Anthropic stream driver mutates while consuming SSE.
@@ -715,19 +759,26 @@ final class AnthropicStreamState: @unchecked Sendable {
             case .text(let t): return .text(t.text)
             case .thinking(let th): return .thinking(th.thinking)
             case .toolUse(let id, let name, let json):
-                let parsed: JSONValue = {
-                    if let data = json.data(using: .utf8),
-                       let v = try? JSONDecoder().decode(JSONValue.self, from: data) { return v }
-                    return .object([:])
-                }()
-                let call = ToolCall(id: id, name: name, arguments: parsed)
+                let call = ToolCall(id: id, name: name, arguments: Self.parseToolJSON(json))
                 blocks[index] = .toolUse(id: id, name: name, json: json)
                 return .toolCall(call)
             }
         }
     }
 
-    func snapshot() -> AssistantMessage {
+    static func parseToolJSON(_ json: String) -> JSONValue {
+        if let data = json.data(using: .utf8),
+           let v = try? JSONDecoder().decode(JSONValue.self, from: data) { return v }
+        return .object([:])
+    }
+
+    /// Streaming snapshot. In-progress tool calls are represented with an empty
+    /// object rather than re-parsing the (usually incomplete) argument buffer on
+    /// every delta — that reparse is O(n) per delta, O(n^2) over a tool call.
+    /// The complete arguments are parsed once in `finishBlock`/`finalize`.
+    func snapshot() -> AssistantMessage { buildMessage(parseToolArgs: false) }
+
+    private func buildMessage(parseToolArgs: Bool) -> AssistantMessage {
         lock.withLock {
             var content: [AssistantBlock] = []
             for i in orderedIndices.sorted() {
@@ -736,12 +787,8 @@ final class AnthropicStreamState: @unchecked Sendable {
                 case .text(let t): content.append(.text(t))
                 case .thinking(let th): content.append(.thinking(th))
                 case .toolUse(let id, let name, let json):
-                    let parsed: JSONValue = {
-                        if let data = json.data(using: .utf8),
-                           let v = try? JSONDecoder().decode(JSONValue.self, from: data) { return v }
-                        return .object([:])
-                    }()
-                    content.append(.toolCall(ToolCall(id: id, name: name, arguments: parsed)))
+                    let args: JSONValue = parseToolArgs ? Self.parseToolJSON(json) : .object([:])
+                    content.append(.toolCall(ToolCall(id: id, name: name, arguments: args)))
                 }
             }
             return AssistantMessage(
@@ -759,7 +806,7 @@ final class AnthropicStreamState: @unchecked Sendable {
     }
 
     func finalize() -> AssistantMessage {
-        var m = snapshot()
+        var m = buildMessage(parseToolArgs: true)
         m.stopReason = stopReason
         return m
     }
@@ -779,11 +826,14 @@ final class AnthropicStreamState: @unchecked Sendable {
 
 func mapStopReason(_ raw: String) -> StopReason {
     switch raw {
-    case "end_turn": return .stop
+    case "end_turn", "stop_sequence": return .stop
     case "max_tokens": return .length
     case "tool_use": return .toolUse
-    case "stop_sequence": return .stop
-    default: return .stop
+    // pi maps a refused / safety-filtered turn to an error rather than a clean
+    // stop; unknown reasons are surfaced the same way (rather than silently
+    // masquerading as a successful completion) so new API values are caught.
+    case "refusal", "sensitive": return .error
+    default: return .error
     }
 }
 

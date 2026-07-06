@@ -94,12 +94,12 @@ let anthropicAPIKey = "sk-ant-..."
 await registerBuiltins(anthropic: anthropicAPIKey)
 
 // 2. Build a coding agent scoped to a working directory.
-let agent = await makeCodingAgent(CodingAgentConfig(
+let agent = try await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .readOnly,
     bashEnvironment: [:]
-))
+)).agent
 
 // 3. Drive it.
 try await agent.prompt("Summarize the Swift files under Sources/KWWKAgent.")
@@ -130,7 +130,7 @@ let reviewer = SubagentDefinition(
 
 let bg = BackgroundTaskManager()
 let shellEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
-let agent = await makeCodingAgent(CodingAgentConfig(
+let coding = try await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
@@ -139,20 +139,24 @@ let agent = await makeCodingAgent(CodingAgentConfig(
     bashEnvironment: shellEnvironment
 ))
 
-try await agent.prompt("Use the reviewer subagent to review Sources/KWWKAgent.")
+try await coding.agent.prompt("Use the reviewer subagent to review Sources/KWWKAgent.")
+
+// With a backgroundManager, completed background tasks auto-continue the
+// agent (new LLM runs start on their own). Call `coding.detachBackground?()`
+// to unsubscribe when embedding.
 ```
 
 For the same built-ins that the CLI uses, SDK users can opt in without
 copying prompts:
 
 ```swift
-let agent = await makeCodingAgent(CodingAgentConfig(
+let agent = try await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
     backgroundManager: BackgroundTaskManager(),
     bashEnvironment: shellEnvironment
-).withBuiltinSubagents([.general, .explore, .plan]))
+).withBuiltinSubagents([.general, .explore, .plan])).agent
 ```
 
 SDK users can also run a subagent directly:
@@ -333,7 +337,7 @@ Task {
 }
 
 // later, from any thread:
-agent.steer(UserMessage(text: "also add tests as you go"))
+agent.steer("also add tests as you go")
 ```
 
 ### Providers

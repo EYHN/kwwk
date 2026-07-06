@@ -244,7 +244,7 @@ struct LoginLogoutModalTests {
         // The active slot, model, and resolver are untouched.
         #expect(ctx.sessionProviders.slot(forStoreId: "anthropic") != nil)
         #expect(ctx.agent.state.model.id == "claude")
-        #expect(await authResolvers.resolve(incumbent, nil)?.token == "live-token")
+        #expect(try await authResolvers.resolve(incumbent, nil)?.token == "live-token")
     }
 
     @MainActor
@@ -368,7 +368,7 @@ struct LoginLogoutModalTests {
             let (ctx, harness) = await makeContext(authResolvers: authResolvers)
             let template = Model(
                 id: "z-ai/glm-5.2", api: "openai-completions", provider: "openrouter",
-                baseUrl: "https://openrouter.ai/api/v1"
+                baseURL: "https://openrouter.ai/api/v1"
             )
             ctx.sessionProviders.upsert(ProviderSlot(
                 storeId: "openrouter", catalogProvider: "openrouter",
@@ -400,7 +400,7 @@ struct LoginLogoutModalTests {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("kwwk-login-modal-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+        return try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
     }
 
     /// SlashContext wired to a recording modal host + notifier. The faux

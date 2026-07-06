@@ -9,7 +9,7 @@ struct GoogleGeminiTests {
         name: "Gemini 2.5 Flash",
         api: "google-generative-ai",
         provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com",
+        baseURL: "https://generativelanguage.googleapis.com",
         reasoning: false,
         input: [.text, .image],
         contextWindow: 1_000_000,
@@ -217,7 +217,7 @@ struct GoogleGeminiTests {
 
     static func reasoningModel(_ id: String) -> Model {
         Model(id: id, name: id, api: "google-generative-ai", provider: "google",
-              baseUrl: "https://generativelanguage.googleapis.com", reasoning: true,
+              baseURL: "https://generativelanguage.googleapis.com", reasoning: true,
               input: [.text, .image], contextWindow: 1_000_000, maxTokens: 8192)
     }
 

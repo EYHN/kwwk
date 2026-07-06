@@ -5,7 +5,7 @@ import FoundationNetworking
 
 /// OpenAI /v1/chat/completions streaming provider. Also usable against any
 /// wire-compatible endpoint — Groq, xAI, OpenRouter, Cerebras, HuggingFace,
-/// Ollama, and OpenAI-compat proxies all work by swapping `model.baseUrl`.
+/// Ollama, and OpenAI-compat proxies all work by swapping `model.baseURL`.
 ///
 /// Differences from Anthropic:
 ///  - Single SSE event stream, `data: {json}` lines, terminated by
@@ -53,16 +53,16 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         self.defaultAPIKey = defaultAPIKey
         self.extraHeaders = extraHeaders
         self.urlBuilder = urlBuilder ?? { model, _, fallback in
-            var base = model.baseUrl.isEmpty ? fallback.absoluteString : model.baseUrl
+            var base = model.baseURL.isEmpty ? fallback.absoluteString : model.baseURL
             while base.hasSuffix("/") { base.removeLast() }
             // Cloudflare catalog entries may carry literal `{CLOUDFLARE_*}`
             // placeholders. The generic provider never reads the process
             // environment; provider variants that support Cloudflare pass
             // explicit values through their own URL builders.
             base = substituteCloudflarePlaceholders(in: base, value: { _ in nil })
-            // Tolerate catalog entries that bake `/v1` into baseUrl
+            // Tolerate catalog entries that bake `/v1` into baseURL
             // (pi-mono's models.generated.ts does this for OpenAI).
-            // Without this, the session baseUrl `https://api.openai.com`
+            // Without this, the session baseURL `https://api.openai.com`
             // → `/v1/chat/completions`, but a `/model` swap pulls in
             // `https://api.openai.com/v1` and we'd double-suffix.
             let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
@@ -141,11 +141,22 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             }
             let state = OpenAICompletionsState(api: api, provider: model.provider, modelId: model.id, model: model)
             state.signal = options?.cancellation
-            try await drive(events: parseSSE(bytes: stream), out: out, state: state)
+            // Bridge external cancellation to the in-flight request (see
+            // AnthropicProvider.run for the rationale).
+            let driveTask = Task { try await self.drive(events: parseSSE(bytes: stream), out: out, state: state) }
+            let cancelReg = options?.cancellation?.onCancel { _ in driveTask.cancel() }
+            defer { cancelReg?.cancel() }
+            try await driveTask.value
         } catch {
-            let msg = Self.makeError(api: api, model: model, text: "\(error)")
-            out.push(.error(reason: .error, error: msg))
-            out.end(msg)
+            if options?.cancellation?.isCancelled == true {
+                let aborted = Self.makeAborted(api: api, model: model)
+                out.push(.error(reason: .aborted, error: aborted))
+                out.end(aborted)
+            } else {
+                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+            }
         }
     }
 
@@ -390,7 +401,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         // (e.g. OpenRouter `anthropic/*`) — those are different, conflicting wire
         // shapes. Only apply native cache when we did NOT apply the anthropic one.
         let openAINativeCache = compat.cacheControlFormat != "anthropic"
-            && (model.baseUrl.contains("api.openai.com")
+            && (model.baseURL.contains("api.openai.com")
                 || (retention == .long && compat.supportsLongCacheRetention))
         if openAINativeCache, retention != .none,
            let sid = clampOpenAIPromptCacheKey(options?.sessionId) {
@@ -405,7 +416,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
     // MARK: - Reasoning / thinking format
 
     /// Subset of pi's resolved OpenAI-completions compat that the reasoning
-    /// encoder needs. Auto-detected from provider/baseUrl, then overlaid with
+    /// encoder needs. Auto-detected from provider/baseURL, then overlaid with
     /// any explicit `model.compat`.
     struct ResolvedCompletionsCompat {
         var supportsStore: Bool
@@ -429,7 +440,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
     }
 
     static func resolveCompat(_ model: Model) -> ResolvedCompletionsCompat {
-        let url = model.baseUrl.lowercased()
+        let url = model.baseURL.lowercased()
         let provider = model.provider
         func has(_ s: String) -> Bool { url.contains(s) }
         let isZai = provider == "zai" || provider == "zai-coding-cn" || has("api.z.ai") || has("bigmodel.cn")
@@ -923,14 +934,27 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         )
     }
 
+    private static func makeAborted(api: String, model: Model) -> AssistantMessage {
+        AssistantMessage(
+            content: [],
+            api: api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(),
+            stopReason: .aborted,
+            errorMessage: "Request was aborted",
+            timestamp: Timestamp.now()
+        )
+    }
+
     private static func errorBodyPreview(
-        from stream: AsyncThrowingStream<UInt8, Error>,
+        from stream: AsyncThrowingStream<Data, Error>,
         limit: Int = 4096
     ) async -> String {
         var data = Data()
         do {
-            for try await byte in stream {
-                data.append(byte)
+            for try await chunk in stream {
+                data.append(chunk)
                 if data.count >= limit {
                     break
                 }
@@ -1120,7 +1144,13 @@ final class OpenAICompletionsState: @unchecked Sendable {
         usage.cost = calculateCost(model: model, usage: usage)
     }
 
-    func snapshot() -> AssistantMessage {
+    /// Streaming snapshot. In-progress tool calls use an empty-object
+    /// placeholder rather than re-parsing the growing JSON buffer on every
+    /// delta (O(n^2)); full arguments are parsed once in
+    /// `finalizeStreamingBlocks`/`finalize`.
+    func snapshot() -> AssistantMessage { buildMessage(parseToolArgs: false) }
+
+    private func buildMessage(parseToolArgs: Bool) -> AssistantMessage {
         lock.withLock {
             AssistantMessage(
                 content: order.compactMap { idx -> AssistantBlock? in
@@ -1128,7 +1158,7 @@ final class OpenAICompletionsState: @unchecked Sendable {
                     case .text(let t): return .text(t)
                     case .thinking(let th): return .thinking(th)
                     case .toolUse(let id, let name, let json, let sig):
-                        let args = parseArguments(json)
+                        let args: JSONValue = parseToolArgs ? parseArguments(json) : .object([:])
                         return .toolCall(ToolCall(id: id, name: name, arguments: args, thoughtSignature: sig))
                     case .none: return nil
                     }
@@ -1166,12 +1196,12 @@ final class OpenAICompletionsState: @unchecked Sendable {
     }
 
     func finalize() -> AssistantMessage {
-        snapshot()
+        buildMessage(parseToolArgs: true)
     }
 
     func asAborted() -> AssistantMessage {
         stopReason = .aborted
-        var m = snapshot()
+        var m = buildMessage(parseToolArgs: true)
         m.errorMessage = "Request was aborted"
         return m
     }
@@ -1189,14 +1219,14 @@ final class OpenAICompletionsState: @unchecked Sendable {
 /// Expand Cloudflare base-URL placeholders (`{CLOUDFLARE_ACCOUNT_ID}` /
 /// `{CLOUDFLARE_GATEWAY_ID}`) from an explicit value source. Mirrors pi's
 /// `resolveCloudflareBaseUrl`: the catalog stores the literal tokens in
-/// `model.baseUrl` and they are substituted at request time.
+/// `model.baseURL` and they are substituted at request time.
 /// Unknown/missing values collapse to the empty string.
 func substituteCloudflarePlaceholders(
-    in baseUrl: String,
+    in baseURL: String,
     value: (String) -> String?
 ) -> String {
-    guard baseUrl.contains("{CLOUDFLARE_") else { return baseUrl }
-    var result = baseUrl
+    guard baseURL.contains("{CLOUDFLARE_") else { return baseURL }
+    var result = baseURL
     for token in ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_GATEWAY_ID"] {
         let needle = "{\(token)}"
         guard result.contains(needle) else { continue }

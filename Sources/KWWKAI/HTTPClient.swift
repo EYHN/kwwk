@@ -6,21 +6,44 @@ import FoundationNetworking
 /// Minimal HTTP client abstraction used by streaming providers. Tests inject a
 /// stub implementation; production code uses `URLSessionHTTPClient`.
 public protocol HTTPClient: Sendable {
-    /// Open a streaming POST request and return an async byte stream of the
-    /// response body. The returned `response` is the initial HTTP response.
+    /// Open a streaming POST request and return an async stream of response
+    /// body chunks. Each element is one `didReceive data:` chunk exactly as it
+    /// arrived off the socket — consumers (e.g. `SSEParser`, `parseAWSEventStream`)
+    /// split it into lines/frames themselves. The returned `response` is the
+    /// initial HTTP response.
+    ///
+    /// The stream is single-consumer and finishes (optionally throwing) when the
+    /// request completes or errors. Cancelling the consuming task tears the
+    /// stream down, which aborts the underlying transport.
     func stream(
         url: URL,
         method: String,
         headers: [String: String],
         body: Data?
-    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>)
+    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>)
 }
 
-public struct URLSessionHTTPClient: HTTPClient {
+public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
+    /// The long-lived session that owns the connection pool. Reused across every
+    /// request so TCP/TLS connections are kept alive between API calls instead
+    /// of paying a fresh handshake per request.
     public let session: URLSession
+    private let delegate: StreamingSessionDelegate
 
     public init(session: URLSession? = nil) {
-        self.session = session ?? Self.makeIsolatedSession()
+        let delegate = StreamingSessionDelegate()
+        self.delegate = delegate
+        // A `URLSession`'s delegate is fixed at creation, so an injected session
+        // can only donate its configuration; we build our own session bound to
+        // the demultiplexing delegate. Cookies/cache stay disabled either way.
+        let configuration = session?.configuration ?? Self.isolatedConfiguration()
+        self.session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
+    }
+
+    deinit {
+        // Let in-flight tasks drain, then release the delegate the session
+        // retains. Without this the session (and its delegate) would leak.
+        session.finishTasksAndInvalidate()
     }
 
     public func stream(
@@ -28,103 +51,81 @@ public struct URLSessionHTTPClient: HTTPClient {
         method: String,
         headers: [String: String],
         body: Data?
-    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
+    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         var request = URLRequest(url: url)
         request.httpMethod = method
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.httpBody = body
-        return try await streamViaDelegate(base: session, request: request)
+
+        let task = session.dataTask(with: request)
+        let id = task.taskIdentifier
+        // Register the body stream before `resume()` so early `didReceive`
+        // callbacks find a continuation to feed. The stream aborts the request
+        // when the consumer stops iterating (or its task is cancelled).
+        let stream = delegate.makeBodyStream(for: id, onCancel: { [weak task] in task?.cancel() })
+        task.resume()
+
+        do {
+            let http = try await delegate.awaitHeader(for: id)
+            return (http, stream)
+        } catch {
+            task.cancel()
+            throw error
+        }
     }
 }
 
 private extension URLSessionHTTPClient {
-    static func makeIsolatedSession() -> URLSession {
+    static func isolatedConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCredentialStorage = nil
         configuration.urlCache = nil
         configuration.httpShouldSetCookies = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-        return URLSession(configuration: configuration)
+        return configuration
     }
 }
 
-/// Drives a `URLSessionDataTask` through a delegate that forwards the initial
-/// `HTTPURLResponse` and every `didReceive data:` chunk into an
-/// `AsyncThrowingStream<UInt8, Error>`. Each call spins up its own
-/// `URLSession` (delegates are per-session) and tears it down when the body
-/// stream is drained or the consumer cancels.
-///
-/// Uniform across Apple and Linux: Apple also has `URLSession.bytes(for:)`
-/// but keeping one code path saves us from debugging two subtly different
-/// streams. The delegate-based path is a thin shim over `URLSessionDataTask`
-/// — same behavior, same back-pressure semantics on both OSes.
-private func streamViaDelegate(
-    base: URLSession,
-    request: URLRequest
-) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
-    let delegate = StreamingDelegate()
-    let driver = URLSession(
-        configuration: base.configuration,
-        delegate: delegate,
-        delegateQueue: nil
-    )
-    let task = driver.dataTask(with: request)
-    let stream = delegate.makeByteStream(onCancel: { task.cancel() })
-    task.resume()
-
-    do {
-        let http = try await delegate.awaitResponse()
-        return (http, stream)
-    } catch {
-        task.cancel()
-        driver.finishTasksAndInvalidate()
-        throw error
+/// A single session-level delegate that demultiplexes callbacks by
+/// `dataTask.taskIdentifier` into per-request header/body continuations. One
+/// delegate (and one session) serves every concurrent request so the session's
+/// connection pool is shared.
+private final class StreamingSessionDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    /// Per-request state. A request is removed once both its header result has
+    /// been handed to `awaitHeader`'s continuation and its body stream has
+    /// finished — either side may complete first.
+    private struct TaskState {
+        var headerContinuation: CheckedContinuation<HTTPURLResponse, Error>?
+        var pendingHeader: Result<HTTPURLResponse, Error>?
+        var headerResolved = false
+        var headerDelivered = false
+        var bodyContinuation: AsyncThrowingStream<Data, Error>.Continuation?
+        /// Completion that arrived before the body stream was constructed.
+        var pendingCompletion: Error??
+        var bodyFinished = false
     }
-}
 
-private final class StreamingDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let lock = NSLock()
-    private var headerContinuation: CheckedContinuation<HTTPURLResponse, Error>?
-    private var headerResolved = false
-    private var pendingHeaders: Result<HTTPURLResponse, Error>?
-    private var bodyContinuation: AsyncThrowingStream<UInt8, Error>.Continuation?
-    /// Error from `didCompleteWithError` that arrived before the body stream
-    /// was constructed. Replayed into the stream once it opens.
-    private var pendingCompletion: Error??
+    private var states: [Int: TaskState] = [:]
 
-    func awaitResponse() async throws -> HTTPURLResponse {
-        try await withCheckedThrowingContinuation { cont in
-            let pending: Result<HTTPURLResponse, Error>? = lock.withLock {
-                if let pending = pendingHeaders {
-                    pendingHeaders = nil
-                    headerResolved = true
-                    return pending
-                } else {
-                    headerContinuation = cont
-                    return nil
-                }
-            }
-            if let pending {
-                switch pending {
-                case .success(let http): cont.resume(returning: http)
-                case .failure(let err):  cont.resume(throwing: err)
-                }
-            }
-        }
-    }
+    // MARK: - Registration (called from `stream(...)`)
 
-    func makeByteStream(onCancel: @escaping @Sendable () -> Void) -> AsyncThrowingStream<UInt8, Error> {
-        AsyncThrowingStream<UInt8, Error> { continuation in
+    func makeBodyStream(for id: Int, onCancel: @escaping @Sendable () -> Void) -> AsyncThrowingStream<Data, Error> {
+        AsyncThrowingStream<Data, Error> { continuation in
             let pending: Error?? = lock.withLock {
-                bodyContinuation = continuation
-                // Replay a completion that landed before the consumer started
-                // draining — typical when the server closed the connection
-                // between `didReceive response:` and the caller hooking in.
-                if let pending = pendingCompletion {
-                    pendingCompletion = nil
-                    return .some(pending)
+                var st = states[id] ?? TaskState()
+                // Replay a completion that landed before the consumer hooked in
+                // (server closed between `didReceive response:` and this call).
+                if let p = st.pendingCompletion {
+                    st.pendingCompletion = nil
+                    st.bodyFinished = true
+                    states[id] = st
+                    removeIfDoneLocked(id)
+                    return .some(p)
                 }
+                st.bodyContinuation = continuation
+                states[id] = st
                 return nil
             }
             if let pending {
@@ -135,83 +136,116 @@ private final class StreamingDelegate: NSObject, URLSessionDataDelegate, @unchec
         }
     }
 
+    func awaitHeader(for id: Int) async throws -> HTTPURLResponse {
+        try await withCheckedThrowingContinuation { cont in
+            let pending: Result<HTTPURLResponse, Error>? = lock.withLock {
+                var st = states[id] ?? TaskState()
+                if let p = st.pendingHeader {
+                    st.pendingHeader = nil
+                    st.headerDelivered = true
+                    states[id] = st
+                    removeIfDoneLocked(id)
+                    return p
+                }
+                st.headerContinuation = cont
+                states[id] = st
+                return nil
+            }
+            if let pending {
+                switch pending {
+                case .success(let http): cont.resume(returning: http)
+                case .failure(let err):  cont.resume(throwing: err)
+                }
+            }
+        }
+    }
+
+    // MARK: - URLSessionDataDelegate
+
     func urlSession(
         _ session: URLSession,
         dataTask: URLSessionDataTask,
         didReceive response: URLResponse,
         completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
     ) {
+        let id = dataTask.taskIdentifier
         guard let http = response as? HTTPURLResponse else {
-            deliverHeader(.failure(HTTPClientError.invalidResponse))
+            deliverHeader(id, .failure(HTTPClientError.invalidResponse))
             completionHandler(.cancel)
             return
         }
-        deliverHeader(.success(http))
+        deliverHeader(id, .success(http))
         completionHandler(.allow)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        let cont = lock.withLock { bodyContinuation }
-        guard let cont else { return }
-        // `yield(contentsOf:)` on a Data wraps it in a Sequence<UInt8>, which
-        // yields without copying and keeps the stream back-pressured.
-        for byte in data { cont.yield(byte) }
+        let id = dataTask.taskIdentifier
+        let cont = lock.withLock { states[id]?.bodyContinuation }
+        // Deliver the whole chunk in one yield — one stream element per socket
+        // read, not one per byte.
+        cont?.yield(data)
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        let id = task.taskIdentifier
         enum HeaderAction { case none, resume(CheckedContinuation<HTTPURLResponse, Error>, Error) }
-        enum BodyAction { case none, finish(AsyncThrowingStream<UInt8, Error>.Continuation, Error?) }
+        enum BodyAction { case none, finish(AsyncThrowingStream<Data, Error>.Continuation, Error?) }
 
         let actions: (HeaderAction, BodyAction) = lock.withLock {
+            guard var st = states[id] else { return (.none, .none) }
             var headerAction: HeaderAction = .none
-            var bodyAction: BodyAction = .none
-
             // If `didReceive response:` never fired (DNS/connect failure),
             // surface the error on the header continuation instead.
-            if !headerResolved {
-                if let cont = headerContinuation {
-                    headerContinuation = nil
-                    headerResolved = true
+            if !st.headerResolved {
+                st.headerResolved = true
+                if let cont = st.headerContinuation {
+                    st.headerContinuation = nil
+                    st.headerDelivered = true
                     headerAction = .resume(cont, error ?? HTTPClientError.invalidResponse)
                 } else {
-                    pendingHeaders = .failure(error ?? HTTPClientError.invalidResponse)
-                    headerResolved = true
+                    st.pendingHeader = .failure(error ?? HTTPClientError.invalidResponse)
                 }
             }
-            if let body = bodyContinuation {
-                bodyContinuation = nil
+            var bodyAction: BodyAction = .none
+            if let body = st.bodyContinuation {
+                st.bodyContinuation = nil
+                st.bodyFinished = true
                 bodyAction = .finish(body, error)
             } else {
-                pendingCompletion = .some(error)
+                st.pendingCompletion = .some(error)
             }
+            states[id] = st
+            removeIfDoneLocked(id)
             return (headerAction, bodyAction)
         }
 
         switch actions.0 {
-        case .none:
-            break
-        case .resume(let cont, let error):
-            cont.resume(throwing: error)
+        case .none: break
+        case .resume(let cont, let error): cont.resume(throwing: error)
         }
         switch actions.1 {
-        case .none:
-            break
+        case .none: break
         case .finish(let body, let error):
-            if let error { body.finish(throwing: error) }
-            else { body.finish() }
+            if let error { body.finish(throwing: error) } else { body.finish() }
         }
-        session.finishTasksAndInvalidate()
     }
 
-    private func deliverHeader(_ result: Result<HTTPURLResponse, Error>) {
+    // MARK: - Helpers
+
+    private func deliverHeader(_ id: Int, _ result: Result<HTTPURLResponse, Error>) {
         let continuation: CheckedContinuation<HTTPURLResponse, Error>? = lock.withLock {
-            guard !headerResolved else { return nil }
-            headerResolved = true
-            if let cont = headerContinuation {
-                headerContinuation = nil
+            var st = states[id] ?? TaskState()
+            guard !st.headerResolved else { states[id] = st; return nil }
+            st.headerResolved = true
+            if let cont = st.headerContinuation {
+                st.headerContinuation = nil
+                st.headerDelivered = true
+                states[id] = st
+                removeIfDoneLocked(id)
                 return cont
             } else {
-                pendingHeaders = result
+                st.pendingHeader = result
+                states[id] = st
                 return nil
             }
         }
@@ -220,6 +254,13 @@ private final class StreamingDelegate: NSObject, URLSessionDataDelegate, @unchec
             case .success(let http): continuation.resume(returning: http)
             case .failure(let err):  continuation.resume(throwing: err)
             }
+        }
+    }
+
+    private func removeIfDoneLocked(_ id: Int) {
+        guard let st = states[id] else { return }
+        if st.headerDelivered && st.bodyFinished {
+            states[id] = nil
         }
     }
 }
@@ -251,7 +292,7 @@ public extension HTTPClient {
             url: url, method: method, headers: headers, body: body
         )
         var buffer = Data()
-        for try await byte in stream { buffer.append(byte) }
+        for try await chunk in stream { buffer.append(chunk) }
         return (response, buffer)
     }
 }

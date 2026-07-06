@@ -23,7 +23,7 @@ final class StubSSEClient: HTTPClient, @unchecked Sendable {
         method: String,
         headers: [String: String],
         body requestBody: Data?
-    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
+    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         lock.withLock { lastRequest = (url, method, headers, requestBody) }
 
         let response = HTTPURLResponse(
@@ -33,12 +33,10 @@ final class StubSSEClient: HTTPClient, @unchecked Sendable {
             headerFields: ["content-type": "text/event-stream"]
         )!
 
-        let bodyBytes = Array(body.utf8)
-        let stream = AsyncThrowingStream<UInt8, Error> { cont in
+        let bodyData = Data(body.utf8)
+        let stream = AsyncThrowingStream<Data, Error> { cont in
             Task {
-                for byte in bodyBytes {
-                    cont.yield(byte)
-                }
+                cont.yield(bodyData)
                 cont.finish()
             }
         }
@@ -54,7 +52,7 @@ struct AnthropicProviderTests {
         name: "Claude Test",
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: false,
         input: [.text],
         contextWindow: 128_000,
@@ -409,7 +407,7 @@ struct AnthropicProviderTests {
         name: "Claude Reason",
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: true,
         input: [.text],
         contextWindow: 200_000,

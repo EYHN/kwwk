@@ -22,11 +22,11 @@ struct ReasoningEncoderTests {
 
     """
 
-    private func reasoningModel(provider: String, baseUrl: String, compat: ModelCompat? = nil,
+    private func reasoningModel(provider: String, baseURL: String, compat: ModelCompat? = nil,
                                 thinkingLevelMap: [String: String?]? = nil) -> Model {
         Model(
             id: "m", name: "m", api: "openai-completions", provider: provider,
-            baseUrl: baseUrl, reasoning: true, input: [.text],
+            baseURL: baseURL, reasoning: true, input: [.text],
             contextWindow: 128_000, maxTokens: 4096,
             compat: compat, thinkingLevelMap: thinkingLevelMap
         )
@@ -44,7 +44,7 @@ struct ReasoningEncoderTests {
 
     @Test("openai default emits flat reasoning_effort")
     func openaiDefault() throws {
-        let b = try body(reasoningModel(provider: "openai", baseUrl: "https://api.openai.com"), .high)
+        let b = try body(reasoningModel(provider: "openai", baseURL: "https://api.openai.com"), .high)
         #expect(b["reasoning_effort"] as? String == "high")
         #expect(b["reasoning"] == nil)
         #expect(b["thinking"] == nil)
@@ -52,7 +52,7 @@ struct ReasoningEncoderTests {
 
     @Test("openrouter (detected from baseUrl) emits nested reasoning.effort")
     func openrouterNested() throws {
-        let b = try body(reasoningModel(provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1"), .medium)
+        let b = try body(reasoningModel(provider: "openrouter", baseURL: "https://openrouter.ai/api/v1"), .medium)
         let reasoning = b["reasoning"] as? [String: Any]
         #expect(reasoning?["effort"] as? String == "medium")
         #expect(b["reasoning_effort"] == nil)
@@ -60,14 +60,14 @@ struct ReasoningEncoderTests {
 
     @Test("deepseek emits thinking{type:enabled} + reasoning_effort")
     func deepseekFormat() throws {
-        let b = try body(reasoningModel(provider: "deepseek", baseUrl: "https://api.deepseek.com"), .high)
+        let b = try body(reasoningModel(provider: "deepseek", baseURL: "https://api.deepseek.com"), .high)
         let thinking = b["thinking"] as? [String: Any]
         #expect(thinking?["type"] as? String == "enabled")
     }
 
     @Test("zai emits thinking + tool_stream via compat")
     func zaiFormat() throws {
-        let model = reasoningModel(provider: "zai", baseUrl: "https://api.z.ai/api/coding/paas/v4",
+        let model = reasoningModel(provider: "zai", baseURL: "https://api.z.ai/api/coding/paas/v4",
                                    compat: { var c = ModelCompat(); c.zaiToolStream = true; c.supportsReasoningEffort = true; return c }())
         let b = try OpenAICompletionsProvider.encodeBodyDict(
             model: model,
@@ -83,7 +83,7 @@ struct ReasoningEncoderTests {
     @Test("thinkingLevelMap remaps the wire effort value")
     func levelMapRemap() throws {
         // xhigh maps to "max"; request xhigh -> reasoning_effort "max".
-        let model = reasoningModel(provider: "openai", baseUrl: "https://api.openai.com",
+        let model = reasoningModel(provider: "openai", baseURL: "https://api.openai.com",
                                    thinkingLevelMap: ["xhigh": "max"])
         let b = try body(model, .xhigh)
         #expect(b["reasoning_effort"] as? String == "max")
@@ -92,7 +92,7 @@ struct ReasoningEncoderTests {
     @Test("non-reasoning model emits no reasoning fields")
     func nonReasoning() throws {
         let model = Model(id: "m", name: "m", api: "openai-completions", provider: "openai",
-                          baseUrl: "https://api.openai.com", reasoning: false)
+                          baseURL: "https://api.openai.com", reasoning: false)
         let b = try OpenAICompletionsProvider.encodeBodyDict(
             model: model, context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(reasoning: .high))
@@ -108,7 +108,7 @@ struct ReasoningEncoderTests {
         let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
         var compat = ModelCompat(); compat.forceAdaptiveThinking = true
         let model = Model(id: "claude-opus-4-6", name: "Opus", api: "anthropic-messages",
-                          provider: "anthropic", baseUrl: "https://api.anthropic.com",
+                          provider: "anthropic", baseURL: "https://api.anthropic.com",
                           reasoning: true, input: [.text], contextWindow: 200_000, maxTokens: 8192,
                           compat: compat, thinkingLevelMap: ["xhigh": "max"])
         _ = provider.stream(model: model,
@@ -130,7 +130,7 @@ struct ReasoningEncoderTests {
         let client = StubSSEClient(body: Self.geminiSSE)
         let provider = GoogleGeminiProvider(client: client, defaultAPIKey: "k")
         let model = Model(id: "gemini-3-pro-preview", name: "G3", api: "google-generative-ai",
-                          provider: "google", baseUrl: "https://generativelanguage.googleapis.com",
+                          provider: "google", baseURL: "https://generativelanguage.googleapis.com",
                           reasoning: true, input: [.text], contextWindow: 1_000_000, maxTokens: 8192)
         _ = provider.stream(model: model,
                             context: Context(messages: [.user(UserMessage(text: "hi"))]),

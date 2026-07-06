@@ -87,7 +87,7 @@ public struct BuiltinSubagentSelection: OptionSet, Sendable, Hashable {
         return selection
     }
 
-    public static let validNames = "general, Explore, Plan, all, none"
+    public static let validNames = "general, explore, plan, all, none"
 }
 
 public extension SubagentDefinition {
@@ -123,7 +123,7 @@ public extension SubagentDefinition {
         tools: CodingTools = .readOnly
     ) -> SubagentDefinition {
         SubagentDefinition(
-            name: "Explore",
+            name: "explore",
             description: "Use for read-only codebase exploration, file discovery, and call-chain analysis.",
             prompt: """
             You are a read-only code exploration specialist.
@@ -149,7 +149,7 @@ public extension SubagentDefinition {
         tools: CodingTools = .readOnly
     ) -> SubagentDefinition {
         SubagentDefinition(
-            name: "Plan",
+            name: "plan",
             description: "Use for read-only implementation planning before code changes.",
             prompt: """
             You are a read-only implementation planner.

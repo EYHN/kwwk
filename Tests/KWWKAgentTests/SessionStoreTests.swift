@@ -167,7 +167,7 @@ struct SessionStoreTests {
         let raw = #"{"type":"session","version":999,"id":"sess-corrupt","cwd":"/w","createdAt":1}"# + "\n"
         try raw.data(using: .utf8)!.write(to: file)
 
-        let resolved = await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh-session")
+        let resolved = try await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh-session")
         #expect(!resolved.resumed)
         #expect(resolved.sessionId == "fresh-session")
         #expect((try? String(contentsOf: file, encoding: .utf8)) == raw)
@@ -345,7 +345,7 @@ struct SessionStoreTests {
                                model: "m1", provider: "p1")
         try await store.append(id: "s1", cwd: "/proj", message: assistantMsg("world"))
 
-        let resolved = await store.resolveResume(.latestForCwd, cwd: "/proj")
+        let resolved = try await store.resolveResume(.latestForCwd, cwd: "/proj")
         #expect(resolved.resumed)
         #expect(resolved.sessionId == "s1")
         #expect(resolved.messages.count == 2)
@@ -358,7 +358,7 @@ struct SessionStoreTests {
         let (store, dir) = tempStore()
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let resolved = await store.resolveResume(.none, cwd: "/proj", freshId: "fresh-1")
+        let resolved = try await store.resolveResume(.none, cwd: "/proj", freshId: "fresh-1")
         #expect(!resolved.resumed)
         #expect(resolved.sessionId == "fresh-1")
         #expect(resolved.messages.isEmpty)
@@ -483,7 +483,7 @@ struct SessionStoreTests {
         #expect(loaded.transcriptMessages.count > loaded.messages.count)
         #expect(loaded.persistedContextCount == 1)
 
-        let resolved = await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh")
+        let resolved = try await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh")
         #expect(resolved.resumed)
         #expect(resolved.messages == loaded.messages)
         #expect(resolved.persistedCount == loaded.persistedContextCount)

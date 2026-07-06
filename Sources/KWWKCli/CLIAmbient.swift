@@ -14,7 +14,7 @@ func cliTmuxManager(environment: [String: String]) throws -> TmuxSessionManager 
     guard let tmuxPath = executableNamed("tmux", environment: environment) else {
         throw CLIAmbientError.tmuxNotFound
     }
-    return TmuxSessionManager(tmuxPath: tmuxPath)
+    return TmuxSessionManager(tmuxPath: tmuxPath, environment: environment)
 }
 
 private func executableNamed(_ name: String, environment: [String: String]) -> String? {

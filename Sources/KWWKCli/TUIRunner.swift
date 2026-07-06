@@ -94,10 +94,16 @@ final class TUIRunner: @unchecked Sendable {
         try installStdin()
         await waitForExit()
         tearDown()
-        let code = lock.withLock { pendingExitCode } ?? 0
-        if code != 0 {
-            Foundation.exit(code)
-        }
+    }
+
+    /// The exit code requested by `exit(code:)` (or a SIGINT/SIGTERM handler),
+    /// or 0 if none. Read by the caller AFTER `run()` returns so it can perform
+    /// its own graceful shutdown (kill background tasks, close provider/tmux)
+    /// and then exit the process with this code. `run()` deliberately does NOT
+    /// call `Foundation.exit` itself — doing so skipped the caller's shutdown on
+    /// every signal-driven teardown, leaking background processes and sockets.
+    var exitCode: Int32 {
+        lock.withLock { pendingExitCode } ?? 0
     }
 
     /// Request a clean shutdown. Safe from signal handlers and keybinding

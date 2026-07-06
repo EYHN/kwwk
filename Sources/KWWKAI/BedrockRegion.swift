@@ -25,14 +25,14 @@ enum BedrockRegion {
     /// Region of a *standard* AWS Bedrock runtime endpoint host:
     /// `bedrock-runtime.<region>.amazonaws.com` (also `-fips` and `.cn`).
     /// Returns nil for custom/VPC/proxy endpoints so we don't pin those.
-    static func fromEndpointHost(_ baseUrl: String?) -> String? {
-        guard let baseUrl, !baseUrl.isEmpty else { return nil }
+    static func fromEndpointHost(_ baseURL: String?) -> String? {
+        guard let baseURL, !baseURL.isEmpty else { return nil }
         let host: String
-        if let url = URL(string: baseUrl), let h = url.host {
+        if let url = URL(string: baseURL), let h = url.host {
             host = h
         } else {
             // Bare host (no scheme).
-            host = baseUrl
+            host = baseURL
         }
         let lower = host.lowercased()
         let prefixes = ["bedrock-runtime-fips.", "bedrock-runtime."]
@@ -63,7 +63,7 @@ enum BedrockRegion {
     /// keeps configuredRegion (env) ranked above the endpoint host, matching pi.
     static func resolve(
         modelId: String,
-        baseUrl: String?,
+        baseURL: String?,
         env: [String: String],
         profileRegion: String? = nil
     ) -> String {
@@ -72,7 +72,7 @@ enum BedrockRegion {
         // 2. configuredRegion (AWS_REGION / AWS_DEFAULT_REGION).
         if let configured = fromEnv(env) { return configured }
         // 3. endpoint-host region, only when useExplicitEndpoint.
-        let endpointRegion = fromEndpointHost(baseUrl)
+        let endpointRegion = fromEndpointHost(baseURL)
         let hasAmbientProfile = !(env["AWS_PROFILE"] ?? "").isEmpty
         let useExplicitEndpoint = endpointRegion == nil
             || (fromEnv(env) == nil && !hasAmbientProfile)

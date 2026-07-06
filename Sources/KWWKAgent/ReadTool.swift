@@ -2,18 +2,15 @@ import Foundation
 import KWWKAI
 
 public struct ReadToolOptions: Sendable {
-    public var autoResizeImages: Bool
     public var operations: ReadOperations
     public var maxLines: Int
     public var maxBytes: Int
 
     public init(
-        autoResizeImages: Bool = true,
         operations: ReadOperations = LocalReadOperations(),
         maxLines: Int = Truncate.defaultMaxLines,
         maxBytes: Int = Truncate.defaultMaxBytes
     ) {
-        self.autoResizeImages = autoResizeImages
         self.operations = operations
         self.maxLines = maxLines
         self.maxBytes = maxBytes
@@ -85,7 +82,9 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
             let absolutePath = PathUtils.resolveToCwd(rawPath, cwd: cwd)
             try await ops.access(absolutePath)
 
-            // Image path.
+            // Image path. The image is base64-inlined as-is: there is no
+            // resizing or downscaling, so a large image contributes its full
+            // encoded byte count to the request.
             if let mimeType = try await ops.detectImageMimeType(absolutePath) {
                 let buffer = try await ops.readFile(absolutePath)
                 let base64 = buffer.base64EncodedString()
@@ -103,21 +102,29 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
             guard let text = String(data: buffer, encoding: .utf8) else {
                 throw CodingToolError.invalidArgument("read: file is not valid UTF-8")
             }
-            let allLines = text.components(separatedBy: "\n")
-            let totalLines = allLines.count
+            // Total line count via a single newline pass — cheap and
+            // allocation-free, unlike materializing every line as a String.
+            let totalLines = text.utf8.reduce(1) { $0 + ($1 == 0x0A ? 1 : 0) }
             let startLine = (offset.map { max(0, $0 - 1) }) ?? 0
             let startDisplay = startLine + 1
-            if startLine >= allLines.count {
-                throw CodingToolError.offsetOutOfRange(offset: offset ?? 0, totalLines: allLines.count)
+            if startLine >= totalLines {
+                throw CodingToolError.offsetOutOfRange(offset: offset ?? 0, totalLines: totalLines)
             }
 
             var userLimitedLines: Int?
             let selectedContent: String
             if let limit {
-                let endLine = min(startLine + limit, allLines.count)
-                selectedContent = allLines[startLine..<endLine].joined(separator: "\n")
-                userLimitedLines = endLine - startLine
+                // Only split up to the requested window instead of every line
+                // in the file: `maxSplits` stops scanning past the window and
+                // keeps the remainder as one unsplit chunk, which we drop.
+                let needed = startLine + limit
+                let head = text.split(separator: "\n", maxSplits: needed, omittingEmptySubsequences: false)
+                let windowEnd = min(needed, head.count)
+                selectedContent = head[startLine..<windowEnd].joined(separator: "\n")
+                userLimitedLines = windowEnd - startLine
             } else {
+                // No limit: everything from the offset to EOF is needed anyway.
+                let allLines = text.components(separatedBy: "\n")
                 selectedContent = allLines[startLine...].joined(separator: "\n")
             }
 
@@ -130,7 +137,8 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
             var returnDetails: JSONValue?
 
             if trunc.firstLineExceedsLimit {
-                let firstLineSize = Truncate.formatSize(allLines[startLine].utf8.count)
+                let firstWindowLineBytes = selectedContent.utf8.prefix { $0 != 0x0A }.count
+                let firstLineSize = Truncate.formatSize(firstWindowLineBytes)
                 outputText = "[Line \(startDisplay) is \(firstLineSize), exceeds \(Truncate.formatSize(maxBytes)) limit.]"
                 returnDetails = encodeTruncation(trunc)
             } else if trunc.truncated {
@@ -143,8 +151,8 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
                     outputText += "\n\n[Showing lines \(startDisplay)-\(endDisplay) of \(totalLines) (\(Truncate.formatSize(maxBytes)) limit). Use offset=\(nextOffset) to continue.]"
                 }
                 returnDetails = encodeTruncation(trunc)
-            } else if let ul = userLimitedLines, startLine + ul < allLines.count {
-                let remaining = allLines.count - (startLine + ul)
+            } else if let ul = userLimitedLines, startLine + ul < totalLines {
+                let remaining = totalLines - (startLine + ul)
                 let nextOffset = startLine + ul + 1
                 outputText = "\(trunc.content)\n\n[\(remaining) more lines in file. Use offset=\(nextOffset) to continue.]"
             } else {

@@ -153,7 +153,7 @@ struct AzureCloudflareTests {
             name: "gpt-4o-mini",
             api: "cloudflare-ai-gateway",
             provider: "cloudflare-ai-gateway",
-            baseUrl: "https://gateway.ai.cloudflare.com/v1/acct/gw/compat"
+            baseURL: "https://gateway.ai.cloudflare.com/v1/acct/gw/compat"
         )
         _ = provider.stream(
             model: model,
@@ -175,13 +175,13 @@ struct AzureCloudflareTests {
             accountId: "acctABC",
             client: client
         )
-        // model.baseUrl carries the literal placeholder; urlBuilder must expand it.
+        // model.baseURL carries the literal placeholder; urlBuilder must expand it.
         let model = Model(
             id: "@cf/x/y",
             name: "y",
             api: "cloudflare-workers-ai",
             provider: "cloudflare-workers-ai",
-            baseUrl: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
+            baseURL: "https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1"
         )
         _ = provider.stream(
             model: model,

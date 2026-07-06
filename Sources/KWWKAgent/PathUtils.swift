@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 public enum PathUtils {
     private static let unicodeSpaceScalars = Set<UInt32>(
@@ -44,6 +49,36 @@ public enum PathUtils {
             }
         }
         return out
+    }
+
+    /// Write `data` to `path` in place: open the existing file (following any
+    /// symlink in the path) and truncate it, or create it with `createMode`
+    /// when missing. Preserves the inode, hard-link siblings, symlink target,
+    /// and existing permissions — matching pi's `fs.writeFile`, unlike an
+    /// atomic temp-file rename which allocates a new inode and detaches
+    /// symlinks/hard links.
+    public static func writeFileInPlace(_ path: String, data: Data, createMode: mode_t = 0o644) throws {
+        #if canImport(Darwin) || canImport(Glibc)
+        let fd = path.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, createMode) }
+        if fd < 0 {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        defer { close(fd) }
+        try data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+            guard let base = buffer.baseAddress else { return }
+            var offset = 0
+            while offset < buffer.count {
+                let written = write(fd, base.advanced(by: offset), buffer.count - offset)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                offset += written
+            }
+        }
+        #else
+        try data.write(to: URL(fileURLWithPath: path))
+        #endif
     }
 
     /// Detect a supported image MIME type by sniffing leading magic bytes.

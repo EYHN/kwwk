@@ -34,12 +34,21 @@ public enum ModelsCatalog {
     // MARK: - Loader
 
     private static func loadAll() -> [String: [String: Model]] {
-        guard let url = Bundle.module.url(forResource: "models", withExtension: "json"),
-              let data = try? Data(contentsOf: url) else {
-            return [:]
+        // The catalog is a bundled build resource; a missing or unparseable
+        // models.json is a broken build, not a runtime condition to paper
+        // over with an empty catalog (which would silently break every model
+        // lookup). Fail loudly so it's caught at first use.
+        guard let url = Bundle.module.url(forResource: "models", withExtension: "json") else {
+            fatalError("ModelsCatalog: bundled resource models.json is missing from the build")
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            fatalError("ModelsCatalog: cannot read bundled models.json at \(url.path): \(error)")
         }
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
+            fatalError("ModelsCatalog: bundled models.json is not a JSON object")
         }
         var out: [String: [String: Model]] = [:]
         for (provider, value) in root {
@@ -65,7 +74,7 @@ public enum ModelsCatalog {
               let provider = dict["provider"] as? String else {
             return nil
         }
-        let baseUrl = dict["baseUrl"] as? String ?? ""
+        let baseURL = dict["baseUrl"] as? String ?? ""
         let reasoning = dict["reasoning"] as? Bool ?? false
         let inputStrings = dict["input"] as? [String] ?? ["text"]
         let input: [InputModality] = inputStrings.compactMap { InputModality(rawValue: $0) }
@@ -110,7 +119,7 @@ public enum ModelsCatalog {
             name: name,
             api: api,
             provider: provider,
-            baseUrl: baseUrl,
+            baseURL: baseURL,
             reasoning: reasoning,
             input: input,
             cost: cost,

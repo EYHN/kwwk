@@ -2,7 +2,7 @@ import Foundation
 import KWWKAI
 
 /// One logged-in provider's session-scoped routing template. `/model` uses
-/// `template` to stamp correct wire routing (api / provider scope / baseUrl /
+/// `template` to stamp correct wire routing (api / provider scope / baseURL /
 /// headers) onto any catalog model the user switches to, and lists that
 /// provider's catalog under `catalogProvider` / `displayName`.
 struct ProviderSlot: Sendable {
@@ -15,7 +15,7 @@ struct ProviderSlot: Sendable {
     /// Human label shown as the group header in the `/model` picker.
     let displayName: String
     /// The default model built at registration time — carries the resolved
-    /// wire `api`, provider scope, session `baseUrl`, and headers that every
+    /// wire `api`, provider scope, session `baseURL`, and headers that every
     /// model under this provider must route through.
     let template: Model
 }
@@ -61,13 +61,13 @@ final class SessionProviders {
 /// on the next request — no agent rebuild. Static api-key providers have no
 /// entry; `resolve` returns nil and the provider falls back to its baked key.
 actor SessionAuthResolvers {
-    private var map: [String: @Sendable (Model, String?) async -> ResolvedProviderAuth?]
+    private var map: [String: @Sendable (Model, String?) async throws -> ResolvedProviderAuth?]
 
-    init(_ initial: [String: @Sendable (Model, String?) async -> ResolvedProviderAuth?] = [:]) {
+    init(_ initial: [String: @Sendable (Model, String?) async throws -> ResolvedProviderAuth?] = [:]) {
         self.map = initial
     }
 
-    func set(scope: String, _ resolver: @escaping @Sendable (Model, String?) async -> ResolvedProviderAuth?) {
+    func set(scope: String, _ resolver: @escaping @Sendable (Model, String?) async throws -> ResolvedProviderAuth?) {
         map[scope] = resolver
     }
 
@@ -75,15 +75,15 @@ actor SessionAuthResolvers {
         map.removeValue(forKey: scope)
     }
 
-    func resolve(_ model: Model, _ sessionId: String?) async -> ResolvedProviderAuth? {
+    func resolve(_ model: Model, _ sessionId: String?) async throws -> ResolvedProviderAuth? {
         guard let r = map[model.provider] else { return nil }
-        return await r(model, sessionId)
+        return try await r(model, sessionId)
     }
 
     /// One stable delegating closure to hand the agent. It closes over this
     /// actor, so later `set` / `remove` calls are visible without swapping the
     /// agent's `authResolver`.
-    nonisolated func delegatingResolver() -> @Sendable (Model, String?) async -> ResolvedProviderAuth? {
-        { model, sid in await self.resolve(model, sid) }
+    nonisolated func delegatingResolver() -> @Sendable (Model, String?) async throws -> ResolvedProviderAuth? {
+        { model, sid in try await self.resolve(model, sid) }
     }
 }

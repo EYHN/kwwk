@@ -14,7 +14,7 @@ struct MultiProviderAuthTests {
             .appendingPathComponent("kwwk-multilogin-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("oauth.json")
-        let store = OAuthStore(url: url)
+        let store = try OAuthStore(url: url)
 
         try await store.set(OAuthCredentials(access: "a", refresh: "ra", expires: .max), for: "anthropic")
         try await store.set(OAuthCredentials(access: "c", refresh: "rc", expires: .max), for: "openai-codex")
@@ -22,7 +22,7 @@ struct MultiProviderAuthTests {
         #expect(all.keys.sorted() == ["anthropic", "openai-codex"])
 
         // Re-persist through a fresh store instance to confirm it round-trips.
-        let reopened = OAuthStore(url: url)
+        let reopened = try OAuthStore(url: url)
         #expect(await reopened.get("anthropic")?.access == "a")
         #expect(await reopened.get("openai-codex")?.access == "c")
     }
@@ -72,7 +72,7 @@ struct MultiProviderAuthTests {
             let dir = FileManager.default.temporaryDirectory
                 .appendingPathComponent("kwwk-openrouter-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let store = OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
             try await store.set(OAuthCredentials(
                 access: "sk-or-test", refresh: "", expires: .max,
                 extras: ["defaultModel": .string("z-ai/glm-5.2")]
@@ -84,7 +84,7 @@ struct MultiProviderAuthTests {
             #expect(resolved?.model.id == "z-ai/glm-5.2")
             #expect(resolved?.model.provider == "openrouter")
             #expect(resolved?.model.api == "openai-completions")
-            #expect(resolved?.model.baseUrl == "https://openrouter.ai/api/v1")
+            #expect(resolved?.model.baseURL == "https://openrouter.ai/api/v1")
             // Catalog metadata — including the OpenRouter reasoning format the
             // completions encoder needs — rides along. Compare against the live
             // catalog entry (not a pinned number) so a catalog regeneration
@@ -106,7 +106,7 @@ struct MultiProviderAuthTests {
             let dir = FileManager.default.temporaryDirectory
                 .appendingPathComponent("kwwk-openrouter-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let store = OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
             // No defaultModel stored → sensible default.
             try await store.set(OAuthCredentials(
                 access: "sk-or-test", refresh: "", expires: .max
@@ -123,7 +123,7 @@ struct MultiProviderAuthTests {
                 modelOverride: "somelab/brand-new-model", context1m: false
             )
             #expect(custom?.model.id == "somelab/brand-new-model")
-            #expect(custom?.model.baseUrl == "https://openrouter.ai/api/v1")
+            #expect(custom?.model.baseURL == "https://openrouter.ai/api/v1")
             #expect(custom?.model.compat?.thinkingFormat == "openrouter")
             await APIRegistry.shared.unregisterScope("openrouter")
         }
@@ -132,7 +132,7 @@ struct MultiProviderAuthTests {
     // MARK: - Unified resolver dispatch
 
     @Test("SessionAuthResolvers dispatches by model.provider and supports mid-session add/remove")
-    func resolverDispatch() async {
+    func resolverDispatch() async throws {
         let resolvers = SessionAuthResolvers()
         await resolvers.set(scope: "anthropic") { _, _ in
             ResolvedProviderAuth(token: "anthropic-token", scheme: .bearer)
@@ -145,22 +145,22 @@ struct MultiProviderAuthTests {
         let codexModel = Model(id: "gpt", api: "chatgpt-codex", provider: "chatgpt-codex")
         let staticModel = Model(id: "k", api: "openai-responses", provider: "openai")
 
-        #expect(await resolvers.resolve(anthropicModel, nil)?.token == "anthropic-token")
-        #expect(await resolvers.resolve(codexModel, nil)?.token == "codex-token")
+        #expect(try await resolvers.resolve(anthropicModel, nil)?.token == "anthropic-token")
+        #expect(try await resolvers.resolve(codexModel, nil)?.token == "codex-token")
         // A static (api-key) provider has no resolver → nil → baked key used.
-        #expect(await resolvers.resolve(staticModel, nil) == nil)
+        #expect(try await resolvers.resolve(staticModel, nil) == nil)
 
         // The stable delegating closure sees a provider added later (`/login`).
         let delegate = resolvers.delegatingResolver()
-        #expect(await delegate(staticModel, nil) == nil)
+        #expect(try await delegate(staticModel, nil) == nil)
         await resolvers.set(scope: "openai") { _, _ in
             ResolvedProviderAuth(token: "openai-token", scheme: .bearer)
         }
-        #expect(await delegate(staticModel, nil)?.token == "openai-token")
+        #expect(try await delegate(staticModel, nil)?.token == "openai-token")
 
         // Removal (`/logout`) drops it again.
         await resolvers.remove(scope: "openai")
-        #expect(await delegate(staticModel, nil) == nil)
+        #expect(try await delegate(staticModel, nil) == nil)
     }
 
     // MARK: - SessionProviders bookkeeping
@@ -199,32 +199,32 @@ struct MultiProviderAuthTests {
         // Codex `maxTokens == 0` sentinel.
         let codexTemplate = Model(
             id: "gpt-5.5", api: "chatgpt-codex", provider: "chatgpt-codex",
-            baseUrl: "https://chatgpt.com", maxTokens: 0
+            baseURL: "https://chatgpt.com", maxTokens: 0
         )
         let picked = Model(
             id: "gpt-5.5-codex", api: "openai-responses", provider: "openai-codex",
-            baseUrl: "https://api.openai.com", maxTokens: 128_000
+            baseURL: "https://api.openai.com", maxTokens: 128_000
         )
         let routed = adoptFields(from: codexTemplate, into: picked)
         #expect(routed.id == "gpt-5.5-codex")
         #expect(routed.provider == "chatgpt-codex")
         #expect(routed.api == "chatgpt-codex")
-        #expect(routed.baseUrl == "https://chatgpt.com")
+        #expect(routed.baseURL == "https://chatgpt.com")
         #expect(routed.maxTokens == 0)
 
-        // Same-provider switch (Copilot enterprise) keeps the session baseUrl.
+        // Same-provider switch (Copilot enterprise) keeps the session baseURL.
         let copilotTemplate = Model(
             id: "gpt-5.5", api: "openai-responses", provider: "github-copilot",
-            baseUrl: "https://api.business.githubcopilot.com"
+            baseURL: "https://api.business.githubcopilot.com"
         )
         let copilotPick = Model(
             id: "claude-opus-4-8", api: "anthropic-messages", provider: "github-copilot",
-            baseUrl: "https://api.individual.githubcopilot.com"
+            baseURL: "https://api.individual.githubcopilot.com"
         )
         let copilotRouted = adoptFields(from: copilotTemplate, into: copilotPick)
         #expect(copilotRouted.provider == "github-copilot")
         #expect(copilotRouted.api == "anthropic-messages")
-        #expect(copilotRouted.baseUrl == "https://api.business.githubcopilot.com")
+        #expect(copilotRouted.baseURL == "https://api.business.githubcopilot.com")
     }
 
     @Test("adoptFields keeps per-model compat + thinkingLevelMap")
@@ -233,11 +233,11 @@ struct MultiProviderAuthTests {
         compat.thinkingFormat = "openrouter"
         let template = Model(
             id: "anthropic/claude-sonnet-5", api: "openai-completions",
-            provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1"
+            provider: "openrouter", baseURL: "https://openrouter.ai/api/v1"
         )
         let picked = Model(
             id: "z-ai/glm-5.2", api: "openai-completions",
-            provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1",
+            provider: "openrouter", baseURL: "https://openrouter.ai/api/v1",
             compat: compat, thinkingLevelMap: ["xhigh": "xhigh"]
         )
         let routed = adoptFields(from: template, into: picked)

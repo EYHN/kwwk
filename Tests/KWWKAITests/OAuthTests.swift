@@ -20,16 +20,16 @@ final class StubResponseClient: HTTPClient, @unchecked Sendable {
 
     func stream(
         url: URL, method: String, headers: [String: String], body: Data?
-    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
+    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         lock.withLock { lastRequest = (url, method, headers, body) }
         let response = HTTPURLResponse(
             url: url, statusCode: responseStatus, httpVersion: "HTTP/1.1",
             headerFields: ["content-type": "application/json"]
         )!
-        let bytes = Array(responseBody)
-        let stream = AsyncThrowingStream<UInt8, Error> { cont in
+        let bodyData = responseBody
+        let stream = AsyncThrowingStream<Data, Error> { cont in
             Task {
-                for b in bytes { cont.yield(b) }
+                cont.yield(bodyData)
                 cont.finish()
             }
         }
@@ -58,14 +58,14 @@ struct OAuthStoreTests {
             .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let a = OAuthStore(url: tmp)
+        let a = try OAuthStore(url: tmp)
         try await a.set(
             OAuthCredentials(access: "A", refresh: "R", expires: 10, extras: ["projectId": .string("p-1")]),
             for: "test"
         )
 
         // Re-open from disk.
-        let b = OAuthStore(url: tmp)
+        let b = try OAuthStore(url: tmp)
         let loaded = await b.get("test")
         #expect(loaded?.access == "A")
         #expect(loaded?.refresh == "R")
@@ -87,7 +87,7 @@ struct OAuthStoreTests {
         """
         try Data(raw.utf8).write(to: tmp)
 
-        let store = OAuthStore(url: tmp)
+        let store = try OAuthStore(url: tmp)
         #expect(await store.get("a")?.extras == [:])
         #expect(await store.get("b")?.extras["x"] == .string("y"))
     }
@@ -226,7 +226,7 @@ struct OAuthManagerTests {
             .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let store = OAuthStore(url: tmp)
+        let store = try OAuthStore(url: tmp)
         try await store.set(
             OAuthCredentials(access: "expired", refresh: "r", expires: 0),
             for: "x"
@@ -244,8 +244,8 @@ struct OAuthManagerTests {
         #expect(provider.refreshCount == 1)
     }
 
-    @Test("throws when no credentials are stored") func missingCreds() async {
-        let store = OAuthStore(url: FileManager.default.temporaryDirectory
+    @Test("throws when no credentials are stored") func missingCreds() async throws {
+        let store = try OAuthStore(url: FileManager.default.temporaryDirectory
             .appendingPathComponent("kw-oauth-\(UUID().uuidString).json"))
         let manager = OAuthManager(store: store, providers: [AnthropicOAuthProvider()])
         await #expect(throws: Error.self) {
@@ -258,7 +258,7 @@ struct OAuthManagerTests {
             .appendingPathComponent("kw-oauth-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        let store = OAuthStore(url: tmp)
+        let store = try OAuthStore(url: tmp)
         try await store.set(
             OAuthCredentials(access: "static", refresh: "r", expires: Int64.max / 2),
             for: "anthropic"
@@ -266,11 +266,11 @@ struct OAuthManagerTests {
         let manager = OAuthManager(store: store, providers: [AnthropicOAuthProvider()])
         let resolver = manager.resolver()
         let model = Model(id: "claude", api: "anthropic-messages", provider: "anthropic")
-        let auth = await resolver(model, nil)
+        let auth = try await resolver(model, nil)
         #expect(auth?.token == "static")
         #expect(auth?.scheme == .bearer)
         let unknown = Model(id: "unknown", api: "unknown", provider: "unknown-xyz")
-        #expect(await resolver(unknown, nil) == nil)
+        #expect(try await resolver(unknown, nil) == nil)
     }
 
     @Test("resolver() includes GitHub Copilot endpoint as baseURL") func resolverPreservesCopilotEndpoint() async throws {
@@ -279,7 +279,7 @@ struct OAuthManagerTests {
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let endpoint = "https://api.business.githubcopilot.com"
-        let store = OAuthStore(url: tmp)
+        let store = try OAuthStore(url: tmp)
         try await store.set(
             OAuthCredentials(
                 access: "session-token",
@@ -293,7 +293,7 @@ struct OAuthManagerTests {
         let resolver = manager.resolver()
         let model = Model(id: "gpt-4.1", api: "openai-completions", provider: "github-copilot")
 
-        let auth = await resolver(model, nil)
+        let auth = try await resolver(model, nil)
         #expect(auth?.token == "session-token")
         #expect(auth?.scheme == .bearer)
         #expect(auth?.baseURL == endpoint)

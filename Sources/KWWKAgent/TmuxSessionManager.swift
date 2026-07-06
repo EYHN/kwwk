@@ -27,6 +27,11 @@ public actor TmuxSessionManager {
     public let socketName: String
     public let sessionName: String
     private let tmuxPath: String
+    /// Exact environment the tmux server (and therefore every pane process) is
+    /// spawned with. Required — like `CodingAgentConfig.bashEnvironment` — so
+    /// the host's environment (API keys and all) is never silently inherited by
+    /// pane commands the model runs.
+    private let environment: [String: String]
 
     private var probed: Bool = false
     private var available: Bool = false
@@ -35,6 +40,9 @@ public actor TmuxSessionManager {
 
     /// - Parameters:
     ///   - tmuxPath: Explicit path to the tmux executable.
+    ///   - environment: Exact environment for the tmux server and its panes.
+    ///     No default: passing the host environment is a deliberate caller
+    ///     choice, matching the bash tool's isolation contract.
     ///   - socketName: Defaults to `kw-<pid>` so multiple kw processes
     ///     don't collide on the same socket. Tests override for isolation.
     ///   - sessionName: tmux session name under the socket. Defaults to
@@ -42,12 +50,14 @@ public actor TmuxSessionManager {
     ///     `duplicate session` errors.
     public init(
         tmuxPath: String,
+        environment: [String: String],
         socketName: String? = nil,
         sessionName: String = "kw"
     ) {
         self.socketName = socketName ?? "kw-\(ProcessInfo.processInfo.processIdentifier)"
         self.sessionName = sessionName
         self.tmuxPath = tmuxPath
+        self.environment = environment
     }
 
     public var isAvailable: Bool {
@@ -253,13 +263,25 @@ public actor TmuxSessionManager {
     private func runTmuxSync(args: [String]) -> ProcResult {
         var allArgs = ["-L", socketName]
         allArgs.append(contentsOf: args)
-        return TmuxSessionManager.runProcessSync(executable: tmuxPath, args: allArgs)
+        return TmuxSessionManager.runProcessSync(
+            executable: tmuxPath,
+            args: allArgs,
+            environment: environment
+        )
     }
 
-    nonisolated static func runProcessSync(executable: String, args: [String]) -> ProcResult {
+    nonisolated static func runProcessSync(
+        executable: String,
+        args: [String],
+        environment: [String: String]
+    ) -> ProcResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = args
+        // Set the tmux server / pane environment explicitly. Without this the
+        // server inherits the host's full environment and leaks it into every
+        // pane the model drives.
+        process.environment = environment
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
@@ -270,16 +292,40 @@ public actor TmuxSessionManager {
         } catch {
             return ProcResult(exitCode: 127, stdout: "", stderr: "\(error)")
         }
+        // Drain both pipes CONCURRENTLY with the wait. Reading only after
+        // waitUntilExit deadlocks once tmux writes more than the ~64KB pipe
+        // buffer (e.g. `capture-pane` over a long scrollback): tmux blocks in
+        // write(2) while we block in wait.
+        let outBox = TmuxDataBox()
+        let errBox = TmuxDataBox()
+        let group = DispatchGroup()
+        let outHandle = stdoutPipe.fileHandleForReading
+        let errHandle = stderrPipe.fileHandleForReading
+        group.enter()
+        DispatchQueue.global().async {
+            outBox.data = outHandle.readDataToEndOfFile()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global().async {
+            errBox.data = errHandle.readDataToEndOfFile()
+            group.leave()
+        }
         process.waitUntilExit()
-        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        group.wait()
         return ProcResult(
             exitCode: process.terminationStatus,
-            stdout: stdout,
-            stderr: stderr
+            stdout: String(decoding: outBox.data, as: UTF8.self),
+            stderr: String(decoding: errBox.data, as: UTF8.self)
         )
     }
 
+}
+
+/// `@unchecked Sendable` holder for draining a pipe on a background queue.
+/// Written on the read thread, read after `DispatchGroup.wait` synchronizes.
+private final class TmuxDataBox: @unchecked Sendable {
+    var data = Data()
 }
 
 public struct ProcResult: Sendable {

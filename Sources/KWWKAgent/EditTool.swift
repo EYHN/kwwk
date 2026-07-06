@@ -21,7 +21,11 @@ public struct LocalEditOperations: EditOperations {
         try Data(contentsOf: URL(fileURLWithPath: absolutePath))
     }
     public func writeFile(_ absolutePath: String, content: Data) async throws {
-        try content.write(to: URL(fileURLWithPath: absolutePath), options: .atomic)
+        // In-place write (open + truncate), not an atomic rename: preserves the
+        // inode, symlink target, hard links, and permissions of an existing
+        // file — matching pi's `fs.writeFile`. Edits always target a file that
+        // already exists (access() ran first), so the create mode is a fallback.
+        try PathUtils.writeFileInPlace(absolutePath, data: content)
     }
     public func access(_ absolutePath: String) async throws {
         try checkPOSIXAccess(absolutePath, mode: editAccessExistsMode)

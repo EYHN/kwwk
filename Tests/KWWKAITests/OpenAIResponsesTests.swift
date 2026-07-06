@@ -9,7 +9,7 @@ struct OpenAIResponsesTests {
         name: "GPT-5",
         api: "openai-responses",
         provider: "openai",
-        baseUrl: "https://api.openai.com",
+        baseURL: "https://api.openai.com",
         reasoning: true,
         input: [.text, .image],
         contextWindow: 200_000,

@@ -1,12 +1,14 @@
 import Foundation
 import KWWKAI
 
-/// Which coding tools to register on a freshly-built agent. Use `.all` for the
-/// full set, `.readOnly` for a sandboxed reviewer-style agent, or compose
-/// an arbitrary subset (`[.read, .grep, .bash]`).
+/// Which coding tools to register on a freshly-built agent. Use `.standard`
+/// for the full non-PTY set, `.allIncludingTmux` to also register tmux,
+/// `.readOnly` for a sandboxed reviewer-style agent, or compose an arbitrary
+/// subset (`[.read, .grep, .bash]`).
 ///
-/// `.tmux` requires an explicit `tmuxManager`; otherwise construction traps
-/// instead of probing PATH or silently omitting a requested tool.
+/// `.tmux` requires an explicit `tmuxManager`; otherwise `makeCodingAgent`
+/// throws `CodingAgentConfigError.tmuxRequiresManager` at configuration time
+/// rather than probing PATH or silently omitting a requested tool.
 /// `.taskStatus` and `.waitTask` are only honored when a `backgroundManager`
 /// is supplied. `.bash` works without a manager (legacy pipe executor) —
 /// it just loses `run_in_background` and the auto-background-on-timeout flip.
@@ -31,11 +33,6 @@ public struct CodingTools: OptionSet, Sendable {
     /// Common editing tools. Includes shell and mutation capabilities; SDK
     /// callers must opt in explicitly when they want those effects.
     public static let standard: CodingTools = [
-        .read, .write, .edit, .bash, .grep, .find, .ls, .taskStatus, .waitTask,
-    ]
-
-    /// Everything except tmux, which requires an explicit executable path.
-    public static let all: CodingTools = [
         .read, .write, .edit, .bash, .grep, .find, .ls, .taskStatus, .waitTask,
     ]
 
@@ -70,7 +67,7 @@ public struct CodingAgentConfig: Sendable {
     /// When empty, no `agent` tool is registered.
     public var subagents: [SubagentDefinition]
     public var sessionId: String
-    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     public var autoCompactThreshold: Double?
     public var autoCompactConfig: AgentContextCompactionConfig
     /// Soft foreground timeout for bash commands. The command auto-moves to
@@ -95,7 +92,7 @@ public struct CodingAgentConfig: Sendable {
         backgroundManager: BackgroundTaskManager? = nil,
         subagents: [SubagentDefinition] = [],
         sessionId: String = UUID().uuidString,
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         autoCompactThreshold: Double? = 0.75,
         autoCompactConfig: AgentContextCompactionConfig = .init(),
         bashEnvironment: [String: String],
@@ -140,25 +137,78 @@ public extension CodingAgentConfig {
     }
 }
 
+/// Raised by `makeCodingAgent` when a configuration cannot be satisfied.
+public enum CodingAgentConfigError: Error, LocalizedError, Equatable {
+    /// `.tmux` was requested (on the agent's own tools or a subagent's) without
+    /// an explicit `TmuxSessionManager`. `context` names where the request came
+    /// from.
+    case tmuxRequiresManager(context: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .tmuxRequiresManager(let context):
+            return "CodingTools.tmux requires an explicit TmuxSessionManager (\(context))"
+        }
+    }
+}
+
+/// Result of `makeCodingAgent`: the built agent plus an optional handle to
+/// detach the auto-continue background bridge.
+public struct CodingAgent: Sendable {
+    public let agent: Agent
+    /// Detaches the auto-continue background bridge that `makeCodingAgent`
+    /// installs when a `backgroundManager` is supplied. `nil` when no manager
+    /// was attached. The bridge autonomously starts a new (billable) model run
+    /// when a background task completes while the agent is idle; call this to
+    /// stop that behavior. In-flight background tasks keep running.
+    public let detachBackground: (@Sendable () async -> Void)?
+
+    public init(agent: Agent, detachBackground: (@Sendable () async -> Void)?) {
+        self.agent = agent
+        self.detachBackground = detachBackground
+    }
+}
+
 /// Build a coding agent with the selected coding tools pre-wired.
 ///
 /// ```swift
-/// let agent = await makeCodingAgent(CodingAgentConfig(
+/// let agent = try await makeCodingAgent(CodingAgentConfig(
 ///     model: model,
 ///     cwd: "/Users/me/project",
 ///     tools: .standard,
 ///     backgroundManager: BackgroundTaskManager(),
 ///     bashEnvironment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
-/// ))
+/// )).agent
 /// try await agent.prompt("list the swift files")
 /// ```
 ///
+/// Throws `CodingAgentConfigError.tmuxRequiresManager` when `.tmux` is
+/// requested (on `config.tools` or any subagent's tools) without a
+/// `tmuxManager`, so the misconfiguration surfaces at build time instead of
+/// crashing when the model first calls the tool.
+///
 /// If `config.backgroundManager` is non-nil, the agent is automatically
-/// attached so completion notifications surface as steered user messages.
-public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
+/// attached so completion notifications surface as steered user messages — and
+/// that bridge will autonomously start new (billable) model runs when
+/// background tasks complete. Call the returned `CodingAgent.detachBackground`
+/// handle to stop that; ignore it to keep the default auto-continue behavior.
+public func makeCodingAgent(_ config: CodingAgentConfig) async throws -> CodingAgent {
     let cwd = config.cwd
     let bgManager = config.backgroundManager
     let sessionId = config.sessionId
+
+    // Fail fast at configuration time: a nil tmuxManager with `.tmux` selected
+    // (directly or via a subagent) must not defer to a crash at tool-call time.
+    if config.tools.contains(.tmux), config.tmuxManager == nil {
+        throw CodingAgentConfigError.tmuxRequiresManager(context: "config.tools")
+    }
+    for definition in config.subagents {
+        guard let subagentTools = definition.tools else { continue }
+        if subagentTools.contains(.tmux), config.tmuxManager == nil {
+            throw CodingAgentConfigError.tmuxRequiresManager(context: "subagent '\(definition.name)'")
+        }
+    }
+
     let autoCompact = config.autoCompactThreshold.map {
         AgentAutoCompactOptions(
             threshold: $0,
@@ -167,7 +217,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
         )
     }
 
-    var tools = await buildCodingToolList(
+    var tools = try await buildCodingToolList(
         cwd: cwd,
         selected: config.tools,
         backgroundManager: bgManager,
@@ -220,11 +270,12 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> Agent {
     ))
     subagentParent.attach(agent)
 
+    var detachBackground: (@Sendable () async -> Void)?
     if let bgManager {
-        _ = await agent.attachBackgroundManager(bgManager, sessionId: sessionId)
+        detachBackground = await agent.attachBackgroundManager(bgManager, sessionId: sessionId)
     }
 
-    return agent
+    return CodingAgent(agent: agent, detachBackground: detachBackground)
 }
 
 internal func buildCodingToolList(
@@ -237,7 +288,7 @@ internal func buildCodingToolList(
     bashEnvironment: [String: String],
     bashShellPath: String = kwwkDefaultShellPath,
     tmuxManager: TmuxSessionManager? = nil
-) async -> [AgentTool] {
+) async throws -> [AgentTool] {
     var tools: [AgentTool] = []
     if selected.contains(.read)  { tools.append(createReadTool(cwd: cwd)) }
     if selected.contains(.write) { tools.append(createWriteTool(cwd: cwd)) }
@@ -264,7 +315,7 @@ internal func buildCodingToolList(
     }
     if selected.contains(.tmux) {
         guard let tmuxManager else {
-            preconditionFailure("CodingTools.tmux requires an explicit TmuxSessionManager")
+            throw CodingAgentConfigError.tmuxRequiresManager(context: "buildCodingToolList")
         }
         if let tmuxTool = await createTmuxTool(
             manager: tmuxManager,

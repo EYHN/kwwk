@@ -87,7 +87,7 @@ enum BashRunnerImpl {
         let control = BashProcessControl(pid: 0)
         let effectiveCommand: String
         if let workDir {
-            effectiveCommand = "cd \(shellQuote(workDir)) && \(command)"
+            effectiveCommand = "cd \(bashShellQuote(workDir)) && \(command)"
         } else {
             effectiveCommand = command
         }
@@ -121,24 +121,19 @@ enum BashRunnerImpl {
         )
     }
 
-    private static func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }
 
-/// Maps a finished `Process` to a `BackgroundTaskOutcome`. Shared between the
-/// spawn path (`BashRunnerImpl.run`) and the foreground-adopted path
-/// (`ForegroundBashExecution.awaitAdoptedCompletion`) so both produce
-/// identical success/summary/details for a given process state.
-enum BashProcessOutcome {
-    static func from(process: Process, cancelled: Bool) -> BackgroundTaskOutcome {
-        let status = SpawnedBashProcess.ExitStatus(
-            code: process.terminationStatus,
-            signaled: process.terminationReason == .uncaughtSignal && process.terminationStatus != 0
-        )
-        return from(status: status, cancelled: cancelled)
-    }
+/// POSIX-quote a single shell argument. Shared by the background runner (cwd
+/// prefix) and the bash tool's foreground/legacy paths.
+func bashShellQuote(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
 
+/// Maps a finished process's `ExitStatus` to a `BackgroundTaskOutcome`. Shared
+/// between the spawn path (`BashRunnerImpl.run`) and the foreground-adopted path
+/// (`ForegroundBashExecution.awaitAdoptedCompletion`) so both produce identical
+/// success/summary/details for a given process state.
+enum BashProcessOutcome {
     static func from(status: SpawnedBashProcess.ExitStatus, cancelled: Bool) -> BackgroundTaskOutcome {
         let code = status.code
         if cancelled {
@@ -169,8 +164,8 @@ enum BashProcessOutcome {
     }
 }
 
-struct SpawnedBashProcess {
-    struct ExitStatus {
+struct SpawnedBashProcess: Sendable {
+    struct ExitStatus: Sendable {
         var code: Int32
         var signaled: Bool
     }
@@ -193,6 +188,8 @@ struct SpawnedBashProcess {
 
     let pid: pid_t
 
+    /// Spawn a shell redirecting stdout+stderr into `outputFile` (truncated).
+    /// Bytes go straight from the kernel to disk without entering Swift memory.
     static func start(
         shellPath: String,
         command: String,
@@ -203,7 +200,30 @@ struct SpawnedBashProcess {
         let outputFd = open(outputFile.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
         guard outputFd >= 0 else { throw SpawnError.openOutput(outputFile.path) }
         defer { close(outputFd) }
+        return try start(
+            shellPath: shellPath,
+            command: command,
+            stdoutFd: outputFd,
+            stderrFd: outputFd,
+            environment: environment,
+            extraEnv: extraEnv
+        )
+    }
 
+    /// Spawn a shell with stdin from /dev/null and stdout/stderr dup'd onto the
+    /// caller-owned `stdoutFd`/`stderrFd` (which may be the same fd — a file —
+    /// or distinct pipe write ends). The child is placed in its own process
+    /// group (`POSIX_SPAWN_SETPGROUP`, pgid 0) so signalling the group reaches
+    /// grandchildren. The caller retains ownership of the passed fds and must
+    /// close its own copies after this returns.
+    static func start(
+        shellPath: String,
+        command: String,
+        stdoutFd: Int32,
+        stderrFd: Int32,
+        environment: [String: String],
+        extraEnv: [String: String]
+    ) throws -> SpawnedBashProcess {
         let inputFd = open("/dev/null", O_RDONLY)
         guard inputFd >= 0 else { throw SpawnError.openDevNull }
         defer { close(inputFd) }
@@ -220,10 +240,18 @@ struct SpawnedBashProcess {
         defer { posix_spawn_file_actions_destroy(&actions) }
 
         try checkFileAction(posix_spawn_file_actions_adddup2(&actions, inputFd, STDIN_FILENO))
-        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, outputFd, STDOUT_FILENO))
-        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, outputFd, STDERR_FILENO))
+        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, stdoutFd, STDOUT_FILENO))
+        try checkFileAction(posix_spawn_file_actions_adddup2(&actions, stderrFd, STDERR_FILENO))
         try checkFileAction(posix_spawn_file_actions_addclose(&actions, inputFd))
-        try checkFileAction(posix_spawn_file_actions_addclose(&actions, outputFd))
+        // Close the child's leftover copies of the source fds after dup2. Guard
+        // against closing a std fd, and against closing the same fd twice when
+        // stdout and stderr share it (the file case).
+        if stdoutFd > STDERR_FILENO {
+            try checkFileAction(posix_spawn_file_actions_addclose(&actions, stdoutFd))
+        }
+        if stderrFd > STDERR_FILENO && stderrFd != stdoutFd {
+            try checkFileAction(posix_spawn_file_actions_addclose(&actions, stderrFd))
+        }
 
         #if os(Linux)
         var attr = posix_spawnattr_t()

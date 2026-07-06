@@ -181,6 +181,47 @@ func loginFormTitle(for entry: LoginEntry) -> String {
     "Log in — " + (providerDescriptor(forStoreId: entry.id)?.formTitle ?? entry.id)
 }
 
+// MARK: - Terminal login callbacks
+
+/// The CLI's interactive implementation of `OAuthLogin.Callbacks`: progress
+/// to stderr, auth URL printed and handed to the system browser. The SDK no
+/// longer bakes these in (it must not print or spawn a browser on its own),
+/// so the terminal behavior lives here.
+func terminalLoginCallbacks() -> OAuthLogin.Callbacks {
+    OAuthLogin.Callbacks(
+        onAuthURL: { url in
+            FileHandle.standardError.write(Data("open in your browser:\n  \(url.absoluteString)\n".utf8))
+            Browser.open(url)
+        },
+        onProgress: { msg in
+            FileHandle.standardError.write(Data("\(msg)\n".utf8))
+        }
+    )
+}
+
+/// Best-effort URL opener. macOS uses `/usr/bin/open`; Linux tries
+/// `xdg-open`, else falls back to stderr so the user can click manually.
+enum Browser {
+    static func open(_ url: URL) {
+        #if os(macOS)
+        let opener = "/usr/bin/open"
+        #else
+        let opener = "/usr/bin/xdg-open"
+        #endif
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: opener)
+        process.arguments = [url.absoluteString]
+        do {
+            try process.run()
+        } catch {
+            FileHandle.standardError.write(Data(
+                "please open manually:\n  \(url.absoluteString)\n".utf8
+            ))
+        }
+    }
+}
+
 // MARK: - OAuth flow (TUI suspended)
 
 /// Browser-based OAuth login for `providerId`. Runs with the coding TUI
@@ -192,14 +233,15 @@ func runOAuthFlow(providerId: String) async throws {
     // Clear a line so the OAuth progress logs start fresh below the TUI.
     FileHandle.standardError.write(Data("starting \(providerId) login…  (Esc/Ctrl-C to cancel)\n".utf8))
 
+    let callbacks = terminalLoginCallbacks()
     let flow = Task {
         switch providerId {
         case "anthropic":
-            return try await OAuthLogin.loginAnthropic()
+            return try await OAuthLogin.loginAnthropic(callbacks: callbacks)
         case "openai-codex":
-            return try await OAuthLogin.loginOpenAICodex()
+            return try await OAuthLogin.loginOpenAICodex(callbacks: callbacks)
         case "github-copilot":
-            return try await OAuthLogin.loginGitHubCopilot()
+            return try await OAuthLogin.loginGitHubCopilot(callbacks: callbacks)
         default:
             throw LoginError.unknownProvider(providerId)
         }
@@ -250,7 +292,13 @@ func runOAuthFlow(providerId: String) async throws {
 /// `GitHubCopilotOAuthProvider.refresh`); we prefer that over the
 /// Individual default so policy POSTs hit the correct tier.
 private func runCopilotPolicyEnable() async {
-    let store = OAuthStore(url: OAuthStore.defaultURL())
+    let store: OAuthStore
+    do {
+        store = try OAuthStore(url: OAuthStore.defaultURL())
+    } catch {
+        print(Style.dimmed("  (skipped model policy enable: \(error.localizedDescription))"))
+        return
+    }
     let manager = OAuthManager(store: store)
     let sessionToken: String
     do {
@@ -336,7 +384,7 @@ private func persistCredentials(
     let saved = try await saveCredentials(
         credentials,
         providerId: providerId,
-        store: OAuthStore(url: OAuthStore.defaultURL())
+        store: try OAuthStore(url: OAuthStore.defaultURL())
     )
     print("")
     print(Style.prompt("✓ saved \(providerId) credentials"))

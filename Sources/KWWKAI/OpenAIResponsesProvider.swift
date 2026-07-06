@@ -59,9 +59,9 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         self.bodyOverrides = bodyOverrides
         self.maxWebSocketFailures = max(1, maxWebSocketFailures)
         self.urlBuilder = urlBuilder ?? { model, _, fallback in
-            var base = model.baseUrl.isEmpty ? fallback.absoluteString : model.baseUrl
+            var base = model.baseURL.isEmpty ? fallback.absoluteString : model.baseURL
             while base.hasSuffix("/") { base.removeLast() }
-            // Tolerate catalog entries that bake `/v1` into baseUrl
+            // Tolerate catalog entries that bake `/v1` into baseURL
             // (pi-mono's models.generated.ts does this for OpenAI).
             let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
             return URL(string: "\(versioned)/responses") ?? fallback.appendingPathComponent("v1/responses")
@@ -183,7 +183,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 // network captures.
                 var body = Data()
                 do {
-                    for try await byte in stream { body.append(byte) }
+                    for try await chunk in stream { body.append(chunk) }
                 } catch {
                     // ignore — best effort
                 }
@@ -198,11 +198,22 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             }
             let state = OpenAIResponsesState(api: api, provider: model.provider, modelId: model.id)
             state.signal = options?.cancellation
-            _ = try await drive(events: parseSSE(bytes: stream), out: out, state: state)
+            // Bridge external cancellation to the in-flight request (see
+            // AnthropicProvider.run for the rationale).
+            let driveTask = Task { _ = try await self.drive(events: parseSSE(bytes: stream), out: out, state: state) }
+            let cancelReg = options?.cancellation?.onCancel { _ in driveTask.cancel() }
+            defer { cancelReg?.cancel() }
+            try await driveTask.value
         } catch {
-            let msg = Self.makeError(api: api, model: model, text: "\(error)")
-            out.push(.error(reason: .error, error: msg))
-            out.end(msg)
+            if options?.cancellation?.isCancelled == true {
+                let aborted = Self.makeAborted(api: api, model: model)
+                out.push(.error(reason: .aborted, error: aborted))
+                out.end(aborted)
+            } else {
+                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+            }
         }
     }
 
@@ -342,7 +353,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             if result.completed, let responseId = result.message.responseId {
                 session.recordCompletedResponse(
                     responseId: responseId,
-                    itemsAdded: Self.encodeAssistantOutputItems(result.message)
+                    itemsAdded: Self.encodeAssistantOutputItems(result.message, model: model)
                 )
                 session.storeConnection(connection)
                 await options?.emitVerbose(
@@ -618,6 +629,16 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                         )
                     }
                     if let index = state.reasoningIndex(for: outputIndex) {
+                        // Persist the full reasoning item (including
+                        // `encrypted_content` and its `id`) on the thinking
+                        // block's signature so encrypted reasoning round-trips
+                        // across turns when the response isn't stored
+                        // server-side (`store: false`). Mirrors pi.
+                        if case .object(let item) = obj["item"] ?? .null,
+                           case .string = item["encrypted_content"] ?? .null,
+                           let serialized = Self.serializeReasoningItem(item) {
+                            state.setThinkingSignature(at: index, signature: serialized)
+                        }
                         let content = state.thinkingValue(at: index)
                         out.push(.thinkingEnd(contentIndex: index, content: content, partial: state.snapshot()))
                     }
@@ -644,6 +665,24 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 out.push(.done(reason: final.stopReason, message: final))
                 out.end(final)
                 return OpenAIResponsesDriveResult(message: final, completed: true)
+
+            case "response.incomplete":
+                // Terminal event when the response is truncated (e.g.
+                // `max_output_tokens` reached). A length-truncated turn is a
+                // normal completion, not a transport failure — finish via the
+                // same success path as `response.completed` with `.length` so
+                // it isn't misreported as `.stop` over HTTP or as a WebSocket
+                // failure that eventually disables the transport.
+                if case .object(let response) = obj["response"] ?? .null {
+                    if case .object(let usage) = response["usage"] ?? .null {
+                        state.applyUsage(usage)
+                    }
+                }
+                state.stopReason = .length
+                let incomplete = state.finalize()
+                out.push(.done(reason: incomplete.stopReason, message: incomplete))
+                out.end(incomplete)
+                return OpenAIResponsesDriveResult(message: incomplete, completed: true)
 
             case "response.failed", "response.error":
                 let text: String = {
@@ -674,7 +713,20 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             }
         }
 
-        // Stream closed without explicit `response.completed`.
+        // Stream closed without an explicit terminal event. On the HTTP path a
+        // cancellation during a silent gap tears the stream down here; surface
+        // it as aborted rather than a clean stop. (The WebSocket path handles
+        // its own cancellation via `endedWithoutTerminalEvent` in runWebSocket.)
+        if finishOnStreamEnd, state.signal?.isCancelled == true {
+            let aborted = state.asAborted()
+            out.push(.error(reason: .aborted, error: aborted))
+            out.end(aborted)
+            return OpenAIResponsesDriveResult(
+                message: aborted,
+                completed: false,
+                endedWithoutTerminalEvent: true
+            )
+        }
         let final = state.finalize()
         if finishOnStreamEnd {
             out.push(.done(reason: final.stopReason, message: final))
@@ -698,7 +750,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         var root: [String: JSONValue] = [
             "model": .string(model.id),
             "stream": .bool(true),
-            "input": .array(encodeInput(context: context)),
+            "input": .array(encodeInput(context: context, model: model)),
         ]
         if let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil) {
             root["max_output_tokens"] = .int(maxTokens)
@@ -810,10 +862,10 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     }
 
     /// Convert our Message transcript into OpenAI Responses' `input` array.
-    /// Each element is a typed item (`message`, `function_call`, or
-    /// `function_call_output`). Assistant messages with tool calls expand
+    /// Each element is a typed item (`reasoning`, `message`, `function_call`,
+    /// or `function_call_output`). Assistant messages with tool calls expand
     /// into multiple items.
-    private static func encodeInput(context: Context) -> [JSONValue] {
+    private static func encodeInput(context: Context, model: Model) -> [JSONValue] {
         var out: [JSONValue] = []
         for message in context.messages {
             switch message {
@@ -833,6 +885,20 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 out.append(.object(["type": .string("message"), "role": .string("user"), "content": .array(parts)]))
 
             case .assistant(let a):
+                // Replay captured encrypted reasoning items so the model keeps
+                // its prior chain-of-thought across turns. Only valid for the
+                // same model/api/provider (encrypted_content is model-bound) and
+                // only when the stored signature is an actual reasoning item.
+                let sameModel = a.provider == model.provider
+                    && a.api == model.api && a.model == model.id
+                if sameModel {
+                    for block in a.content {
+                        guard case .thinking(let th) = block,
+                              let sig = th.thinkingSignature, !sig.isEmpty,
+                              let item = Self.parseReasoningItem(sig) else { continue }
+                        out.append(.object(item))
+                    }
+                }
                 let textParts: [JSONValue] = a.content.compactMap { block in
                     guard case .text(let t) = block, !t.text.isEmpty else { return nil }
                     return .object(["type": .string("output_text"), "text": .string(t.text)])
@@ -878,8 +944,29 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         return out
     }
 
-    private static func encodeAssistantOutputItems(_ message: AssistantMessage) -> [JSONValue] {
-        encodeInput(context: Context(messages: [.assistant(message)]))
+    private static func encodeAssistantOutputItems(_ message: AssistantMessage, model: Model) -> [JSONValue] {
+        encodeInput(context: Context(messages: [.assistant(message)]), model: model)
+    }
+
+    /// Serialize a streamed reasoning item (the full `item` object from
+    /// `response.output_item.done`, including `encrypted_content` and `id`) to a
+    /// JSON string for storage on the thinking block's signature.
+    private static func serializeReasoningItem(_ item: [String: JSONValue]) -> String? {
+        guard let any = anyFromJSONValue(.object(item)),
+              let data = try? JSONSerialization.data(withJSONObject: any, options: [.sortedKeys]),
+              let s = String(data: data, encoding: .utf8) else { return nil }
+        return s
+    }
+
+    /// Parse a stored reasoning-item signature back into its object form,
+    /// validating that it is actually a `reasoning` item (so signatures from
+    /// other providers' formats are never mis-replayed as reasoning).
+    private static func parseReasoningItem(_ serialized: String) -> [String: JSONValue]? {
+        guard let data = serialized.data(using: .utf8),
+              let value = try? JSONDecoder().decode(JSONValue.self, from: data),
+              case .object(let obj) = value,
+              case .string("reasoning")? = obj["type"] else { return nil }
+        return obj
     }
 
     private static func encodeToolChoice(_ choice: ToolChoice?) -> JSONValue? {
@@ -912,6 +999,19 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            timestamp: Timestamp.now()
+        )
+    }
+
+    private static func makeAborted(api: String, model: Model) -> AssistantMessage {
+        AssistantMessage(
+            content: [],
+            api: api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(),
+            stopReason: .aborted,
+            errorMessage: "Request was aborted",
             timestamp: Timestamp.now()
         )
     }
@@ -1326,6 +1426,15 @@ final class OpenAIResponsesState: @unchecked Sendable {
         }
     }
 
+    func setThinkingSignature(at index: Int, signature: String) {
+        lock.withLock {
+            if case .thinking(var th) = blocks[index] {
+                th.thinkingSignature = signature
+                blocks[index] = .thinking(th)
+            }
+        }
+    }
+
     func appendToolCallArgs(at index: Int, chunk: String) {
         lock.withLock {
             if case .toolUse(let id, let name, let json) = blocks[index] {
@@ -1369,7 +1478,13 @@ final class OpenAIResponsesState: @unchecked Sendable {
         usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
     }
 
-    func snapshot() -> AssistantMessage {
+    /// Streaming snapshot. In-progress tool calls use an empty-object
+    /// placeholder rather than re-parsing the growing JSON buffer on every
+    /// delta (O(n^2)); full arguments are parsed once in `finalize`
+    /// (and in `toolCallValue` for the `toolCallEnd` event).
+    func snapshot() -> AssistantMessage { buildMessage(parseToolArgs: false) }
+
+    private func buildMessage(parseToolArgs: Bool) -> AssistantMessage {
         lock.withLock {
             AssistantMessage(
                 content: order.compactMap { idx -> AssistantBlock? in
@@ -1377,7 +1492,8 @@ final class OpenAIResponsesState: @unchecked Sendable {
                     case .text(let t): return .text(t)
                     case .thinking(let th): return .thinking(th)
                     case .toolUse(let id, let name, let json):
-                        return .toolCall(ToolCall(id: id, name: name, arguments: parseArguments(json)))
+                        let args: JSONValue = parseToolArgs ? parseArguments(json) : .object([:])
+                        return .toolCall(ToolCall(id: id, name: name, arguments: args))
                     case .none: return nil
                     }
                 },
@@ -1393,7 +1509,7 @@ final class OpenAIResponsesState: @unchecked Sendable {
         }
     }
 
-    func finalize() -> AssistantMessage { snapshot() }
+    func finalize() -> AssistantMessage { buildMessage(parseToolArgs: true) }
 
     func asAborted() -> AssistantMessage {
         stopReason = .aborted

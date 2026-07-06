@@ -102,8 +102,7 @@ struct OAuthLoginShapeTests {
             clientID: "test-client",
             callbacks: OAuthLogin.Callbacks(
                 onAuthURL: { _ in },
-                onProgress: { _ in },
-                onPrompt: { _ in "" }
+                onProgress: { _ in }
             ),
             client: client
         )
@@ -127,17 +126,17 @@ final class SequentialStubClient: HTTPClient, @unchecked Sendable {
 
     func stream(
         url: URL, method: String, headers: [String: String], body: Data?
-    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
+    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         recorded.append((url, method, headers, body))
         let next = queue.removeFirst()
         let response = HTTPURLResponse(
             url: url, statusCode: next.status, httpVersion: "HTTP/1.1",
             headerFields: ["content-type": "application/json"]
         )!
-        let bytes = Array(next.body.utf8)
-        let stream = AsyncThrowingStream<UInt8, Error> { cont in
+        let bodyData = Data(next.body.utf8)
+        let stream = AsyncThrowingStream<Data, Error> { cont in
             Task {
-                for b in bytes { cont.yield(b) }
+                cont.yield(bodyData)
                 cont.finish()
             }
         }

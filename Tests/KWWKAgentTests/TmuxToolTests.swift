@@ -17,9 +17,22 @@ private func resolvedTmuxPath() -> String? {
     return nil
 }
 
+/// Explicit environment for the tmux server in integration tests. tmux itself
+/// (socket under TMPDIR, config under HOME, terminal type) needs more than bare
+/// PATH, so pass a small curated slice of the host env rather than the whole
+/// thing — exercising the new required-environment contract realistically.
+private func tmuxTestEnvironment() -> [String: String] {
+    let host = ProcessInfo.processInfo.environment
+    var env = testBashEnvironment
+    for key in ["HOME", "TMPDIR", "TERM", "USER"] {
+        if let value = host[key] { env[key] = value }
+    }
+    return env
+}
+
 private func tmuxAvailable() async -> Bool {
     guard let tmuxPath = resolvedTmuxPath() else { return false }
-    return await TmuxSessionManager(tmuxPath: tmuxPath).isAvailable
+    return await TmuxSessionManager(tmuxPath: tmuxPath, environment: tmuxTestEnvironment()).isAvailable
 }
 
 private func makeSessionManager() -> TmuxSessionManager {
@@ -28,6 +41,7 @@ private func makeSessionManager() -> TmuxSessionManager {
     let id = UUID().uuidString.prefix(8)
     return TmuxSessionManager(
         tmuxPath: resolvedTmuxPath()!,
+        environment: tmuxTestEnvironment(),
         socketName: "kw-test-\(id)",
         sessionName: "t\(id)"
     )
@@ -89,7 +103,7 @@ struct TmuxSessionManagerTests {
 
     @Test("methods throw .unavailable when tmux is not on PATH")
     func unavailableRaises() async {
-        let manager = TmuxSessionManager(tmuxPath: "/definitely-not-real/tmux-absent")
+        let manager = TmuxSessionManager(tmuxPath: "/definitely-not-real/tmux-absent", environment: testBashEnvironment)
         await #expect(throws: TmuxError.self) {
             _ = try await manager.startPane(command: "echo hi")
         }
@@ -139,7 +153,7 @@ struct TmuxToolTests {
     @Test("createTmuxTool returns nil when tmux is unavailable")
     func gatedByAvailability() async {
         // Simulate by passing a manager with a bogus path.
-        let bogus = TmuxSessionManager(tmuxPath: "/definitely-not-a-real-path/tmux-nope")
+        let bogus = TmuxSessionManager(tmuxPath: "/definitely-not-a-real-path/tmux-nope", environment: testBashEnvironment)
         let tool = await createTmuxTool(
             manager: bogus,
             cwd: FileManager.default.currentDirectoryPath

@@ -206,7 +206,7 @@ public func registerFauxProvider(_ options: RegisterFauxProviderOptions = .init(
             name: def.name ?? def.id,
             api: api,
             provider: provider,
-            baseUrl: FauxProvider.defaultBaseURL,
+            baseURL: FauxProvider.defaultBaseURL,
             reasoning: def.reasoning ?? false,
             input: def.input ?? [.text, .image],
             cost: def.cost ?? .init(),

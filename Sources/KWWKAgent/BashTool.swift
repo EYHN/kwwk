@@ -77,72 +77,115 @@ public struct LocalBashOperations: BashOperations {
         timeout: Int?,
         cancellation: CancellationHandle?
     ) async throws -> BashExecutionResult {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: shellPath)
-        process.arguments = ["-c", command]
-        process.environment = environment
+        // Spawn via posix_spawn (SpawnedBashProcess) so the child gets its own
+        // process group — cancel/timeout then signals the whole group and
+        // reaches any grandchildren, not just the direct shell. Foundation's
+        // Process leaves the child in our group, so `kill` would miss them.
+        let effectiveCommand: String
         if let cwd {
-            process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+            effectiveCommand = "cd \(bashShellQuote(cwd)) && \(command)"
+        } else {
+            effectiveCommand = command
         }
 
+        // Isolate stdin from the parent (handled inside SpawnedBashProcess by
+        // dup'ing /dev/null onto STDIN): the coding TUI runs its own stdin in
+        // raw mode, so a child reading stdin would steal the user's keystrokes
+        // and interactive wizards would hang. /dev/null forces EOF on reads.
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
 
-        // Isolate stdin from the parent. The coding TUI runs its own stdin in
-        // raw mode — if we don't override, npm/prompting commands will read
-        // the user's keystrokes and the TUI will lose them, and interactive
-        // wizards (e.g. `npm create vite`) hang waiting for input that will
-        // never come. Attaching /dev/null forces EOF on any read.
-        if let devNull = FileHandle(forReadingAtPath: "/dev/null") {
-            process.standardInput = devNull
-        }
-
+        let control = BashProcessControl(pid: 0)
         let start = Date()
-        try process.run()
 
-        let control = BashProcessControl(pid: process.processIdentifier)
+        let spawned: SpawnedBashProcess
+        do {
+            spawned = try SpawnedBashProcess.start(
+                shellPath: shellPath,
+                command: effectiveCommand,
+                stdoutFd: stdoutPipe.fileHandleForWriting.fileDescriptor,
+                stderrFd: stderrPipe.fileHandleForWriting.fileDescriptor,
+                environment: environment,
+                extraEnv: [:]
+            )
+        } catch {
+            throw CodingToolError.commandFailed(stderr: "\(error)", exitCode: -1)
+        }
+        // Close our copies of the write ends so the read ends see EOF once the
+        // child exits and closes its dup'd copies.
+        try? stdoutPipe.fileHandleForWriting.close()
+        try? stderrPipe.fileHandleForWriting.close()
 
+        control.setPid(spawned.pid)
         cancellation?.onCancel { _ in control.terminate() }
 
+        var timeoutTask: Task<Void, Never>?
         if let timeout, timeout > 0 {
-            Task {
-                try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
+            timeoutTask = Task {
+                // A cancelled sleep means the process already exited — the
+                // deadline never arrived, so it must not count as a timeout.
+                guard (try? await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)) != nil else { return }
                 control.timeoutAndTerminate()
             }
         }
 
-        // Wait for completion off the executor.
+        // Drain both pipes CONCURRENTLY with the wait. Reading only after
+        // waitpid would deadlock once the child fills the ~64KB pipe buffer:
+        // the child blocks in write(2) while we block in wait.
+        let outBox = OutputBox()
+        let errBox = OutputBox()
+        let statusBox = ExitStatusBox()
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let group = DispatchGroup()
+            let outHandle = stdoutPipe.fileHandleForReading
+            let errHandle = stderrPipe.fileHandleForReading
+            group.enter()
             DispatchQueue.global().async {
-                process.waitUntilExit()
-                cont.resume()
+                outBox.data = outHandle.readDataToEndOfFile()
+                group.leave()
             }
+            group.enter()
+            DispatchQueue.global().async {
+                errBox.data = errHandle.readDataToEndOfFile()
+                group.leave()
+            }
+            group.enter()
+            DispatchQueue.global().async {
+                statusBox.status = spawned.wait()
+                group.leave()
+            }
+            group.notify(queue: .global()) { cont.resume() }
         }
+        timeoutTask?.cancel()
 
-        let stdout = readAll(stdoutPipe.fileHandleForReading)
-        let stderr = readAll(stderrPipe.fileHandleForReading)
+        let stdout = String(decoding: outBox.data, as: UTF8.self)
+        let stderr = String(decoding: errBox.data, as: UTF8.self)
         let duration = Int(Date().timeIntervalSince(start) * 1000)
-        let timedOut = control.didTimeOut
 
         if cancellation?.isCancelled == true {
             throw CodingToolError.aborted
         }
-        if timedOut {
+        if control.didTimeOut {
             throw CodingToolError.commandFailed(stderr: "Command timed out after \(timeout ?? 0)ms\n" + stderr, exitCode: -1)
         }
-        let status = process.terminationStatus
-        if status != 0 {
-            throw CodingToolError.commandFailed(stderr: stderr.isEmpty ? stdout : stderr, exitCode: status)
+        // The wait closure always sets `status` before the group completes.
+        let code = statusBox.status!.code
+        if code != 0 {
+            throw CodingToolError.commandFailed(stderr: stderr.isEmpty ? stdout : stderr, exitCode: code)
         }
-        return BashExecutionResult(stdout: stdout, stderr: stderr, exitCode: status, durationMs: duration, timedOut: false)
+        return BashExecutionResult(stdout: stdout, stderr: stderr, exitCode: code, durationMs: duration, timedOut: false)
     }
 }
 
-private func readAll(_ handle: FileHandle) -> String {
-    let data = handle.readDataToEndOfFile()
-    return String(data: data, encoding: .utf8) ?? ""
+/// `@unchecked Sendable` holders used to return values out of the concurrent
+/// pipe-drain closures. Written on dispatch threads, read by the awaiting task
+/// after `DispatchGroup.notify` establishes a happens-before edge.
+private final class OutputBox: @unchecked Sendable {
+    var data = Data()
+}
+
+private final class ExitStatusBox: @unchecked Sendable {
+    var status: SpawnedBashProcess.ExitStatus?
 }
 
 public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
@@ -364,39 +407,31 @@ private func runBashForegroundWithFlip(
 ) async throws -> AgentToolResult {
     let outputFile = await manager.allocateForegroundOutputFile()
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: shellPath)
-    process.arguments = ["-c", input.command]
-    process.environment = environment
-    process.currentDirectoryURL = URL(fileURLWithPath: cwd)
-
-    guard let writeHandle = try? FileHandle(forWritingTo: outputFile) else {
-        throw CodingToolError.commandFailed(
-            stderr: "could not open output file \(outputFile.path)",
-            exitCode: -1
-        )
-    }
-    process.standardOutput = writeHandle
-    process.standardError = writeHandle
-    if let devNull = FileHandle(forReadingAtPath: "/dev/null") {
-        process.standardInput = devNull
-    }
-
+    // posix_spawn onto the output file (own process group, stdout+stderr → file,
+    // stdin ← /dev/null). `cd`-prefix the command since posix_spawn has no cwd
+    // file action — same convention as the background runner.
+    let effectiveCommand = "cd \(bashShellQuote(cwd)) && \(input.command)"
     let control = BashProcessControl(pid: 0)
     let start = Date()
+
+    let spawned: SpawnedBashProcess
     do {
-        try process.run()
+        spawned = try SpawnedBashProcess.start(
+            shellPath: shellPath,
+            command: effectiveCommand,
+            outputFile: outputFile,
+            environment: environment,
+            extraEnv: [:]
+        )
     } catch {
-        try? writeHandle.close()
         try? FileManager.default.removeItem(at: outputFile)
         throw CodingToolError.commandFailed(stderr: "\(error)", exitCode: -1)
     }
-    control.setPid(process.processIdentifier)
+    control.setPid(spawned.pid)
     cancellation?.onCancel { _ in control.terminate() }
 
     let bundle = ForegroundBashExecution(
-        process: process,
-        writeHandle: writeHandle,
+        spawned: spawned,
         outputFile: outputFile,
         control: control,
         startedAt: start
@@ -404,14 +439,14 @@ private func runBashForegroundWithFlip(
 
     let exit = await bundle.waitUpTo(seconds: input.timeoutSeconds)
 
-    if let code = exit {
+    if let status = exit {
         // Completed within soft timeout.
-        try? bundle.writeHandle.close()
         let text = bundle.readOutput()
         try? FileManager.default.removeItem(at: outputFile)
         if cancellation?.isCancelled == true {
             throw CodingToolError.aborted
         }
+        let code = status.code
         if code != 0 {
             throw CodingToolError.commandFailed(stderr: text.isEmpty ? "command exited with code \(code)" : text, exitCode: code)
         }
@@ -419,8 +454,6 @@ private func runBashForegroundWithFlip(
         return AgentToolResult(
             content: [.text(TextContent(text: text))],
             details: .object([
-                "stdout": .string(text),
-                "stderr": .string(""),
                 "exitCode": .int(Int(code)),
                 "durationMs": .int(durationMs),
             ])
@@ -467,51 +500,67 @@ private func runBashLegacy(
         timeout: input.timeoutSeconds * 1000,
         cancellation: cancellation
     )
-    let body = [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+    let body = boundBashOutput(
+        [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+    )
     return AgentToolResult(
         content: [.text(TextContent(text: body))],
         details: .object([
-            "stdout": .string(result.stdout),
-            "stderr": .string(result.stderr),
             "exitCode": .int(Int(result.exitCode)),
             "durationMs": .int(result.durationMs),
         ])
     )
 }
 
+/// Bound bash output before it enters the transcript. Command output is most
+/// useful at the tail (errors and summaries land at the end), so keep the last
+/// lines/bytes within the read tool's budget. Callers that keep a full copy on
+/// disk (the flip/background paths) still expose it via the output file; this
+/// only bounds what the model sees inline, and is not duplicated into `details`.
+func boundBashOutput(_ text: String) -> String {
+    let result = Truncate.truncateTail(text)
+    guard result.truncated else { return result.content }
+    let omitted = result.totalLines - result.outputLines
+    let notice = "[output truncated: \(omitted) earlier line(s) omitted; showing last "
+        + "\(result.outputLines) of \(result.totalLines) lines, "
+        + "\(Truncate.formatSize(result.totalBytes)) total]\n"
+    return notice + result.content
+}
+
 // MARK: - Foreground/adopted process wrapper
 
-/// Sendable wrapper over the non-Sendable `Process` + `FileHandle`. Two roles:
+/// Sendable wrapper over a `SpawnedBashProcess`. Two roles:
 ///   * Race the soft timeout against process termination via `waitUpTo`.
 ///   * If the timeout wins, let the Manager's adopt closure await the same
 ///     cached termination result and map it to a `BackgroundTaskOutcome`.
+///
+/// A single background thread runs the blocking `waitpid`; its cached result
+/// fans out to every registered `onExit` callback, so the soft-timeout race and
+/// a later adopted wait share one reap.
 private final class ForegroundBashExecution: @unchecked Sendable {
-    let process: Process
-    let writeHandle: FileHandle
+    let spawned: SpawnedBashProcess
     let outputFile: URL
     let control: BashProcessControl
     let startedAt: Date
     private let lock = NSLock()
     private var exitWaiterStarted = false
-    private var exitStatus: Int32?
-    private var exitCallbacks: [@Sendable (Int32) -> Void] = []
+    private var exitStatus: SpawnedBashProcess.ExitStatus?
+    private var exitCallbacks: [@Sendable (SpawnedBashProcess.ExitStatus) -> Void] = []
 
     init(
-        process: Process,
-        writeHandle: FileHandle,
+        spawned: SpawnedBashProcess,
         outputFile: URL,
         control: BashProcessControl,
         startedAt: Date
     ) {
-        self.process = process
-        self.writeHandle = writeHandle
+        self.spawned = spawned
         self.outputFile = outputFile
         self.control = control
         self.startedAt = startedAt
     }
 
-    func waitUpTo(seconds: Int) async -> Int32? {
-        return await withCheckedContinuation { (cont: CheckedContinuation<Int32?, Never>) in
+    func waitUpTo(seconds: Int) async -> SpawnedBashProcess.ExitStatus? {
+        return await withCheckedContinuation { (cont: CheckedContinuation<SpawnedBashProcess.ExitStatus?, Never>) in
             let oneShot = OneShotContinuation(cont)
             self.onExit { status in
                 oneShot.resume(returning: status)
@@ -524,31 +573,40 @@ private final class ForegroundBashExecution: @unchecked Sendable {
 
     func awaitAdoptedCompletion(cancellation: CancellationHandle) async -> BackgroundTaskOutcome {
         cancellation.onCancel { [control] _ in control.terminate() }
-        _ = await awaitExitStatus()
-        try? writeHandle.close()
+        let status = await awaitExitStatus()
         return BashProcessOutcome.from(
-            process: process,
+            status: status,
             cancelled: control.didCancel || cancellation.isCancelled
         )
     }
 
+    /// Read the completed command's output, bounded to the read tool's budget.
+    /// Reads only the tail window of the file so a multi-GB log never lands in
+    /// memory; the full output stays on disk at `outputFile`.
     func readOutput() -> String {
-        guard let data = try? Data(contentsOf: outputFile) else { return "" }
-        // Cap at 1MB to avoid context bombs on small-looking commands that
-        // spewed output before finishing.
-        let capped = data.prefix(1_000_000)
-        return String(data: capped, encoding: .utf8) ?? ""
+        guard let handle = try? FileHandle(forReadingFrom: outputFile) else { return "" }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        if size == 0 { return "" }
+        // Read a generous tail window, then apply the line/byte budget on top.
+        let window: UInt64 = 4 * 1024 * 1024
+        let startOffset = size > window ? size - window : 0
+        guard (try? handle.seek(toOffset: startOffset)) != nil,
+              let data = try? handle.read(upToCount: Int(size - startOffset)) else {
+            return ""
+        }
+        return boundBashOutput(String(decoding: data, as: UTF8.self))
     }
 
-    private func awaitExitStatus() async -> Int32 {
-        await withCheckedContinuation { (cont: CheckedContinuation<Int32, Never>) in
+    private func awaitExitStatus() async -> SpawnedBashProcess.ExitStatus {
+        await withCheckedContinuation { (cont: CheckedContinuation<SpawnedBashProcess.ExitStatus, Never>) in
             onExit { status in cont.resume(returning: status) }
         }
     }
 
-    private func onExit(_ callback: @escaping @Sendable (Int32) -> Void) {
+    private func onExit(_ callback: @escaping @Sendable (SpawnedBashProcess.ExitStatus) -> Void) {
         startExitWaiterIfNeeded()
-        let status: Int32? = lock.withLock {
+        let status: SpawnedBashProcess.ExitStatus? = lock.withLock {
             if let exitStatus { return exitStatus }
             exitCallbacks.append(callback)
             return nil
@@ -566,23 +624,21 @@ private final class ForegroundBashExecution: @unchecked Sendable {
         }
         guard shouldStart else { return }
 
-        process.terminationHandler = { [weak self] process in
-            self?.finishExit(status: process.terminationStatus)
-        }
-        if !process.isRunning {
-            finishExit(status: process.terminationStatus)
+        let spawned = self.spawned
+        DispatchQueue.global().async { [weak self] in
+            let status = spawned.wait()
+            self?.finishExit(status: status)
         }
     }
 
-    private func finishExit(status: Int32) {
-        let callbacks: [@Sendable (Int32) -> Void] = lock.withLock {
+    private func finishExit(status: SpawnedBashProcess.ExitStatus) {
+        let callbacks: [@Sendable (SpawnedBashProcess.ExitStatus) -> Void] = lock.withLock {
             if exitStatus != nil { return [] }
             exitStatus = status
             let callbacks = exitCallbacks
             exitCallbacks.removeAll()
             return callbacks
         }
-        process.terminationHandler = nil
         for callback in callbacks {
             callback(status)
         }

@@ -193,9 +193,13 @@ public func createTmuxTool(
                     throw CodingToolError.invalidArgument("tmux: `pane_id` is required for action=capture")
                 }
                 let lines: Int? = {
-                    if case .int(let v) = obj["lines"] ?? .null { return v }
-                    if case .double(let v) = obj["lines"] ?? .null { return Int(v) }
-                    return nil
+                    let raw: Int
+                    if case .int(let v) = obj["lines"] ?? .null { raw = v }
+                    else if case .double(let v) = obj["lines"] ?? .null { raw = Int(v) }
+                    else { return nil }
+                    // Clamp the model-controlled count: a huge value makes tmux
+                    // emit megabytes of scrollback and bloats the transcript.
+                    return min(max(raw, 1), 10_000)
                 }()
                 let text = try await manager.capture(paneId, lines: lines)
                 return AgentToolResult(

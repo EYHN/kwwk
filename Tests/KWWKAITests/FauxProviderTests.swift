@@ -158,12 +158,21 @@ struct FauxProviderTests {
 
         let first = try await complete(model: registration.getModel(), context: context)
         let second = try await complete(model: registration.getModel(), context: context)
-        let exhausted = try await complete(model: registration.getModel(), context: context)
 
         #expect(first.content == [.text(TextContent(text: "first"))])
         #expect(second.content == [.text(TextContent(text: "second"))])
-        #expect(exhausted.stopReason == .error)
-        #expect(exhausted.errorMessage == "No more faux responses queued")
+
+        // The exhausted queue finishes the stream in an error state; complete()
+        // surfaces that as a thrown CompletionFailedError (carrying the error
+        // message) rather than an ordinary-looking message.
+        var thrown: CompletionFailedError?
+        do {
+            _ = try await complete(model: registration.getModel(), context: context)
+        } catch let error as CompletionFailedError {
+            thrown = error
+        }
+        #expect(thrown?.message.stopReason == .error)
+        #expect(thrown?.message.errorMessage == "No more faux responses queued")
         #expect(registration.getPendingResponseCount() == 0)
         #expect(registration.state.callCount == 3)
     }

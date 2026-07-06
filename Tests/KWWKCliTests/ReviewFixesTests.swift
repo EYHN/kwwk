@@ -31,7 +31,7 @@ struct AdoptFieldsMaxTokensTests {
             name: id,
             api: api,
             provider: provider,
-            baseUrl: "https://example",
+            baseURL: "https://example",
             reasoning: false,
             input: [.text],
             contextWindow: 0,
@@ -63,10 +63,10 @@ struct AdoptFieldsMaxTokensTests {
 @Suite("adoptFields session routing")
 struct AdoptFieldsSessionRoutingTests {
     private func model(
-        id: String, api: String, provider: String, baseUrl: String, maxTokens: Int = 4096
+        id: String, api: String, provider: String, baseURL: String, maxTokens: Int = 4096
     ) -> Model {
         Model(
-            id: id, name: id, api: api, provider: provider, baseUrl: baseUrl,
+            id: id, name: id, api: api, provider: provider, baseURL: baseURL,
             reasoning: false, input: [.text], contextWindow: 0, maxTokens: maxTokens
         )
     }
@@ -74,24 +74,24 @@ struct AdoptFieldsSessionRoutingTests {
     @Test("same-provider swap keeps the session's baseUrl")
     func sameProviderPreservesBaseUrl() {
         // Mimics the real bug: user logs in with anthropic-api-key using a
-        // custom baseUrl (e.g. a corporate proxy). `/model` switching to
+        // custom baseURL (e.g. a corporate proxy). `/model` switching to
         // another Claude model from the catalog must not drop that host
         // in favor of the catalog's `https://api.anthropic.com`.
         let current = model(
             id: "claude-sonnet-4-5-20250929",
             api: "anthropic-messages",
             provider: "anthropic",
-            baseUrl: "https://proxy.example.com"
+            baseURL: "https://proxy.example.com"
         )
         let picked = model(
             id: "claude-haiku-4-5",
             api: "anthropic-messages",
             provider: "anthropic",
-            baseUrl: "https://api.anthropic.com"
+            baseURL: "https://api.anthropic.com"
         )
         let result = adoptFields(from: current, into: picked)
         #expect(result.id == "claude-haiku-4-5")
-        #expect(result.baseUrl == "https://proxy.example.com",
+        #expect(result.baseURL == "https://proxy.example.com",
                 "session baseUrl must survive same-provider /model swap")
     }
 
@@ -101,23 +101,23 @@ struct AdoptFieldsSessionRoutingTests {
         // proxy endpoint onto the initial model. Switching from a
         // completions-wire model (gpt-4.1) to an anthropic-messages-wire
         // model (claude-sonnet-4.5) must carry picked.api through, but
-        // keep the enterprise baseUrl.
+        // keep the enterprise baseURL.
         let current = model(
             id: "gpt-4.1",
             api: "openai-completions",
             provider: "github-copilot",
-            baseUrl: "https://api.business.githubcopilot.com"
+            baseURL: "https://api.business.githubcopilot.com"
         )
         let picked = model(
             id: "claude-sonnet-4.5",
             api: "anthropic-messages",
             provider: "github-copilot",
-            baseUrl: "https://api.individual.githubcopilot.com"
+            baseURL: "https://api.individual.githubcopilot.com"
         )
         let result = adoptFields(from: current, into: picked)
         #expect(result.api == "anthropic-messages",
                 "picked's wire format must be used — routing by api key")
-        #expect(result.baseUrl == "https://api.business.githubcopilot.com",
+        #expect(result.baseURL == "https://api.business.githubcopilot.com",
                 "session (enterprise) baseUrl must survive the cross-wire swap")
     }
 }

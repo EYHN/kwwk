@@ -235,6 +235,15 @@ private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable 
             server.resolveError(.invalidResponse(err))
             return
         }
+        // Only a request that actually carries the authorization `code`
+        // resolves the flow. Anything else hitting the path (browser favicon
+        // probe, health check, a preflight with no query) gets a 404 and the
+        // server keeps waiting — otherwise a stray request would kill the
+        // pending login with an empty parameter set.
+        guard params["code"] != nil else {
+            write(context: context, status: .notFound, html: server.errorHTMLFilled("missing authorization code"))
+            return
+        }
         write(context: context, status: .ok, html: server.successHTML)
         server.resolveSuccess(params)
     }

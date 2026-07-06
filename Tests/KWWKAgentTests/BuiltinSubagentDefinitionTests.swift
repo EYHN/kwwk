@@ -11,14 +11,14 @@ struct BuiltinSubagentDefinitionTests {
         #expect(general.tools == nil)
         #expect(general.prompt.contains("general-purpose coding agent"))
 
-        let explore = SubagentDefinition.explore(tools: .all)
-        #expect(explore.name == "Explore")
+        let explore = SubagentDefinition.explore(tools: .standard)
+        #expect(explore.name == "explore")
         #expect(explore.tools == .readOnly)
         #expect(explore.prompt.contains("read-only code exploration"))
         #expect(explore.prompt.contains("Do not edit"))
 
-        let plan = SubagentDefinition.plan(tools: .all)
-        #expect(plan.name == "Plan")
+        let plan = SubagentDefinition.plan(tools: .standard)
+        #expect(plan.name == "plan")
         #expect(plan.tools == .readOnly)
         #expect(plan.prompt.contains("read-only implementation planner"))
     }
@@ -29,14 +29,14 @@ struct BuiltinSubagentDefinitionTests {
             for: .readOnly,
             selection: [.general, .explore]
         )
-        #expect(readOnly.map(\.name) == ["general", "Explore"])
+        #expect(readOnly.map(\.name) == ["general", "explore"])
         #expect(readOnly.first { $0.name == "general" }?.tools == nil)
 
         let selected = SubagentDefinition.builtins(
-            for: .all,
+            for: .standard,
             selection: [.plan]
         )
-        #expect(selected.map(\.name) == ["Plan"])
+        #expect(selected.map(\.name) == ["plan"])
     }
 
     @Test("builtin selection parses CLI names")
@@ -52,12 +52,12 @@ struct BuiltinSubagentDefinitionTests {
         let base = CodingAgentConfig(
             model: .init(id: "m", name: "m", api: "a", provider: "p"),
             cwd: "/tmp",
-            tools: .all,
+            tools: .standard,
             bashEnvironment: testBashEnvironment
         )
 
         let configured = base.withBuiltinSubagents(.general.union(.plan))
-        #expect(configured.subagents.map { $0.name } == ["general", "Plan"])
+        #expect(configured.subagents.map { $0.name } == ["general", "plan"])
         #expect(base.subagents.isEmpty)
     }
 }

@@ -149,7 +149,7 @@ public enum AgentContextCompactor {
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String?,
         config: AgentContextCompactionConfig = .init(),
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         transformContext: TransformContextHook? = nil,
         convertToLlm: ConvertToLlmHook? = nil,
         streamFn: StreamFn? = nil,
@@ -247,7 +247,7 @@ public enum AgentContextCompactor {
         model: Model,
         sessionId: String?,
         config: AgentContextCompactionConfig = .init(),
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         streamFn: StreamFn? = nil,
         cancellation: CancellationHandle? = nil
     ) async throws -> String {
@@ -285,10 +285,10 @@ public enum AgentContextCompactor {
             tools: []
         )
 
-        let resolvedAuth = await authResolver?(model, sessionId)
+        let resolvedAuth = try await authResolver?(model, sessionId)
         var requestModel = model
         if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
-            requestModel.baseUrl = baseURL
+            requestModel.baseURL = baseURL
         }
         let metadata: [String: JSONValue]? = {
             guard let authMetadata = resolvedAuth?.metadata, !authMetadata.isEmpty else { return nil }

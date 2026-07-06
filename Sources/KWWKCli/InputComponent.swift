@@ -517,39 +517,40 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         return out
     }
 
-    /// Visible column width of a single `Character` — sums the per-scalar
-    /// widths (a precomposed `Character` like "é" normally has width 1;
-    /// CJK ideographs width 2).
+    /// Visible column width of a single `Character` (grapheme cluster). Uses
+    /// the shared grapheme-aware width so modern emoji stay 2 columns: a ZWJ
+    /// family/profession sequence collapses to one glyph, skin-tone modifiers
+    /// and variation selectors add nothing, and a regional-indicator pair is a
+    /// single 2-column flag — matching how the terminal advances its cursor.
+    ///
+    /// A grapheme whose scalars are *all* zero-width (a lone combining mark or
+    /// ZWSP — reachable when a bracketed paste is inserted verbatim) genuinely
+    /// occupies no columns. `insertCursorMarker` accounts it as 0 too, so we
+    /// must NOT floor it to 1: flooring would advance the layout column past
+    /// where the marker pass lands, dropping the cursor one column too far
+    /// right. Normal text (width ≥ 1) is unaffected.
     private func charColumnWidth(_ ch: Character) -> Int {
-        var w = 0
-        for scalar in ch.unicodeScalars {
-            w += ANSI.columnWidth(of: scalar.value)
-        }
-        // A grapheme whose scalars are *all* zero-width (a lone combining mark
-        // or ZWSP — reachable when a bracketed paste is inserted verbatim)
-        // genuinely occupies no columns. `insertCursorMarker` accounts it as 0
-        // too, so we must NOT floor it to 1 here: flooring would advance the
-        // layout column past where the marker pass lands, dropping the cursor
-        // one column too far right. Normal text (width ≥ 1) is unaffected.
-        return w
+        ANSI.graphemeWidth(ch)
     }
 
-    /// Insert a zero-width cursor marker into `line` at the given
-    /// visible column (counting scalar widths ANSI-style). If the
-    /// column is at or past the visible end, the marker goes at the
-    /// end — the TUI's cursor positioner handles "just past last col"
-    /// naturally.
+    /// Insert a zero-width cursor marker into `line` at the given visible
+    /// column. Walks grapheme clusters with the same width accounting as
+    /// `layoutRows` (`charColumnWidth`), so a ZWJ emoji or flag is treated as
+    /// one 2-column glyph and the marker lands on the same column the layout
+    /// pass computed. If the column is at or past the visible end, the marker
+    /// goes at the end — the TUI's cursor positioner handles "just past last
+    /// col" naturally.
     private func insertCursorMarker(in line: String, atCol col: Int) -> String {
         var out = ""
         var visible = 0
         var inserted = false
-        for scalar in line.unicodeScalars {
+        for ch in line {
             if !inserted && visible >= col {
                 out += CURSOR_MARKER
                 inserted = true
             }
-            out.unicodeScalars.append(scalar)
-            visible += ANSI.columnWidth(of: scalar.value)
+            out.append(ch)
+            visible += charColumnWidth(ch)
         }
         if !inserted {
             out += CURSOR_MARKER
@@ -629,9 +630,12 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
             case ("y", true, false): yank()
             case ("y", false, true): yankPop()
             // Single-level undo. Ctrl+_ is byte 0x1F (also sent by Ctrl+/ on
-            // many terminals); Ctrl+Z works where the terminal forwards it in
-            // raw mode. Both pop the last pre-edit snapshot.
+            // legacy terminals); Ctrl+Z works where the terminal forwards it in
+            // raw mode. Under the Kitty keyboard protocol Ctrl+/ arrives as a
+            // distinct "/" codepoint rather than collapsing to 0x1F, so bind it
+            // too. All pop the last pre-edit snapshot.
             case ("_", true, false): undo()
+            case ("/", true, false): undo()
             case ("z", true, false): undo()
             // Newline-insert triggers. Ctrl+J is the raw LF byte
             // (0x0A); terminals emit it even without any keyboard

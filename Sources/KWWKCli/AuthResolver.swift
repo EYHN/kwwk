@@ -9,7 +9,7 @@ struct ResolvedAuth: Sendable {
     /// For OAuth-backed providers (Codex, Anthropic OAuth, ...), an
     /// `authResolver` that calls back into `OAuthManager.apiKey(for:)` so
     /// tokens refresh on demand. Nil for static api-key providers.
-    let authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    let authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     /// Every provider registered this session, so `/model` can list + switch
     /// across all logged-in accounts. Single-login / env auth yields one slot.
     let providerSlots: [ProviderSlot]
@@ -21,7 +21,7 @@ struct ResolvedAuth: Sendable {
     init(
         model: Model,
         modelLabel: String,
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         providerSlots: [ProviderSlot] = [],
         authResolvers: SessionAuthResolvers? = nil
     ) {
@@ -93,7 +93,7 @@ func resolveAgentAuth(
     modelOverride: String? = nil,
     context1m: Bool = false
 ) async throws -> ResolvedAuth {
-    let store = OAuthStore(url: OAuthStore.defaultURL())
+    let store = try OAuthStore(url: OAuthStore.defaultURL())
     let all = await store.all()
 
     if !all.isEmpty {
@@ -190,8 +190,14 @@ private func registerAllStored(
             continue
         }
         let mo = storeId == activeStoreId ? activeModelId : nil
+        // Only the active provider primes its OAuth token at startup — the
+        // others register their scoped provider + resolver + slot and refresh
+        // lazily on first use (a `/model` switch). Priming every stored login
+        // fired an OAuth refresh/exchange network round-trip per account on
+        // every launch, for accounts the session may never touch.
         guard let resolved = try await registerStored(
-            storeId: storeId, store: store, modelOverride: mo, context1m: context1m
+            storeId: storeId, store: store, modelOverride: mo, context1m: context1m,
+            primeToken: storeId == activeStoreId
         ) else { continue }
         seenScopes.insert(scope)
         if let r = resolved.authResolver {
@@ -229,15 +235,20 @@ func registerStored(
     storeId: String,
     store: OAuthStore,
     modelOverride: String?,
-    context1m: Bool
+    context1m: Bool,
+    // When false, skip the eager OAuth token refresh/exchange network call at
+    // registration and read any needed endpoint/account claims from the stored
+    // credentials instead. The provider's resolver still refreshes on demand at
+    // first request. Passed false for non-active providers at startup.
+    primeToken: Bool = true
 ) async throws -> ResolvedAuth? {
     guard let creds = await store.get(storeId) else { return nil }
     switch storeId {
     case "openai-codex":
-        return await registerCodex(store: store, creds: creds, modelOverride: modelOverride)
+        return await registerCodex(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "anthropic":
         return await registerAnthropicOAuth(
-            store: store, creds: creds, modelOverride: modelOverride, context1m: context1m
+            store: store, creds: creds, modelOverride: modelOverride, context1m: context1m, primeToken: primeToken
         )
     case "anthropic-api-key":
         return await registerAnthropicAPIKey(creds: creds, modelOverride: modelOverride)
@@ -250,7 +261,7 @@ func registerStored(
     case "openrouter":
         return await registerOpenRouter(creds: creds, modelOverride: modelOverride)
     case "github-copilot":
-        return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride)
+        return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     default:
         FileHandle.standardError.write(Data(
             "kwwk: stored credentials for '\(storeId)' aren't wired up; skipping.\n".utf8
@@ -270,9 +281,14 @@ func registerStoredProviderLive(
     context1m: Bool = false,
     store: OAuthStore? = nil
 ) async -> ProviderSlot? {
-    let store = store ?? OAuthStore(url: OAuthStore.defaultURL())
+    let resolvedStore: OAuthStore
+    if let store { resolvedStore = store }
+    else {
+        guard let opened = try? OAuthStore(url: OAuthStore.defaultURL()) else { return nil }
+        resolvedStore = opened
+    }
     guard let resolved = try? await registerStored(
-        storeId: storeId, store: store, modelOverride: nil, context1m: context1m
+        storeId: storeId, store: resolvedStore, modelOverride: nil, context1m: context1m
     ) else { return nil }
     // Keep the scope's provider instance and its resolver consistent: an
     // OAuth provider installs a resolver; a static api-key provider has none
@@ -365,7 +381,7 @@ private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?)
     let model = Model(
         id: modelId, name: catalog?.name ?? modelId,
         api: "azure-openai-responses", provider: "azure-openai-responses",
-        baseUrl: azure.baseURL, reasoning: catalog?.reasoning ?? true,
+        baseURL: azure.baseURL, reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 128_000
     )
@@ -398,13 +414,13 @@ private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, m
     //
     // Workers AI catalog entries are themselves openai-completions models, so we
     // borrow their metadata. AI Gateway catalog entries describe the *native*
-    // (e.g. anthropic) wire whose baseUrl doesn't match the openai-compat gateway
+    // (e.g. anthropic) wire whose baseURL doesn't match the openai-compat gateway
     // endpoint, so we ignore the catalog there and use the compat fallback base.
     let catalog = gateway ? nil : ModelsCatalog.model(provider: providerId, id: modelId)
     let model = Model(
         id: modelId, name: catalog?.name ?? modelId,
         api: providerId, provider: providerId,
-        baseUrl: catalog?.baseUrl ?? fallbackBase, reasoning: catalog?.reasoning ?? false,
+        baseURL: catalog?.baseURL ?? fallbackBase, reasoning: catalog?.reasoning ?? false,
         input: catalog?.input ?? [.text],
         contextWindow: catalog?.contextWindow ?? 128_000, maxTokens: catalog?.maxTokens ?? 16_384,
         compat: catalog?.compat, thinkingLevelMap: catalog?.thinkingLevelMap
@@ -413,11 +429,11 @@ private func registerCloudflareEnv(_ cf: EnvAPIKeys.Cloudflare, gateway: Bool, m
     return ResolvedAuth(model: model, modelLabel: "\(modelId) · \(label) (env)", authResolver: nil)
 }
 
-/// Derive the AWS region for a Bedrock model from its catalog baseUrl host
+/// Derive the AWS region for a Bedrock model from its catalog baseURL host
 /// (`bedrock-runtime.<region>.amazonaws.com`), falling back to AWS_REGION /
 /// us-east-1. Keeps EU/APAC-hosted models from being misrouted to us-east-1.
 private func bedrockRegion(for model: Model, environment: [String: String]) -> String {
-    if let host = URL(string: model.baseUrl)?.host {
+    if let host = URL(string: model.baseURL)?.host {
         let parts = host.split(separator: ".")
         if parts.count >= 3, parts[0] == "bedrock-runtime" {
             return String(parts[1])
@@ -438,11 +454,11 @@ private func pickEnvModel(provider: String, id: String?) -> Model? {
     let models = ModelsCatalog.models(for: provider)
     if let id, !id.isEmpty {
         // Honor an override id even if it isn't catalogued, inheriting the
-        // provider's wire api/baseUrl from any sibling model.
+        // provider's wire api/baseURL from any sibling model.
         if let sibling = models.first {
             return Model(
                 id: id, name: id, api: sibling.api, provider: provider,
-                baseUrl: sibling.baseUrl, reasoning: sibling.reasoning,
+                baseURL: sibling.baseURL, reasoning: sibling.reasoning,
                 input: sibling.input, cost: sibling.cost,
                 contextWindow: sibling.contextWindow, maxTokens: sibling.maxTokens,
                 headers: sibling.headers, compat: sibling.compat
@@ -472,27 +488,29 @@ private func registerEnvProviders(for provider: String, apiKey: String) async ->
 }
 
 private func registerEnvProvider(api: String, provider: String, apiKey: String) async -> Bool {
+    // Tag each flat env registration with its vendor so a model whose
+    // `provider` differs can never fall back onto this vendor's key.
     switch api {
     case "openai-completions":
-        await APIRegistry.shared.register(OpenAICompletionsProvider(defaultAPIKey: apiKey))
+        await APIRegistry.shared.register(OpenAICompletionsProvider(defaultAPIKey: apiKey), providerVendor: provider)
         return true
     case "openai-responses":
-        await APIRegistry.shared.register(OpenAIResponsesProvider(defaultAPIKey: apiKey))
+        await APIRegistry.shared.register(OpenAIResponsesProvider(defaultAPIKey: apiKey), providerVendor: provider)
         return true
     case "google-generative-ai":
-        await APIRegistry.shared.register(GoogleGeminiProvider(defaultAPIKey: apiKey))
+        await APIRegistry.shared.register(GoogleGeminiProvider(defaultAPIKey: apiKey), providerVendor: provider)
         return true
     case "mistral-conversations":
-        await APIRegistry.shared.register(MistralConversationsProvider(defaultAPIKey: apiKey))
+        await APIRegistry.shared.register(MistralConversationsProvider(defaultAPIKey: apiKey), providerVendor: provider)
         return true
     case "anthropic-messages":
         if provider == "anthropic" {
-            await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: apiKey))
+            await APIRegistry.shared.register(AnthropicProvider(defaultAPIKey: apiKey), providerVendor: provider)
         } else {
             await APIRegistry.shared.register(AnthropicProvider(
                 defaultAPIKey: apiKey,
                 authHeaderBuilder: { key in ["Authorization": cliBearerHeaderValue(key)] }
-            ))
+            ), providerVendor: provider)
         }
         return true
     default:
@@ -505,15 +523,20 @@ private func registerEnvProvider(api: String, provider: String, apiKey: String) 
 private func registerCodex(
     store: OAuthStore,
     creds: OAuthCredentials,
-    modelOverride: String? = nil
+    modelOverride: String? = nil,
+    primeToken: Bool = true
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
     // Grab a fresh token if expired. If the refresh fails we still register
     // the provider — the authResolver below will retry on the next request
-    // and surface the error to the user there.
-    _ = try? await manager.apiKey(for: "openai-codex")
+    // and surface the error to the user there. When not priming, read the
+    // stored `accountId` (persisted at login) and let the resolver refresh
+    // lazily on first use.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "openai-codex")
+    }
 
-    let refreshed = await store.get("openai-codex") ?? creds
+    let refreshed = primeToken ? (await store.get("openai-codex") ?? creds) : creds
     let accountId: String? = {
         if case .string(let s) = refreshed.extras["accountId"] ?? .null { return s }
         return nil
@@ -532,7 +555,7 @@ private func registerCodex(
         name: catalogEntry?.name ?? modelId,
         api: "chatgpt-codex",
         provider: "chatgpt-codex",
-        baseUrl: "https://chatgpt.com",
+        baseURL: "https://chatgpt.com",
         reasoning: catalogEntry?.reasoning ?? true,
         input: catalogEntry?.input ?? [.text, .image],
         contextWindow: catalogEntry?.contextWindow ?? 272_000,
@@ -555,10 +578,15 @@ private func registerAnthropicOAuth(
     store: OAuthStore,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
-    context1m: Bool = false
+    context1m: Bool = false,
+    primeToken: Bool = true
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
-    _ = try? await manager.apiKey(for: "anthropic")
+    // Prime the token only for the active provider; otherwise the resolver
+    // refreshes lazily on the first request.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "anthropic")
+    }
 
     // Opt into the 1M-context beta when requested. Sent alongside the OAuth
     // beta as a single comma-separated `anthropic-beta` header value, which
@@ -582,7 +610,7 @@ private func registerAnthropicOAuth(
         name: catalog?.name ?? modelId,
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: "https://api.anthropic.com",
+        baseURL: "https://api.anthropic.com",
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: context1m ? 1_000_000 : (catalog?.contextWindow ?? defaultContext),
@@ -602,7 +630,8 @@ private func registerAnthropicOAuth(
 private func registerGitHubCopilot(
     store: OAuthStore,
     creds: OAuthCredentials,
-    modelOverride: String? = nil
+    modelOverride: String? = nil,
+    primeToken: Bool = true
 ) async -> ResolvedAuth {
     let manager = OAuthManager(store: store)
     // Prime the session token — Copilot's `refresh` is actually a PAT →
@@ -610,9 +639,13 @@ private func registerGitHubCopilot(
     // We ignore the returned token; the resolver below re-fetches on demand
     // (`OAuthManager` caches until `expires_at` so we don't round-trip
     // every request). The refresh also persists the proxy endpoint into
-    // `extras["endpoint"]`, which we read below.
-    _ = try? await manager.apiKey(for: "github-copilot")
-    let refreshed = await store.get("github-copilot") ?? creds
+    // `extras["endpoint"]`, which we read below. For a non-active provider we
+    // skip the eager exchange and read the endpoint the previous session's
+    // login already persisted; the resolver primes it on first use.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "github-copilot")
+    }
+    let refreshed = primeToken ? (await store.get("github-copilot") ?? creds) : creds
 
     // Copilot Business / Enterprise get a proxy-endpoint claim (e.g.
     // `https://api.business.githubcopilot.com`) that the session-token
@@ -659,17 +692,17 @@ private func registerGitHubCopilot(
         name: defaultId,
         api: "openai-completions",
         provider: "github-copilot",
-        baseUrl: baseURLString,
+        baseURL: baseURLString,
         reasoning: false,
         input: [.text, .image],
         contextWindow: 200_000,
         maxTokens: 128_000
     )
     // Use catalog model for wire-format api + capabilities, but stamp
-    // the session's resolved `baseUrl` on it — catalog entries hardcode
+    // the session's resolved `baseURL` on it — catalog entries hardcode
     // `api.individual.githubcopilot.com` which would bypass the
     // Business/Enterprise proxy. `adoptFields` preserves this session
-    // baseUrl across `/model` switches, so every Copilot model routes
+    // baseURL across `/model` switches, so every Copilot model routes
     // through the right host.
     let model: Model = {
         guard let catalog = ModelsCatalog.model(provider: "github-copilot", id: defaultId)
@@ -679,7 +712,7 @@ private func registerGitHubCopilot(
             name: catalog.name,
             api: catalog.api,
             provider: catalog.provider,
-            baseUrl: baseURLString,
+            baseURL: baseURLString,
             reasoning: catalog.reasoning,
             input: catalog.input,
             cost: catalog.cost,
@@ -717,7 +750,7 @@ private func registerAnthropicAPIKey(
         name: catalog?.name ?? modelId,
         api: "anthropic-messages",
         provider: "anthropic",
-        baseUrl: baseURL,
+        baseURL: baseURL,
         reasoning: catalog?.reasoning ?? false,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000,
@@ -746,7 +779,7 @@ private func registerOpenAIAPIKey(
         name: catalog?.name ?? modelId,
         api: "openai-responses",
         provider: "openai",
-        baseUrl: baseURL,
+        baseURL: baseURL,
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000,
@@ -776,9 +809,9 @@ private func registerGoogleAPIKey(
         api: "google-generative-ai",
         provider: "google",
         // Host root — `GoogleGeminiProvider`'s urlBuilder appends `/v1beta`
-        // itself (and tolerates a baseUrl that already includes it, which
+        // itself (and tolerates a baseURL that already includes it, which
         // is what catalog models carry).
-        baseUrl: baseURL,
+        baseURL: baseURL,
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 1_048_576,
@@ -819,7 +852,7 @@ private func registerOpenRouter(
         name: catalog?.name ?? modelId,
         api: "openai-completions",
         provider: "openrouter",
-        baseUrl: catalog?.baseUrl ?? "https://openrouter.ai/api/v1",
+        baseURL: catalog?.baseURL ?? "https://openrouter.ai/api/v1",
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text],
         cost: catalog?.cost ?? ModelCost(),
@@ -856,7 +889,7 @@ private func registerOpenAICompatible(
         name: modelId,
         api: "openai-completions",
         provider: "openai-compatible",
-        baseUrl: baseURL,
+        baseURL: baseURL,
         reasoning: false,
         input: [.text],
         contextWindow: 131_072,
@@ -889,9 +922,16 @@ private func oauthResolver(
     providerId: String,
     scheme: AuthScheme,
     baseURL: String? = nil
-) -> @Sendable (Model, String?) async -> ResolvedProviderAuth? {
+) -> @Sendable (Model, String?) async throws -> ResolvedProviderAuth? {
     { _, _ in
-        guard let token = try? await manager.apiKey(for: providerId) else { return nil }
-        return ResolvedProviderAuth(token: token, scheme: scheme, baseURL: baseURL)
+        do {
+            let token = try await manager.apiKey(for: providerId)
+            return ResolvedProviderAuth(token: token, scheme: scheme, baseURL: baseURL)
+        } catch OAuthError.missing, OAuthError.unknownProvider {
+            // Not logged in for this provider ⇒ anonymous. Any other failure
+            // (refresh/exchange error) propagates so the request surfaces it
+            // instead of silently going out unauthenticated.
+            return nil
+        }
     }
 }

@@ -48,10 +48,12 @@ public final class SessionRecorder: @unchecked Sendable {
         self.persistedCount = persistedCount
     }
 
-    /// Ensure the session file exists with a header. Call once before the
-    /// first run when starting a fresh session.
+    /// Ensure the session file exists with a header, creating it only when it
+    /// does not already exist. Safe to call after resuming — it never truncates
+    /// an existing transcript, so a resumed session's history is preserved even
+    /// if a caller forgets the `resumed` guard.
     public func ensureCreated() async {
-        _ = try? await store.create(id: sessionId, cwd: cwd, model: model, provider: provider)
+        _ = try? await store.createIfMissing(id: sessionId, cwd: cwd, model: model, provider: provider)
     }
 
     /// Subscribe to `agent` and persist its transcript as it grows. Returns an

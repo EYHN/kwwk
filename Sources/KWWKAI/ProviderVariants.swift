@@ -102,7 +102,7 @@ public enum ProviderVariants {
             defaultBaseURL: baseURL,
             defaultAPIKey: apiKey,
             urlBuilder: { model, _, fallback in
-                var base = model.baseUrl.isEmpty ? fallbackBase : model.baseUrl
+                var base = model.baseURL.isEmpty ? fallbackBase : model.baseURL
                 while base.hasSuffix("/") { base.removeLast() }
                 base = substituteCloudflarePlaceholders(in: base) { token in
                     token == "CLOUDFLARE_ACCOUNT_ID" ? accountId : nil
@@ -141,7 +141,7 @@ public enum ProviderVariants {
             defaultBaseURL: baseURL,
             defaultAPIKey: apiKey,
             urlBuilder: { model, _, fallback in
-                var base = model.baseUrl.isEmpty ? fallbackBase : model.baseUrl
+                var base = model.baseURL.isEmpty ? fallbackBase : model.baseURL
                 while base.hasSuffix("/") { base.removeLast() }
                 base = substituteCloudflarePlaceholders(in: base) { token in
                     switch token {
@@ -313,14 +313,14 @@ public enum ProviderVariants {
         api: String = "anthropic-messages",
         baseURL: URL = URL(string: "https://api.individual.githubcopilot.com")!
     ) -> AnthropicProvider {
-        // AnthropicProvider's default urlBuilder reads `model.baseUrl`,
+        // AnthropicProvider's default urlBuilder reads `model.baseURL`,
         // which the Copilot catalog pins to `api.individual.githubcopilot.com`
         // — that would bypass the session's enterprise/business proxy
         // endpoint. We can't inject a urlBuilder on AnthropicProvider, so
-        // `defaultBaseURL` is the fallback when `model.baseUrl.isEmpty`.
+        // `defaultBaseURL` is the fallback when `model.baseURL.isEmpty`.
         // Callers who need enterprise routing should normalize
-        // `model.baseUrl` via `adoptFields` on `/model` switches, which
-        // keeps the session baseUrl across catalog swaps.
+        // `model.baseURL` via `adoptFields` on `/model` switches, which
+        // keeps the session baseURL across catalog swaps.
         AnthropicProvider(
             api: api,
             client: client,

@@ -26,7 +26,7 @@ import KWWKCli
 ///                        Requires the account to have long-context billing
 ///                        enabled. Ignored for non-Anthropic providers.
 ///   `--subagents <list>` — comma-separated built-in subagents to enable:
-///                        general, Explore, Plan, all, none.
+///                        general, explore, plan, all, none.
 ///   `--no-subagents`    — disable built-in CLI subagents.
 @main
 struct KwwkCLI {
@@ -91,7 +91,7 @@ struct KwwkCLI {
           --context-1m                opt into Anthropic 1M-context beta
                                       (long-context billing must be on)
           --subagents <list>          built-in subagents to enable:
-                                      general,Explore,Plan,all, or none
+                                      general,explore,plan,all, or none
           --no-subagents              disable built-in CLI subagents
           --continue                  resume the latest session for this
                                       directory (replays its transcript)

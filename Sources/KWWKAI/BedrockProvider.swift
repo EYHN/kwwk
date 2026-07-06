@@ -11,7 +11,7 @@ import FoundationNetworking
 public final class BedrockProvider: APIProvider, @unchecked Sendable {
     public let api: String
     public let client: HTTPClient
-    /// Fallback region used when neither the model ARN, the model `baseUrl`
+    /// Fallback region used when neither the model ARN, the model `baseURL`
     /// host, nor `AWS_REGION`/`AWS_DEFAULT_REGION` pin a region.
     public let region: String
     public let credentialsProvider: @Sendable () async -> AWSSigV4.Credentials?
@@ -78,7 +78,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         }()
         let effectiveRegion = BedrockRegion.resolve(
             modelId: model.id,
-            baseUrl: model.baseUrl,
+            baseURL: model.baseURL,
             env: environment,
             profileRegion: profileRegion
         )
@@ -159,9 +159,20 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 url: url, method: "POST", headers: headers, body: body
             )
             if response.statusCode >= 400 {
+                // Surface the error body (a JSON `{message}` on 4xx/5xx) like the
+                // other providers instead of a bare status code.
+                var bodyBytes = Data()
+                for try await chunk in stream {
+                    bodyBytes.append(chunk)
+                    if bodyBytes.count > 4096 { break }
+                }
+                let bodyText = String(data: bodyBytes, encoding: .utf8) ?? ""
+                let preview = bodyText.isEmpty
+                    ? ""
+                    : ": " + bodyText.replacingOccurrences(of: "\n", with: " ").prefix(500)
                 let msg = Self.makeError(
                     api: api, model: model,
-                    text: "Bedrock returned status \(response.statusCode)"
+                    text: "Bedrock returned status \(response.statusCode)\(preview)"
                 )
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
@@ -169,11 +180,22 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             }
             let state = BedrockStreamState(api: api, provider: model.provider, modelId: model.id)
             state.signal = options?.cancellation
-            try await drive(events: parseAWSEventStream(bytes: stream), out: out, state: state)
+            // Bridge external cancellation to the in-flight request (see
+            // AnthropicProvider.run for the rationale).
+            let driveTask = Task { try await self.drive(events: parseAWSEventStream(bytes: stream), out: out, state: state) }
+            let cancelReg = options?.cancellation?.onCancel { _ in driveTask.cancel() }
+            defer { cancelReg?.cancel() }
+            try await driveTask.value
         } catch {
-            let msg = Self.makeError(api: api, model: model, text: "\(error)")
-            out.push(.error(reason: .error, error: msg))
-            out.end(msg)
+            if options?.cancellation?.isCancelled == true {
+                let aborted = Self.makeAborted(api: api, model: model)
+                out.push(.error(reason: .aborted, error: aborted))
+                out.end(aborted)
+            } else {
+                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                out.push(.error(reason: .error, error: msg))
+                out.end(msg)
+            }
         }
     }
 
@@ -254,8 +276,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                     state.appendText(index: index, text: text)
                     out.push(.textDelta(contentIndex: index, delta: text, partial: state.snapshot()))
                 }
-                if case .object(let reasoning) = delta["reasoningContent"] ?? .null,
-                   case .string(let text) = reasoning["text"] ?? .null {
+                if case .object(let reasoning) = delta["reasoningContent"] ?? .null {
                     let (index, firstSeen) = state.noteThinkingBlock(at: blockIndex)
                     if !emittedStart {
                         out.push(.start(partial: state.snapshot()))
@@ -264,8 +285,18 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                     if firstSeen {
                         out.push(.thinkingStart(contentIndex: index, partial: state.snapshot()))
                     }
-                    state.appendThinking(index: index, text: text)
-                    out.push(.thinkingDelta(contentIndex: index, delta: text, partial: state.snapshot()))
+                    if case .string(let text) = reasoning["text"] ?? .null {
+                        state.appendThinking(index: index, text: text)
+                        out.push(.thinkingDelta(contentIndex: index, delta: text, partial: state.snapshot()))
+                    }
+                    // Capture the reasoning signature delta so a replayed thinking
+                    // block carries a valid signature — Claude-on-Bedrock rejects a
+                    // signed thinking block replayed without one, and `encodeMessages`
+                    // otherwise degrades it to plain text. Mirrors pi and the
+                    // AnthropicProvider's `signature_delta` handling.
+                    if case .string(let sig) = reasoning["signature"] ?? .null {
+                        state.appendSignature(index: index, signature: sig)
+                    }
                 }
                 if case .object(let toolUse) = delta["toolUse"] ?? .null,
                    case .string(let input) = toolUse["input"] ?? .null {
@@ -292,6 +323,12 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             }
         }
 
+        if state.signal?.isCancelled == true {
+            let aborted = state.asAborted()
+            out.push(.error(reason: .aborted, error: aborted))
+            out.end(aborted)
+            return
+        }
         state.finalizePending { event in out.push(event) }
         let final = state.finalize()
         out.push(.done(reason: final.stopReason, message: final))
@@ -666,6 +703,19 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             timestamp: Timestamp.now()
         )
     }
+
+    private static func makeAborted(api: String, model: Model) -> AssistantMessage {
+        AssistantMessage(
+            content: [],
+            api: api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(),
+            stopReason: .aborted,
+            errorMessage: "Request was aborted",
+            timestamp: Timestamp.now()
+        )
+    }
 }
 
 // MARK: - Mutable state
@@ -745,6 +795,14 @@ final class BedrockStreamState: @unchecked Sendable {
             if case .thinking(var th) = blocks[index] { th.thinking += text; blocks[index] = .thinking(th) }
         }
     }
+    func appendSignature(index: Int, signature: String) {
+        lock.withLock {
+            if case .thinking(var th) = blocks[index] {
+                th.thinkingSignature = (th.thinkingSignature ?? "") + signature
+                blocks[index] = .thinking(th)
+            }
+        }
+    }
     func appendToolCallArgs(index: Int, chunk: String) {
         lock.withLock {
             if case .toolUse(let id, let name, let json) = blocks[index] {
@@ -802,7 +860,12 @@ final class BedrockStreamState: @unchecked Sendable {
         }
     }
 
-    func snapshot() -> AssistantMessage {
+    /// Streaming snapshot. In-progress tool calls use an empty-object
+    /// placeholder rather than re-parsing the growing JSON buffer on every
+    /// delta (O(n^2)); full arguments are parsed once in `finishBlock`/`finalize`.
+    func snapshot() -> AssistantMessage { buildMessage(parseToolArgs: false) }
+
+    private func buildMessage(parseToolArgs: Bool) -> AssistantMessage {
         lock.withLock {
             AssistantMessage(
                 content: order.compactMap { idx -> AssistantBlock? in
@@ -810,7 +873,8 @@ final class BedrockStreamState: @unchecked Sendable {
                     case .text(let t): return .text(t)
                     case .thinking(let th): return .thinking(th)
                     case .toolUse(let id, let name, let json):
-                        return .toolCall(ToolCall(id: id, name: name, arguments: parseArgs(json)))
+                        let args: JSONValue = parseToolArgs ? parseArgs(json) : .object([:])
+                        return .toolCall(ToolCall(id: id, name: name, arguments: args))
                     case .none: return nil
                     }
                 },
@@ -825,7 +889,7 @@ final class BedrockStreamState: @unchecked Sendable {
         }
     }
 
-    func finalize() -> AssistantMessage { snapshot() }
+    func finalize() -> AssistantMessage { buildMessage(parseToolArgs: true) }
 
     func asAborted() -> AssistantMessage {
         stopReason = .aborted

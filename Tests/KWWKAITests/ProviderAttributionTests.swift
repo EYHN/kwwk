@@ -36,7 +36,7 @@ struct ProviderAttributionTests {
     func openRouterByBaseUrl() {
         let h = ProviderAttribution.attributionHeaders(
             provider: "custom",
-            baseUrl: "https://openrouter.ai/api/v1"
+            baseURL: "https://openrouter.ai/api/v1"
         )
         #expect(h?["HTTP-Referer"] == "https://kwwk.dev")
     }
@@ -47,7 +47,7 @@ struct ProviderAttributionTests {
         #expect(byId?["X-BILLING-INVOKE-ORIGIN"] == "kwwk")
         let byHost = ProviderAttribution.attributionHeaders(
             provider: "x",
-            baseUrl: "https://integrate.api.nvidia.com/v1"
+            baseURL: "https://integrate.api.nvidia.com/v1"
         )
         #expect(byHost?["X-BILLING-INVOKE-ORIGIN"] == "kwwk")
     }
@@ -77,7 +77,7 @@ struct ProviderAttributionTests {
             id: "x",
             api: "openai-completions",
             provider: "openrouter",
-            baseUrl: "https://openrouter.ai/api/v1"
+            baseURL: "https://openrouter.ai/api/v1"
         )
         let merged = ProviderAttribution.mergedHeaders(
             for: model,

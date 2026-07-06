@@ -105,6 +105,71 @@ public enum Truncate {
         )
     }
 
+    /// Tail truncation — keep the last N lines/bytes. Command output (bash,
+    /// test runs) is most useful at the end, where errors and summaries land,
+    /// so this is the counterpart to `truncateHead` for tool output that we
+    /// want to bound without losing the tail.
+    public static func truncateTail(
+        _ content: String,
+        maxLines: Int = defaultMaxLines,
+        maxBytes: Int = defaultMaxBytes
+    ) -> Result {
+        let totalBytes = content.utf8.count
+        // A trailing newline terminates the last line — it does not start an
+        // empty one. Without this, `seq 1 3` counts 4 lines and the kept tail
+        // ends in "" instead of "3".
+        let body = content.hasSuffix("\n") ? String(content.dropLast()) : content
+        let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let totalLines = lines.count
+
+        if totalLines <= maxLines && totalBytes <= maxBytes {
+            return Result(
+                content: content,
+                truncated: false,
+                truncatedBy: nil,
+                totalLines: totalLines,
+                totalBytes: totalBytes,
+                outputLines: totalLines,
+                outputBytes: totalBytes,
+                lastLinePartial: false,
+                firstLineExceedsLimit: false,
+                maxLines: maxLines,
+                maxBytes: maxBytes
+            )
+        }
+
+        var kept: [String] = []
+        var outBytes = 0
+        var truncatedBy = "lines"
+        for line in lines.reversed() {
+            if kept.count >= maxLines {
+                truncatedBy = "lines"
+                break
+            }
+            let lineBytes = line.utf8.count + (kept.isEmpty ? 0 : 1)
+            if outBytes + lineBytes > maxBytes {
+                truncatedBy = "bytes"
+                break
+            }
+            kept.append(line)
+            outBytes += lineBytes
+        }
+        let output = kept.reversed().joined(separator: "\n")
+        return Result(
+            content: output,
+            truncated: true,
+            truncatedBy: truncatedBy,
+            totalLines: totalLines,
+            totalBytes: totalBytes,
+            outputLines: kept.count,
+            outputBytes: output.utf8.count,
+            lastLinePartial: false,
+            firstLineExceedsLimit: false,
+            maxLines: maxLines,
+            maxBytes: maxBytes
+        )
+    }
+
     /// Truncate a single line to `maxChars` characters, adding a suffix if needed.
     public static func truncateLine(
         _ line: String, maxChars: Int = grepMaxLineLength

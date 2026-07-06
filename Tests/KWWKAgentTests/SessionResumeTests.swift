@@ -12,19 +12,27 @@ struct SessionResumeTests {
     }
 
     @Test("pickInteractive resolves to a fresh session at the agent layer")
-    func pickInteractiveFallsBackFresh() async {
+    func pickInteractiveFallsBackFresh() async throws {
         let store = SessionStore(directory: tempDir())
-        let r = await store.resolveResume(.pickInteractive, cwd: "/x", freshId: "FIX")
+        let r = try await store.resolveResume(.pickInteractive, cwd: "/x", freshId: "FIX")
         #expect(r.sessionId == "FIX")
         #expect(r.resumed == false)
     }
 
     @Test("none resolves to a fresh session")
-    func noneFresh() async {
+    func noneFresh() async throws {
         let store = SessionStore(directory: tempDir())
-        let r = await store.resolveResume(.none, cwd: "/x", freshId: "FIX")
+        let r = try await store.resolveResume(.none, cwd: "/x", freshId: "FIX")
         #expect(r.sessionId == "FIX")
         #expect(r.resumed == false)
+    }
+
+    @Test("an invalid-format explicit id throws instead of minting a random session")
+    func invalidIdThrows() async {
+        let store = SessionStore(directory: tempDir())
+        await #expect(throws: SessionStore.SessionStoreError.invalidId("has spaces")) {
+            _ = try await store.resolveResume(.id("has spaces"), cwd: "/x", freshId: "FIX")
+        }
     }
 
     @Test("the four resume cases are distinct")

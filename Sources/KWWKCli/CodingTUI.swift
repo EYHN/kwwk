@@ -13,7 +13,7 @@ func runCodingTUIInternal(
     cwd: String,
     tools: CodingTools,
     builtinSubagents: BuiltinSubagentSelection = .all,
-    authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+    authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
     providerSlots: [ProviderSlot] = [],
     authResolvers: SessionAuthResolvers? = nil,
     autoCompactThreshold: Double? = 0.75,
@@ -27,26 +27,22 @@ func runCodingTUIInternal(
     // Resolve session persistence up front: a fresh id by default, or a
     // stored transcript when `--resume` / `--session` was passed.
     let sessionStore = SessionStore(directory: SessionStore.defaultDirectory())
-    // `--resume` opens an interactive picker across all projects; resolve the
-    // user's choice to a concrete session id before loading. Cancelling exits
-    // cleanly (pi parity: "No session selected", exit 0).
-    var effectiveResume = resume
-    if resume == .pickInteractive {
-        if let chosen = await SessionPicker.choose(store: sessionStore) {
-            effectiveResume = .id(chosen)
-        } else {
-            FileHandle.standardError.write(Data("No session selected\n".utf8))
-            Foundation.exit(0)
-        }
-    }
-    let resolvedResume = await sessionStore.resolveResume(effectiveResume, cwd: cwd)
+    // `--resume` opens the same polished arrow-key picker that `/resume` uses,
+    // rather than a bare numbered stdin prompt. The picker needs the TUI +
+    // ModalHost to exist, so we start in a fresh session and open the resume
+    // modal on the first frame (see `openResumePickerOnStart` below); its
+    // confirm handler hot-swaps persistence into the chosen session exactly
+    // like `/resume`. Cancelling the picker leaves the fresh session in place.
+    let openResumePickerOnStart = (resume == .pickInteractive)
+    let effectiveResume: SessionResume = openResumePickerOnStart ? .none : resume
+    let resolvedResume = try await sessionStore.resolveResume(effectiveResume, cwd: cwd)
     let sessionId = resolvedResume.sessionId
 
     let environment = ProcessInfo.processInfo.environment
     let tmuxManager = tools.contains(.tmux)
         ? try cliTmuxManager(environment: environment)
         : nil
-    let agent = await makeCodingAgent(CodingAgentConfig(
+    let agent = try await makeCodingAgent(CodingAgentConfig(
         model: model,
         cwd: cwd,
         tools: tools,
@@ -60,7 +56,7 @@ func runCodingTUIInternal(
         bashEnvironment: environment,
         bashShellPath: cliShellPath(environment: environment),
         tmuxManager: tmuxManager
-    ))
+    )).agent
 
     // Seed the transcript from disk when resuming so the model continues
     // where it left off.
@@ -367,6 +363,10 @@ func runCodingTUIInternal(
     }
 
     var isAutoCompacting = false
+    // Set for the duration of a manual `/compact` (via the SlashContext
+    // `setCompacting` hook). Mirrors `isAutoCompacting` in the Enter busy gate
+    // so a prompt typed mid-compact queues instead of racing the compactor.
+    var isManualCompacting = false
     updateFrameStatus()
 
     // Retry bookkeeping for `/retry`: remembers the last submitted prompt and
@@ -381,6 +381,31 @@ func runCodingTUIInternal(
     // `resetSessionTransientState` — a stale cursor into a drained queue must
     // not survive into a fresh or restored session.
     let dequeueCycle = DequeueCycleState()
+
+    // Background-task poll controller. The poll refreshes the "N bg running"
+    // count + abort/retry countdowns, but only needs to run while something is
+    // actually live: a turn is in flight (which may spawn tasks) or at least
+    // one background task is still running. `ensurePoll` (re)starts it on
+    // activity; the loop stops itself once idle so an idle prompt isn't
+    // re-queried and repainted 4×/second for nothing.
+    let pollHandle = PollHandle()
+    let ensurePoll: @MainActor @Sendable () -> Void = {
+        guard pollHandle.task == nil else { return }
+        pollHandle.task = Task { @MainActor in
+            defer { pollHandle.task = nil }
+            while !Task.isCancelled {
+                let running = await bgManager.list(sessionId: sessionId)
+                    .filter { $0.status == .running }.count
+                runningBackgroundTasks = running
+                updateFrameStatus()
+                runner.tui.requestRender()
+                // Nothing left to animate the count → stop. A later turn or
+                // background task restarts the poll via `ensurePoll`.
+                if running == 0 && !agent.state.isStreaming { break }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+        }
+    }
 
     // Keep the renderer's display mode in sync with the agent's state on
     // every event, so `/thinking show|hide` (which only mutates agent
@@ -526,6 +551,9 @@ func runCodingTUIInternal(
                 break
             default: break
             }
+            // A turn is live (and may spawn background tasks) — make sure the
+            // bg-task poll is running so the count + countdowns stay fresh.
+            if agent.state.isStreaming { ensurePoll() }
             updateFrameStatus()
             runner.tui.requestRender()
         }
@@ -663,6 +691,15 @@ func runCodingTUIInternal(
             recomputeTranscript()
             updateFrameStatus()
             runner.tui.requestRender()
+        },
+        setCompacting: { active in
+            isManualCompacting = active
+            // Show the compacting spinner (frameMode.isActive drives the
+            // dedicated spinner tick) for the whole round-trip, and clear back
+            // to idle when it finishes.
+            frameMode = active ? .compacting(messageCount: agent.state.messages.count) : .idle
+            updateFrameStatus()
+            runner.tui.requestRender()
         }
     )
 
@@ -693,7 +730,7 @@ func runCodingTUIInternal(
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
-            let busy = agent.state.isStreaming || isAutoCompacting
+            let busy = agent.state.isStreaming || isAutoCompacting || isManualCompacting
 
             // Logged-out gate: with no registered provider a prompt has
             // nowhere to route — surface the /login hint instead of letting
@@ -880,12 +917,52 @@ func runCodingTUIInternal(
         }
     }
 
-    // Ctrl-C: always exits (single tap). Keep it as the hard-stop key so
-    // there's always a predictable way out.
+    // Ctrl-C: pi/omp two-stage convention. The first press does the least
+    // destructive useful thing — cancel a live generation, else clear a
+    // non-empty input, else arm the exit and hint — and a second press within
+    // the window quits. This stops a single accidental Ctrl-C from tearing the
+    // app down mid-stream. (Ctrl-D on an empty input is still the one-tap exit.)
+    let ctrlC = CtrlCState()
     runner.bind(.ctrl("c")) { _ in
         Task { @MainActor in
-            await agent.abortAndKillBackgroundTasks()
-            runner.exit()
+            let now = Date()
+            let armed = ctrlC.lastPress.map { now.timeIntervalSince($0) < CtrlCState.window } ?? false
+            if armed {
+                await agent.abortAndKillBackgroundTasks()
+                runner.exit()
+                return
+            }
+            ctrlC.lastPress = now
+            if modal.isOpen {
+                modal.routeCancel()
+                return
+            }
+            if agent.state.isStreaming {
+                // Cancel the active generation, mirroring Esc's abort path. The
+                // "Ctrl-C to force quit" state line already tells the user a
+                // second press exits, so no extra scrollback notice here.
+                agent.abort()
+                frameMode = .aborting
+                agent.clearSteeringQueue()
+                if let t = retryArmTarget(
+                    summary: nil,
+                    aborted: true,
+                    trackedActive: retry.trackedActive,
+                    messages: agent.state.messages
+                ) {
+                    retry.lastText = t.text
+                    retry.lastImages = t.images
+                    retry.failed = true
+                }
+                retry.trackedActive = false
+            } else if !frame.input.value.isEmpty {
+                frame.input.value = ""
+                runner.tui.commit(["", Style.dimmed("  cleared — press Ctrl-C again to exit")])
+            } else {
+                runner.tui.commit(["", Style.dimmed("  press Ctrl-C again to exit")])
+            }
+            updateFrameStatus()
+            runner.tui.requestRender()
         }
     }
 
@@ -961,21 +1038,12 @@ func runCodingTUIInternal(
         }
     }
 
-    // Background-task poll. Refreshes the "N bg running" count + retry/abort
-    // countdowns at a relaxed 250ms cadence. The spinner is NOT advanced here
-    // anymore — it has its own faster tick below — so a slow bg poll can't make
-    // the animation visibly step.
-    let frameStatusTask = Task { @MainActor in
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        while !Task.isCancelled {
-            let running = await bgManager.list(sessionId: sessionId)
-                .filter { $0.status == .running }.count
-            runningBackgroundTasks = running
-            updateFrameStatus()
-            runner.tui.requestRender()
-            try? await Task.sleep(nanoseconds: 250_000_000)
-        }
-    }
+    // The background-task poll (see `ensurePoll` above) refreshes the
+    // "N bg running" count + retry/abort countdowns at a relaxed 250ms cadence,
+    // but only while a turn or a background task is live — it is started on
+    // demand rather than spinning forever. The spinner is NOT advanced there —
+    // it has its own faster tick below — so a slow bg poll can't make the
+    // animation visibly step.
 
     // Dedicated spinner tick, decoupled from the bg poll. ~90ms gives the
     // 10-frame braille set a smooth, continuous spin. We only advance + repaint
@@ -1000,17 +1068,32 @@ func runCodingTUIInternal(
         await tmuxManager?.teardown()
     }
 
+    // `--resume`: open the arrow-key session picker on the first frame, reusing
+    // the exact `/resume` modal + confirm/hot-swap. Opening it before `run()`
+    // is safe — `modal.open` just stages the overlay; the first render (once
+    // the runner starts) paints it, and the ModalInputRouter already routes
+    // keys to it. Cancel leaves the fresh session in place.
+    if openResumePickerOnStart, let resumeCmd = slashRegistry.find("resume") {
+        await resumeCmd.handler(slashContext, "")
+    }
+
     do {
         try await runner.run()
     } catch {
-        frameStatusTask.cancel()
+        pollHandle.task?.cancel()
         spinnerTask.cancel()
         await shutdown()
         throw error
     }
-    frameStatusTask.cancel()
+    pollHandle.task?.cancel()
     spinnerTask.cancel()
     await shutdown()
+    // A signal-driven teardown (SIGINT/SIGTERM) records a non-zero exit code.
+    // `runner.run()` no longer calls `Foundation.exit` itself, so the graceful
+    // shutdown above always runs first; propagate the code now.
+    if runner.exitCode != 0 {
+        Foundation.exit(runner.exitCode)
+    }
 }
 
 // MARK: - Helpers
@@ -1035,6 +1118,23 @@ final class WelcomeHeaderState: @unchecked Sendable {
     func snapshot() -> WelcomeContext {
         lock.withLock { context }
     }
+}
+
+/// Tracks the last Ctrl-C press so a second press within `window` exits while
+/// a lone press cancels/clears (pi's two-stage Ctrl-C). Reference type so the
+/// @MainActor keybinding closure can mutate it under Swift 6 concurrency.
+@MainActor
+final class CtrlCState {
+    static let window: TimeInterval = 1.5
+    var lastPress: Date?
+}
+
+/// Holds the on-demand background-task poll task so the @MainActor closures
+/// that start and cancel it can share one mutable handle (a captured `var` is
+/// rejected under Swift 6 strict concurrency).
+@MainActor
+final class PollHandle {
+    var task: Task<Void, Never>?
 }
 
 /// Whether the goal-continuation loop's logged-out "/login" hint has already
@@ -1355,7 +1455,7 @@ private func codingFrameStateLine(
 
     switch mode {
     case .compacting(let count):
-        parts.append(Theme.paint("\(spinner) auto-compacting \(count)", Theme.warn, bold: true))
+        parts.append(Theme.paint("\(spinner) compacting \(count)", Theme.warn, bold: true))
         parts.append(Theme.faintText("new prompts queue"))
     case .aborting:
         parts.append(Theme.paint("\(spinner) aborting", Theme.warn, bold: true))
@@ -1412,14 +1512,19 @@ func handlePastedBody(
     tui: TUI,
     inlineLimit: Int = 80
 ) {
-    // Clipboard-image takes precedence: on macOS the user can ⌘V a
-    // screenshot whose bytes never reach stdin — the terminal sends
-    // an empty/degenerate paste body while NSPasteboard holds the
-    // real image. Peek the pasteboard before interpreting the body.
-    if let image = ClipboardImageReader.readIfPresent() {
-        let token = attachments.addClipboardImage(data: image.data, mimeType: image.mimeType)
-        input.insert("\(token) ")
-        tui.requestRender()
+    // Pasted TEXT always wins. Only when the bracketed-paste body carries no
+    // text do we fall back to the clipboard image: on macOS a ⌘V of a
+    // screenshot delivers an empty/whitespace paste body while NSPasteboard
+    // holds the real image. Peeking the pasteboard first (the old behavior)
+    // discarded genuinely pasted text whenever a stale image lingered on the
+    // clipboard.
+    if body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let image = ClipboardImageReader.readIfPresent() {
+            let token = attachments.addClipboardImage(data: image.data, mimeType: image.mimeType)
+            input.insert("\(token) ")
+            tui.requestRender()
+        }
+        // Empty paste with no clipboard image: nothing to insert.
         return
     }
 

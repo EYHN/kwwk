@@ -78,7 +78,11 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
                 currentSessionId: recorderBox.sessionId,
                 onSelect: { info in
                     Task { @MainActor in
-                        let loaded = await sessionStore.resolveResume(.id(info.id), cwd: cwd)
+                        // `info.id` comes from the on-disk listing, so its
+                        // format is always valid; `try?` only guards the
+                        // (unreachable here) invalid-id throw.
+                        guard let loaded = try? await sessionStore.resolveResume(
+                            .id(info.id), cwd: cwd) else { return }
 
                         // Repoint persistence at the restored session.
                         recorderBox.unsubscribe()

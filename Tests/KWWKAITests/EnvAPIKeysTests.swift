@@ -4,12 +4,12 @@ import Testing
 
 @Suite("Env API keys")
 struct EnvAPIKeysTests {
-    @Test("default lookup uses an empty environment")
-    func defaultLookupIsEmpty() {
-        #expect(EnvAPIKeys.apiKey(for: "openai") == nil)
-        #expect(EnvAPIKeys.configuredProviders().isEmpty)
-        #expect(EnvAPIKeys.azure() == nil)
-        #expect(EnvAPIKeys.cloudflare() == nil)
+    @Test("an empty environment resolves nothing")
+    func emptyEnvironmentIsEmpty() {
+        #expect(EnvAPIKeys.apiKey(for: "openai", env: [:]) == nil)
+        #expect(EnvAPIKeys.configuredProviders(env: [:]).isEmpty)
+        #expect(EnvAPIKeys.azure(env: [:]) == nil)
+        #expect(EnvAPIKeys.cloudflare(env: [:]) == nil)
     }
 
     @Test("resolves provider keys from an injected environment")

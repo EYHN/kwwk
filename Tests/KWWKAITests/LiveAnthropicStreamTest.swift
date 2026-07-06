@@ -35,7 +35,7 @@ struct LiveAnthropicStreamTests {
             name: "claude-sonnet-4-5",
             api: "anthropic-messages",
             provider: "anthropic",
-            baseUrl: "https://api.anthropic.com",
+            baseURL: "https://api.anthropic.com",
             reasoning: true,
             input: [.text],
             contextWindow: 200_000,

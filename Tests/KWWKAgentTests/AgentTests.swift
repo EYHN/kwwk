@@ -123,13 +123,13 @@ struct AgentInitTests {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
 
-        let agent = await makeCodingAgent(CodingAgentConfig(
+        let agent = try await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: FileManager.default.temporaryDirectory.path,
             tools: [],
             sessionId: "stable-session",
             bashEnvironment: [:]
-        ))
+        )).agent
 
         #expect(agent.sessionId == "stable-session")
         #expect(agent.autoCompact?.threshold == 0.75)
@@ -154,21 +154,21 @@ struct AgentInitTests {
         """.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let defaultAgent = await makeCodingAgent(CodingAgentConfig(
+        let defaultAgent = try await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: root.path,
             tools: [],
             bashEnvironment: [:]
-        ))
+        )).agent
         #expect(!defaultAgent.state.systemPrompt.contains("<name>greeter</name>"))
 
-        let configuredAgent = await makeCodingAgent(CodingAgentConfig(
+        let configuredAgent = try await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: root.path,
             tools: [],
             skillDirectories: [skillsRoot.path],
             bashEnvironment: [:]
-        ))
+        )).agent
         #expect(configuredAgent.state.systemPrompt.contains("<name>greeter</name>"))
     }
 }
@@ -480,7 +480,7 @@ struct AgentIntegrationTests {
         let streamed = await capture.streamed
         #expect(resolved?.model.id == registration.getModel().id)
         #expect(resolved?.sessionId == "session-auth")
-        #expect(streamed?.model.baseUrl == "https://proxy.example")
+        #expect(streamed?.model.baseURL == "https://proxy.example")
         #expect(streamed?.options?.apiKey == "resolved-token")
         #expect(streamed?.options?.sessionId == "session-auth")
         #expect(streamed?.options?.resolvedAuth?.scheme == .bearer)

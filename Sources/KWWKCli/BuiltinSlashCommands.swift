@@ -105,7 +105,7 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
 /// `/model` — opens a modal listing every model across **all** providers
 /// logged in this session (grouped by provider), and switches to the picked
 /// one. The pick is routed through the target provider's session template
-/// (`adoptFields`) so its wire api / provider scope / baseUrl / headers are
+/// (`adoptFields`) so its wire api / provider scope / baseURL / headers are
 /// correct, then stored on `agent.state.model` for the next request. The swap
 /// is session-scoped (restart = back to the launch default).
 @MainActor
@@ -237,14 +237,19 @@ private func handleLoginCommand(_ ctx: SlashContext, _ args: String) async {
                     onSubmit: { values in
                         modal.close()
                         Task { @MainActor in
-                            await completeAPIKeyLogin(
-                                values: values,
-                                storeId: storeId,
-                                extrasKeys: extrasKeys,
-                                ctx: ctx,
-                                authResolvers: authResolvers,
-                                store: OAuthStore(url: OAuthStore.defaultURL())
-                            )
+                            do {
+                                let store = try OAuthStore(url: OAuthStore.defaultURL())
+                                await completeAPIKeyLogin(
+                                    values: values,
+                                    storeId: storeId,
+                                    extrasKeys: extrasKeys,
+                                    ctx: ctx,
+                                    authResolvers: authResolvers,
+                                    store: store
+                                )
+                            } catch {
+                                ctx.notify(Style.dimmed("  /login: \(error.localizedDescription)"))
+                            }
                         }
                     },
                     onCancel: {
@@ -375,7 +380,11 @@ func activateFreshLogin(
 /// logged-out sentinel state when the last provider goes.
 @MainActor
 private func handleLogoutCommand(_ ctx: SlashContext, _ args: String) async {
-    await performLogout(ctx, args, store: OAuthStore(url: OAuthStore.defaultURL()))
+    do {
+        await performLogout(ctx, args, store: try OAuthStore(url: OAuthStore.defaultURL()))
+    } catch {
+        ctx.notify(Style.dimmed("  /logout: \(error.localizedDescription)"))
+    }
 }
 
 /// `/logout` body with the credential store injected, so tests can drive it
@@ -449,7 +458,7 @@ func performLogout(_ ctx: SlashContext, _ args: String, store: OAuthStore) async
 /// regimes:
 ///
 ///   - **Same provider** (`current.provider == picked.provider`): the
-///     catalog entry already carries the correct wire api, baseUrl, and
+///     catalog entry already carries the correct wire api, baseURL, and
 ///     headers — e.g. Copilot models vary per-model across
 ///     openai-completions / anthropic-messages / openai-responses, and
 ///     we registered all three variants at login. Just take `picked`
@@ -466,13 +475,13 @@ func performLogout(_ ctx: SlashContext, _ args: String, store: OAuthStore) async
 func adoptFields(from current: Model, into picked: Model) -> Model {
     if current.provider == picked.provider {
         // Same provider — adopt picked's identity, wire (api), and
-        // capabilities, but keep the session's `baseUrl`. The session
-        // baseUrl carries two things the catalog doesn't:
+        // capabilities, but keep the session's `baseURL`. The session
+        // baseURL carries two things the catalog doesn't:
         //   - Enterprise / Business Copilot's proxy host (refreshed
         //     from the session token's `endpoints.api` claim)
         //   - A user-supplied custom host for `openai-compatible` or
         //     `anthropic-api-key` / `openai-api-key` logins
-        // The catalog entry's `baseUrl` is the canonical upstream
+        // The catalog entry's `baseURL` is the canonical upstream
         // (`https://api.openai.com/v1`, etc.), which can round-trip
         // into double-`/v1` when our providers append their own
         // suffix. Holding the session value is both correct and
@@ -482,7 +491,7 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
             name: picked.name,
             api: picked.api,
             provider: picked.provider,
-            baseUrl: current.baseUrl,
+            baseURL: current.baseURL,
             reasoning: picked.reasoning,
             input: picked.input,
             cost: picked.cost,
@@ -499,7 +508,7 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
         name: picked.name,
         api: current.api,
         provider: current.provider,
-        baseUrl: current.baseUrl,
+        baseURL: current.baseURL,
         reasoning: picked.reasoning,
         input: picked.input,
         cost: picked.cost,
@@ -686,6 +695,16 @@ private func previewQueuedMessage(_ msg: Message, max: Int = 80) -> String {
 /// automatic path uses the same KWWKAgent compactor directly from `Agent`.
 @MainActor
 private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
+    // Route the manual compact through the same busy machinery as a normal
+    // run: flip the compacting spinner on and make the Enter handler treat the
+    // round-trip as busy, so a prompt submitted mid-compact queues (steers)
+    // instead of starting a turn that the compactor would clobber when it
+    // overwrites `agent.state.messages`. The "summarizing…" notice prints
+    // BEFORE the (multi-second) round-trip, not after it.
+    ctx.setCompacting(true)
+    defer { ctx.setCompacting(false) }
+    ctx.notify(Style.dimmed("  /compact: summarizing the conversation…"))
+
     let outcome = await performCompact(
         agent: ctx.agent,
         backgroundManager: ctx.backgroundManager,
@@ -701,7 +720,6 @@ private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
         // Show a compact record + durable boundary so the user can
         // scroll up later and see where the compact happened.
         await ctx.recordCompaction(n)
-        ctx.notify(Style.dimmed("  /compact: summarizing \(n) messages…"))
         ctx.commitScrollback { width in
             renderCompactBoundary(
                 messagesCompacted: n,

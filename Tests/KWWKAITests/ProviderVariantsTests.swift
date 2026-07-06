@@ -80,7 +80,7 @@ struct ProviderVariantsTests {
             name: "claude",
             api: "anthropic-messages",
             provider: "anthropic",
-            baseUrl: "https://api.anthropic.com"
+            baseURL: "https://api.anthropic.com"
         )
         _ = provider.stream(
             model: model,
@@ -143,7 +143,7 @@ struct ProviderVariantsTests {
             name: "claude",
             api: "github-copilot-chat",
             provider: "github-copilot",
-            baseUrl: "https://api.githubcopilot.com"
+            baseURL: "https://api.githubcopilot.com"
         )
 
         // Agent flow: last message is tool result → x-initiator=agent.
@@ -183,7 +183,7 @@ struct ProviderVariantsTests {
             name: "m",
             api: "github-copilot-chat",
             provider: "github-copilot",
-            baseUrl: "https://api.githubcopilot.com"
+            baseURL: "https://api.githubcopilot.com"
         )
         _ = provider.stream(
             model: model,

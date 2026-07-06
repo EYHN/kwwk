@@ -26,7 +26,7 @@ public struct Model: Codable, Sendable, Hashable {
     /// Opaque API identifier (e.g., "anthropic-messages", "openai-responses", "faux:xyz").
     public var api: String
     public var provider: String
-    public var baseUrl: String
+    public var baseURL: String
     public var reasoning: Bool
     public var input: [InputModality]
     public var cost: ModelCost
@@ -34,19 +34,27 @@ public struct Model: Codable, Sendable, Hashable {
     public var maxTokens: Int
     public var headers: [String: String]?
     /// Per-API compatibility overrides (cache format, thinking format, store
-    /// support, etc.). nil = auto-detect from baseUrl / provider defaults.
+    /// support, etc.). nil = auto-detect from baseURL / provider defaults.
     public var compat: ModelCompat?
     /// Maps pi thinking levels (off/minimal/low/medium/high/xhigh) to
     /// provider/model-specific wire values. A `.some(nil)` entry marks a level
     /// as unsupported; a missing key uses provider defaults.
     public var thinkingLevelMap: [String: String?]?
 
+    /// The wire/persisted key stays "baseUrl" (models.json, pi parity);
+    /// only the Swift property follows Foundation's URL casing.
+    enum CodingKeys: String, CodingKey {
+        case id, name, api, provider
+        case baseURL = "baseUrl"
+        case reasoning, input, cost, contextWindow, maxTokens, headers, compat, thinkingLevelMap
+    }
+
     public init(
         id: String,
         name: String? = nil,
         api: String,
         provider: String,
-        baseUrl: String = "",
+        baseURL: String = "",
         reasoning: Bool = false,
         input: [InputModality] = [.text],
         cost: ModelCost = .init(),
@@ -60,7 +68,7 @@ public struct Model: Codable, Sendable, Hashable {
         self.name = name ?? id
         self.api = api
         self.provider = provider
-        self.baseUrl = baseUrl
+        self.baseURL = baseURL
         self.reasoning = reasoning
         self.input = input
         self.cost = cost

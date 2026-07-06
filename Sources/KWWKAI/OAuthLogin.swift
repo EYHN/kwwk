@@ -11,46 +11,27 @@ import FoundationNetworking
 /// redirect ports differ.
 public enum OAuthLogin {
 
-    /// Hooks the orchestrator calls as the flow progresses. Defaults print to
-    /// stderr; GUI apps can plug their own handlers to render progress.
+    /// Hooks the orchestrator calls as the flow progresses. Both are required:
+    /// the SDK does not print to stderr or launch a browser on its own — the
+    /// embedding app decides how to surface the auth URL and progress (the
+    /// kwwk CLI supplies terminal implementations in `Login.swift`).
     public struct Callbacks: Sendable {
         public var onAuthURL: @Sendable (URL) -> Void
         public var onProgress: @Sendable (String) -> Void
-        public var onPrompt: @Sendable (String) async throws -> String
 
         public init(
-            onAuthURL: @escaping @Sendable (URL) -> Void = Self.defaultAuthURL,
-            onProgress: @escaping @Sendable (String) -> Void = Self.defaultProgress,
-            onPrompt: @escaping @Sendable (String) async throws -> String = Self.defaultPrompt
+            onAuthURL: @escaping @Sendable (URL) -> Void,
+            onProgress: @escaping @Sendable (String) -> Void
         ) {
             self.onAuthURL = onAuthURL
             self.onProgress = onProgress
-            self.onPrompt = onPrompt
-        }
-
-        public static let defaultAuthURL: @Sendable (URL) -> Void = { url in
-            let msg = "open in your browser:\n  \(url.absoluteString)\n"
-            FileHandle.standardError.write(Data(msg.utf8))
-            Browser.open(url)
-        }
-
-        public static let defaultProgress: @Sendable (String) -> Void = { msg in
-            FileHandle.standardError.write(Data("\(msg)\n".utf8))
-        }
-
-        public static let defaultPrompt: @Sendable (String) async throws -> String = { question in
-            FileHandle.standardError.write(Data("\(question) ".utf8))
-            guard let line = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines) else {
-                throw OAuthError.transport("no terminal input")
-            }
-            return line
         }
     }
 
     // MARK: - Anthropic
 
     public static func loginAnthropic(
-        callbacks: Callbacks = Callbacks(),
+        callbacks: Callbacks,
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
@@ -104,7 +85,7 @@ public enum OAuthLogin {
     // MARK: - OpenAI Codex
 
     public static func loginOpenAICodex(
-        callbacks: Callbacks = Callbacks(),
+        callbacks: Callbacks,
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
@@ -177,7 +158,7 @@ public enum OAuthLogin {
 
     public static func loginGitHubCopilot(
         clientID: String = "Iv1.b507a08c87ecfe98",
-        callbacks: Callbacks = Callbacks(),
+        callbacks: Callbacks,
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         callbacks.onProgress("requesting GitHub device code…")
@@ -301,7 +282,7 @@ extension OAuthLogin {
         sessionToken: String,
         baseURL: URL = URL(string: "https://api.individual.githubcopilot.com")!,
         modelIds: [String],
-        callbacks: Callbacks = Callbacks(),
+        callbacks: Callbacks,
         client: HTTPClient = URLSessionHTTPClient()
     ) async {
         let baseString: String = {
@@ -334,31 +315,6 @@ extension OAuthLogin {
             } catch {
                 callbacks.onProgress("  · \(id): \(error.localizedDescription)")
             }
-        }
-    }
-}
-
-// MARK: - Browser launcher
-
-public enum Browser {
-    /// Best-effort URL opener. macOS uses `/usr/bin/open`; Linux tries
-    /// `xdg-open` then falls back to stderr so the user can click manually.
-    public static func open(_ url: URL) {
-        #if os(macOS)
-        let opener = "/usr/bin/open"
-        #else
-        let opener = "/usr/bin/xdg-open"
-        #endif
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: opener)
-        process.arguments = [url.absoluteString]
-        do {
-            try process.run()
-        } catch {
-            FileHandle.standardError.write(Data(
-                "please open manually:\n  \(url.absoluteString)\n".utf8
-            ))
         }
     }
 }

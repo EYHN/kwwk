@@ -16,12 +16,41 @@ public final class SSEParser: @unchecked Sendable {
     private var dataLines: [String] = []
     private var id: String?
     private var pending: [SSEMessage] = []
+    /// Trailing bytes from the previous `ingest(bytes:)` that formed an
+    /// incomplete multi-byte UTF-8 sequence. Prepended to the next chunk so a
+    /// character split across a network read is not dropped.
+    private var carryBytes = Data()
 
     public init() {}
 
     public func ingest(bytes: Data) {
-        guard let s = String(data: bytes, encoding: .utf8) else { return }
-        ingest(s)
+        var buffer = carryBytes
+        buffer.append(bytes)
+        let (decoded, remaining) = Self.decodeUTF8Prefix(buffer)
+        carryBytes = remaining
+        if !decoded.isEmpty { ingest(decoded) }
+    }
+
+    /// Split `data` into its longest UTF-8-decodable prefix and any trailing
+    /// bytes that form an incomplete multi-byte sequence (kept for the next
+    /// call). If the data contains a genuinely invalid sequence rather than a
+    /// boundary split, decode it lossily so the parser still makes progress.
+    static func decodeUTF8Prefix(_ data: Data) -> (String, Data) {
+        if data.isEmpty { return ("", Data()) }
+        if let s = String(data: data, encoding: .utf8) { return (s, Data()) }
+        // A UTF-8 sequence is at most 4 bytes, so an incomplete trailing
+        // character lives in the last 3 bytes. Trim them one at a time looking
+        // for a valid prefix.
+        var end = data.count
+        let lower = Swift.max(0, data.count - 3)
+        while end > lower {
+            end -= 1
+            let prefix = data.subdata(in: 0..<end)
+            if let s = String(data: prefix, encoding: .utf8) {
+                return (s, data.subdata(in: end..<data.count))
+            }
+        }
+        return (String(decoding: data, as: UTF8.self), Data())
     }
 
     public func ingest(_ text: String) {
@@ -86,25 +115,17 @@ public final class SSEParser: @unchecked Sendable {
 
 /// Parse a stream of bytes into an async sequence of `SSEMessage`.
 public func parseSSE(
-    bytes: AsyncThrowingStream<UInt8, Error>
+    bytes: AsyncThrowingStream<Data, Error>
 ) -> AsyncThrowingStream<SSEMessage, Error> {
     AsyncThrowingStream { continuation in
         let task = Task {
             let parser = SSEParser()
-            var chunk = [UInt8]()
             do {
-                for try await byte in bytes {
-                    chunk.append(byte)
-                    if byte == 0x0a {
-                        parser.ingest(bytes: Data(chunk))
-                        chunk.removeAll()
-                        for msg in parser.drain() {
-                            continuation.yield(msg)
-                        }
+                for try await chunk in bytes {
+                    parser.ingest(bytes: chunk)
+                    for msg in parser.drain() {
+                        continuation.yield(msg)
                     }
-                }
-                if !chunk.isEmpty {
-                    parser.ingest(bytes: Data(chunk))
                 }
                 for msg in parser.finish() {
                     continuation.yield(msg)

@@ -269,6 +269,11 @@ public actor SessionStore {
         case notFound(String)
         case invalidId(String)
         case storageDisabled
+        /// A transcript line failed to decode. Carries the file path and the
+        /// 1-based line number so schema drift / corruption is diagnosable
+        /// instead of silently dropping messages.
+        case undecodableEntry(path: String, line: Int)
+        case writeFailed(path: String)
     }
 
     // MARK: - Paths
@@ -290,9 +295,14 @@ public actor SessionStore {
 
     private func ensureDirectory() throws {
         guard isPersistent else { throw SessionStoreError.storageDisabled }
+        // 0700: session transcripts carry the full conversation plus every tool
+        // result (bash output, file contents). Lock the directory to the owner
+        // at creation, mirroring BackgroundTaskManager's 0700 output dir — no
+        // chmod-after-create race.
         try FileManager.default.createDirectory(
             at: directory,
-            withIntermediateDirectories: true
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
     }
 
@@ -307,7 +317,8 @@ public actor SessionStore {
     // MARK: - Create / append
 
     /// Create a new session file with a versioned header. Overwrites any
-    /// existing file for the same id. Returns the written header.
+    /// existing file for the same id — use `createIfMissing` to preserve a
+    /// resumed transcript. Returns the written header.
     @discardableResult
     public func create(
         id: String,
@@ -320,8 +331,33 @@ public actor SessionStore {
         let line = try Self.encoder.encode(header)
         var data = line
         data.append(0x0A)  // newline
-        try data.write(to: try path(for: id), options: .atomic)
+        let url = try path(for: id)
+        // Create with 0600 at write time (no chmod-after-write window): the
+        // transcript is the same class of sensitive data the 0600 task logs
+        // protect. createFile truncates an existing file, matching this
+        // method's overwrite contract.
+        guard FileManager.default.createFile(
+            atPath: url.path,
+            contents: data,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw SessionStoreError.writeFailed(path: url.path)
+        }
         return header
+    }
+
+    /// Create the session file (header only) only when it does not already
+    /// exist. Never truncates an existing transcript, so resuming a session
+    /// and then calling this is a safe no-op. Backs `SessionRecorder.ensureCreated`.
+    public func createIfMissing(
+        id: String,
+        cwd: String,
+        model: String? = nil,
+        provider: String? = nil
+    ) throws {
+        let url = try path(for: id)
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        try create(id: id, cwd: cwd, model: model, provider: provider)
     }
 
     /// Append a single transcript message to a session, creating the file
@@ -452,12 +488,20 @@ public actor SessionStore {
         var thinkingLevel: String?
         var title: String?
 
-        for line in lines.dropFirst() {
-            guard let data = String(line).data(using: .utf8),
-                  let entry = try? Self.decoder.decode(Entry.self, from: data) else {
-                // Skip malformed/partial trailing lines (e.g. a crash mid-write)
-                // rather than failing the whole load.
-                continue
+        // Line 1 is the header; entries start at line 2. An entry that fails
+        // to decode (schema drift after an up/downgrade, mid-file corruption)
+        // is an error — throwing with the exact line keeps a resumed context
+        // from silently losing messages out of the middle of a conversation.
+        for (offset, line) in lines.dropFirst().enumerated() {
+            let lineNumber = offset + 2
+            guard let data = String(line).data(using: .utf8) else {
+                throw SessionStoreError.undecodableEntry(path: url.path, line: lineNumber)
+            }
+            let entry: Entry
+            do {
+                entry = try Self.decoder.decode(Entry.self, from: data)
+            } catch {
+                throw SessionStoreError.undecodableEntry(path: url.path, line: lineNumber)
             }
             switch entry {
             case .message(_, let message):
@@ -545,18 +589,24 @@ public actor SessionStore {
         var title: String?
         var messageCount = 0
         for line in lines.dropFirst() {
-            guard let data = String(line).data(using: .utf8),
-                  let entry = try? Self.decoder.decode(Entry.self, from: data) else { continue }
-            switch entry {
-            case .message:
+            // Listing only needs a message count plus the latest meta values, so
+            // never JSON-decode the message bodies (full transcripts, embedded
+            // base64 images) — that is what made `--continue` startup pay for
+            // the entire on-disk history. The encoder writes `.sortedKeys`, so a
+            // transcript-message entry is always `{"message":{…`; classify by
+            // that prefix and skip the decode. Only the small/rare `meta` lines
+            // are decoded (compaction markers are irrelevant to listing).
+            if line.hasPrefix("{\"message\":") {
                 messageCount += 1
-            case .meta(_, let m, let p, _, let ti):
-                if let m { model = m }
-                if let p { provider = p }
-                if let ti { title = ti }
-            case .compaction:
                 continue
             }
+            guard line.contains("\"type\":\"meta\""),
+                  let data = String(line).data(using: .utf8),
+                  case .meta(_, let m, let p, _, let ti)? =
+                    try? Self.decoder.decode(Entry.self, from: data) else { continue }
+            if let m { model = m }
+            if let p { provider = p }
+            if let ti { title = ti }
         }
 
         let mtime = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?

@@ -67,9 +67,9 @@ struct AWSEventStreamTests {
             headers: [":event-type": "messageStart", ":content-type": "application/json"],
             payload: payload
         )
-        let bytes = AsyncThrowingStream<UInt8, Error> { cont in
+        let bytes = AsyncThrowingStream<Data, Error> { cont in
             Task {
-                for b in frame { cont.yield(b) }
+                cont.yield(frame)
                 cont.finish()
             }
         }
@@ -91,9 +91,12 @@ struct AWSEventStreamTests {
             headers: [":event-type": "messageStop"], payload: Data("{\"stopReason\":\"end_turn\"}".utf8)
         )
         let combined = one + two
-        let bytes = AsyncThrowingStream<UInt8, Error> { cont in
+        // Deliver the two frames split across chunk boundaries to exercise the
+        // parser's cross-chunk buffering.
+        let bytes = AsyncThrowingStream<Data, Error> { cont in
             Task {
-                for b in combined { cont.yield(b) }
+                cont.yield(combined.prefix(one.count + 3))
+                cont.yield(combined.suffix(from: one.count + 3))
                 cont.finish()
             }
         }
@@ -137,16 +140,16 @@ struct BedrockProviderTests {
         }
         func stream(
             url: URL, method: String, headers: [String: String], body requestBody: Data?
-        ) async throws -> (HTTPURLResponse, AsyncThrowingStream<UInt8, Error>) {
+        ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
             lastRequest = (url, method, headers, requestBody)
             let response = HTTPURLResponse(
                 url: url, statusCode: statusCode, httpVersion: "HTTP/1.1",
                 headerFields: ["content-type": "application/vnd.amazon.eventstream"]
             )!
-            let bytes = Array(body)
-            let stream = AsyncThrowingStream<UInt8, Error> { cont in
+            let bodyData = body
+            let stream = AsyncThrowingStream<Data, Error> { cont in
                 Task {
-                    for b in bytes { cont.yield(b) }
+                    cont.yield(bodyData)
                     cont.finish()
                 }
             }

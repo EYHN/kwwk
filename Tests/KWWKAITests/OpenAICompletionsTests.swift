@@ -9,7 +9,7 @@ struct OpenAICompletionsTests {
         name: "GPT-4o Mini",
         api: "openai-completions",
         provider: "openai",
-        baseUrl: "https://api.openai.com",
+        baseURL: "https://api.openai.com",
         reasoning: false,
         input: [.text],
         contextWindow: 128_000,
@@ -210,7 +210,7 @@ struct OpenAICompletionsTests {
         #expect(json["prompt_cache_retention"] as? String == "24h")
 
         var proxy = Self.model
-        proxy.baseUrl = "https://proxy.example.com"
+        proxy.baseURL = "https://proxy.example.com"
         var compat = ModelCompat()
         compat.supportsLongCacheRetention = false
         proxy.compat = compat
@@ -230,7 +230,7 @@ struct OpenAICompletionsTests {
     @Test("session affinity headers honor cache retention and caller overrides")
     func sessionAffinityHeaders() async throws {
         var model = Self.model
-        model.baseUrl = "https://proxy.example.com"
+        model.baseURL = "https://proxy.example.com"
         model.headers = ["x-model-header": "model"]
         var compat = ModelCompat()
         compat.sendSessionAffinityHeaders = true
@@ -309,7 +309,7 @@ struct OpenAICompletionsTests {
     func anthropicCacheControlCompat() async throws {
         var model = Self.model
         model.provider = "openrouter"
-        model.baseUrl = "https://openrouter.ai/api"
+        model.baseURL = "https://openrouter.ai/api"
         var compat = ModelCompat()
         compat.cacheControlFormat = "anthropic"
         model.compat = compat
@@ -344,7 +344,7 @@ struct OpenAICompletionsTests {
     func anthropicCacheExcludesNativeCache() async throws {
         var model = Self.model
         model.provider = "openrouter"
-        model.baseUrl = "https://openrouter.ai/api"
+        model.baseURL = "https://openrouter.ai/api"
         var compat = ModelCompat()
         compat.cacheControlFormat = "anthropic"
         compat.supportsLongCacheRetention = true
@@ -405,7 +405,7 @@ struct OpenAICompletionsTests {
     @Test("forwards tool-result images as a following user message (vision model)")
     func toolResultImageForwarding() async throws {
         let visionModel = Model(id: "gpt-4o", name: "GPT-4o", api: "openai-completions",
-            provider: "openai", baseUrl: "https://api.openai.com", reasoning: false,
+            provider: "openai", baseURL: "https://api.openai.com", reasoning: false,
             input: [.text, .image], contextWindow: 128_000, maxTokens: 4096)
         let client = StubSSEClient(body: Self.textSSE)
         let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")

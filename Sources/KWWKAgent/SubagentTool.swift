@@ -12,7 +12,7 @@ public func createAgentTool(
     parentAutoCompact: AgentAutoCompactOptions? = nil,
     backgroundManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil,
-    authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+    authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
@@ -49,7 +49,7 @@ public func createAgentTool(
     parentTools: CodingTools,
     backgroundManager: BackgroundTaskManager? = nil,
     sessionId: String? = nil,
-    fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+    fallbackAuthResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
@@ -87,7 +87,7 @@ internal struct SubagentParentSnapshot: Sendable {
     var thinkingBudgets: ThinkingBudgets?
     var maxRetryDelayMs: Int?
     var autoCompact: AgentAutoCompactOptions?
-    var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
 }
 
 internal final class SubagentParentBox: @unchecked Sendable {
@@ -99,7 +99,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
     private let fallbackThinkingBudgets: ThinkingBudgets?
     private let fallbackMaxRetryDelayMs: Int?
     private let fallbackAutoCompact: AgentAutoCompactOptions?
-    private let fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    private let fallbackAuthResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
 
     init(
         fallbackModel: Model,
@@ -108,7 +108,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
         fallbackThinkingBudgets: ThinkingBudgets?,
         fallbackMaxRetryDelayMs: Int?,
         fallbackAutoCompact: AgentAutoCompactOptions?,
-        fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+        fallbackAuthResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     ) {
         self.fallbackModel = fallbackModel
         self.fallbackTools = fallbackTools
@@ -373,17 +373,21 @@ private struct SubagentRegistry: Sendable {
         for definition in subagents {
             let name = definition.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty else { continue }
-            if definitions[name] == nil {
+            // Key lookups case-insensitively to match the selection parser
+            // (BuiltinSubagentSelection.named lowercases its input); `names`
+            // keeps the definition's own spelling for the tool-schema enum.
+            let key = name.lowercased()
+            if definitions[key] == nil {
                 names.append(name)
             }
-            definitions[name] = definition
+            definitions[key] = definition
         }
         self.names = names
         self.definitions = definitions
     }
 
     func definition(named name: String) -> SubagentDefinition? {
-        definitions[name]
+        definitions[name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
     }
 }
 
@@ -580,7 +584,7 @@ public struct SubagentRunner: Sendable {
         parentAutoCompact: AgentAutoCompactOptions? = nil,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String? = nil,
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
@@ -615,7 +619,7 @@ public struct SubagentRunner: Sendable {
         parentTools: CodingTools,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String? = nil,
-        fallbackAuthResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        fallbackAuthResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
@@ -695,7 +699,8 @@ public struct SubagentRunner: Sendable {
 
     private func definition(named rawName: String) throws -> SubagentDefinition {
         let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let definition = subagents.first(where: { $0.name == trimmed }) {
+        let key = trimmed.lowercased()
+        if let definition = subagents.first(where: { $0.name.lowercased() == key }) {
             return definition
         }
         let names = subagents
@@ -848,7 +853,7 @@ private struct SubagentInvocationRunner: Sendable {
             toolOverride: modelOverride
         )
         let selectedTools = definition.tools ?? parent.tools
-        let tools = await buildCodingToolList(
+        let tools = try await buildCodingToolList(
             cwd: cwd,
             selected: selectedTools,
             backgroundManager: backgroundManager,
@@ -1047,7 +1052,7 @@ private func adoptRuntimeFields(from current: Model, into picked: Model) -> Mode
     var rebuilt = picked
     rebuilt.api = current.api
     rebuilt.provider = current.provider
-    rebuilt.baseUrl = current.baseUrl
+    rebuilt.baseURL = current.baseURL
     rebuilt.headers = current.headers
     return rebuilt
 }

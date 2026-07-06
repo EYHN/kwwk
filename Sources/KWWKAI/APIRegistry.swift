@@ -36,6 +36,12 @@ public actor APIRegistry {
     public static let shared = APIRegistry()
 
     private var providers: [String: APIProvider] = [:]
+    /// `api → the model.provider vendor a flat registration belongs to`, when
+    /// the caller declared it. Gates the flat fallback in
+    /// `provider(scope:api:)` so a scoped miss can never route to a provider
+    /// registered for a *different* vendor (which would send that vendor's
+    /// key to the model's foreign `baseURL`).
+    private var flatVendor: [String: String] = [:]
     /// `providerScope → api → provider`. Populated when `register` is given a
     /// `scope`. Looked up first by `stream`, keyed on `model.provider`.
     private var scoped: [String: [String: APIProvider]] = [:]
@@ -49,7 +55,18 @@ public actor APIRegistry {
     /// its `api` (legacy behavior). With `scope`, it also lands in the
     /// provider-scoped map under `(scope, api)` so it can coexist with other
     /// providers sharing the same wire `api`.
-    public func register(_ provider: APIProvider, scope: String? = nil, sourceId: String? = nil) {
+    ///
+    /// `providerVendor` tags a flat registration with the model `provider` it
+    /// serves. When set, the flat fallback in `provider(scope:api:)` only
+    /// matches models of that vendor — required so a single-login Anthropic
+    /// key isn't handed to, say, a GitHub-Copilot model that happens to share
+    /// the `anthropic-messages` wire. Ignored for scoped registrations.
+    public func register(
+        _ provider: APIProvider,
+        scope: String? = nil,
+        sourceId: String? = nil,
+        providerVendor: String? = nil
+    ) {
         if let scope, !scope.isEmpty {
             scoped[scope, default: [:]][provider.api] = provider
             if let sourceId {
@@ -57,6 +74,11 @@ public actor APIRegistry {
             }
         } else {
             providers[provider.api] = provider
+            if let providerVendor {
+                flatVendor[provider.api] = providerVendor
+            } else {
+                flatVendor.removeValue(forKey: provider.api)
+            }
             if let sourceId {
                 bySource[sourceId, default: []].insert("\u{1}\(provider.api)")
             }
@@ -68,13 +90,18 @@ public actor APIRegistry {
     }
 
     /// Resolve the provider for a model: prefer a provider-scoped match on
-    /// `(scope, api)`, then fall back to the flat `api` map.
+    /// `(scope, api)`, then fall back to the flat `api` map — but never fall
+    /// back to a flat provider tagged for a different vendor.
     public func provider(scope: String, api: String) -> APIProvider? {
-        scoped[scope]?[api] ?? providers[api]
+        if let scopedMatch = scoped[scope]?[api] { return scopedMatch }
+        guard let flat = providers[api] else { return nil }
+        if let vendor = flatVendor[api], vendor != scope { return nil }
+        return flat
     }
 
     public func unregister(api: String) {
         providers.removeValue(forKey: api)
+        flatVendor.removeValue(forKey: api)
         for key in bySource.keys {
             bySource[key]?.remove("\u{1}\(api)")
         }
@@ -95,6 +122,7 @@ public actor APIRegistry {
             let api = String(key[key.index(after: sep)...])
             if scope.isEmpty {
                 providers.removeValue(forKey: api)
+                flatVendor.removeValue(forKey: api)
             } else {
                 scoped[scope]?.removeValue(forKey: api)
                 if scoped[scope]?.isEmpty == true { scoped.removeValue(forKey: scope) }
@@ -117,21 +145,48 @@ public enum ProviderNotFoundError: Error, Equatable {
     case api(String)
 }
 
+/// Thrown by `complete()` when the drained stream finished in an error state,
+/// so a runtime failure surfaces as a thrown error rather than an ordinary
+/// message whose `stopReason` a caller might not inspect. `message` carries
+/// the finished assistant message (including `errorMessage`).
+public struct CompletionFailedError: Error, LocalizedError {
+    public let message: AssistantMessage
+    public init(message: AssistantMessage) { self.message = message }
+    public var errorDescription: String? {
+        message.errorMessage ?? "completion failed"
+    }
+}
+
 /// Top-level streaming entry point. Looks up the registered provider for the
 /// model's `api` and delegates to it. Throws if no provider is registered.
-public func stream(model: Model, context: Context, options: StreamOptions? = nil) async throws -> AssistantMessageStream {
-    guard let provider = await APIRegistry.shared.provider(scope: model.provider, api: model.api) else {
+public func stream(
+    model: Model,
+    context: Context,
+    options: StreamOptions? = nil,
+    registry: APIRegistry = .shared
+) async throws -> AssistantMessageStream {
+    guard let provider = await registry.provider(scope: model.provider, api: model.api) else {
         throw ProviderNotFoundError.api(model.api)
     }
     return provider.stream(model: model, context: context, options: options)
 }
 
 /// Convenience: run a stream to completion and return the final message.
-public func complete(model: Model, context: Context, options: StreamOptions? = nil) async throws -> AssistantMessage {
-    let s = try await stream(model: model, context: context, options: options)
+/// Throws `CompletionFailedError` if the stream finished in an error state.
+public func complete(
+    model: Model,
+    context: Context,
+    options: StreamOptions? = nil,
+    registry: APIRegistry = .shared
+) async throws -> AssistantMessage {
+    let s = try await stream(model: model, context: context, options: options, registry: registry)
     // Drain events so producers aren't blocked waiting for consumption.
     for await _ in s {}
-    return await s.result()
+    let message = await s.result()
+    if message.stopReason == .error {
+        throw CompletionFailedError(message: message)
+    }
+    return message
 }
 
 /// Close provider-owned resources associated with a session id across every

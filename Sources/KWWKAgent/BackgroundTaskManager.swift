@@ -18,8 +18,10 @@ import KWWKAI
 /// Cross-cutting guarantees:
 ///   - Task IDs are unique within a Manager instance.
 ///   - Each task gets a distinct `outputFile` under `outputDir`.
-///   - Exactly one notification is enqueued per task (either completion or
-///     stall — whichever fires first wins; the other is suppressed).
+///   - Exactly one terminal notification is enqueued per task (completion or
+///     kill — whichever fires first wins; the other is suppressed). A stall
+///     notification is a non-terminal heads-up: it may precede the terminal
+///     one, so a stuck-then-finished task yields a stall AND a completion.
 ///   - Listeners are invoked sequentially in subscription order on the
 ///     Manager's isolation context.
 public actor BackgroundTaskManager {
@@ -523,7 +525,9 @@ public actor BackgroundTaskManager {
             outcome: nil,
             stalled: true
         )
-        tasks[taskId]?.notified = true
+        // A stall is a heads-up, not a terminal event: deliberately do NOT set
+        // `notified`, so the eventual completion/kill notification still fires.
+        // Returning true ends the watchdog, so exactly one stall is emitted.
         return true
     }
 

@@ -113,14 +113,35 @@ public struct GrepParams: Sendable {
     }
 }
 
+public struct GrepContextLine: Sendable, Equatable {
+    public var line: Int
+    public var text: String
+    public init(line: Int, text: String) {
+        self.line = line
+        self.text = text
+    }
+}
+
 public struct GrepMatch: Sendable, Equatable {
     public var file: String
     public var line: Int
     public var text: String
-    public init(file: String, line: Int, text: String) {
+    /// Context lines immediately before/after the match (empty when the
+    /// `context` parameter is 0). Each carries its own 1-based line number.
+    public var before: [GrepContextLine]
+    public var after: [GrepContextLine]
+    public init(
+        file: String,
+        line: Int,
+        text: String,
+        before: [GrepContextLine] = [],
+        after: [GrepContextLine] = []
+    ) {
         self.file = file
         self.line = line
         self.text = text
+        self.before = before
+        self.after = after
     }
 }
 

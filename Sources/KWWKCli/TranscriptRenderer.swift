@@ -54,6 +54,11 @@ final class TranscriptRenderer {
     /// boundary yet. It is flushed on newline boundaries while streaming and
     /// fully flushed on `messageEnd`.
     private var assistantSegmentBuffer: String = ""
+    /// Content-block index of the text block the last `.textDelta` extended.
+    /// While consecutive deltas grow the same block we append the delta
+    /// directly (O(delta)); only a block transition falls back to re-deriving
+    /// from the full snapshot. `nil` before the first text delta of a turn.
+    private var lastAssistantTextIndex: Int?
     /// Whether this assistant turn has already emitted any text/error marker
     /// into scrollback. Used to prepend the block's leading separator exactly
     /// once.
@@ -146,6 +151,7 @@ final class TranscriptRenderer {
                 assistantIngestedCharacters = 0
                 assistantSegmentBuffer = ""
                 assistantCommittedDuringTurn = false
+                lastAssistantTextIndex = nil
                 // New turn — drop any prior turn's thinking timings.
                 // Re-populated from `.thinkingStart` events below.
                 thinkingTimings.removeAll()
@@ -171,7 +177,23 @@ final class TranscriptRenderer {
             default:
                 break
             }
-            ingestAssistantText(assistant, flushAll: false)
+            // Fast path: while consecutive text deltas grow the same content
+            // block, append the delta straight into the segment buffer instead
+            // of re-deriving (and re-diffing) the whole accumulated snapshot on
+            // every event — the latter is O(n) per delta, O(n²) over a long
+            // message. A block transition (a new text block after a tool call)
+            // falls back to the snapshot path so the inter-block separator is
+            // inserted correctly, then re-syncs the ingested count.
+            if case .textDelta(let idx, let delta, _) = amEvent,
+               lastAssistantTextIndex == nil || lastAssistantTextIndex == idx {
+                lastAssistantTextIndex = idx
+                assistantSegmentBuffer += delta
+                assistantIngestedCharacters += delta.count
+                drainAssistantSegmentBuffer(flushAll: false)
+            } else {
+                if case .textDelta(let idx, _, _) = amEvent { lastAssistantTextIndex = idx }
+                ingestAssistantText(assistant, flushAll: false)
+            }
             recomputeLive()
 
         case .messageEnd(let message):
@@ -198,6 +220,7 @@ final class TranscriptRenderer {
                 assistantIngestedCharacters = 0
                 assistantSegmentBuffer = ""
                 assistantCommittedDuringTurn = false
+                lastAssistantTextIndex = nil
                 recomputeLive()
                 flushQueuedVerbose()
             case .toolResult, .user:
@@ -251,6 +274,7 @@ final class TranscriptRenderer {
             assistantIngestedCharacters = 0
             assistantSegmentBuffer = ""
             assistantCommittedDuringTurn = false
+            lastAssistantTextIndex = nil
             queuedVerboseLines.removeAll()
             recomputeLive()
 

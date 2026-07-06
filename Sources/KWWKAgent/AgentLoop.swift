@@ -22,7 +22,7 @@ public struct AgentLoopConfig: Sendable {
     public var retryBaseDelayMs: UInt64
     public var getSteeringMessages: @Sendable () async -> [Message]
     public var getFollowUpMessages: @Sendable () async -> [Message]
-    public var authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)?
+    public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     public var beforeToolCall: BeforeToolCallHook?
     public var afterToolCall: AfterToolCallHook?
     public var userPromptSubmit: UserPromptSubmitHook?
@@ -44,7 +44,7 @@ public struct AgentLoopConfig: Sendable {
         retryBaseDelayMs: UInt64 = 1_000,
         getSteeringMessages: @escaping @Sendable () async -> [Message] = { [] },
         getFollowUpMessages: @escaping @Sendable () async -> [Message] = { [] },
-        authResolver: (@Sendable (Model, String?) async -> ResolvedProviderAuth?)? = nil,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         beforeToolCall: BeforeToolCallHook? = nil,
         afterToolCall: AfterToolCallHook? = nil,
         userPromptSubmit: UserPromptSubmitHook? = nil,
@@ -133,9 +133,12 @@ public enum AgentLoop {
             await emit(.messageEnd(message: prompt))
         }
 
+        // `run()` already emitted the run's first `turnStart` above; enter the
+        // loop with `firstTurn: true` so the first iteration consumes it
+        // instead of emitting a duplicate. Matches pi-agent-core's semantics.
         try await runLoop(
             currentContext: &currentContext,
-            firstTurn: false,
+            firstTurn: true,
             config: config,
             cancellation: cancellation,
             emit: emit,
@@ -179,9 +182,11 @@ public enum AgentLoop {
         await emit(.agentStart)
         await emit(.turnStart)
 
+        // `firstTurn: true` — the `turnStart` just emitted stands in for the
+        // loop's first iteration, so exactly one `turnStart` precedes the turn.
         try await runLoop(
             currentContext: &currentContext,
-            firstTurn: false,
+            firstTurn: true,
             config: config,
             cancellation: cancellation,
             emit: emit,
@@ -476,10 +481,10 @@ public enum AgentLoop {
             tools: context.tools.map { $0.toKWAITool() }
         )
 
-        let resolvedAuth = await config.authResolver?(config.model, config.sessionId)
+        let resolvedAuth = try await config.authResolver?(config.model, config.sessionId)
         var requestModel = config.model
         if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
-            requestModel.baseUrl = baseURL
+            requestModel.baseURL = baseURL
         }
         let mergedMetadata: [String: JSONValue]? = {
             guard let authMetadata = resolvedAuth?.metadata, !authMetadata.isEmpty else { return nil }

@@ -87,6 +87,12 @@ final class SlashContext {
     /// like the `/login` OAuth handoff), then restore the TUI and repaint.
     /// A no-op passthrough in headless / test contexts.
     let withSuspendedTUI: @MainActor (_ body: @escaping @MainActor () async -> Void) async -> Void
+    /// Mark the TUI busy for the duration of a manual `/compact`: shows the
+    /// compacting spinner and makes the Enter handler treat the round-trip as
+    /// busy, so a prompt submitted mid-compact queues (steers) instead of
+    /// starting a turn that the compactor would clobber when it overwrites
+    /// `agent.state.messages`. A no-op in headless / test contexts.
+    let setCompacting: @MainActor (_ active: Bool) -> Void
 
     init(
         agent: Agent,
@@ -101,7 +107,8 @@ final class SlashContext {
         sessionProviders: SessionProviders = SessionProviders(),
         authResolvers: SessionAuthResolvers? = nil,
         context1m: Bool = false,
-        withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() }
+        withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() },
+        setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
     ) {
         self.agent = agent
         self.modal = modal
@@ -116,6 +123,7 @@ final class SlashContext {
         self.authResolvers = authResolvers
         self.context1m = context1m
         self.withSuspendedTUI = withSuspendedTUI
+        self.setCompacting = setCompacting
     }
 
     /// Single-line convenience: one-off status messages (`/model switched

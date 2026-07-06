@@ -562,10 +562,14 @@ struct TUIInlineResizeReflowTests {
         // still drop back down by 2 (CSI 2 B) before rewinding to the top.
         let terminal = VirtualTerminal(width: 40, height: 10)
         let tui = TUI(terminal: terminal)
-        tui.addChild(TestLinesComponent([CURSOR_MARKER + "input", "border", "state"]))
+        let comp = TestLinesComponent([CURSOR_MARKER + "input", "border", "state"])
+        tui.addChild(comp)
         tui.start()
         await terminal.waitForRender()
 
+        // Change a row so the frame isn't suppressed as a no-op — an
+        // identical frame is (correctly) skipped entirely these days.
+        comp.lines = [CURSOR_MARKER + "input", "border", "state ✳"]
         terminal.clearWrites()
         tui.requestRender()
         await terminal.waitForRender()

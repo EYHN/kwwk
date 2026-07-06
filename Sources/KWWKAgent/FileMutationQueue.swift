@@ -1,12 +1,18 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 /// Per-path serial queue for file mutations. Matches pi-coding-agent's
 /// `withFileMutationQueue` — overlapping edits and writes on the same physical
 /// file run strictly one-after-the-other, while unrelated files run in parallel.
 ///
-/// Uniqueness is determined by the file's inode when the file exists;
-/// otherwise the absolute path is used. This keeps symlink siblings on the
-/// same queue.
+/// Uniqueness is determined by the file's canonical (realpath-resolved) path,
+/// so different spellings and symlink siblings collapse onto the same queue.
+/// The tools write in place (open + truncate) so a file's identity is stable
+/// across mutations. Mirrors pi's `realpathSync`-with-fallback keying.
 public actor FileMutationQueue {
     public static let shared = FileMutationQueue()
 
@@ -43,12 +49,17 @@ public actor FileMutationQueue {
     }
 
     private func queueKey(for path: String) -> String {
-        // If the file exists, key by inode so symlinks collapse.
-        var stats = stat()
-        if stat(path, &stats) == 0 {
-            return "inode:\(stats.st_dev):\(stats.st_ino)"
+        // Resolve to the canonical path so symlink siblings, hard links, and
+        // "../"-relative spellings collapse onto one queue. realpath fails when
+        // the final component does not exist yet (a fresh write) — fall back to
+        // the normalized absolute path, matching pi's realpathSync fallback.
+        #if canImport(Darwin) || canImport(Glibc)
+        if let resolved = realpath(path, nil) {
+            defer { free(resolved) }
+            return String(cString: resolved)
         }
-        return "path:\(path)"
+        #endif
+        return URL(fileURLWithPath: path).standardized.path
     }
 }
 
