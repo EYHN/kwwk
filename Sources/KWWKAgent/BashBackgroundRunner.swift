@@ -54,7 +54,12 @@ public struct BashBackgroundRunner: BackgroundTaskRunner {
         let shellPath = self.shellPath
         let environment = self.environment
         let extraEnv = self.extraEnv
-        Task.detached {
+        // Dispatch, not Task.detached: BashRunnerImpl.run blocks in waitpid for
+        // the process's whole lifetime. On the narrow cooperative pool a few
+        // long-running tasks would starve every actor in the process (the
+        // manager's own kill() included); the dispatch pool grows under
+        // blocking.
+        DispatchQueue.global().async {
             let outcome = BashRunnerImpl.run(
                 command: command,
                 workDir: workDir,
