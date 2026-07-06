@@ -123,7 +123,7 @@ struct AgentInitTests {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
 
-        let agent = try await makeCodingAgent(CodingAgentConfig(
+        let agent = await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: FileManager.default.temporaryDirectory.path,
             tools: [],
@@ -154,7 +154,7 @@ struct AgentInitTests {
         """.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: root) }
 
-        let defaultAgent = try await makeCodingAgent(CodingAgentConfig(
+        let defaultAgent = await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: root.path,
             tools: [],
@@ -162,7 +162,7 @@ struct AgentInitTests {
         )).agent
         #expect(!defaultAgent.state.systemPrompt.contains("<name>greeter</name>"))
 
-        let configuredAgent = try await makeCodingAgent(CodingAgentConfig(
+        let configuredAgent = await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: root.path,
             tools: [],

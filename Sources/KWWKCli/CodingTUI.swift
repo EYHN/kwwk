@@ -39,10 +39,7 @@ func runCodingTUIInternal(
     let sessionId = resolvedResume.sessionId
 
     let environment = ProcessInfo.processInfo.environment
-    let tmuxManager = tools.contains(.tmux)
-        ? try cliTmuxManager(environment: environment)
-        : nil
-    let agent = try await makeCodingAgent(CodingAgentConfig(
+    let agent = await makeCodingAgent(CodingAgentConfig(
         model: model,
         cwd: cwd,
         tools: tools,
@@ -54,8 +51,7 @@ func runCodingTUIInternal(
         authResolver: authResolver,
         autoCompactThreshold: autoCompactThreshold,
         bashEnvironment: environment,
-        bashShellPath: cliShellPath(environment: environment),
-        tmuxManager: tmuxManager
+        bashShellPath: cliShellPath(environment: environment)
     )).agent
 
     // Seed the transcript from disk when resuming so the model continues
@@ -1060,12 +1056,10 @@ func runCodingTUIInternal(
     }
 
     let shutdown: @MainActor @Sendable () async -> Void = {
-        // Kill any still-running background tasks, close provider-held
-        // session resources, and tear down the isolated tmux socket so we
-        // don't leak processes after the user exits.
+        // Kill any still-running background tasks and close provider-held
+        // session resources so we don't leak processes after the user exits.
         await agent.abortAndKillBackgroundTasks()
         await agent.closeSession()
-        await tmuxManager?.teardown()
     }
 
     // `--resume`: open the arrow-key session picker on the first frame, reusing

@@ -12,7 +12,7 @@ struct SubagentToolTests {
         let cwd = makeTempDir()
         defer { try? FileManager.default.removeItem(at: cwd) }
 
-        let withoutSubagents = try await makeCodingAgent(CodingAgentConfig(
+        let withoutSubagents = await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
@@ -20,7 +20,7 @@ struct SubagentToolTests {
         )).agent
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent" })
 
-        let withSubagents = try await makeCodingAgent(CodingAgentConfig(
+        let withSubagents = await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,

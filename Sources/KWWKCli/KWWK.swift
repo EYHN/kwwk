@@ -20,9 +20,7 @@ public enum KWWK {
     ///
     /// `tools` controls which coding tools the agent is given. Default is
     /// `.standard` — read/write/edit/bash/grep/find/ls/task_status/wait_task.
-    /// Pass `.readOnly` for a sandboxed reviewer-style agent. If `tools`
-    /// contains `.tmux`, this CLI wrapper resolves `tmux` from `PATH` and
-    /// passes the explicit executable path into the SDK.
+    /// Pass `.readOnly` for a sandboxed reviewer-style agent.
     ///
     /// `autoCompactThreshold` fires a silent `/compact` (summarize the
     /// transcript → replace with a recap) once the turn's reported

@@ -16,8 +16,7 @@ public func createAgentTool(
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
-    bashShellPath: String = kwwkDefaultShellPath,
-    tmuxManager: TmuxSessionManager? = nil
+    bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let snapshot = SubagentParentSnapshot(
         model: parentModel,
@@ -37,8 +36,7 @@ public func createAgentTool(
         bashEnvironment: bashEnvironment,
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
-        bashShellPath: bashShellPath,
-        tmuxManager: tmuxManager
+        bashShellPath: bashShellPath
     )
 }
 
@@ -53,8 +51,7 @@ public func createAgentTool(
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
-    bashShellPath: String = kwwkDefaultShellPath,
-    tmuxManager: TmuxSessionManager? = nil
+    bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let parentBox = SubagentParentBox(
         fallbackModel: parentAgent.state.model,
@@ -75,8 +72,7 @@ public func createAgentTool(
         bashEnvironment: bashEnvironment,
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
-        bashShellPath: bashShellPath,
-        tmuxManager: tmuxManager
+        bashShellPath: bashShellPath
     )
 }
 
@@ -158,8 +154,7 @@ internal func _createAgentTool(
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
-    bashShellPath: String = kwwkDefaultShellPath,
-    tmuxManager: TmuxSessionManager? = nil
+    bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let registry = SubagentRegistry(subagents)
     let parameters: JSONValue = .object([
@@ -222,8 +217,7 @@ internal func _createAgentTool(
                 bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
                 bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
                 bashEnvironment: bashEnvironment,
-                bashShellPath: bashShellPath,
-                tmuxManager: tmuxManager
+                bashShellPath: bashShellPath
             )
             let shouldRunBackground = input.runInBackground ?? definition.runInBackgroundByDefault
             if shouldRunBackground {
@@ -505,7 +499,6 @@ private func subagentToolsDescription(_ tools: CodingTools?) -> String {
     if tools.contains(.ls) { names.append("ls") }
     if tools.contains(.taskStatus) { names.append("task_status") }
     if tools.contains(.waitTask) { names.append("wait_task") }
-    if tools.contains(.tmux) { names.append("tmux") }
     return names.isEmpty ? "None" : names.joined(separator: ", ")
 }
 
@@ -571,7 +564,6 @@ public struct SubagentRunner: Sendable {
     private var bashMaxTimeoutSeconds: Int
     private var bashEnvironment: [String: String]
     private var bashShellPath: String
-    private var tmuxManager: TmuxSessionManager?
 
     public init(
         cwd: String,
@@ -588,8 +580,7 @@ public struct SubagentRunner: Sendable {
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
-        bashShellPath: String = kwwkDefaultShellPath,
-        tmuxManager: TmuxSessionManager? = nil
+        bashShellPath: String = kwwkDefaultShellPath
     ) {
         let snapshot = SubagentParentSnapshot(
             model: parentModel,
@@ -609,7 +600,6 @@ public struct SubagentRunner: Sendable {
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
         self.bashEnvironment = bashEnvironment
         self.bashShellPath = bashShellPath
-        self.tmuxManager = tmuxManager
     }
 
     public init(
@@ -623,8 +613,7 @@ public struct SubagentRunner: Sendable {
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
-        bashShellPath: String = kwwkDefaultShellPath,
-        tmuxManager: TmuxSessionManager? = nil
+        bashShellPath: String = kwwkDefaultShellPath
     ) {
         let parentBox = SubagentParentBox(
             fallbackModel: parentAgent.state.model,
@@ -645,7 +634,6 @@ public struct SubagentRunner: Sendable {
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
         self.bashEnvironment = bashEnvironment
         self.bashShellPath = bashShellPath
-        self.tmuxManager = tmuxManager
     }
 
     public func run(
@@ -728,8 +716,7 @@ public struct SubagentRunner: Sendable {
             bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
             bashEnvironment: bashEnvironment,
-            bashShellPath: bashShellPath,
-            tmuxManager: tmuxManager
+            bashShellPath: bashShellPath
         )
     }
 }
@@ -819,7 +806,6 @@ private struct SubagentInvocationRunner: Sendable {
     var bashMaxTimeoutSeconds: Int
     var bashEnvironment: [String: String]
     var bashShellPath: String
-    var tmuxManager: TmuxSessionManager?
 
     func run(
         cancellation: CancellationHandle?,
@@ -853,7 +839,7 @@ private struct SubagentInvocationRunner: Sendable {
             toolOverride: modelOverride
         )
         let selectedTools = definition.tools ?? parent.tools
-        let tools = try await buildCodingToolList(
+        let tools = buildCodingToolList(
             cwd: cwd,
             selected: selectedTools,
             backgroundManager: backgroundManager,
@@ -861,8 +847,7 @@ private struct SubagentInvocationRunner: Sendable {
             bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
             bashEnvironment: bashEnvironment,
-            bashShellPath: bashShellPath,
-            tmuxManager: tmuxManager
+            bashShellPath: bashShellPath
         )
         let systemPrompt = buildSubagentSystemPrompt(
             definition: definition,

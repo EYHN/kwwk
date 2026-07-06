@@ -36,7 +36,7 @@ public func createWaitTaskTool(
         "properties": .object([
             "task_id": .object([
                 "type": .string("string"),
-                "description": .string("ID of a background task (bash, tmux, …) previously returned by another tool."),
+                "description": .string("ID of a background task previously returned by another tool."),
             ]),
             "timeout_seconds": .object([
                 "type": .string("integer"),
@@ -53,7 +53,7 @@ public func createWaitTaskTool(
 
     Prefer this over polling with `task_status` in a loop — it's cheaper and doesn't flood the transcript with intermediate snapshots. Call `task_status` for a one-shot check instead.
 
-    Useful immediately after kicking off a long-running bash/tmux task whose output you need before you can proceed. The `waited` field in the result tells you whether the task actually finished (true) or the timeout fired first (false).
+    Useful immediately after kicking off a long-running bash task whose output you need before you can proceed. The `waited` field in the result tells you whether the task actually finished (true) or the timeout fired first (false).
     """
 
     return AgentTool(

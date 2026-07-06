@@ -98,7 +98,7 @@ final class TUIRunner: @unchecked Sendable {
 
     /// The exit code requested by `exit(code:)` (or a SIGINT/SIGTERM handler),
     /// or 0 if none. Read by the caller AFTER `run()` returns so it can perform
-    /// its own graceful shutdown (kill background tasks, close provider/tmux)
+    /// its own graceful shutdown (kill background tasks, close the provider)
     /// and then exit the process with this code. `run()` deliberately does NOT
     /// call `Foundation.exit` itself — doing so skipped the caller's shutdown on
     /// every signal-driven teardown, leaking background processes and sockets.

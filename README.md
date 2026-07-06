@@ -50,9 +50,9 @@ OpenRouter, or any OpenAI-compatible endpoint).
 
 Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,
-LS, and background-task tools out of the box. SDK callers that want tmux
-must opt into `.tmux` or `.allIncludingTmux` and provide an explicit
-`TmuxSessionManager`.
+LS, and background-task tools out of the box. For interactive terminal
+work (TUIs, REPLs, long-lived servers) the agent drives `tmux` directly
+through the Bash tool.
 
 ---
 
@@ -94,7 +94,7 @@ let anthropicAPIKey = "sk-ant-..."
 await registerBuiltins(anthropic: anthropicAPIKey)
 
 // 2. Build a coding agent scoped to a working directory.
-let agent = try await makeCodingAgent(CodingAgentConfig(
+let agent = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .readOnly,
@@ -130,7 +130,7 @@ let reviewer = SubagentDefinition(
 
 let bg = BackgroundTaskManager()
 let shellEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
-let coding = try await makeCodingAgent(CodingAgentConfig(
+let coding = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
@@ -150,7 +150,7 @@ For the same built-ins that the CLI uses, SDK users can opt in without
 copying prompts:
 
 ```swift
-let agent = try await makeCodingAgent(CodingAgentConfig(
+let agent = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
