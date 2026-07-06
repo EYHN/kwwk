@@ -50,9 +50,7 @@ OpenRouter, or any OpenAI-compatible endpoint).
 
 Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,
-LS, and background-task tools out of the box. For interactive terminal
-work (TUIs, REPLs, long-lived servers) the agent drives `tmux` directly
-through the Bash tool.
+LS, and background-task tools out of the box.
 
 ---
 

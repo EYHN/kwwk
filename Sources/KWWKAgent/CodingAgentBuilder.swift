@@ -8,8 +8,6 @@ import KWWKAI
 /// `.taskStatus` and `.waitTask` are only honored when a `backgroundManager`
 /// is supplied. `.bash` works without a manager (legacy pipe executor) —
 /// it just loses `run_in_background` and the auto-background-on-timeout flip.
-/// Interactive terminal sessions (tmux, screen) are driven through `.bash`
-/// directly — there is no dedicated PTY tool.
 public struct CodingTools: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
@@ -24,7 +22,7 @@ public struct CodingTools: OptionSet, Sendable {
     public static let taskStatus = CodingTools(rawValue: 1 << 7)
     public static let waitTask   = CodingTools(rawValue: 1 << 8)
 
-    /// Filesystem-scan only — no write, no edit, no shell, no PTY.
+    /// Filesystem-scan only — no write, no edit, no shell.
     public static let readOnly: CodingTools = [.read, .grep, .find, .ls]
 
     /// Common editing tools. Includes shell and mutation capabilities; SDK
