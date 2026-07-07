@@ -70,6 +70,9 @@ public struct AgentOptions: Sendable {
     public var steeringMode: QueueMode
     public var followUpMode: QueueMode
     public var sessionId: String?
+    /// Workspace root forwarded to server-driven providers (Cursor). Nil =
+    /// don't report one.
+    public var cwd: String?
     public var thinkingBudgets: ThinkingBudgets?
     public var maxRetryDelayMs: Int?
     /// Hard cap on assistant turns per run. Nil = unlimited.
@@ -94,6 +97,7 @@ public struct AgentOptions: Sendable {
         steeringMode: QueueMode = .oneAtATime,
         followUpMode: QueueMode = .oneAtATime,
         sessionId: String? = nil,
+        cwd: String? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         maxRetryDelayMs: Int? = nil,
         maxTurns: Int? = nil,
@@ -114,6 +118,7 @@ public struct AgentOptions: Sendable {
         self.steeringMode = steeringMode
         self.followUpMode = followUpMode
         self.sessionId = sessionId
+        self.cwd = cwd
         self.thinkingBudgets = thinkingBudgets
         self.maxRetryDelayMs = maxRetryDelayMs
         self.maxTurns = maxTurns
@@ -146,6 +151,9 @@ public final class Agent: @unchecked Sendable {
     /// mutating it would leave tools, the recorder, and background attachments
     /// scoped to different ids.
     public let sessionId: String?
+
+    /// Workspace root forwarded to server-driven providers (Cursor).
+    public let cwd: String?
 
     // Mutable run configuration. `loopConfig()` reads these on the run's task
     // while the public setters may be invoked from any thread (steer() is
@@ -268,6 +276,7 @@ public final class Agent: @unchecked Sendable {
             try await KWWKAI.stream(model: model, context: context, options: options)
         }
         self.sessionId = options.sessionId
+        self.cwd = options.cwd
         // Assign backing storage directly — the public accessors are
         // lock-guarded computed properties, so they can't be used until every
         // stored property is initialized.
@@ -515,6 +524,7 @@ extension Agent {
             reasoning: effectiveReasoning,
             thinkingBudgets: thinkingBudgets,
             sessionId: sessionId,
+            cwd: cwd,
             verboseEnabled: state.verboseEnabled,
             maxRetryDelayMs: maxRetryDelayMs,
             toolExecution: toolExecution,

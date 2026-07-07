@@ -14,6 +14,7 @@ let package = Package(
         .library(name: "KWWKCli", targets: ["KWWKCli"]),
         .executable(name: "kwwk", targets: ["kwwk"]),
         .executable(name: "kwwk-generate-models", targets: ["kwwk-generate-models"]),
+        .executable(name: "kwwk-generate-cursor-models", targets: ["kwwk-generate-cursor-models"]),
     ],
     dependencies: [
         // swift-crypto's `Crypto` module is source-compatible with Apple's
@@ -24,6 +25,11 @@ let package = Package(
         // `Network.framework`-only implementation so the OAuth login flow
         // runs the same code on macOS and Linux.
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
+        // NIO HTTP/2 + TLS back the Cursor agent transport, which speaks the
+        // Connect-RPC protocol over a full-duplex HTTP/2 stream (the client
+        // keeps writing heartbeats / exec results while the server streams).
+        .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.44.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.0"),
     ],
     targets: [
         .target(
@@ -32,6 +38,8 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOHTTP2", package: "swift-nio-http2"),
+                .product(name: "NIOSSL", package: "swift-nio-ssl"),
             ],
             path: "Sources/KWWKAI",
             resources: [.process("Resources")]
@@ -59,6 +67,11 @@ let package = Package(
             name: "kwwk-generate-models",
             dependencies: ["KWWKGenerateModelsCore"],
             path: "Scripts/GenerateModels"
+        ),
+        .executableTarget(
+            name: "kwwk-generate-cursor-models",
+            dependencies: ["KWWKAI"],
+            path: "Scripts/GenerateCursorModels"
         ),
         .testTarget(
             name: "KWWKAITests",

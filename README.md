@@ -355,16 +355,26 @@ in-session `/login` command uses.
 
 ### Updating the model catalog
 
-`/model` reads the bundled catalog at
-`Sources/KWWKAI/Resources/models.json`, generated from pi-mono's
-`packages/ai/src/models.generated.ts`.
+There are two bundled catalogs, and a sync should regenerate BOTH —
+don't update one without the other:
+
+1. `Sources/KWWKAI/Resources/models.json` — every regular provider,
+   generated from pi-mono's `packages/ai/src/models.generated.ts`.
+2. `Sources/KWWKAI/Resources/cursor-models.json` — the Cursor
+   subscription models, pulled live from Cursor's `GetUsableModels` RPC
+   (there is no runtime model sync; this file is the authoritative
+   Cursor catalog).
 
 ```sh
 swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts
+swift run kwwk-generate-cursor-models
 swift test
 ```
 
-The generator writes `Sources/KWWKAI/Resources/models.json` by default.
+`kwwk-generate-cursor-models` authenticates via `CURSOR_ACCESS_TOKEN`,
+an existing `cursor` login in `~/.kwwk/oauth.json`, or — with neither
+present — an interactive browser login it persists for next time.
+
 The catalog tests assert unsupported Google Gemini CLI and Google
 Antigravity provider groups stay absent.
 

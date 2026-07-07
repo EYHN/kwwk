@@ -35,6 +35,11 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "cursor",
+        display: "Cursor (Claude, GPT, Gemini, etc. via subscription)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "anthropic-api-key",
         display: "Anthropic API key (api.anthropic.com)",
         flow: .apiKey(
@@ -242,6 +247,8 @@ func runOAuthFlow(providerId: String) async throws {
             return try await OAuthLogin.loginOpenAICodex(callbacks: callbacks)
         case "github-copilot":
             return try await OAuthLogin.loginGitHubCopilot(callbacks: callbacks)
+        case "cursor":
+            return try await OAuthLogin.loginCursor(callbacks: callbacks)
         default:
             throw LoginError.unknownProvider(providerId)
         }

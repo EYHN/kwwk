@@ -8,6 +8,9 @@ public struct AgentLoopConfig: Sendable {
     public var reasoning: ReasoningLevel?
     public var thinkingBudgets: ThinkingBudgets?
     public var sessionId: String?
+    /// Workspace root reported to providers with a server-driven harness
+    /// (Cursor's requestContext env). Nil = don't report one.
+    public var cwd: String?
     public var verboseEnabled: Bool
     public var maxRetryDelayMs: Int?
     public var toolExecution: ToolExecutionMode
@@ -35,6 +38,7 @@ public struct AgentLoopConfig: Sendable {
         reasoning: ReasoningLevel? = nil,
         thinkingBudgets: ThinkingBudgets? = nil,
         sessionId: String? = nil,
+        cwd: String? = nil,
         verboseEnabled: Bool = false,
         maxRetryDelayMs: Int? = nil,
         toolExecution: ToolExecutionMode = .parallel,
@@ -56,6 +60,7 @@ public struct AgentLoopConfig: Sendable {
         self.reasoning = reasoning
         self.thinkingBudgets = thinkingBudgets
         self.sessionId = sessionId
+        self.cwd = cwd
         self.verboseEnabled = verboseEnabled
         self.maxRetryDelayMs = maxRetryDelayMs
         self.toolExecution = toolExecution
@@ -312,12 +317,14 @@ public enum AgentLoop {
                     return
                 }
 
+                let cursorResults = CursorToolResultBox()
                 let assistant = try await streamAssistantResponse(
                     context: &currentContext,
                     config: config,
                     cancellation: cancellation,
                     emit: emit,
-                    streamFn: streamFn
+                    streamFn: streamFn,
+                    cursorResults: cursorResults
                 )
                 // Append to the in-loop context BEFORE running tools, so the
                 // next turn's request body carries the assistant turn
@@ -329,20 +336,32 @@ public enum AgentLoop {
                 turnsExecuted += 1
                 accumulate(assistant)
 
+                // Tool results the Cursor provider executed inline over its exec
+                // channel land right after the assistant message, pairing with
+                // the `cursorExecResolved` toolCall blocks inside it.
+                let inlineResults = cursorResults.drain()
+                for result in inlineResults {
+                    currentContext.messages.append(.toolResult(result))
+                }
+
                 if assistant.stopReason == .error || assistant.stopReason == .aborted {
-                    await emit(.turnEnd(message: .assistant(assistant), toolResults: []))
+                    await emit(.turnEnd(message: .assistant(assistant), toolResults: inlineResults))
                     await emit(.agentEnd(messages: delta(), summary: finalize(nil)))
                     return
                 }
 
+                // Skip calls the Cursor provider already resolved inline — the
+                // results are in `inlineResults`; running them again would
+                // duplicate side effects.
                 let toolCalls = assistant.content.compactMap { block -> ToolCall? in
-                    if case .toolCall(let tc) = block { return tc } else { return nil }
+                    guard case .toolCall(let tc) = block, tc.cursorExecResolved != true else { return nil }
+                    return tc
                 }
                 hasMoreToolCalls = !toolCalls.isEmpty
 
-                var toolResults: [ToolResultMessage] = []
+                var toolResults: [ToolResultMessage] = inlineResults
                 if hasMoreToolCalls {
-                    toolResults = await executeToolCalls(
+                    let executed = await executeToolCalls(
                         currentContext: currentContext,
                         assistantMessage: assistant,
                         toolCalls: toolCalls,
@@ -351,7 +370,8 @@ public enum AgentLoop {
                         cancellation: cancellation,
                         emit: emit
                     )
-                    for result in toolResults {
+                    toolResults += executed
+                    for result in executed {
                         currentContext.messages.append(.toolResult(result))
                         if let subagent = subagentRunSummary(from: result) {
                             summary.subagents.append(subagent)
@@ -466,7 +486,8 @@ public enum AgentLoop {
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
         emit: @escaping AgentEventSink,
-        streamFn: @escaping StreamFn
+        streamFn: @escaping StreamFn,
+        cursorResults: CursorToolResultBox
     ) async throws -> AssistantMessage {
         var messages = context.messages
         if let transform = config.transformContext {
@@ -480,6 +501,22 @@ public enum AgentLoop {
             messages: messages,
             tools: context.tools.map { $0.toKWAITool() }
         )
+
+        // Inline tool execution for Cursor's server-driven exec channel: the
+        // provider calls this mid-stream; results are buffered and appended to
+        // the transcript after the assistant message closes.
+        let bridgeContext = context
+        let cursorExecBridge = CursorExecBridge(cwd: config.cwd) { call in
+            let result = await executeCursorExec(
+                call: call,
+                context: bridgeContext,
+                config: config,
+                cancellation: cancellation,
+                emit: emit
+            )
+            cursorResults.append(result)
+            return result
+        }
 
         let resolvedAuth = try await config.authResolver?(config.model, config.sessionId)
         var requestModel = config.model
@@ -502,6 +539,7 @@ public enum AgentLoop {
             cancellation: cancellation,
             toolChoice: config.toolChoice,
             parallelToolCalls: config.parallelToolCalls,
+            cursorExecBridge: cursorExecBridge,
             verbose: config.verboseEnabled,
             onVerbose: { event in
                 await emit(.verbose(event))
@@ -567,6 +605,10 @@ public enum AgentLoop {
                    let msg = final.errorMessage,
                    isRetryableError(msg),
                    attempt < maxRetries - 1 {
+                    // Discard inline Cursor tool results from the rewound
+                    // attempt — their toolCall blocks are gone with it, and the
+                    // retried stream produces fresh pairs.
+                    _ = cursorResults.drain()
                     if emittedStart {
                         await emit(.streamRewind)
                     }
@@ -607,6 +649,128 @@ public enum AgentLoop {
         }
 
         throw lastError ?? AgentError.maxRetriesExceeded
+    }
+
+    // MARK: - Cursor inline exec
+
+    /// Execute one tool call on behalf of the Cursor provider's exec channel.
+    /// Registered tools run through the same prepare (validation + hooks) /
+    /// execute / finalize path as loop-driven calls; `write` and `delete` —
+    /// native Cursor tools kwwk has no registered counterpart for — get
+    /// built-in file implementations, still gated by the beforeToolCall hook.
+    /// Never throws: failures fold into an `isError` result.
+    private static func executeCursorExec(
+        call: ToolCall,
+        context: AgentContext,
+        config: AgentLoopConfig,
+        cancellation: CancellationHandle?,
+        emit: @escaping AgentEventSink
+    ) async -> ToolResultMessage {
+        await emit(.toolExecutionStart(toolCallId: call.id, toolName: call.name, args: call.arguments))
+
+        // The hook context wants the surrounding assistant message, which is
+        // still streaming — stand in with a placeholder carrying the model
+        // coordinates.
+        let placeholder = AssistantMessage(
+            content: [.toolCall(call)],
+            api: config.model.api,
+            provider: config.model.provider,
+            model: config.model.id
+        )
+
+        if context.tools.contains(where: { $0.name == call.name }) {
+            let prep = await prepareToolCall(
+                context: context,
+                assistantMessage: placeholder,
+                toolCall: call,
+                config: config,
+                cancellation: cancellation
+            )
+            switch prep {
+            case .immediate(let result, let isError):
+                return await finalize(
+                    call: call, assistantMessage: placeholder, args: call.arguments,
+                    context: context, outcome: ExecutedOutcome(result: result, isError: isError),
+                    config: config, cancellation: cancellation, emit: emit
+                )
+            case .prepared(let prepared):
+                let executed = await executePrepared(prepared, cancellation: cancellation, emit: emit)
+                return await finalize(
+                    call: call, assistantMessage: placeholder, args: prepared.args,
+                    context: context, outcome: executed,
+                    config: config, cancellation: cancellation, emit: emit
+                )
+            }
+        }
+
+        let outcome: ExecutedOutcome
+        switch call.name {
+        case "write", "delete":
+            var effectiveArgs = call.arguments
+            var blocked: String?
+            if let before = config.beforeToolCall {
+                let ctx = BeforeToolCallContext(
+                    assistantMessage: placeholder, toolCall: call,
+                    args: call.arguments, context: context
+                )
+                if let result = await before(ctx, cancellation) {
+                    if result.block {
+                        blocked = result.reason ?? "Tool execution was blocked"
+                    } else if let rewritten = result.modifiedArgs {
+                        effectiveArgs = rewritten
+                    }
+                }
+            }
+            if let blocked {
+                outcome = ExecutedOutcome(result: errorToolResult(blocked), isError: true)
+            } else {
+                outcome = executeBuiltinFileTool(name: call.name, args: effectiveArgs)
+            }
+        default:
+            outcome = ExecutedOutcome(
+                result: errorToolResult("Tool \(call.name) not found"), isError: true
+            )
+        }
+        return await finalize(
+            call: call, assistantMessage: placeholder, args: call.arguments,
+            context: context, outcome: outcome,
+            config: config, cancellation: cancellation, emit: emit
+        )
+    }
+
+    /// Built-in `write` (`{path, content}`) and `delete` (`{path}`) used only
+    /// for Cursor's native exec tools.
+    private static func executeBuiltinFileTool(name: String, args: JSONValue) -> ExecutedOutcome {
+        guard case .object(let obj) = args, case .string(let path)? = obj["path"], !path.isEmpty else {
+            return ExecutedOutcome(result: errorToolResult("\(name): `path` is required"), isError: true)
+        }
+        let url = URL(fileURLWithPath: path)
+        do {
+            switch name {
+            case "write":
+                guard case .string(let content)? = obj["content"] else {
+                    return ExecutedOutcome(result: errorToolResult("write: `content` is required"), isError: true)
+                }
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                try Data(content.utf8).write(to: url)
+                return ExecutedOutcome(
+                    result: AgentToolResult(content: [.text(TextContent(
+                        text: "Wrote \(content.utf8.count) bytes to \(path)"
+                    ))]),
+                    isError: false
+                )
+            default:
+                try FileManager.default.removeItem(at: url)
+                return ExecutedOutcome(
+                    result: AgentToolResult(content: [.text(TextContent(text: "Deleted \(path)"))]),
+                    isError: false
+                )
+            }
+        } catch {
+            return ExecutedOutcome(result: errorToolResult("\(error)"), isError: true)
+        }
     }
 
     // MARK: - Tool execution
@@ -1009,6 +1173,26 @@ public enum AgentLoop {
             cacheWrite: doubleValue(object["cache_write"]) ?? 0,
             total: doubleValue(object["total"]) ?? 0
         )
+    }
+}
+
+/// Collects tool results the Cursor provider produced inline during a stream,
+/// drained by the loop right after the assistant message is appended so the
+/// transcript reads (assistant with resolved toolCall blocks) → results.
+final class CursorToolResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var results: [ToolResultMessage] = []
+
+    func append(_ result: ToolResultMessage) {
+        lock.withLock { results.append(result) }
+    }
+
+    func drain() -> [ToolResultMessage] {
+        lock.withLock {
+            let out = results
+            results.removeAll()
+            return out
+        }
     }
 }
 

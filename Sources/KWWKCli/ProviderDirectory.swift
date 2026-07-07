@@ -92,6 +92,13 @@ let providerDirectory: [ProviderDescriptor] = [
         displayName: "GitHub Copilot",
         formTitle: nil
     ),
+    ProviderDescriptor(
+        storeId: "cursor",
+        scope: "cursor",
+        catalogKey: "cursor",
+        displayName: "Cursor",
+        formTitle: nil
+    ),
 ]
 
 /// Descriptor for a store id, or nil for unknown / `env:` sentinel ids —

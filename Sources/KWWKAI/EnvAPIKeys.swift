@@ -13,6 +13,7 @@ public enum EnvAPIKeys {
     public static let envVars: [String: [String]] = [
         "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
         "github-copilot": ["COPILOT_GITHUB_TOKEN"],
+        "cursor": ["CURSOR_ACCESS_TOKEN"],
         "ant-ling": ["ANT_LING_API_KEY"],
         "openai": ["OPENAI_API_KEY"],
         "azure-openai-responses": ["AZURE_OPENAI_API_KEY"],

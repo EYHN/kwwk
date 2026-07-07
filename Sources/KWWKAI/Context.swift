@@ -119,6 +119,31 @@ public enum ToolChoice: Sendable, Hashable {
     case tool(name: String)
 }
 
+/// Bridge that lets the Cursor provider execute the caller's tools inline
+/// during a stream. Cursor's protocol is server-driven: the server sends exec
+/// requests (shell/read/grep/... and MCP calls for advertised tools) over the
+/// open stream and blocks the turn until the client replies, so tool execution
+/// cannot wait for the agent loop. The agent loop supplies this bridge; the
+/// provider synthesizes matching `toolCall` blocks marked
+/// `cursorExecResolved` and the loop appends each returned result to the
+/// transcript after the assistant message closes.
+public struct CursorExecBridge: Sendable {
+    /// Workspace root reported to Cursor's server through the requestContext
+    /// handshake (`RequestContextEnv.workspace_paths`). Without it the
+    /// server-side harness has no authoritative cwd and the model guesses
+    /// paths until a `pwd` corrects it.
+    public var cwd: String?
+
+    /// Execute one tool call and return its result. Failures are folded into
+    /// an `isError` result by the implementation — this never throws.
+    public var execute: @Sendable (ToolCall) async -> ToolResultMessage
+
+    public init(cwd: String? = nil, execute: @escaping @Sendable (ToolCall) async -> ToolResultMessage) {
+        self.cwd = cwd
+        self.execute = execute
+    }
+}
+
 /// Options passed into streaming calls. All fields are optional; providers
 /// ignore fields they do not understand.
 public struct StreamOptions: Sendable {
@@ -166,6 +191,11 @@ public struct StreamOptions: Sendable {
     /// Providers that lack an analog ignore this.
     public var parallelToolCalls: Bool?
 
+    /// Inline tool-execution bridge for the Cursor provider (see
+    /// ``CursorExecBridge``). Providers without a server-driven exec channel
+    /// ignore this.
+    public var cursorExecBridge: CursorExecBridge?
+
     /// Enables provider/internal diagnostic logging for this stream.
     public var verbose: Bool?
 
@@ -192,6 +222,7 @@ public struct StreamOptions: Sendable {
         thinkingDisplay: BedrockThinkingDisplay? = nil,
         toolChoice: ToolChoice? = nil,
         parallelToolCalls: Bool? = nil,
+        cursorExecBridge: CursorExecBridge? = nil,
         verbose: Bool? = nil,
         onVerbose: (@Sendable (VerboseEvent) async -> Void)? = nil
     ) {
@@ -214,6 +245,7 @@ public struct StreamOptions: Sendable {
         self.thinkingDisplay = thinkingDisplay
         self.toolChoice = toolChoice
         self.parallelToolCalls = parallelToolCalls
+        self.cursorExecBridge = cursorExecBridge
         self.verbose = verbose
         self.onVerbose = onVerbose
     }

@@ -149,6 +149,92 @@ public enum OAuthLogin {
         )
     }
 
+    // MARK: - Cursor (browser PKCE poll flow)
+    //
+    // Cursor's CLI login: generate a PKCE verifier/challenge and a session
+    // uuid, open `cursor.com/loginDeepControl` in the browser, then poll
+    // `api2.cursor.sh/auth/poll?uuid=&verifier=` with exponential backoff until
+    // it returns the access/refresh tokens. No local callback server. Mirrors
+    // oh-my-pi's `loginCursor`.
+
+    public static func loginCursor(
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        let pkce = PKCE.random()
+        let uuid = UUID().uuidString.lowercased()
+
+        var comps = URLComponents(string: "https://cursor.com/loginDeepControl")!
+        comps.queryItems = [
+            URLQueryItem(name: "challenge", value: pkce.challenge),
+            URLQueryItem(name: "uuid", value: uuid),
+            URLQueryItem(name: "mode", value: "login"),
+            URLQueryItem(name: "redirectTarget", value: "cli"),
+        ]
+        callbacks.onAuthURL(comps.url!)
+        callbacks.onProgress("waiting for Cursor browser authentication…")
+
+        // Poll with exponential backoff (1s → 10s, ×1.2), up to 150 attempts.
+        // A 404 means "still pending"; 3 consecutive hard errors aborts.
+        var delayMs: UInt64 = 1000
+        let maxDelayMs: UInt64 = 10_000
+        var consecutiveErrors = 0
+
+        for _ in 0..<150 {
+            try Task.checkCancellation()
+            try await Task.sleep(nanoseconds: delayMs * 1_000_000)
+
+            var poll = URLComponents(string: "https://api2.cursor.sh/auth/poll")!
+            poll.queryItems = [
+                URLQueryItem(name: "uuid", value: uuid),
+                URLQueryItem(name: "verifier", value: pkce.verifier),
+            ]
+            do {
+                let (response, body) = try await client.request(
+                    url: poll.url!, method: "GET",
+                    headers: ["accept": "application/json"], body: nil
+                )
+                if response.statusCode == 404 {
+                    consecutiveErrors = 0
+                    delayMs = min(delayMs * 12 / 10, maxDelayMs)
+                    continue
+                }
+                if response.statusCode >= 400 {
+                    consecutiveErrors += 1
+                    if consecutiveErrors >= 3 {
+                        throw OAuthError.refreshFailed("cursor poll \(response.statusCode)")
+                    }
+                    delayMs = min(delayMs * 12 / 10, maxDelayMs)
+                    continue
+                }
+                guard let obj = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+                      let access = obj["accessToken"] as? String, !access.isEmpty else {
+                    // 200 with no token yet — keep polling.
+                    consecutiveErrors = 0
+                    delayMs = min(delayMs * 12 / 10, maxDelayMs)
+                    continue
+                }
+                let refresh = obj["refreshToken"] as? String ?? ""
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                return OAuthCredentials(
+                    access: access,
+                    refresh: refresh.isEmpty ? access : refresh,
+                    expires: OAuth.jwtExpiryMillis(access) ?? (now + 60 * 60 * 1000)
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as OAuthError {
+                throw error
+            } catch {
+                consecutiveErrors += 1
+                if consecutiveErrors >= 3 {
+                    throw OAuthError.transport("cursor auth polling failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        throw OAuthError.transport("cursor authentication timed out")
+    }
+
     // MARK: - GitHub Copilot (device flow)
     //
     // Copilot uses GitHub's device-authorization grant: we POST to
