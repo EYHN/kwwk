@@ -97,7 +97,13 @@ final class ModalHost {
         active?.confirm()
         if isOpen { redraw() }
     }
-    func routeCancel() { guard isOpen else { return }; active?.cancel() }
+    /// Cancel may close the modal or mutate it in place (e.g. Esc clearing
+    /// the model selector's filter query) — repaint only when still open.
+    func routeCancel() {
+        guard isOpen else { return }
+        active?.cancel()
+        if isOpen { redraw() }
+    }
     func routeTab() { guard isOpen else { return }; active?.tab(); redraw() }
     func routeLeft() { guard isOpen else { return }; active?.left(); redraw() }
     func routeRight() { guard isOpen else { return }; active?.right(); redraw() }

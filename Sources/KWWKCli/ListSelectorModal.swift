@@ -84,20 +84,20 @@ final class ModalListCore {
         self.scroll = 0
     }
 
-    /// Render the full modal surface. `header`, when present, is one extra
-    /// chrome line between the title and the list (e.g. a provider tab bar)
-    /// and is charged against the `maxRows` budget so windowing never
-    /// overflows.
-    func render(title: String, header: String? = nil, maxRows: Int) -> [String] {
+    /// Render the full modal surface. `headerLines`, when present, are extra
+    /// chrome lines between the title and the list (e.g. a provider tab bar
+    /// or a filter line) and are charged against the `maxRows` budget so
+    /// windowing never overflows.
+    func render(title: String, headerLines: [String] = [], maxRows: Int) -> [String] {
         // Cosmetic blank spacers (above the list and above the footer) are
         // dropped on short terminals so the render stays within `maxRows` —
-        // title + header + body + footer is the irreducible minimum.
-        let headerRows = header == nil ? 0 : 1
+        // title + headers + body + footer is the irreducible minimum.
+        let headerRows = headerLines.count
         let roomy = maxRows >= 9 + headerRows
         var out: [String] = []
         if roomy { out.append("") }
         out.append(Style.header("  \(title)"))
-        if let header { out.append(header) }
+        out.append(contentsOf: headerLines)
         guard !rows.isEmpty else {
             if roomy { out.append("") }
             out.append(Style.dimmed("  \(emptyMessage)"))
