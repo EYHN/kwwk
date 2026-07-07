@@ -95,9 +95,11 @@ struct ModelSelectorModalTests {
             onSelect: { _ in },
             onCancel: {}
         )
-        let lines = modal.render(maxRows: 40)
+        let lines = modal.render(maxRows: 40).map(strip)
         // Current (`b`) should get the pre-selection + "· current" tag.
-        let bLine = lines.first(where: { $0.contains("b") && !$0.contains("Pick one") })
+        // Match the row body ("b  b" = id + name detail) so chrome lines
+        // that merely contain the letter b (e.g. the filter hint) don't win.
+        let bLine = lines.first(where: { $0.contains("b  b") && !$0.contains("Pick one") })
         #expect(bLine?.contains("current") == true)
         #expect(bLine?.contains("❯") == true)
     }
@@ -295,6 +297,120 @@ struct ModelSelectorModalTests {
                 modal.down()
             }
         }
+    }
+
+    // MARK: - Typed filter
+
+    @MainActor
+    @Test("typing filters the list by model id, case-insensitively")
+    func typedFilter() {
+        let models = [model("opus-4"), model("sonnet-4"), model("haiku-4")]
+        let picked = Ref<String?>(nil)
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: "opus-4",
+            onSelect: { picked.value = $0.id },
+            onCancel: {}
+        )
+        #expect(modal.handleText("SON") == true)
+        let lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("sonnet-4") }))
+        #expect(!lines.contains(where: { $0.contains("opus-4") }))
+        #expect(lines.contains(where: { $0.contains("filter: SON") }))
+        modal.confirm()
+        #expect(picked.value == "sonnet-4")
+    }
+
+    @MainActor
+    @Test("backspace edits the query; no-match shows a message; confirm is a no-op")
+    func filterBackspaceAndNoMatch() {
+        let models = [model("opus-4"), model("sonnet-4")]
+        let picked = Ref<String?>(nil)
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: nil,
+            onSelect: { picked.value = $0.id },
+            onCancel: {}
+        )
+        _ = modal.handleText("zzz")
+        var lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("no models match \"zzz\"") }))
+        modal.confirm()
+        #expect(picked.value == nil)
+
+        // Backspace down to "z" — still no match; then to empty — full list.
+        _ = modal.handleText("\u{7F}")
+        _ = modal.handleText("\u{7F}")
+        _ = modal.handleText("\u{7F}")
+        lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("opus-4") }))
+        #expect(lines.contains(where: { $0.contains("sonnet-4") }))
+    }
+
+    @MainActor
+    @Test("Esc clears a non-empty query first, then closes")
+    func escClearsQueryThenCloses() {
+        let cancelled = Ref<Bool>(false)
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: [model("opus-4"), model("sonnet-4")],
+            currentModelId: nil,
+            onSelect: { _ in },
+            onCancel: { cancelled.value = true }
+        )
+        _ = modal.handleText("opus")
+        modal.cancel()
+        #expect(cancelled.value == false)
+        let lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("sonnet-4") })) // filter cleared
+        modal.cancel()
+        #expect(cancelled.value == true)
+    }
+
+    @MainActor
+    @Test("query composes with the provider tab filter")
+    func filterComposesWithTabs() {
+        let (models, groups) = multiProviderFixture()
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: "opus-4",
+            groupLabels: groups,
+            currentIndex: 0,
+            onSelect: { _ in },
+            onCancel: {}
+        )
+        _ = modal.handleText("sonnet")
+        modal.tab() // → Anthropic
+        var lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("sonnet-4") }))
+        #expect(!lines.contains(where: { $0.contains("opus-4") }))
+        #expect(lines.filter { $0.contains("sonnet-4") }.count == 1)
+        modal.tab() // → OpenAI: its own sonnet-4 copy
+        lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("sonnet-4") }))
+        #expect(!lines.contains(where: { $0.contains("gpt-5") }))
+    }
+
+    @MainActor
+    @Test("pasted text is unwrapped and escape sequences are swallowed")
+    func pasteAndEscapes() {
+        let models = [model("opus-4"), model("sonnet-4")]
+        let modal = ModelSelectorModal(
+            title: "t",
+            models: models,
+            currentModelId: nil,
+            onSelect: { _ in },
+            onCancel: {}
+        )
+        #expect(modal.handleText("\u{1B}[200~son\u{1B}[201~") == true)
+        #expect(modal.handleText("\u{1B}[1;5C") == true) // swallowed, not typed
+        let lines = modal.render(maxRows: 40).map(strip)
+        #expect(lines.contains(where: { $0.contains("filter: son") }))
+        #expect(lines.contains(where: { $0.contains("sonnet-4") }))
+        #expect(!lines.contains(where: { $0.contains("opus-4") }))
     }
 
     @MainActor

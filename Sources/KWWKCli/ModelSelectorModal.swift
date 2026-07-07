@@ -10,6 +10,10 @@ import KWWKAI
 /// "All" plus one tab per provider — and Tab / ←→ filter the list to a
 /// single provider. With a single provider the tab bar is omitted and the
 /// render is identical to the ungrouped selector.
+///
+/// Typing filters the list by model id (case-insensitive substring),
+/// composed with the active provider tab. Backspace edits the query; Esc
+/// clears a non-empty query first and only closes the modal once empty.
 @MainActor
 final class ModelSelectorModal: Modal {
     private let title: String
@@ -32,7 +36,10 @@ final class ModelSelectorModal: Modal {
     private let tabs: [String]
     /// Index into `tabs`; 0 is "All".
     private var activeTab = 0
-    /// Indices into `models` currently listed (filtered by the active tab).
+    /// Typed filter query, matched case-insensitively against model ids.
+    private var query = ""
+    /// Indices into `models` currently listed (filtered by the active tab
+    /// and the typed query).
     private var visible: [Int]
     private let core: ModalListCore
 
@@ -96,18 +103,26 @@ final class ModelSelectorModal: Modal {
         }
     }
 
-    /// Re-derive the visible rows for `activeTab`. The active model's row
-    /// stays selected when it is visible under the tab; otherwise selection
-    /// falls back to the first row. Scroll resets with the new row set.
-    private func applyTabFilter() {
-        let indices: [Int]
+    /// Re-derive the visible rows for `activeTab` + `query` (intersection).
+    /// The active model's row stays selected when it is visible under the
+    /// filters; otherwise selection falls back to the first row. Scroll
+    /// resets with the new row set.
+    private func applyFilters() {
+        var indices: [Int]
         if activeTab == 0 {
             indices = Array(models.indices)
         } else {
             let label = tabs[activeTab]
             indices = models.indices.filter { groupLabels?[$0] == label }
         }
+        if !query.isEmpty {
+            let q = query.lowercased()
+            indices = indices.filter { models[$0].id.lowercased().contains(q) }
+        }
         visible = indices
+        core.emptyMessage = query.isEmpty
+            ? "(no models available for this provider)"
+            : "(no models match \"\(query)\")"
         let selected = activeModelIndex.flatMap { indices.firstIndex(of: $0) } ?? 0
         core.setRows(rows(for: indices), selectedIndex: selected)
     }
@@ -115,7 +130,7 @@ final class ModelSelectorModal: Modal {
     private func moveTab(_ delta: Int) {
         guard tabs.count > 1 else { return }
         activeTab = (activeTab + delta + tabs.count) % tabs.count
-        applyTabFilter()
+        applyFilters()
     }
 
     // MARK: - Modal
@@ -131,12 +146,72 @@ final class ModelSelectorModal: Modal {
         onSelect(models[visible[core.selectedIndex]])
     }
 
+    /// Esc clears a non-empty filter query first; a second Esc (or Esc with
+    /// no query) closes the modal.
     func cancel() {
+        guard query.isEmpty else {
+            query = ""
+            applyFilters()
+            return
+        }
         onCancel()
     }
 
+    /// Typed input edits the filter query: printable characters append,
+    /// backspace deletes, pasted text is unwrapped, and everything else is
+    /// swallowed so keystrokes never leak into the prompt box while the
+    /// selector is open. Enter / Esc / Tab / arrows are keybound upstream
+    /// and never reach here.
+    func handleText(_ data: String) -> Bool {
+        var text = data
+        if text.hasPrefix("\u{1B}[200~") && text.hasSuffix("\u{1B}[201~") {
+            text.removeFirst("\u{1B}[200~".count)
+            text.removeLast("\u{1B}[201~".count)
+        }
+        if text == "\u{7F}" || text == "\u{08}" {
+            if !query.isEmpty {
+                query.removeLast()
+                applyFilters()
+            }
+            return true
+        }
+        if text.hasPrefix("\u{1B}") {
+            return true // unrecognized escape sequence — swallow it
+        }
+        var appended = ""
+        for ch in text {
+            if ch == "\n" || ch == "\r" || ch == "\t" { continue }
+            if let ascii = ch.asciiValue, ascii < 0x20 { continue }
+            appended.append(ch)
+        }
+        if !appended.isEmpty {
+            query.append(appended)
+            applyFilters()
+        }
+        return true
+    }
+
     func render(maxRows: Int) -> [String] {
-        core.render(title: title, header: tabBarLine(), maxRows: maxRows)
+        var headers = [tabBarLine(), filterLine(maxRows: maxRows)].compactMap { $0 }
+        // Irreducible chrome is title + footer + one body row; when the
+        // header lines would push the render past maxRows, drop the tab bar
+        // first — an active filter query must stay visible.
+        while headers.count > 1, maxRows < 3 + headers.count {
+            headers.removeFirst()
+        }
+        return core.render(title: title, headerLines: headers, maxRows: maxRows)
+    }
+
+    /// One-line filter status: a dim typing hint while the query is empty
+    /// (dropped on short terminals — it's cosmetic), the highlighted query
+    /// with a match count once the user has typed.
+    private func filterLine(maxRows: Int) -> String? {
+        guard !query.isEmpty else {
+            guard maxRows >= 9 else { return nil }
+            return "  " + Style.dimmed("type to filter by model id")
+        }
+        return "  " + Style.dimmed("filter: ") + Theme.accentText(query, bold: true)
+            + Style.dimmed("   \(visible.count) match\(visible.count == 1 ? "" : "es")   Esc: clear")
     }
 
     /// One-line provider tab bar (nil when a single provider makes it noise).
