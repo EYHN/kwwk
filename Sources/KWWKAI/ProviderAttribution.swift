@@ -22,6 +22,7 @@ public enum ProviderAttribution {
         "azure-openai-responses": "Azure OpenAI Responses",
         "cerebras": "Cerebras",
         "chatgpt-codex": "ChatGPT Codex",
+        "cursor": "Cursor",
         "cloudflare-ai-gateway": "Cloudflare AI Gateway",
         "cloudflare-workers-ai": "Cloudflare Workers AI",
         "deepseek": "DeepSeek",

@@ -217,6 +217,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
             tools: tools
         ),
         sessionId: sessionId,
+        cwd: cwd,
         autoCompact: autoCompact,
         authResolver: config.authResolver
     ))

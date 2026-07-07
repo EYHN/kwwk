@@ -262,6 +262,8 @@ func registerStored(
         return await registerOpenRouter(creds: creds, modelOverride: modelOverride)
     case "github-copilot":
         return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+    case "cursor":
+        return await registerCursor(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     default:
         FileHandle.standardError.write(Data(
             "kwwk: stored credentials for '\(storeId)' aren't wired up; skipping.\n".utf8
@@ -361,6 +363,13 @@ func resolveEnvAuth(
             guard let cf = EnvAPIKeys.cloudflare(env: environment), cf.accountId != nil else { continue }
             return await registerCloudflareEnv(cf, gateway: false, modelOverride: forcedId)
         }
+        // Cursor rides its own agent wire (cursor-agent), not one of the flat
+        // env-provider wire protocols, so register it explicitly from the env
+        // access token.
+        if provider == "cursor" {
+            guard let token = EnvAPIKeys.apiKey(for: "cursor", env: environment), !token.isEmpty else { continue }
+            return await registerCursorEnv(token: token, modelOverride: forcedId)
+        }
         guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
         guard await registerEnvProviders(for: provider, apiKey: key) else { continue }
@@ -368,6 +377,26 @@ func resolveEnvAuth(
         return ResolvedAuth(model: model, modelLabel: label, authResolver: nil)
     }
     return nil
+}
+
+/// Register Cursor from a `CURSOR_ACCESS_TOKEN` env var (static token, no
+/// refresh — the token is used as-is until it expires).
+private func registerCursorEnv(token: String, modelOverride: String?) async -> ResolvedAuth {
+    await APIRegistry.shared.register(CursorAgentProvider(defaultAPIKey: token), scope: "cursor")
+    let modelId = modelOverride ?? "default"
+    let catalog = ModelsCatalog.model(provider: "cursor", id: modelId)
+    let model = Model(
+        id: modelId,
+        name: catalog?.name ?? modelId,
+        api: "cursor-agent",
+        provider: "cursor",
+        baseURL: "https://api2.cursor.sh",
+        reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text],
+        contextWindow: catalog?.contextWindow ?? 200_000,
+        maxTokens: catalog?.maxTokens ?? 64_000
+    )
+    return ResolvedAuth(model: model, modelLabel: "\(modelId) · Cursor (env)", authResolver: nil)
 }
 
 /// Register Azure OpenAI (Responses wire) from resolved env config.
@@ -731,6 +760,44 @@ private func registerGitHubCopilot(
             scheme: .bearer,
             baseURL: baseURLString
         )
+    )
+}
+
+// MARK: - Cursor (OAuth subscription)
+
+private func registerCursor(
+    store: OAuthStore,
+    creds: OAuthCredentials,
+    modelOverride: String? = nil,
+    primeToken: Bool = true
+) async -> ResolvedAuth {
+    let manager = OAuthManager(store: store)
+    // Prime the token only for the active provider; the resolver refreshes
+    // lazily on the first request for the others. Cursor's `refresh` exchanges
+    // the stored refresh token for a fresh short-lived JWT access token.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "cursor")
+    }
+
+    await APIRegistry.shared.register(CursorAgentProvider(), scope: "cursor")
+
+    let modelId = modelOverride ?? "default"
+    let catalog = ModelsCatalog.model(provider: "cursor", id: modelId)
+    let model = Model(
+        id: modelId,
+        name: catalog?.name ?? modelId,
+        api: "cursor-agent",
+        provider: "cursor",
+        baseURL: "https://api2.cursor.sh",
+        reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text],
+        contextWindow: catalog?.contextWindow ?? 200_000,
+        maxTokens: catalog?.maxTokens ?? 64_000
+    )
+    return ResolvedAuth(
+        model: model,
+        modelLabel: "\(modelId) · Cursor",
+        authResolver: oauthResolver(manager: manager, providerId: "cursor", scheme: .bearer)
     )
 }
 

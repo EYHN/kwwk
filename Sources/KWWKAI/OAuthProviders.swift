@@ -184,9 +184,82 @@ public struct GitHubCopilotOAuthProvider: OAuthProvider {
     }
 }
 
+// MARK: - Cursor
+//
+// Cursor's subscription auth is a browser PKCE poll flow (see
+// `OAuthLogin.loginCursor`). Tokens are short-lived JWTs; the stored `refresh`
+// is exchanged for a fresh access token at `exchange_user_api_key` (an unusual
+// pattern where the refresh token rides as the bearer with an empty body).
+
+public struct CursorOAuthProvider: OAuthProvider {
+    public let id = "cursor"
+    public let name = "Cursor"
+    public let refreshURL: URL
+
+    public init(
+        refreshURL: URL = URL(string: "https://api2.cursor.sh/auth/exchange_user_api_key")!
+    ) {
+        self.refreshURL = refreshURL
+    }
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let (response, body) = try await client.request(
+            url: refreshURL, method: "POST",
+            headers: [
+                "authorization": "Bearer \(credentials.refresh)",
+                "content-type": "application/json",
+            ],
+            body: Data("{}".utf8)
+        )
+        if response.statusCode >= 400 {
+            let text = String(data: body, encoding: .utf8) ?? ""
+            throw OAuthError.refreshFailed("cursor \(response.statusCode): \(text)")
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let access = obj["accessToken"] as? String, !access.isEmpty else {
+            throw OAuthError.invalidResponse("cursor refresh missing accessToken")
+        }
+        let newRefresh: String = {
+            if let r = obj["refreshToken"] as? String, !r.isEmpty { return r }
+            return credentials.refresh
+        }()
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return OAuthCredentials(
+            access: access,
+            refresh: newRefresh,
+            expires: OAuth.jwtExpiryMillis(access) ?? (now + 60 * 60 * 1000),
+            extras: credentials.extras
+        )
+    }
+}
+
 // MARK: - Helpers
 
 enum OAuth {
+    /// Decode a JWT's `exp` claim (Unix seconds) into an expiry in Unix
+    /// milliseconds, subtracting a 5-minute safety margin so callers refresh
+    /// slightly early. Returns nil for non-JWT / unparseable tokens.
+    static func jwtExpiryMillis(_ token: String) -> Int64? {
+        let parts = token.split(separator: ".")
+        guard parts.count == 3 else { return nil }
+        var payload = String(parts[1])
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while payload.count % 4 != 0 { payload.append("=") }
+        guard let data = Data(base64Encoded: payload),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        let exp: Double?
+        if let v = obj["exp"] as? Double { exp = v }
+        else if let v = obj["exp"] as? Int { exp = Double(v) }
+        else { exp = nil }
+        guard let exp else { return nil }
+        return Int64(exp * 1000) - 5 * 60 * 1000
+    }
+
     struct TokenResponse: Decodable {
         let accessToken: String
         let refreshToken: String?

@@ -13,6 +13,10 @@ import KWWKGenerateModelsCore
 ///
 ///   Sources/KWWKAI/Resources/models.json
 ///
+/// NOTE: when syncing the model catalogs, also regenerate the Cursor
+/// catalog (`swift run kwwk-generate-cursor-models`) — the two bundled
+/// files are updated together.
+///
 @main
 struct GenerateModels {
     static func main() throws {
@@ -79,6 +83,9 @@ struct GenerateModels {
 
     options:
       -h, --help               show this help
+
+    note: also run `swift run kwwk-generate-cursor-models` when syncing —
+    the Cursor catalog (cursor-models.json) is regenerated separately.
     """
 }
 

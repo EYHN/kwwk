@@ -107,6 +107,24 @@
       "name": "Release kwwk-generate-models",
       "program": "${workspaceFolder:kw}/.build/release/kwwk-generate-models",
       "preLaunchTask": "swift: Build Release kwwk-generate-models"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Debug kwwk-generate-cursor-models",
+      "program": "${workspaceFolder:kw}/.build/debug/kwwk-generate-cursor-models",
+      "preLaunchTask": "swift: Build Debug kwwk-generate-cursor-models"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:kw}",
+      "name": "Release kwwk-generate-cursor-models",
+      "program": "${workspaceFolder:kw}/.build/release/kwwk-generate-cursor-models",
+      "preLaunchTask": "swift: Build Release kwwk-generate-cursor-models"
     }
   ]
 }

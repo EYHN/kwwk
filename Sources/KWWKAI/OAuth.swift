@@ -223,6 +223,7 @@ public actor OAuthManager {
             AnthropicOAuthProvider(),
             OpenAICodexOAuthProvider(),
             GitHubCopilotOAuthProvider(),
+            CursorOAuthProvider(),
         ]
     }
 
@@ -304,6 +305,7 @@ public actor OAuthManager {
         case "anthropic": return "anthropic"
         case "github-copilot": return "github-copilot"
         case "openai-codex": return "openai-codex"
+        case "cursor": return "cursor"
         default: return provider
         }
     }

@@ -53,11 +53,19 @@ public struct ToolCall: Codable, Sendable, Hashable {
     public var name: String
     public var arguments: JSONValue
     public var thoughtSignature: String?
-    public init(id: String, name: String, arguments: JSONValue, thoughtSignature: String? = nil) {
+    /// Set when the Cursor provider already executed this call inline over the
+    /// server-driven exec channel. The agent loop must not run it again; the
+    /// paired tool result arrives out-of-band via `CursorExecBridge.execute`.
+    public var cursorExecResolved: Bool?
+    public init(
+        id: String, name: String, arguments: JSONValue,
+        thoughtSignature: String? = nil, cursorExecResolved: Bool? = nil
+    ) {
         self.id = id
         self.name = name
         self.arguments = arguments
         self.thoughtSignature = thoughtSignature
+        self.cursorExecResolved = cursorExecResolved
     }
 }
 

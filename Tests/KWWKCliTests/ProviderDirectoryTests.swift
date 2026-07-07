@@ -21,6 +21,7 @@ struct ProviderDirectoryTests {
         ("google-api-key", "google", "google", "Google AI Studio", "Google AI Studio API key"),
         ("openrouter", "openrouter", "openrouter", "OpenRouter", "OpenRouter API key"),
         ("github-copilot", "github-copilot", "github-copilot", "GitHub Copilot", nil),
+        ("cursor", "cursor", "cursor", "Cursor", nil),
     ]
 
     @Test("directory order is the stored-provider priority order")
