@@ -63,6 +63,7 @@ func openRewindSelector(
     agent: Agent,
     modal: ModalHost,
     frame: CodingFrame,
+    sessionStore: SessionStore,
     recorderBox: RecorderBox,
     retry: TurnRetryState,
     attachments: AttachmentStore,
@@ -171,13 +172,35 @@ func openRewindSelector(
                 recomputeTranscript()
                 updateFrameStatus()
 
+                // Persist the cut as a projection replacement (the same store
+                // entry compaction uses): it resets the recorder's baseline so
+                // post-rewind turns flush from the new count, and a later
+                // /resume loads the kept prefix instead of replaying the
+                // dropped tail — the JSONL store is append-only, so the tail
+                // can't be deleted, only superseded. Persisted BEFORE the
+                // repaint so the recap below can read the updated visual
+                // history back from the store.
+                await recorderBox.recorder.recordCompaction(
+                    messages: kept,
+                    messagesCompacted: removed,
+                    reason: .rewind
+                )
+
                 // omp's branch treatment: clear the screen (and scrollback,
-                // where the terminal allows) and re-render the kept prefix as
-                // the whole transcript — the dropped tail vanishes from view
-                // instead of piling a recap under the stale conversation. The
-                // welcome header is re-emitted on top by the repaint; a
+                // where the terminal allows) and re-render the surviving
+                // transcript — the dropped tail vanishes from view instead of
+                // piling a recap under the stale conversation. The recap
+                // replays the store's visual history (displayMessages), NOT
+                // `kept`: after a context compaction the model context starts
+                // with a `<previous-session-summary>` message the user never
+                // saw, and everything the compaction summarized away is still
+                // part of the on-screen history. Falls back to the kept model
+                // prefix only when the session file can't be read back.
+                // The welcome header is re-emitted on top by the repaint; a
                 // trailing note keeps the cut visible after the clear.
-                var snapshot = TranscriptSnapshot.render(kept, width: terminalWidth())
+                let display = (try? await sessionStore.load(id: recorderBox.sessionId))?
+                    .displayMessages ?? kept
+                var snapshot = TranscriptSnapshot.render(display, width: terminalWidth())
                 snapshot.append(contentsOf: [
                     "",
                     Theme.accentText(
@@ -187,19 +210,6 @@ func openRewindSelector(
                 ])
                 replaceTranscript(snapshot)
                 requestRender()
-
-                // Persist the cut as a projection replacement (the same store
-                // entry compaction uses): it resets the recorder's baseline so
-                // post-rewind turns flush from the new count, and a later
-                // /resume loads the kept prefix instead of replaying the
-                // dropped tail — the JSONL store is append-only, so the tail
-                // can't be deleted, only superseded. Only the disk write is
-                // deferred; the recorder's append chain keeps it ordered ahead
-                // of any later turn's flush.
-                await recorderBox.recorder.recordCompaction(
-                    messages: kept,
-                    messagesCompacted: removed
-                )
             }
         },
         onCancel: { modal.close() }

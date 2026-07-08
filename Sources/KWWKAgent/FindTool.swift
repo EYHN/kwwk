@@ -32,7 +32,12 @@ public func createFindTool(cwd: String, options: FindToolOptions = .init()) -> A
     return AgentTool(
         name: "find",
         label: "find",
-        description: "Find files matching a glob pattern.",
+        description: """
+        Find files matching a glob pattern. A pattern without a slash matches the file \
+        name at any depth, so `*.swift` finds every Swift file in the tree. Use a slash \
+        to scope it: `Sources/*.swift` matches only that directory's top level, and \
+        `Sources/**/*.swift` recurses under it.
+        """,
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()

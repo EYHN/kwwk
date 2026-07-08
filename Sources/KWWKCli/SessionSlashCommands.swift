@@ -136,10 +136,12 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
                         // (and scrollback, where the terminal allows) and
                         // re-render the restored transcript in place of the
                         // outgoing one; a trailing note names the session.
-                        var snapshot = TranscriptSnapshot.render(loaded.messages, width: terminalWidth())
+                        // The recap replays the full visual history
+                        // (displayMessages), not the compacted model context.
+                        var snapshot = TranscriptSnapshot.render(loaded.displayMessages, width: terminalWidth())
                         snapshot.append(contentsOf: [
                             "",
-                            Theme.accentText("↻ resumed session \(info.id.prefix(8)) · \(loaded.messages.count) messages", bold: false),
+                            Theme.accentText("↻ resumed session \(info.id.prefix(8)) · \(loaded.displayMessages.count) messages", bold: false),
                         ])
                         replaceTranscript(snapshot)
                         requestRender()

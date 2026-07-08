@@ -71,7 +71,8 @@ public final class SessionRecorder: @unchecked Sendable {
                 if case .compacted(let messagesCompacted, _) = outcome {
                     await self.recordCompaction(
                         messages: agent.state.messages,
-                        messagesCompacted: messagesCompacted
+                        messagesCompacted: messagesCompacted,
+                        reason: .compact
                     )
                 }
             default:
@@ -125,7 +126,8 @@ public final class SessionRecorder: @unchecked Sendable {
         messages replacementMessages: [Message],
         messagesCompacted: Int,
         tokensBefore: Int? = nil,
-        contextWindow: Int? = nil
+        contextWindow: Int? = nil,
+        reason: SessionStore.CompactionReason
     ) async {
         let work: Task<Void, Never> = lock.withLock {
             let usage = pendingCompactionUsage
@@ -150,6 +152,7 @@ public final class SessionRecorder: @unchecked Sendable {
                     messagesCompacted: messagesCompacted,
                     tokensBefore: tokensBefore ?? usage?.tokens,
                     contextWindow: contextWindow ?? usage?.window,
+                    reason: reason,
                     model: model,
                     provider: provider
                 )

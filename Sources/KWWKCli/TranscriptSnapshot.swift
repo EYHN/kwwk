@@ -1,75 +1,52 @@
 import Foundation
 import KWWKAI
+import KWWKAgent
 
 /// Render a stored `[Message]` transcript into display lines for the retained
-/// frame. Used by `/resume` to show a readable history of the session being
-/// restored (the model itself receives the full messages; this is only the
-/// visual recap). Deliberately compact: user turns, assistant prose, and a
-/// one-line marker per tool call. Thinking blocks and tool results are
-/// omitted to keep the recap skimmable.
+/// frame. Used by `/resume` and `/rewind` to repaint history.
+///
+/// Replays the messages through a fresh `TranscriptRenderer` as synthetic
+/// agent events, so the recap is rendered by the exact same code path as the
+/// live stream: user bars, markdown-committed assistant prose, `●` tool
+/// blocks with result previews, folded read runs — and, critically, one
+/// physical line per array element (embedded newlines are split), which the
+/// raw-mode terminal requires. Thinking blocks don't replay (they only ever
+/// render from live deltas); tool `uiDisplay` summaries aren't persisted, so
+/// replayed tool results show the default content preview.
+@MainActor
 enum TranscriptSnapshot {
     static func render(_ messages: [Message], width: Int) -> [String] {
-        var out: [String] = []
+        let renderer = TranscriptRenderer()
+        renderer.displayWidth = width
         for message in messages {
             switch message {
-            case .user(let u):
-                let text = userText(u)
-                guard !text.isEmpty else { continue }
-                if !out.isEmpty { out.append("") }
-                out.append(Theme.paint("❯ \(text)", Theme.text, bold: true))
+            case .user:
+                renderer.apply(.messageStart(message: message))
             case .assistant(let a):
-                var blockLines: [String] = []
+                renderer.apply(.messageStart(message: message))
+                renderer.apply(.messageEnd(message: message))
                 for block in a.content {
-                    switch block {
-                    case .text(let t):
-                        let trimmed = t.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty { blockLines.append(Theme.bodyText(trimmed)) }
-                    case .toolCall(let call):
-                        blockLines.append(Theme.accentText("● \(call.name)\(argHint(call.arguments))", bold: false))
-                    case .thinking:
-                        continue
+                    if case .toolCall(let call) = block {
+                        renderer.apply(.toolExecutionStart(
+                            toolCallId: call.id, toolName: call.name, args: call.arguments))
                     }
                 }
-                guard !blockLines.isEmpty else { continue }
-                if !out.isEmpty { out.append("") }
-                out.append(contentsOf: blockLines)
-            case .toolResult:
-                continue
+            case .toolResult(let tr):
+                renderer.apply(.toolExecutionEnd(
+                    toolCallId: tr.toolCallId,
+                    toolName: tr.toolName,
+                    result: AgentToolResult(content: tr.content, details: tr.details),
+                    isError: tr.isError
+                ))
             }
         }
-        return out
-    }
-
-    private static func userText(_ u: UserMessage) -> String {
-        let text = u.content.compactMap { block -> String? in
-            if case .text(let t) = block { return t.text }
-            return nil
-        }.joined(separator: " ")
-        // Drop synthetic system blocks (task notifications, attachment
-        // manifests) so the recap shows only real user prose.
-        if text.hasPrefix("<") { return "" }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Short single-arg hint for a tool call, e.g. `(path: Foo.swift)`.
-    private static func argHint(_ args: JSONValue) -> String {
-        guard case .object(let fields) = args, !fields.isEmpty else { return "" }
-        let preferred = ["path", "file_path", "command", "pattern", "query", "cmd"]
-        let key = preferred.first { fields[$0] != nil } ?? fields.keys.sorted().first
-        guard let key, let value = fields[key] else { return "" }
-        let str = scalar(value)
-        guard !str.isEmpty else { return "" }
-        let clipped = str.count > 40 ? String(str.prefix(40)) + "…" : str
-        return "(\(key): \(clipped))"
-    }
-
-    private static func scalar(_ v: JSONValue) -> String {
-        switch v {
-        case .string(let s): return s.replacingOccurrences(of: "\n", with: " ")
-        case .int(let i): return String(i)
-        case .double(let d): return String(d)
-        case .bool(let b): return String(b)
-        default: return ""
-        }
+        // Seal any trailing read-only fold run into its count-headed tree block.
+        // A trailing tool call with no persisted result (the process died
+        // mid-execution) stays in the renderer's live zone and is deliberately
+        // dropped from the recap — a frozen "calling…" row in scrollback reads
+        // worse than the call simply not appearing, and the resumed model
+        // context has no result for it either.
+        renderer.sealFoldRun()
+        return renderer.drainCommits()
     }
 }

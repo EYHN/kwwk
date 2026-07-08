@@ -91,25 +91,38 @@ public actor SessionStore {
     /// Append-only marker written when the live agent context is compacted.
     /// `replacementMessages` is the model-facing context that should replace
     /// prior projected messages when the session is resumed.
+    /// Why a projection-replacement entry was written. `.compact` = context
+    /// compaction (auto or `/compact`): only the model-facing context shrinks;
+    /// the visual transcript is unaffected. `.rewind` = the user cut the
+    /// conversation at a prompt: the visual transcript truncates too.
+    public enum CompactionReason: String, Codable, Sendable {
+        case compact
+        case rewind
+    }
+
     public struct Compaction: Codable, Sendable, Hashable {
         public var replacementMessages: [Message]
         public var messagesCompacted: Int
         public var firstKeptMessageIndex: Int?
         public var tokensBefore: Int?
         public var contextWindow: Int?
+        /// Nil when decoding pre-`CompactionReason` session files.
+        public var reason: CompactionReason?
 
         public init(
             replacementMessages: [Message],
             messagesCompacted: Int,
             firstKeptMessageIndex: Int? = nil,
             tokensBefore: Int? = nil,
-            contextWindow: Int? = nil
+            contextWindow: Int? = nil,
+            reason: CompactionReason?
         ) {
             self.replacementMessages = replacementMessages
             self.messagesCompacted = messagesCompacted
             self.firstKeptMessageIndex = firstKeptMessageIndex
             self.tokensBefore = tokensBefore
             self.contextWindow = contextWindow
+            self.reason = reason
         }
     }
 
@@ -123,7 +136,7 @@ public actor SessionStore {
         private enum CodingKeys: String, CodingKey {
             case type, timestamp, message, model, provider, thinkingLevel, title
             case replacementMessages, messagesCompacted, firstKeptMessageIndex
-            case tokensBefore, contextWindow
+            case tokensBefore, contextWindow, reason
         }
         private enum Kind: String, Codable { case message, meta, compaction }
 
@@ -151,7 +164,9 @@ public actor SessionStore {
                         firstKeptMessageIndex: try c.decodeIfPresent(
                             Int.self, forKey: .firstKeptMessageIndex),
                         tokensBefore: try c.decodeIfPresent(Int.self, forKey: .tokensBefore),
-                        contextWindow: try c.decodeIfPresent(Int.self, forKey: .contextWindow)
+                        contextWindow: try c.decodeIfPresent(Int.self, forKey: .contextWindow),
+                        reason: try c.decodeIfPresent(
+                            CompactionReason.self, forKey: .reason)
                     )
                 )
             }
@@ -180,6 +195,7 @@ public actor SessionStore {
                     compaction.firstKeptMessageIndex, forKey: .firstKeptMessageIndex)
                 try c.encodeIfPresent(compaction.tokensBefore, forKey: .tokensBefore)
                 try c.encodeIfPresent(compaction.contextWindow, forKey: .contextWindow)
+                try c.encodeIfPresent(compaction.reason, forKey: .reason)
             }
         }
     }
@@ -189,8 +205,11 @@ public actor SessionStore {
         public var header: Header
         /// Model-facing context after replaying any compaction markers.
         public var messages: [Message]
-        /// Raw transcript message entries, excluding compaction replacements.
-        public var transcriptMessages: [Message]
+        /// What the user actually saw, replayed for visual recaps: every raw
+        /// message, truncated by rewind markers but NOT by context compaction
+        /// (compaction shrinks the model-facing context, not the on-screen
+        /// history).
+        public var displayMessages: [Message]
         /// Number of messages in `messages` already represented on disk.
         public var persistedContextCount: Int
         /// Latest model id seen (from the header or a later `meta` entry).
@@ -205,7 +224,7 @@ public actor SessionStore {
         public init(
             header: Header,
             messages: [Message],
-            transcriptMessages: [Message]? = nil,
+            displayMessages: [Message]? = nil,
             persistedContextCount: Int? = nil,
             model: String?,
             provider: String?,
@@ -214,7 +233,7 @@ public actor SessionStore {
         ) {
             self.header = header
             self.messages = messages
-            self.transcriptMessages = transcriptMessages ?? messages
+            self.displayMessages = displayMessages ?? messages
             self.persistedContextCount = persistedContextCount ?? messages.count
             self.model = model
             self.provider = provider
@@ -428,6 +447,7 @@ public actor SessionStore {
         firstKeptMessageIndex: Int? = nil,
         tokensBefore: Int? = nil,
         contextWindow: Int? = nil,
+        reason: CompactionReason,
         model: String? = nil,
         provider: String? = nil
     ) throws {
@@ -444,7 +464,8 @@ public actor SessionStore {
                     messagesCompacted: messagesCompacted,
                     firstKeptMessageIndex: firstKeptMessageIndex,
                     tokensBefore: tokensBefore,
-                    contextWindow: contextWindow
+                    contextWindow: contextWindow,
+                    reason: reason
                 )
             ))
     }
@@ -482,7 +503,7 @@ public actor SessionStore {
         let header = try parseHeader(String(first), path: url.path)
 
         var messages: [Message] = []
-        var transcriptMessages: [Message] = []
+        var displayMessages: [Message] = []
         var model = header.model
         var provider = header.provider
         var thinkingLevel: String?
@@ -505,8 +526,8 @@ public actor SessionStore {
             }
             switch entry {
             case .message(_, let message):
-                transcriptMessages.append(message)
                 messages.append(message)
+                displayMessages.append(message)
             case .meta(_, let m, let p, let t, let ti):
                 if let m { model = m }
                 if let p { provider = p }
@@ -514,13 +535,31 @@ public actor SessionStore {
                 if let ti { title = ti }
             case .compaction(_, let compaction):
                 messages = compaction.replacementMessages
+                switch compaction.reason {
+                case .compact:
+                    // Context compaction shrinks the model-facing context
+                    // only; the on-screen history is untouched.
+                    break
+                case .rewind:
+                    // Rewind cut the conversation at a prompt: drop the same
+                    // tail from the visual history that was cut from the
+                    // model context. The kept prefix cannot simply replace
+                    // the display — after a compaction it starts with a
+                    // summary message the display never contained.
+                    displayMessages = Array(
+                        displayMessages.dropLast(compaction.messagesCompacted))
+                case nil:
+                    // Legacy entries predate the reason split and truncated
+                    // both the model and the display context.
+                    displayMessages = compaction.replacementMessages
+                }
             }
         }
 
         return LoadedSession(
             header: header,
             messages: messages,
-            transcriptMessages: transcriptMessages,
+            displayMessages: displayMessages,
             persistedContextCount: messages.count,
             model: model,
             provider: provider,

@@ -174,10 +174,16 @@ func runCodingTUIInternal(
         WelcomeScreen.render(welcomeHeader.snapshot(), width: width) + [""]
     }
     if resolvedResume.resumed {
-        runner.tui.commit([
-            Theme.faintText("  ↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.messages.count) messages"),
+        // Replay the restored session's visual history into scrollback (the
+        // same recap `/resume` paints), then the trailing session note.
+        var recap = TranscriptSnapshot.render(
+            resolvedResume.displayMessages, width: runner.terminal.width)
+        recap.append(contentsOf: [
+            "",
+            Theme.faintText("  ↻ resumed session \(sessionId.prefix(8)) · \(resolvedResume.displayMessages.count) messages"),
             "",
         ])
+        runner.tui.commit(recap)
     }
 
     runner.tui.addChild(frame)
@@ -409,6 +415,10 @@ func runCodingTUIInternal(
     // every event, so `/thinking show|hide` (which only mutates agent
     // state) takes effect on the next turn without extra plumbing.
     renderer.setThinkingDisplay(agent.state.thinkingDisplay)
+    let streamCoalescer = RenderCoalescer {
+        updateFrameStatus()
+        runner.tui.requestRender()
+    }
     _ = agent.subscribe { event, _ in
         await MainActor.run {
             renderer.setThinkingDisplay(agent.state.thinkingDisplay)
@@ -419,7 +429,15 @@ func runCodingTUIInternal(
             if !modal.isOpen {
                 recomputeTranscript()
             }
-            _ = flushCommits()
+            let flushedCommits = flushCommits()
+            // A pure token delta that settled nothing only mutates the live
+            // tail — render it on the coalesced ~30fps cadence rather than
+            // synchronously per delta. Anything that reached scrollback (or
+            // any non-delta event) keeps the immediate render below.
+            if isPureStreamDelta(event) && !flushedCommits {
+                streamCoalescer.schedule()
+                return
+            }
             switch event {
             case .agentStart:
                 break
@@ -608,6 +626,7 @@ func runCodingTUIInternal(
             agent: agent,
             modal: modal,
             frame: frame,
+            sessionStore: sessionStore,
             recorderBox: recorderBox,
             retry: retry,
             attachments: attachments,
@@ -700,7 +719,8 @@ func runCodingTUIInternal(
         recordCompaction: { messagesCompacted in
             await recorderBox.recorder.recordCompaction(
                 messages: agent.state.messages,
-                messagesCompacted: messagesCompacted
+                messagesCompacted: messagesCompacted,
+                reason: .compact
             )
         },
         setSessionTitle: { title in
@@ -1121,6 +1141,13 @@ func runCodingTUIInternal(
             try? await Task.sleep(nanoseconds: 90_000_000)
             guard agent.state.isStreaming || frameStatus.isAutoCompacting || frameStatus.mode.isActive else { continue }
             frame.tick()
+            // Advance the collapsed `[thinking Ns…]` elapsed counter between
+            // provider deltas — liveLines is cached state, so it must be
+            // re-derived here for the label to tick.
+            if renderer.hasActiveThinking && !modal.isOpen {
+                renderer.tickLive()
+                recomputeTranscript()
+            }
             updateFrameStatus()
             runner.tui.requestRender()
         }

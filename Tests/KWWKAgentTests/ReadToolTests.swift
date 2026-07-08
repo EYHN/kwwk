@@ -577,6 +577,36 @@ struct GrepToolTests {
         #expect(output.contains("needle two"))
         #expect(!output.contains("something else"))
     }
+
+    @Test("a glob with a slash matches relative to the search root")
+    func slashGlobMatchesRelativeToRoot() async throws {
+        // makeTempDir lives under /var on macOS — a firmlink the enumerator
+        // resolves to /private/var. The relative-path slice must use the same
+        // canonical base or the glob prefix is cut at the wrong offset and
+        // nothing matches (the bug Glob.canonicalDirectoryPath fixes).
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("src/nested"), withIntermediateDirectories: true)
+        try write("needle direct", to: dir.appendingPathComponent("src/direct.swift"))
+        try write("needle buried", to: dir.appendingPathComponent("src/nested/buried.swift"))
+        try write("needle outside", to: dir.appendingPathComponent("top.swift"))
+
+        let tool = createGrepTool(cwd: dir.path)
+        let result = try await tool.execute(
+            "call-1",
+            [
+                "pattern": .string("needle"),
+                "path": .string(dir.path),
+                "glob": .string("src/*.swift"),
+            ],
+            nil, nil
+        )
+        let output = textOutput(result)
+        #expect(output.contains("needle direct"))
+        // `src/*.swift` does not cross into src/nested and never leaves src.
+        #expect(!output.contains("needle buried"))
+        #expect(!output.contains("needle outside"))
+    }
 }
 
 @Suite("Find tool")
@@ -600,6 +630,50 @@ struct FindToolTests {
         #expect(output.contains("one.swift"))
         #expect(output.contains("two.swift"))
         #expect(!output.contains("three.txt"))
+    }
+
+    @Test("a slashless pattern matches by name at any depth (recursive)")
+    func slashlessPatternRecurses() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("sub/deep"), withIntermediateDirectories: true)
+        try write("x", to: dir.appendingPathComponent("top.swift"))
+        try write("x", to: dir.appendingPathComponent("sub/mid.swift"))
+        try write("x", to: dir.appendingPathComponent("sub/deep/low.swift"))
+        try write("x", to: dir.appendingPathComponent("sub/note.txt"))
+
+        let tool = createFindTool(cwd: dir.path)
+        let result = try await tool.execute(
+            "call-1",
+            ["pattern": .string("*.swift"), "path": .string(dir.path)],
+            nil, nil
+        )
+        let output = textOutput(result)
+        // Every .swift, regardless of depth — not just the top-level one.
+        #expect(output.contains("top.swift"))
+        #expect(output.contains("mid.swift"))
+        #expect(output.contains("low.swift"))
+        #expect(!output.contains("note.txt"))
+    }
+
+    @Test("a pattern with a slash scopes to that directory, not deeper")
+    func slashPatternScopesToDirectory() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("src/nested"), withIntermediateDirectories: true)
+        try write("x", to: dir.appendingPathComponent("src/direct.swift"))
+        try write("x", to: dir.appendingPathComponent("src/nested/buried.swift"))
+
+        let tool = createFindTool(cwd: dir.path)
+        let result = try await tool.execute(
+            "call-1",
+            ["pattern": .string("src/*.swift"), "path": .string(dir.path)],
+            nil, nil
+        )
+        let output = textOutput(result)
+        #expect(output.contains("direct.swift"))
+        // `src/*.swift` does not cross into src/nested — that needs src/**/*.swift.
+        #expect(!output.contains("buried.swift"))
     }
 }
 

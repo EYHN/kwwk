@@ -12,13 +12,13 @@ struct NewSlashCommandTests {
     func registeredAndInHelp() async {
         let registry = SlashCommandRegistry()
         registerBuiltinSlashCommands(registry)
-        for name in ["context", "init", "tools", "hotkeys", "copy", "dump", "rename"] {
+        for name in ["context", "init", "tools", "hotkeys", "copy", "rename"] {
             #expect(registry.find(name) != nil, "/\(name) should be registered")
         }
 
         let (ctx, notifier) = await makeContext()
         await registry.find("help")?.handler(ctx, "")
-        for name in ["context", "init", "tools", "hotkeys", "copy", "dump", "rename"] {
+        for name in ["context", "init", "tools", "hotkeys", "copy", "rename"] {
             #expect(notifier.joined.contains("/\(name)"), "/help should list /\(name)")
         }
     }
