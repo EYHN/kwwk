@@ -30,6 +30,9 @@ public enum SessionResume: Sendable, Hashable {
 public struct ResolvedResume: Sendable {
     public var sessionId: String
     public var messages: [Message]
+    /// Visual-recap transcript (`LoadedSession.displayMessages`): the full
+    /// on-screen history, truncated by rewinds but not by context compaction.
+    public var displayMessages: [Message]
     public var model: String?
     public var thinkingLevel: String?
     /// Number of projected context messages already represented on disk for
@@ -41,6 +44,7 @@ public struct ResolvedResume: Sendable {
     public init(
         sessionId: String,
         messages: [Message] = [],
+        displayMessages: [Message]? = nil,
         model: String? = nil,
         thinkingLevel: String? = nil,
         persistedCount: Int = 0,
@@ -48,6 +52,7 @@ public struct ResolvedResume: Sendable {
     ) {
         self.sessionId = sessionId
         self.messages = messages
+        self.displayMessages = displayMessages ?? messages
         self.model = model
         self.thinkingLevel = thinkingLevel
         self.persistedCount = persistedCount
@@ -85,6 +90,7 @@ extension SessionStore {
             return ResolvedResume(
                 sessionId: loaded.header.id,
                 messages: loaded.messages,
+                displayMessages: loaded.displayMessages,
                 model: loaded.model,
                 thinkingLevel: loaded.thinkingLevel,
                 persistedCount: loaded.persistedContextCount,
@@ -100,6 +106,7 @@ extension SessionStore {
                 return ResolvedResume(
                     sessionId: loaded.header.id,
                     messages: loaded.messages,
+                    displayMessages: loaded.displayMessages,
                     model: loaded.model,
                     thinkingLevel: loaded.thinkingLevel,
                     persistedCount: loaded.persistedContextCount,

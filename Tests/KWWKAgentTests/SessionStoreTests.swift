@@ -281,7 +281,8 @@ struct SessionStoreTests {
             replacementMessages: [summary],
             messagesCompacted: before.count,
             tokensBefore: 123,
-            contextWindow: 456
+            contextWindow: 456,
+            reason: .compact
         )
 
         let after = userMsg("after compact")
@@ -289,7 +290,7 @@ struct SessionStoreTests {
 
         let loaded = try await store.load(id: id)
         #expect(loaded.messages == [summary, after])
-        #expect(loaded.transcriptMessages == before + [after])
+        #expect(loaded.displayMessages == before + [after])
         #expect(loaded.persistedContextCount == 2)
 
         let raw = try String(contentsOf: dir.appendingPathComponent("\(id).jsonl"), encoding: .utf8)
@@ -313,7 +314,8 @@ struct SessionStoreTests {
             id: id,
             cwd: cwd,
             replacementMessages: [firstSummary],
-            messagesCompacted: 2
+            messagesCompacted: 2,
+            reason: .compact
         )
 
         let c = userMsg("c")
@@ -324,7 +326,8 @@ struct SessionStoreTests {
             id: id,
             cwd: cwd,
             replacementMessages: [secondSummary],
-            messagesCompacted: 2
+            messagesCompacted: 2,
+            reason: .compact
         )
 
         let d = assistantMsg("d")
@@ -332,8 +335,146 @@ struct SessionStoreTests {
 
         let loaded = try await store.load(id: id)
         #expect(loaded.messages == [secondSummary, d])
-        #expect(loaded.transcriptMessages == [a, b, c, d])
+        #expect(loaded.displayMessages == [a, b, c, d])
         #expect(loaded.persistedContextCount == 2)
+    }
+
+    @Test("context compaction leaves displayMessages (the visual history) intact")
+    func compactionKeepsDisplayMessages() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-display-compact"
+        let cwd = "/w"
+        let before = [userMsg("one"), assistantMsg("two")]
+        try await store.append(id: id, cwd: cwd, messages: before)
+
+        let summary = userMsg("<previous-session-summary>one-two</previous-session-summary>")
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [summary],
+            messagesCompacted: before.count,
+            reason: .compact
+        )
+
+        let after = userMsg("after")
+        try await store.append(id: id, cwd: cwd, message: after)
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [summary, after])
+        #expect(loaded.displayMessages == before + [after])
+    }
+
+    @Test("rewind compaction truncates displayMessages to the kept prefix")
+    func rewindTruncatesDisplayMessages() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-display-rewind"
+        let cwd = "/w"
+        let a = userMsg("a")
+        let b = assistantMsg("b")
+        let c = userMsg("c")
+        let d = assistantMsg("d")
+        try await store.append(id: id, cwd: cwd, messages: [a, b, c, d])
+
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [a, b],
+            messagesCompacted: 2,
+            reason: .rewind
+        )
+
+        let e = userMsg("e")
+        try await store.append(id: id, cwd: cwd, message: e)
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [a, b, e])
+        #expect(loaded.displayMessages == [a, b, e])
+
+        let resolved = try await store.resolveResume(.id(id), cwd: cwd)
+        #expect(resolved.displayMessages == [a, b, e])
+    }
+
+    @Test("rewind after a context compaction keeps the pre-compact visual history")
+    func rewindAfterCompactionKeepsDisplayHistory() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-compact-then-rewind"
+        let cwd = "/w"
+        let a = userMsg("a")
+        let b = assistantMsg("b")
+        let c = userMsg("c")
+        let d = assistantMsg("d")
+        try await store.append(id: id, cwd: cwd, messages: [a, b, c, d])
+
+        // Context compaction: the model context becomes summary + kept tail;
+        // the visual history is untouched.
+        let summary = userMsg("<previous-session-summary>a-b</previous-session-summary>")
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [summary, c, d],
+            messagesCompacted: 2,
+            reason: .compact
+        )
+
+        let e = userMsg("e")
+        let f = assistantMsg("f")
+        try await store.append(id: id, cwd: cwd, messages: [e, f])
+
+        // Rewind at prompt `e`: the kept model prefix starts with the summary
+        // message the user never saw. The display history must drop the same
+        // tail (e, f) but keep everything the compaction summarized away.
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [summary, c, d],
+            messagesCompacted: 2,
+            reason: .rewind
+        )
+
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [summary, c, d])
+        #expect(loaded.displayMessages == [a, b, c, d])
+    }
+
+    @Test("legacy compaction entries (no reason field) truncate both contexts")
+    func legacyCompactionTruncatesBoth() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-legacy-compaction"
+        let cwd = "/w"
+        let a = userMsg("a")
+        let b = assistantMsg("b")
+        let c = userMsg("c")
+        let d = assistantMsg("d")
+        try await store.append(id: id, cwd: cwd, messages: [a, b, c, d])
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [a, b],
+            messagesCompacted: 2,
+            reason: .rewind
+        )
+        let e = userMsg("e")
+        try await store.append(id: id, cwd: cwd, message: e)
+
+        // Strip the reason field to reproduce a pre-CompactionReason file.
+        let file = dir.appendingPathComponent("\(id).jsonl")
+        let raw = try String(contentsOf: file, encoding: .utf8)
+        let legacy = raw.replacingOccurrences(of: #""reason":"rewind","#, with: "")
+        #expect(legacy != raw)
+        try legacy.write(to: file, atomically: true, encoding: .utf8)
+
+        // Legacy entries predate the model/display split and truncated both.
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [a, b, e])
+        #expect(loaded.displayMessages == [a, b, e])
     }
 
     @Test("resolveResume(.latestForCwd) seeds the stored transcript")
@@ -411,7 +552,8 @@ struct SessionStoreTests {
             messages: [summary],
             messagesCompacted: before.count,
             tokensBefore: 99,
-            contextWindow: 1000
+            contextWindow: 1000,
+            reason: .compact
         )
 
         let after = userMsg("post-compact")
@@ -419,7 +561,7 @@ struct SessionStoreTests {
 
         let loaded = try await store.load(id: id)
         #expect(loaded.messages == [summary, after])
-        #expect(loaded.transcriptMessages == before + [after])
+        #expect(loaded.displayMessages == before + [after])
         #expect(loaded.persistedContextCount == 2)
 
         let raw = try String(contentsOf: dir.appendingPathComponent("\(id).jsonl"), encoding: .utf8)
@@ -480,7 +622,7 @@ struct SessionStoreTests {
         let loaded = try await store.load(id: id)
         #expect(loaded.messages.count == 1)
         #expect(text(from: loaded.messages.first).contains("event summary"))
-        #expect(loaded.transcriptMessages.count > loaded.messages.count)
+        #expect(loaded.displayMessages.count > loaded.messages.count)
         #expect(loaded.persistedContextCount == 1)
 
         let resolved = try await store.resolveResume(.id(id), cwd: "/w", freshId: "fresh")

@@ -117,8 +117,13 @@ public struct LocalGrepOperations: GrepOperations {
 
     private func collectFiles(at rootURL: URL, glob: String?) -> [URL] {
         let fm = FileManager.default
+        // Canonicalize the root before enumerating so a slash-anchored glob's
+        // relative-path prefix strips the right number of leading characters
+        // (see `Glob.canonicalDirectoryPath` — the enumerator yields
+        // firmlink-resolved paths that `standardizedFileURL` doesn't produce).
+        let rootPath = Glob.canonicalDirectoryPath(rootURL.path)
         guard let enumerator = fm.enumerator(
-            at: rootURL,
+            at: URL(fileURLWithPath: rootPath),
             includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey]
         ) else {
             return []
@@ -129,7 +134,6 @@ public struct LocalGrepOperations: GrepOperations {
         // to the search root.
         let globRegex = glob.flatMap { try? NSRegularExpression(pattern: Glob.patternToRegex($0)) }
         let globMatchesRelative = glob?.contains("/") ?? false
-        let rootPath = rootURL.standardizedFileURL.path
         var out: [URL] = []
         for case let url as URL in enumerator {
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])

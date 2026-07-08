@@ -75,11 +75,6 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
         handler: handleCopyCommand
     ))
     registry.register(SlashCommand(
-        name: "dump",
-        description: "Copy the full transcript to the clipboard",
-        handler: handleDumpCommand
-    ))
-    registry.register(SlashCommand(
         name: "rename",
         description: "Set a title for the current session",
         handler: handleRenameCommand
@@ -933,7 +928,7 @@ private func handleHotkeysCommand(_ ctx: SlashContext, _ args: String) async {
     ctx.notifyBlock(lines)
 }
 
-// MARK: - /copy, /dump
+// MARK: - /copy
 
 /// `/copy` — put the last assistant reply on the clipboard (plain text, ANSI
 /// stripped). Defers omp's interactive selector; the no-arg default covers the
@@ -946,20 +941,6 @@ private func handleCopyCommand(_ ctx: SlashContext, _ args: String) async {
     }
     let outcome = ClipboardWriter.copy(text)
     ctx.notify(Style.dimmed("  /copy: copied last reply (\(text.count) chars)\(clipboardVia(outcome))"))
-}
-
-/// `/dump` — put the whole transcript on the clipboard as plain text.
-@MainActor
-private func handleDumpCommand(_ ctx: SlashContext, _ args: String) async {
-    let rendered = TranscriptSnapshot.render(ctx.agent.state.messages, width: 100)
-    let plain = rendered.map { ANSI.stripEscapes($0) }.joined(separator: "\n")
-    let trimmed = plain.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        ctx.notify(Style.dimmed("  /dump: transcript is empty"))
-        return
-    }
-    let outcome = ClipboardWriter.copy(trimmed)
-    ctx.notify(Style.dimmed("  /dump: copied transcript (\(trimmed.count) chars)\(clipboardVia(outcome))"))
 }
 
 /// Trailing " · via OSC 52" note when the write didn't go through the native

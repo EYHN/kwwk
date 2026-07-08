@@ -98,7 +98,7 @@ enum ClipboardImageReader {
 /// Write text to the system clipboard. On macOS this drives `NSPasteboard`;
 /// everywhere else (and over SSH where there's no local pasteboard) it falls
 /// back to the OSC 52 terminal escape, which asks the *outer* terminal
-/// emulator to set its own clipboard. Backs `/copy` and `/dump`.
+/// emulator to set its own clipboard. Backs `/copy`.
 enum ClipboardWriter {
 
     /// Result of a write so callers can tailor the confirmation message.

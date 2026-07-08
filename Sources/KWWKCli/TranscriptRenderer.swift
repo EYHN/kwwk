@@ -11,10 +11,12 @@ import KWWKAgent
 ///   terminal's native scrollback and stay there forever). CodingTUI
 ///   drains this on every agent event and passes it to `tui.commit(_:)`.
 ///
-/// * `liveLines` — the mutable in-progress tail: running tool headers
-///   + their result previews. Assistant text is not retained here; it is
-///   committed append-only at stable segment boundaries so the terminal's
-///   native autowrap handles long lines.
+/// * `liveLines` — the mutable in-progress tail: the read-only fold group,
+///   running tool headers + result previews, open-thinking labels, and the
+///   unsettled trailing segment of assistant text (streamed token-by-token).
+///   Stable text segments are committed append-only at hard-line boundaries
+///   so the terminal's native autowrap handles long lines; only the trailing
+///   partial stays live until it settles.
 ///
 /// Settlement points:
 ///   - `messageStart(.user)` → commit the user prompt row + a blank
@@ -37,10 +39,11 @@ final class TranscriptRenderer {
     /// Drained by CodingTUI via `drainCommits()` on every agent event.
     private var pendingCommits: [String] = []
 
-    /// The current in-progress tail. Assistant text is deliberately not
-    /// retained here: stable text segments are committed append-only so the
-    /// terminal can handle native autowrap. The live tail is for mutable tool
-    /// slots and transient status only.
+    /// The current in-progress tail: mutable tool slots, open-thinking
+    /// labels, and the unsettled assistant-text tail streamed token-by-token.
+    /// Stable text segments (up to a hard newline) are still committed
+    /// append-only so the terminal owns native autowrap; only the trailing
+    /// partial segment lives here until it settles.
     private(set) var liveLines: [String] = []
 
     /// True while an assistant message is mid-stream.
@@ -81,7 +84,30 @@ final class TranscriptRenderer {
         let args: JSONValue
         var partial: AgentToolResult?
         var resolution: [String]?   // nil = running
+        /// Set when this slot resolved as a foldable read-only call: the
+        /// tool name + compact one-line summary that joins the current
+        /// fold run instead of committing its own block.
+        var foldEntry: FoldEntry?
     }
+
+    private struct FoldEntry {
+        let name: String
+        let summary: String
+    }
+
+    /// Read-only tools whose successful results fold to a one-line summary
+    /// instead of a content preview (omp keeps read/grep/glob visually
+    /// light; edit/write/bash keep their full blocks). Errors never fold.
+    private static let foldedTools: Set<String> = ["read", "grep", "find", "ls"]
+
+    /// Consecutive resolved read-only calls (read/grep/find/ls), held back
+    /// from scrollback so they commit as one group — a per-tool-count header
+    /// (`read 2 files, grep 1 time`) over a dimmed tree, the same structure
+    /// for one call or many. The run is sealed by any other content entering
+    /// scrollback — assistant text, a non-folded tool block, a user message —
+    /// so a burst of file/search calls reads
+    /// as one calm block instead of N green-bulleted rows.
+    private var foldRun: [FoldEntry] = []
 
     /// How to surface thinking blocks. Mirrored from `agent.state` via
     /// `setThinkingDisplay` so the UI can honor the user's `/thinking
@@ -89,10 +115,28 @@ final class TranscriptRenderer {
     /// Agent.
     private var thinkingDisplay: ThinkingDisplay = .collapsed
 
+    /// Minimum reasoning time before a **collapsed** thinking block is shown
+    /// at all. Short thinks stay fully hidden — no live label, no committed
+    /// row, no group seal — so a quick think between two tool calls doesn't
+    /// chop the fold group into fragments. Expanded mode ignores this (the
+    /// user opted into seeing every reasoning step). Stored so tests can
+    /// lower it without waiting on the wall clock.
+    var collapsedThinkingMinSeconds: Double = 3.0
+
     /// Start/end timestamps per thinking content-block index for the
     /// current streaming turn. `end == nil` while the block is still
     /// receiving deltas. Reset on every `messageStart`.
     private var thinkingTimings: [Int: (start: DispatchTime, end: DispatchTime?)] = [:]
+
+    /// Streaming thinking text per content-block index, accumulated from
+    /// `.thinkingDelta` and shown live (expanded mode) while the block is
+    /// open. Cleared when the block commits.
+    private var thinkingBuffers: [Int: String] = [:]
+
+    /// Thinking blocks whose settled form has already been committed to
+    /// scrollback — guards against double-commit when `messageEnd` sweeps
+    /// up blocks that never saw an explicit `thinkingEnd`.
+    private var thinkingCommitted: Set<Int> = []
 
     /// Terminal width used to render full-width blocks (the user-message bar).
     /// Updated by CodingTUI on init + resize. Committed lines are otherwise
@@ -152,9 +196,11 @@ final class TranscriptRenderer {
                 assistantSegmentBuffer = ""
                 assistantCommittedDuringTurn = false
                 lastAssistantTextIndex = nil
-                // New turn — drop any prior turn's thinking timings.
+                // New turn — drop any prior turn's thinking state.
                 // Re-populated from `.thinkingStart` events below.
                 thinkingTimings.removeAll()
+                thinkingBuffers.removeAll()
+                thinkingCommitted.removeAll()
                 recomputeLive()
             case .toolResult:
                 break
@@ -169,11 +215,14 @@ final class TranscriptRenderer {
                 if thinkingTimings[idx] == nil {
                     thinkingTimings[idx] = (start: DispatchTime.now(), end: nil)
                 }
-            case .thinkingEnd(let idx, _, _):
+            case .thinkingDelta(let idx, let delta, _):
+                thinkingBuffers[idx, default: ""] += delta
+            case .thinkingEnd(let idx, let content, _):
                 if var t = thinkingTimings[idx] {
                     t.end = DispatchTime.now()
                     thinkingTimings[idx] = t
                 }
+                commitThinkingBlock(idx, content: content)
             default:
                 break
             }
@@ -206,6 +255,13 @@ final class TranscriptRenderer {
                     thinkingTimings[idx] = (start: t.start, end: DispatchTime.now())
                 }
                 ingestAssistantText(a, flushAll: true)
+                // Commit blocks the sweep just sealed: an abort mid-thought
+                // still leaves a settled `[thought for Ns]` row (with
+                // whatever streamed, in expanded mode) instead of the block
+                // silently vanishing from the transcript.
+                for idx in thinkingTimings.keys.sorted() where !thinkingCommitted.contains(idx) {
+                    commitThinkingBlock(idx, content: thinkingBuffers[idx] ?? "")
+                }
                 var tail: [String] = []
                 if a.stopReason == .aborted {
                     tail.append(Style.dimmed("⋯ aborted"))
@@ -239,16 +295,21 @@ final class TranscriptRenderer {
         case .toolExecutionEnd(let id, _, let result, let isError):
             guard let idx = toolSlots.firstIndex(where: { $0.id == id }) else { break }
             let slot = toolSlots[idx]
-            let header = Style.tool("● \(slot.name)(\(formatArgs(slot.args)))")
-            // Leading blank, no trailing — uniform "every scrollback block
-            // opens with a separator row, never closes with one" rule.
-            var finalLines = ["", header]
-            finalLines.append(contentsOf: formatToolResult(result, isError: isError))
-            toolSlots[idx].resolution = finalLines
+            if !isError, let summary = foldedSummary(name: slot.name, args: slot.args, result: result) {
+                toolSlots[idx].foldEntry = FoldEntry(name: slot.name, summary: summary)
+            } else {
+                let header = Style.tool("● \(slot.name)(\(formatArgs(slot.args)))")
+                // Leading blank, no trailing — uniform "every scrollback block
+                // opens with a separator row, never closes with one" rule.
+                var finalLines = ["", header]
+                finalLines.append(contentsOf: formatToolResult(result, isError: isError))
+                toolSlots[idx].resolution = finalLines
+            }
             drainResolvedToolFront()
             recomputeLive()
 
         case .agentEnd:
+            sealFoldRun()
             flushQueuedVerbose()
 
         case .streamRetry(_, let delayMs, _):
@@ -276,6 +337,12 @@ final class TranscriptRenderer {
             assistantCommittedDuringTurn = false
             lastAssistantTextIndex = nil
             queuedVerboseLines.removeAll()
+            // The failed attempt's thinking is gone with the stream; the
+            // retry's `messageStart` would clear these anyway, but the live
+            // zone must not show a ghost `[thinking Ns…]` in between.
+            thinkingTimings.removeAll()
+            thinkingBuffers.removeAll()
+            thinkingCommitted.removeAll()
             recomputeLive()
 
         case .verbose(let event):
@@ -292,7 +359,16 @@ final class TranscriptRenderer {
 
     // MARK: - Commit / live helpers
 
+    /// Every scrollback write funnels through here, which makes it the
+    /// single break point for the fold run: anything else entering
+    /// scrollback seals the pending read-only group first, so the group
+    /// always lands in chronological position.
     private func commit(_ lines: [String]) {
+        sealFoldRun()
+        rawCommit(lines)
+    }
+
+    private func rawCommit(_ lines: [String]) {
         for raw in lines {
             for sub in raw.split(separator: "\n", omittingEmptySubsequences: false) {
                 pendingCommits.append(String(sub))
@@ -300,13 +376,112 @@ final class TranscriptRenderer {
         }
     }
 
+    /// Flush the pending fold run into scrollback as a single count-headed
+    /// tree block. Internal so `TranscriptSnapshot`'s replay can seal a
+    /// trailing run without synthesizing a full `.agentEnd` payload.
+    func sealFoldRun() {
+        guard !foldRun.isEmpty else { return }
+        let entries = foldRun
+        foldRun.removeAll()
+        rawCommit(foldRunLines(entries))
+        recomputeLive()
+    }
+
+    /// One row of a read-only group: a resolved call carries its summary
+    /// (`README.md · 200 lines`); a still-running call carries just its
+    /// target (`README.md`) and fills in the count when it resolves.
+    private struct GroupRow {
+        let name: String
+        let detail: String
+    }
+
+    private func foldRunLines(_ entries: [FoldEntry]) -> [String] {
+        foldGroupLines(entries.map { GroupRow(name: $0.name, detail: $0.summary) })
+    }
+
+    /// Render a read-only group: a per-tool-count header (`read 2 files,
+    /// ls 3 times`) over a dimmed tree — the same structure for one call or
+    /// many. Used for both the committed group and the live (mid-flight)
+    /// view, so a call joining or resolving only updates its row in place —
+    /// no jump when the group settles into scrollback.
+    private func foldGroupLines(_ rows: [GroupRow]) -> [String] {
+        guard !rows.isEmpty else { return [] }
+        // Always the same structure — count header over a dimmed tree — even
+        // for a single call. A lone read/grep/ls never reshapes into a
+        // standalone line and back as sibling calls arrive; the layout stays
+        // stable regardless of how many land in the group.
+        var out = ["", Style.tool("●") + " " + Style.dimmed(foldGroupHeader(rows))]
+        for (i, r) in rows.enumerated() {
+            let glyph = i == rows.count - 1 ? "└" : "├"
+            let detail = r.detail.isEmpty ? "" : " \(r.detail)"
+            out.append(Style.dimmed("  \(glyph) \(r.name)\(detail)"))
+        }
+        return out
+    }
+
+    /// Per-tool-type count summary for a group header, in first-appearance
+    /// order: `read 2 files, ls 3 times, grep 1 time`. `read` counts files;
+    /// the search/list tools count invocations.
+    private func foldGroupHeader(_ rows: [GroupRow]) -> String {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for r in rows {
+            if counts[r.name] == nil { order.append(r.name) }
+            counts[r.name, default: 0] += 1
+        }
+        return order.map { name -> String in
+            let n = counts[name] ?? 0
+            let unit: String
+            switch name {
+            case "read": unit = n == 1 ? "file" : "files"
+            default: unit = n == 1 ? "time" : "times"
+            }
+            return "\(name) \(n) \(unit)"
+        }.joined(separator: ", ")
+    }
+
+    /// The leading target of a still-running read-only call — the same
+    /// prefix its resolved summary will start with, so the row doesn't jump
+    /// when the count fills in. Empty when there's nothing meaningful yet.
+    private func foldTarget(name: String, args: JSONValue) -> String {
+        guard case .object(let obj) = args else { return "" }
+        switch name {
+        case "read", "ls":
+            if case .string(let p) = obj["path"] ?? .null { return p }
+            return name == "ls" ? "." : ""
+        case "grep":
+            guard case .string(let pat) = obj["pattern"] ?? .null else { return "" }
+            var t = "\"\(truncate(pat, to: 60))\""
+            if case .string(let p) = obj["path"] ?? .null { t += " in \(p)" }
+            return t
+        case "find":
+            guard case .string(let pat) = obj["pattern"] ?? .null else { return "" }
+            var t = "\"\(truncate(pat, to: 60))\""
+            // Match the `in <path>` the resolved summary adds, so the row
+            // doesn't shift when the count fills in.
+            if case .string(let p) = obj["path"] ?? .null { t += " in \(p)" }
+            return t
+        default:
+            return ""
+        }
+    }
+
     /// Pop resolved tool slots from the front of the queue until we hit
     /// one that's still running. This preserves start-order in the
-    /// committed output even when tools finish out of order.
+    /// committed output even when tools finish out of order. Resolved
+    /// read-only calls join the fold run instead of committing; any other
+    /// resolved slot commits (sealing the run first).
     private func drainResolvedToolFront() {
-        while let front = toolSlots.first, let resolved = front.resolution {
-            commit(resolved)
-            toolSlots.removeFirst()
+        while let front = toolSlots.first {
+            if let entry = front.foldEntry {
+                foldRun.append(entry)
+                toolSlots.removeFirst()
+            } else if let resolved = front.resolution {
+                commit(resolved)
+                toolSlots.removeFirst()
+            } else {
+                break
+            }
         }
     }
 
@@ -323,7 +498,75 @@ final class TranscriptRenderer {
     /// known, even before the commit happens.
     private func recomputeLive() {
         var out: [String] = []
+        // Read-only group, live: the resolved-pending fold entries plus any
+        // foldable calls still in flight at the front of the queue, rendered
+        // as one growing tree. An in-flight `read`/`grep`/`ls` sits inside
+        // the group from the moment it starts — no separate `● read(…)`
+        // block that later jumps into the group when it finishes.
+        var groupRows: [GroupRow] = foldRun.map {
+            GroupRow(name: $0.name, detail: $0.summary)
+        }
+        var consumed = 0
         for slot in toolSlots {
+            guard Self.foldedTools.contains(slot.name) else { break }
+            if let entry = slot.foldEntry {
+                groupRows.append(GroupRow(name: entry.name, detail: entry.summary))
+            } else if slot.resolution == nil {
+                groupRows.append(GroupRow(
+                    name: slot.name,
+                    detail: foldTarget(name: slot.name, args: slot.args)
+                ))
+            } else {
+                // A foldable call that errored keeps its own full block.
+                break
+            }
+            consumed += 1
+        }
+        if !groupRows.isEmpty {
+            out.append(contentsOf: foldGroupLines(groupRows))
+        }
+        // Token-streaming tail: the assistant text that hasn't reached a
+        // hard-newline boundary yet. Rendered exactly where it will settle
+        // (foldRun seals first, this message's tools start only later), with
+        // the same leading-blank rule as `commitAssistantLines` so the
+        // commit moment doesn't visually jump.
+        if streaming && !assistantSegmentBuffer.isEmpty {
+            if !assistantCommittedDuringTurn {
+                out.append("")
+            }
+            out.append(assistantSegmentBuffer)
+        }
+        // Open thinking blocks: a ticking `[thinking Ns…]` label, plus the
+        // streaming body in expanded mode. Settled blocks are already in
+        // scrollback (committed on thinkingEnd), so only open ones render.
+        // A collapsed block stays hidden until it crosses the visibility
+        // threshold, so short reasoning never flashes a label it won't keep.
+        // Rendered *after* the text tail so an interleaved text→thinking
+        // sequence keeps chronological order, matching `messageEnd`'s commit
+        // order (the text tail settles before the thinking sweep).
+        for (idx, t) in thinkingTimings.sorted(by: { $0.key < $1.key })
+        where t.end == nil && !thinkingCommitted.contains(idx) {
+            let buf = thinkingBuffers[idx] ?? ""
+            let secs = elapsedSeconds(from: t.start, to: .now())
+            guard thinkingVisible(seconds: secs, hasContent: !buf.isEmpty) else { continue }
+            out.append("")
+            out.append(Style.dimmed("[thinking \(formatElapsed(from: t.start, to: .now()))…]"))
+            if thinkingDisplay == .expanded, !buf.isEmpty {
+                out.append(contentsOf: buf.components(separatedBy: "\n").map { Style.dimmed("  " + $0) })
+            }
+        }
+        // Remaining slots — those past the leading foldable run consumed
+        // into the group above (non-folded tools, or foldable calls blocked
+        // behind a running non-folded tool).
+        for slot in toolSlots.dropFirst(consumed) {
+            // A resolved read-only call blocked behind an earlier running
+            // non-folded slot renders as its own one-row group — byte-for-byte
+            // the form it will settle into once it unblocks, so there's no
+            // reflow on commit.
+            if let entry = slot.foldEntry {
+                out.append(contentsOf: foldGroupLines([GroupRow(name: entry.name, detail: entry.summary)]))
+                continue
+            }
             // Each tool execution is its own block — leading blank
             // separator keeps parallel tools from stacking against the
             // streaming body or each other. Matches the committed-
@@ -447,6 +690,56 @@ final class TranscriptRenderer {
         }
     }
 
+    /// Whether a thinking block that has run for `seconds` is worth
+    /// surfacing. Collapsed mode hides anything under the threshold so quick
+    /// reasoning between tool calls leaves no trace and doesn't fragment the
+    /// fold group; expanded mode shows a block as soon as it has any body
+    /// (the user asked to see reasoning), and still surfaces a long
+    /// content-less think.
+    private func thinkingVisible(seconds: Double, hasContent: Bool) -> Bool {
+        switch thinkingDisplay {
+        case .collapsed:
+            return seconds >= collapsedThinkingMinSeconds
+        case .expanded:
+            return hasContent || seconds >= collapsedThinkingMinSeconds
+        }
+    }
+
+    /// Commit a thinking block's settled form into scrollback: a dimmed
+    /// `[thought for Ns]` label, plus the full body in expanded mode. Like
+    /// any other block, a shown thought seals the pending fold run (it flows
+    /// through `commit`), so the transcript stays in chronological order. A
+    /// block below the visibility threshold commits nothing and therefore
+    /// does not seal — short thinks stay out of the way entirely.
+    private func commitThinkingBlock(_ idx: Int, content: String) {
+        guard !thinkingCommitted.contains(idx) else { return }
+        thinkingCommitted.insert(idx)
+        thinkingBuffers[idx] = nil
+        let timing = thinkingTimings[idx]
+        let seconds = timing.map { elapsedSeconds(from: $0.start, to: $0.end ?? .now()) } ?? 0
+        guard thinkingVisible(seconds: seconds, hasContent: !content.isEmpty) else { return }
+        let elapsed = timing.map { formatElapsed(from: $0.start, to: $0.end ?? .now()) } ?? "0.0s"
+        var lines = ["", Style.dimmed("[thought for \(elapsed)]")]
+        if thinkingDisplay == .expanded, !content.isEmpty {
+            lines.append(contentsOf: content.components(separatedBy: "\n").map { Style.dimmed("  " + $0) })
+        }
+        commit(lines)
+    }
+
+    /// Re-derive `liveLines` outside an agent event. The CodingTUI spinner
+    /// tick calls this while `hasActiveThinking`, so the `[thinking Ns…]`
+    /// elapsed counter advances even when the provider sends no deltas.
+    func tickLive() {
+        recomputeLive()
+    }
+
+    private func elapsedSeconds(from start: DispatchTime, to end: DispatchTime) -> Double {
+        let ns = end.uptimeNanoseconds >= start.uptimeNanoseconds
+            ? end.uptimeNanoseconds - start.uptimeNanoseconds
+            : 0
+        return Double(ns) / 1_000_000_000
+    }
+
     /// Format a DispatchTime delta as a human-readable duration. 0.1s
     /// granularity under 10 seconds so the counter visibly ticks; full
     /// seconds above that; `Nm Ss` once we cross a minute.
@@ -484,6 +777,104 @@ final class TranscriptRenderer {
         case .array(let arr): return "[\(arr.count) items]"
         case .object: return "{…}"
         }
+    }
+
+    // MARK: - Read-only tool folding
+
+    /// One-line summary for a successful read-only tool call, or nil for
+    /// tools that keep their full block. The tool name is prepended by the
+    /// caller (`● name summary` inline, or `name summary` as a tree row),
+    /// so the summary here is name-free.
+    private func foldedSummary(name: String, args: JSONValue, result: AgentToolResult) -> String? {
+        guard Self.foldedTools.contains(name) else { return nil }
+        guard case .object(let obj) = args else { return nil }
+        switch name {
+        case "read":
+            guard case .string(let path) = obj["path"] ?? .null else { return nil }
+            if result.content.contains(where: { if case .image = $0 { return true } else { return false } }) {
+                return "\(path) · image"
+            }
+            let lines = resultLineCount(result)
+            var label = path
+            let offset = intArg(obj["offset"])
+            if offset != nil || intArg(obj["limit"]) != nil {
+                let start = offset ?? 1
+                label += ":\(start)-\(start + max(lines, 1) - 1)"
+            }
+            return "\(label) · \(lines) \(lines == 1 ? "line" : "lines")"
+        case "grep":
+            guard case .string(let pattern) = obj["pattern"] ?? .null else { return nil }
+            let matches = detailsArray(result, key: "matches")
+            var label = "\"\(truncate(pattern, to: 60))\""
+            if case .string(let path) = obj["path"] ?? .null {
+                label += " in \(path)"
+            }
+            if matches.isEmpty {
+                return "\(label) · no matches"
+            }
+            var files = Set<String>()
+            for m in matches {
+                if case .object(let mo) = m, case .string(let f) = mo["file"] ?? .null {
+                    files.insert(f)
+                }
+            }
+            label += " · \(matches.count) \(matches.count == 1 ? "match" : "matches")"
+            if files.count > 1 {
+                label += " · \(files.count) files"
+            }
+            return label
+        case "find":
+            guard case .string(let pattern) = obj["pattern"] ?? .null else { return nil }
+            var label = "\"\(truncate(pattern, to: 60))\""
+            // Surface the search root: `find "*.swift"` scoped to a subdir
+            // that has no top-level match reads as a mysterious "no files"
+            // otherwise (the glob's `*` doesn't cross `/`).
+            if case .string(let path) = obj["path"] ?? .null {
+                label += " in \(path)"
+            }
+            let files = detailsArray(result, key: "files")
+            let count = files.isEmpty ? "no files" : "\(files.count) \(files.count == 1 ? "file" : "files")"
+            return "\(label) · \(count)"
+        case "ls":
+            let path: String = {
+                if case .string(let p) = obj["path"] ?? .null { return p }
+                return "."
+            }()
+            let entries = detailsArray(result, key: "entries")
+            return "\(path) · \(entries.count) \(entries.count == 1 ? "entry" : "entries")"
+        default:
+            return nil
+        }
+    }
+
+    private func intArg(_ v: JSONValue?) -> Int? {
+        switch v ?? .null {
+        case .int(let i): return i
+        case .double(let d): return Int(d)
+        default: return nil
+        }
+    }
+
+    private func detailsArray(_ result: AgentToolResult, key: String) -> [JSONValue] {
+        guard case .object(let details) = result.details ?? .null,
+              case .array(let arr) = details[key] ?? .null else { return [] }
+        return arr
+    }
+
+    /// Count the content lines of a tool result, excluding the trailing
+    /// `[Showing lines X-Y of Z…]`-style bracket note the read tool appends
+    /// after a blank line.
+    private func resultLineCount(_ result: AgentToolResult) -> Int {
+        let text = result.content.compactMap { block -> String? in
+            if case .text(let t) = block { return t.text } else { return nil }
+        }.joined(separator: "\n")
+        var lines = text.components(separatedBy: "\n")
+        if lines.count >= 3,
+           let last = lines.last, last.hasPrefix("["), last.hasSuffix("]"),
+           lines[lines.count - 2].isEmpty {
+            lines.removeLast(2)
+        }
+        return lines.count
     }
 
     private func formatToolResult(_ result: AgentToolResult, isError: Bool) -> [String] {
