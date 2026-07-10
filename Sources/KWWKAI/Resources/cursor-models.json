@@ -2722,12 +2722,12 @@
       "input" : 0,
       "output" : 0
     },
-    "id" : "grok-4.3",
+    "id" : "gpt-5.6-luna-high",
     "input" : [
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Grok 4.3 1M",
+    "name" : "GPT-5.6 Luna 1M High",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2741,12 +2741,772 @@
       "input" : 0,
       "output" : 0
     },
-    "id" : "grok-build-0.1",
+    "id" : "gpt-5.6-luna-high-fast",
     "input" : [
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Grok Build 0.1 1M",
+    "name" : "GPT-5.6 Luna High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-low",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna 1M Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-low-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-max",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna 1M Max",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-max-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna Max Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-medium",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna 1M",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-medium-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-none",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna 1M None",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-none-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna None Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-xhigh",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna 1M Extra High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-luna-xhigh-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Luna Extra High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-high",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol 1M High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-high-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-low",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol 1M Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-low-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-max",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol 1M Max",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-max-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol Max Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-medium",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol 1M",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-medium-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-none",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol 1M None",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-none-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol None Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-xhigh",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol 1M Extra High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-sol-xhigh-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Sol Extra High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-high",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra 1M High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-high-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-low",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra 1M Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-low-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-max",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra 1M Max",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-max-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra Max Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-medium",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra 1M",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-medium-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-none",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra 1M None",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-none-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra None Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-xhigh",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra 1M Extra High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gpt-5.6-terra-xhigh-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "GPT-5.6 Terra Extra High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.5-fast-high",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Medium Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.5-fast-medium",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.5-fast-xhigh",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.5-high",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Medium",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.5-medium",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.5-xhigh",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5",
     "provider" : "cursor",
     "reasoning" : false
   },

@@ -9,6 +9,7 @@ public enum ThinkingLevel: String, Sendable, Hashable {
     case medium
     case high
     case xhigh
+    case max
 }
 
 /// How the transcript UI should surface assistant thinking blocks. Orthogonal

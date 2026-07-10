@@ -111,6 +111,24 @@ public enum ModelsCatalog {
             cost.output = doubleValue(c["output"]) ?? 0
             cost.cacheRead = doubleValue(c["cacheRead"]) ?? 0
             cost.cacheWrite = doubleValue(c["cacheWrite"]) ?? 0
+            if let tierObjects = c["tiers"] as? [[String: Any]] {
+                cost.tiers = tierObjects.compactMap { tier in
+                    guard let inputTokensAbove = intValue(tier["inputTokensAbove"]),
+                          let input = doubleValue(tier["input"]),
+                          let output = doubleValue(tier["output"]),
+                          let cacheRead = doubleValue(tier["cacheRead"]),
+                          let cacheWrite = doubleValue(tier["cacheWrite"]) else {
+                        return nil
+                    }
+                    return ModelCostTier(
+                        inputTokensAbove: inputTokensAbove,
+                        input: input,
+                        output: output,
+                        cacheRead: cacheRead,
+                        cacheWrite: cacheWrite
+                    )
+                }
+            }
         }
 
         let headers = dict["headers"] as? [String: String]
@@ -159,6 +177,12 @@ public enum ModelsCatalog {
         if let d = v as? Double { return d }
         if let i = v as? Int { return Double(i) }
         if let n = v as? NSNumber { return n.doubleValue }
+        return nil
+    }
+
+    private static func intValue(_ v: Any?) -> Int? {
+        if let i = v as? Int { return i }
+        if let n = v as? NSNumber { return n.intValue }
         return nil
     }
 }

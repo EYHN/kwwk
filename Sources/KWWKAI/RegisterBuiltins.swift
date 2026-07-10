@@ -140,7 +140,21 @@ public enum Models {
         baseURL: "https://api.openai.com",
         reasoning: true,
         input: [.text, .image],
-        cost: ModelCost(input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0),
+        cost: ModelCost(
+            input: 5,
+            output: 30,
+            cacheRead: 0.5,
+            cacheWrite: 0,
+            tiers: [
+                ModelCostTier(
+                    inputTokensAbove: 272_000,
+                    input: 10,
+                    output: 45,
+                    cacheRead: 1,
+                    cacheWrite: 0
+                ),
+            ]
+        ),
         contextWindow: 272_000,
         maxTokens: 128_000
     )

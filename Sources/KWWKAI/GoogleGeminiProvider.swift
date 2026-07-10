@@ -363,20 +363,20 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         if isGemini3Pro(id) {
             switch reasoning {
             case .minimal, .low: return "LOW"
-            case .medium, .high, .xhigh: return "HIGH"
+            case .medium, .high, .xhigh, .max: return "HIGH"
             }
         }
         if isGemma4(id) {
             switch reasoning {
             case .minimal, .low: return "MINIMAL"
-            case .medium, .high, .xhigh: return "HIGH"
+            case .medium, .high, .xhigh, .max: return "HIGH"
             }
         }
         switch reasoning {
         case .minimal: return "MINIMAL"
         case .low: return "LOW"
         case .medium: return "MEDIUM"
-        case .high, .xhigh: return "HIGH"
+        case .high, .xhigh, .max: return "HIGH"
         }
     }
 
@@ -395,7 +395,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             case .minimal: return minimal
             case .low: return low
             case .medium: return medium
-            case .high, .xhigh: return high
+            case .high, .xhigh, .max: return high
             }
         }
         if id.contains("2.5-pro") { return pick(128, 2048, 8192, 32768) }
@@ -629,7 +629,7 @@ extension ThinkingBudgets {
         case .minimal: return minimal
         case .low: return low
         case .medium: return medium
-        case .high, .xhigh: return high
+        case .high, .xhigh, .max: return high
         }
     }
 }
