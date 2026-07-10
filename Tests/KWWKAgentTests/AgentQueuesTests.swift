@@ -6,6 +6,152 @@ import Testing
 @Suite("Agent queues and hooks")
 struct AgentQueuesTests {
 
+    @Test("runtime asides do not enter the editable steering queue")
+    func runtimeAsideIsNotEditableSteering() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+
+        agent.aside("background completion")
+
+        #expect(agent.hasQueuedMessages())
+        #expect(agent.queuedSteeringCount() == 0)
+        #expect(agent.queuedSteeringMessages().isEmpty)
+        #expect(agent.popLastSteeringMessage() == nil)
+    }
+
+    @Test("a competing continue cannot drain runtime aside before owning the run")
+    func continueRunOwnershipPreservesRuntimeAside() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let gate = QueueOwnershipGate()
+        let witness = Holder<[Message]>()
+        faux.setResponses([
+            .factory { context, _, _, _ in
+                await witness.set(context.messages)
+                return fauxAssistantMessage("done")
+            }
+        ])
+
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: faux.getModel(),
+                messages: [.assistant(fauxAssistantMessage("prior"))]
+            ),
+            userPromptSubmit: { _, _ in
+                await gate.enterAndWait()
+                return nil
+            }
+        ))
+        agent.aside("runtime survives")
+
+        let prompt = Task { try await agent.prompt("new user prompt") }
+        await gate.waitUntilEntered()
+        await #expect(throws: AgentError.alreadyRunning) {
+            try await agent.continue()
+        }
+        #expect(agent.hasQueuedMessages())
+
+        await gate.release()
+        try await prompt.value
+
+        let seen = await witness.value ?? []
+        let runtimeCopies = seen.filter { message in
+            guard case .user(let user) = message, user.source == .runtime,
+                  case .text(let text) = user.content.first else { return false }
+            return text.text == "runtime survives"
+        }
+        #expect(runtimeCopies.count == 1)
+    }
+
+    @Test("maintenance excludes prompts and resumes queued input after explicit settlement")
+    func maintenanceOwnershipPreservesQueuedPrompt() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        faux.setResponses([.message(fauxAssistantMessage("queued prompt handled"))])
+
+        let gate = QueueOwnershipGate()
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+
+        let maintenance = Task {
+            try await agent.withMaintenance {
+                await gate.enterAndWait()
+            }
+        }
+        await gate.waitUntilEntered()
+
+        await #expect(throws: AgentError.alreadyRunning) {
+            try await agent.prompt("racing direct prompt")
+        }
+        agent.steer("preserved while compacting")
+        await gate.release()
+        try await maintenance.value
+
+        // The maintenance caller owns durable/UI settlement. Releasing the
+        // mutation lock alone must not start the queued turn ahead of it.
+        #expect(agent.queuedSteeringCount() == 1)
+        #expect(agent.state.messages.isEmpty)
+        agent.resumeQueuedWork()
+
+        for _ in 0..<200 {
+            if agent.state.messages.contains(where: { message in
+                guard case .assistant(let assistant) = message else { return false }
+                return assistant.content.contains { block in
+                    if case .text(let text) = block {
+                        return text.text == "queued prompt handled"
+                    }
+                    return false
+                }
+            }) { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await agent.waitForIdle()
+
+        let preserved = agent.state.messages.filter { message in
+            guard case .user(let user) = message else { return false }
+            return user.content.contains { block in
+                if case .text(let text) = block {
+                    return text.text == "preserved while compacting"
+                }
+                return false
+            }
+        }
+        #expect(preserved.count == 1)
+        #expect(agent.state.messages.contains(where: { message in
+            guard case .assistant(let assistant) = message else { return false }
+            return assistant.content.contains { block in
+                if case .text(let text) = block {
+                    return text.text == "queued prompt handled"
+                }
+                return false
+            }
+        }))
+    }
+
+    @Test("retired session agents cannot be revived by stale wake tasks")
+    func retiredAgentRejectsFutureRuns() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: faux.getModel(),
+                messages: [.assistant(fauxAssistantMessage("prior"))]
+            ),
+            sessionId: "retired-session"
+        ))
+        agent.aside("late background completion")
+        agent.retire()
+
+        #expect(!agent.hasQueuedMessages())
+        await #expect(throws: AgentError.alreadyRunning) {
+            try await agent.continue()
+        }
+        await #expect(throws: AgentError.alreadyRunning) {
+            try await agent.prompt("late user task")
+        }
+        #expect(agent.state.messages.count == 1)
+    }
+
     @Test("reset clears transcript, runtime state, and queues")
     func resetClearsState() async throws {
         let faux = await registerFauxProvider()
@@ -184,4 +330,32 @@ struct AgentQueuesTests {
 actor _Holder<T> {
     var value: T?
     func set(_ v: T) { value = v }
+}
+
+private actor QueueOwnershipGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enterAndWait() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
 }

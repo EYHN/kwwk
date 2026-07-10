@@ -73,7 +73,11 @@ private func checkPOSIXAccess(_ absolutePath: String, mode: Int32) throws {
     }
 }
 
-public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> AgentTool {
+public func createEditTool(
+    cwd: String,
+    options: EditToolOptions = .init(),
+    fileAccessPolicy: FileAccessPolicy = .unrestricted
+) -> AgentTool {
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
@@ -93,7 +97,7 @@ public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> A
         "required": ["path", "edits"],
     ]
     let ops = options.operations
-    return AgentTool(
+    var tool = AgentTool(
         name: "edit",
         label: "edit",
         description: "Edit a file using exact text replacement. Each oldText must match a unique, non-overlapping region.",
@@ -118,7 +122,12 @@ public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> A
             }
             let edits = collected
 
-            let absolutePath = PathUtils.resolveToCwd(rawPath, cwd: cwd)
+            let absolutePath = try PathUtils.resolveForAccess(
+                rawPath,
+                cwd: cwd,
+                policy: fileAccessPolicy,
+                intent: .write
+            )
             return try await FileMutationQueue.shared.run(absolutePath) {
                 do {
                     try await ops.access(absolutePath)
@@ -171,6 +180,10 @@ public func createEditTool(cwd: String, options: EditToolOptions = .init()) -> A
             }
         }
     )
+    tool.fileAccessPolicy = fileAccessPolicy
+    tool.fileAccessCwd = cwd
+    tool.codingToolCapabilities = .edit
+    return tool
 }
 
 private func editDetails(diff: String, patch: String, firstChangedLine: Int?) -> JSONValue {

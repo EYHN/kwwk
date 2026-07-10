@@ -7,19 +7,18 @@ import KWWKAgent
 /// to one of the synthetic user-role messages the system injects. Only real
 /// prompts are valid rewind targets:
 ///   - hidden goal continuations carry the goal marker (GoalTool),
-///   - background-task notifications are steered in by the bg bridge and
-///     recognised by their lead-in (BgNotificationSummary),
+///   - runtime asides carry an explicit source marker,
 ///   - a compaction recap is the summary message the compactor swapped in —
 ///     nothing exists before it in the projected context, so rewinding to it
 ///     would leave the agent with an empty, meaningless history.
 func isRewindableUserPrompt(_ message: Message) -> Bool {
     guard case .user(let u) = message else { return false }
     if isHiddenGoalContinuation(message) { return false }
+    if u.source == .runtime { return false }
     let text = u.content.compactMap { block -> String? in
         if case .text(let t) = block { return t.text }
         return nil
     }.joined(separator: "\n")
-    if BgNotificationSummary.parse(text) != nil { return false }
     if text.hasPrefix("<previous-session-summary>") { return false }
     return true
 }
@@ -73,9 +72,21 @@ func openRewindSelector(
     replaceTranscript: @escaping @MainActor @Sendable ([String]) -> Void,
     recomputeTranscript: @escaping @MainActor @Sendable () -> Void,
     updateFrameStatus: @escaping @MainActor @Sendable () -> Void,
-    requestRender: @escaping @MainActor @Sendable () -> Void
+    requestRender: @escaping @MainActor @Sendable () -> Void,
+    isCurrentSession: @escaping @MainActor @Sendable () -> Bool = { true },
+    setRewinding: @escaping @MainActor @Sendable (Bool) -> Void = { _ in }
 ) {
     let messages = agent.state.messages
+    // Persistence is part of the session identity. Never resolve it through
+    // the mutable box after an await: `/new` or `/resume` may have installed a
+    // different recorder by then.
+    let expectedRecorder = recorderBox.recorder
+    let expectedSessionId = recorderBox.sessionId
+    let stillCurrent: @MainActor @Sendable () -> Bool = {
+        isCurrentSession()
+            && recorderBox.recorder === expectedRecorder
+            && recorderBox.sessionId == expectedSessionId
+    }
     let candidates = rewindCandidateIndices(messages)
     guard !candidates.isEmpty else {
         commit(["", Style.dimmed("  no messages to rewind to")])
@@ -89,6 +100,10 @@ func openRewindSelector(
         items: candidates.map { ListSelectorModal.Item(label: rewindRowLabel(messages[$0])) },
         selectedIndex: candidates.count - 1,
         onSelect: { row in
+            // Mark busy before closing: ModalHost.close synchronously restores
+            // the ordinary frame, whose Enter path must already reject a
+            // session switch or prompt until this transaction settles.
+            setRewinding(true)
             // Close before doing anything else so confirm is one-shot:
             // routeConfirm gates only on `isOpen`, and a key-repeat Enter
             // would otherwise re-run the whole rewind body.
@@ -101,115 +116,100 @@ func openRewindSelector(
             // in-flight run), so it lives on a single MainActor task; the
             // one-shot close above already happened synchronously.
             Task { @MainActor in
-                // A bg-task notification may have kicked a turn behind the
-                // open picker (see the doc comment). The rewind is forced:
-                // stop that turn dead — same abort idiom as Esc-interrupt,
-                // minus the /retry arming (the turn is being rewound away,
-                // not resubmitted). The steering queue is cleared BEFORE the
-                // idle wait so the bridge's post-agentEnd safety drain
-                // (Agent+Background.swift) finds nothing to `continue()` on.
-                // (No `.aborting` frame mode here, unlike Esc: the whole
-                // wind-down happens inside this awaited block, and the
-                // `.agentEnd` handler flips frameMode back to .idle before
-                // `waitForIdle` resumes — the streaming spinner covers the
-                // brief interim.)
-                if agent.state.isStreaming {
-                    agent.abort()
-                    agent.clearAllQueues()
+                defer { setRewinding(false) }
+                guard stillCurrent() else { return }
+
+                // A background wake can win the tiny idle-to-maintenance race.
+                // Abort that contender and retry a bounded number of times; a
+                // retired/replaced Agent cannot spin this task indefinitely.
+                for _ in 0..<8 {
+                    guard stillCurrent() else { return }
+                    if agent.state.isStreaming {
+                        agent.abort()
+                        agent.clearAllQueues()
+                    }
+                    // Agent listeners (including persistence) finish before
+                    // idle waiters resume, so the prior turn is fully settled.
+                    await agent.waitForIdle()
+                    guard stillCurrent() else { return }
+
+                    do {
+                        let applied = try await agent.withMaintenance { @MainActor in
+                            guard stillCurrent() else { return false }
+
+                            // Recompute against the live transcript under the
+                            // same exclusive ownership used by manual compact.
+                            // A changed snapshot is stale, not process-fatal.
+                            let live = agent.state.messages
+                            guard cut < live.count, live[cut] == captured else {
+                                return false
+                            }
+                            let kept = Array(live[..<cut])
+                            let removed = live.count - cut
+                            agent.state.messages = kept
+
+                            resetSessionTransientState(
+                                agent: agent,
+                                retry: retry,
+                                attachments: attachments,
+                                dequeueCycle: dequeueCycle
+                            )
+
+                            frame.input.value = queuedMessageBodyText(captured)
+                                .replacingOccurrences(of: "\n", with: " ")
+                            frame.input.moveEnd()
+                            recomputeTranscript()
+                            updateFrameStatus()
+
+                            // Persist through the recorder captured with this
+                            // Agent/session, never whatever the mutable box may
+                            // contain after an await. Ownership stays held so a
+                            // queued runtime/user turn cannot overtake the marker.
+                            await expectedRecorder.recordCompaction(
+                                messages: kept,
+                                messagesCompacted: removed,
+                                reason: .rewind
+                            )
+                            guard stillCurrent() else { return false }
+
+                            let display = (try? await sessionStore.load(id: expectedSessionId))?
+                                .displayMessages ?? kept
+                            guard stillCurrent() else { return false }
+                            var snapshot = TranscriptSnapshot.render(
+                                display,
+                                width: terminalWidth()
+                            )
+                            snapshot.append(contentsOf: [
+                                "",
+                                Theme.accentText(
+                                    "⤺ rewound · dropped \(removed) message\(removed == 1 ? "" : "s")",
+                                    bold: false
+                                ),
+                            ])
+                            replaceTranscript(snapshot)
+                            requestRender()
+                            return true
+                        }
+                        // `false` means the selection/session snapshot became
+                        // stale; retrying it against a changed transcript would
+                        // target the wrong message.
+                        if applied { return }
+                        return
+                    } catch AgentError.alreadyRunning {
+                        await Task.yield()
+                    } catch {
+                        if stillCurrent() {
+                            commit(["", Style.error("  rewind failed: \(error)")])
+                            requestRender()
+                        }
+                        return
+                    }
                 }
-                // `runLifecycle` awaits every `.agentEnd` listener BEFORE it
-                // resumes idle waiters, so on the far side of this wait the
-                // TUI's .agentEnd handler has already run: frameMode is back
-                // to .idle and any /retry record it armed is about to be
-                // cleared by resetSessionTransientState below. When the agent
-                // is already idle this resumes immediately.
-                await agent.waitForIdle()
 
-                // Recompute the cut against the LIVE transcript: behind an
-                // idle picker the message array only ever grows by appending,
-                // so the captured index must still name the same prompt. If
-                // it doesn't, something replaced the projection wholesale
-                // (auto-compaction cannot — the picker never opens while
-                // compacting, and a mid-run compaction dies with the abort
-                // above before its between-turns swap) — that is omp's
-                // "invalid entry" case and a bug, not a user state.
-                //
-                // Residual race, same shape as the bridge's steer-vs-continue
-                // note (Agent+Background.swift): a bg notification landing in
-                // the suspension between waitForIdle resuming and this
-                // MainActor block running can steer + kick `continue()`, and
-                // that run's appends would interleave with the truncation.
-                // The window is a few instructions wide and the notification
-                // itself is synthetic, so we accept it — the alternative is
-                // an abortable atomic idle-and-freeze on the agent.
-                let live = agent.state.messages
-                precondition(
-                    cut < live.count && live[cut] == captured,
-                    "rewind: live transcript no longer contains the chosen prompt at index \(cut)"
-                )
-                let kept = Array(live[..<cut])
-                let removed = live.count - cut
-                agent.state.messages = kept
-
-                // A stale /retry record (including one the aborted turn's
-                // .agentEnd just armed) or queued steer must not resurrect a
-                // message that was just rewound away.
-                resetSessionTransientState(
-                    agent: agent,
-                    retry: retry,
-                    attachments: attachments,
-                    dequeueCycle: dequeueCycle
-                )
-
-                // The dropped prompt goes back into the editor for
-                // edit-and-resubmit, flattened to one line like the Alt+↑
-                // dequeue (image blocks are not restored). Editor + live zone
-                // are updated BEFORE the repaint below so it draws the final
-                // post-rewind frame in one pass.
-                frame.input.value = queuedMessageBodyText(captured)
-                    .replacingOccurrences(of: "\n", with: " ")
-                frame.input.moveEnd()
-                recomputeTranscript()
-                updateFrameStatus()
-
-                // Persist the cut as a projection replacement (the same store
-                // entry compaction uses): it resets the recorder's baseline so
-                // post-rewind turns flush from the new count, and a later
-                // /resume loads the kept prefix instead of replaying the
-                // dropped tail — the JSONL store is append-only, so the tail
-                // can't be deleted, only superseded. Persisted BEFORE the
-                // repaint so the recap below can read the updated visual
-                // history back from the store.
-                await recorderBox.recorder.recordCompaction(
-                    messages: kept,
-                    messagesCompacted: removed,
-                    reason: .rewind
-                )
-
-                // omp's branch treatment: clear the screen (and scrollback,
-                // where the terminal allows) and re-render the surviving
-                // transcript — the dropped tail vanishes from view instead of
-                // piling a recap under the stale conversation. The recap
-                // replays the store's visual history (displayMessages), NOT
-                // `kept`: after a context compaction the model context starts
-                // with a `<previous-session-summary>` message the user never
-                // saw, and everything the compaction summarized away is still
-                // part of the on-screen history. Falls back to the kept model
-                // prefix only when the session file can't be read back.
-                // The welcome header is re-emitted on top by the repaint; a
-                // trailing note keeps the cut visible after the clear.
-                let display = (try? await sessionStore.load(id: recorderBox.sessionId))?
-                    .displayMessages ?? kept
-                var snapshot = TranscriptSnapshot.render(display, width: terminalWidth())
-                snapshot.append(contentsOf: [
-                    "",
-                    Theme.accentText(
-                        "⤺ rewound · dropped \(removed) message\(removed == 1 ? "" : "s")",
-                        bold: false
-                    ),
-                ])
-                replaceTranscript(snapshot)
-                requestRender()
+                if stillCurrent() {
+                    commit(["", Style.error("  rewind: agent remained busy; try again")])
+                    requestRender()
+                }
             }
         },
         onCancel: { modal.close() }

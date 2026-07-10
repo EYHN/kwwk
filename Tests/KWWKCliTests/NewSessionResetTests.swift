@@ -7,6 +7,125 @@ import Testing
 @Suite("performNewSession reset")
 struct NewSessionResetTests {
 
+    @Test("Enter contention preserves the cleared prompt exactly once")
+    func promptContentionFallback() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        faux.setResponses([.message(fauxAssistantMessage("handled"))])
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel()))
+        let gate = SessionMaintenanceGate()
+        let maintenance = Task {
+            try await agent.withMaintenance {
+                await gate.enterAndWait()
+            }
+        }
+        await gate.waitUntilEntered()
+
+        let submission = Task {
+            try await promptPreservingContention(
+                agent: agent,
+                text: "do not lose me",
+                images: []
+            )
+        }
+        for _ in 0..<100 {
+            if agent.queuedSteeringCount() > 0 { break }
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+        #expect(agent.queuedSteeringCount() == 1)
+        await gate.release()
+        try await maintenance.value
+        try await submission.value
+        await agent.waitForIdle()
+
+        let copies = agent.state.messages.filter { message in
+            guard case .user(let user) = message,
+                  case .text(let text) = user.content.first else { return false }
+            return text.text == "do not lose me"
+        }
+        #expect(copies.count == 1)
+    }
+
+    @MainActor
+    @Test("production replacement path records only the new Agent identity")
+    func replacementUsesFreshAgentIdentity() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        faux.setResponses([.message(fauxAssistantMessage("new session reply"))])
+
+        let outgoing = Agent(
+            initialState: AgentInitialState(
+                model: faux.getModel(),
+                messages: [.user(UserMessage(text: "outgoing transcript"))]
+            ),
+            sessionId: "old-session"
+        )
+        let replacement = Agent(
+            initialState: AgentInitialState(model: faux.getModel()),
+            sessionId: "new-session"
+        )
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-newidentity-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SessionStore(directory: dir)
+        let initialRecorder = SessionRecorder(
+            store: store,
+            sessionId: "old-session",
+            cwd: dir.path,
+            model: outgoing.state.model.id,
+            provider: outgoing.state.model.provider
+        )
+        await initialRecorder.ensureCreated()
+        let recorderBox = RecorderBox(
+            recorder: initialRecorder,
+            unsubscribe: initialRecorder.attach(to: outgoing),
+            sessionId: "old-session"
+        )
+        defer { recorderBox.unsubscribe() }
+
+        await performNewSession(
+            newId: "new-session",
+            recorderBox: recorderBox,
+            sessionStore: store,
+            agent: outgoing,
+            replaceSessionAgent: { id, messages in
+                #expect(id == "new-session")
+                replacement.state.messages = messages
+                return replacement
+            },
+            cwd: dir.path,
+            attachments: AttachmentStore(),
+            retry: TurnRetryState(),
+            dequeueCycle: DequeueCycleState(),
+            frame: CodingFrame(),
+            width: 60,
+            commit: { _ in },
+            recompute: {},
+            updateStatus: {},
+            requestRender: {}
+        )
+
+        #expect(outgoing.sessionId == "old-session")
+        #expect(outgoing.state.messages.count == 1)
+        #expect(replacement.sessionId == "new-session")
+        #expect(replacement.state.messages.isEmpty)
+        #expect(recorderBox.sessionId == "new-session")
+
+        try await replacement.prompt("belongs to new session")
+        let loaded = try await store.resolveResume(.id("new-session"), cwd: dir.path)
+        #expect(loaded.messages.contains { message in
+            guard case .user(let user) = message,
+                  case .text(let text) = user.content.first else { return false }
+            return text.text == "belongs to new session"
+        })
+        #expect(!loaded.messages.contains { message in
+            guard case .user(let user) = message,
+                  case .text(let text) = user.content.first else { return false }
+            return text.text == "outgoing transcript"
+        })
+    }
+
     @MainActor
     @Test("clears messages, queue, retry, attachments and repoints the recorder")
     func resetsEverything() async {
@@ -97,4 +216,32 @@ struct NewSessionResetTests {
 private final class CommitRecorder {
     var lines: [String] = []
     var joined: String { lines.joined(separator: "\n") }
+}
+
+private actor SessionMaintenanceGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enterAndWait() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
 }

@@ -1,8 +1,8 @@
 import Foundation
 
 /// UI-side compacting of the `<task-notification>` XML block that the
-/// background-task bridge steers into the agent as a synthetic user
-/// message. The LLM consumes the full XML; the TUI uses
+/// background-task bridge injects into the agent as a runtime aside. The LLM
+/// consumes the full XML; the TUI uses
 /// `BgNotificationSummary` to render it as a `●`/`⎿` tool-result-style
 /// entry instead of dumping the raw tags.
 ///
@@ -16,8 +16,10 @@ struct BgNotificationSummary {
     let summary: String?        // e.g. "exit 0", "exit 1 (signal)"
     let durationMs: Int?
     let outputTail: [String]    // lines from <output-tail>, trimmed
+    let outputTruncated: Bool
     let isError: Bool
     let isStalled: Bool
+    let isIncomplete: Bool
 
     /// Return nil if `text` isn't a background-task notification. We only
     /// recognise the two lead-ins the bridge emits so genuine user
@@ -36,12 +38,23 @@ struct BgNotificationSummary {
         }
 
         let label     = tag(text, "label")     ?? tag(text, "task-id") ?? "background task"
-        let status    = tag(text, "status")    ?? (isStalled ? "stalled" : "completed")
+        let rawStatus = tag(text, "status")    ?? (isStalled ? "stalled" : "completed")
         let summary   = tag(text, "summary")
+        let isIncomplete = summary == "incomplete"
+        let status = isIncomplete ? "incomplete" : rawStatus
         let durationS = tag(text, "duration-ms")
         let duration  = durationS.flatMap(Int.init)
-        let tail      = multilineTag(text, "output-tail")
-        let isError   = status == "failed" || summary?.contains("exit") == true && summary?.contains("exit 0") == false && status != "completed"
+        // New notifications wrap escaped task output in an explicit trust
+        // boundary. Keep the outer-tag fallback so transcripts written by
+        // older kwwk versions still render correctly when resumed.
+        let tail      = multilineTag(text, "untrusted-output", fallback: "output-tail")
+        let truncated = tag(text, "output-truncated") == "true"
+        let isError = !isIncomplete && (
+            rawStatus == "failed"
+                || summary?.contains("exit") == true
+                    && summary?.contains("exit 0") == false
+                    && rawStatus != "completed"
+        )
 
         return BgNotificationSummary(
             label: label,
@@ -49,8 +62,10 @@ struct BgNotificationSummary {
             summary: summary,
             durationMs: duration,
             outputTail: tail,
+            outputTruncated: truncated,
             isError: isError || isStalled,
-            isStalled: isStalled
+            isStalled: isStalled,
+            isIncomplete: isIncomplete
         )
     }
 
@@ -66,7 +81,7 @@ struct BgNotificationSummary {
 
     private func renderHeader() -> String {
         var parts: [String] = []
-        let icon = isStalled ? "⚠" : (isError ? "●" : "●")
+        let icon = isStalled || isIncomplete ? "⚠" : "●"
         parts.append(icon + " bg(\(label))")
         parts.append("· \(status)")
         if let summary, !summary.isEmpty, summary != status {
@@ -76,18 +91,26 @@ struct BgNotificationSummary {
             parts.append("· \(formatDuration(durationMs))")
         }
         let joined = parts.joined(separator: " ")
-        return isError || isStalled ? Style.error(joined) : Style.tool(joined)
+        if isError || isStalled { return Style.error(joined) }
+        if isIncomplete { return Style.running(joined) }
+        return Style.tool(joined)
     }
 
     private func renderBody() -> [String] {
         let arm = "  ⎿ "
-        let errorStyle = isError || isStalled
-        func styler(_ s: String) -> String { errorStyle ? Style.error(s) : Style.dimmed(s) }
+        func styler(_ s: String) -> String {
+            if isError || isStalled { return Style.error(s) }
+            if isIncomplete { return Style.running(s) }
+            return Style.dimmed(s)
+        }
         let preview = Array(outputTail.prefix(4))
         var out: [String] = preview.map { styler(arm + truncated($0, max: 200)) }
         let hidden = max(0, outputTail.count - preview.count)
         if hidden > 0 {
             out.append(styler("  ⎿ … \(hidden) more output lines"))
+        }
+        if outputTruncated {
+            out.append(styler("  ⎿ … preview truncated; full output is available through job read"))
         }
         return out
     }
@@ -99,6 +122,10 @@ struct BgNotificationSummary {
     // `<tag>…</tag>` is safe and cheap.
 
     private static func tag(_ text: String, _ name: String) -> String? {
+        rawTag(text, name).map(decodeXMLEntities)
+    }
+
+    private static func rawTag(_ text: String, _ name: String) -> String? {
         let open = "<\(name)>"
         let close = "</\(name)>"
         guard let openRange = text.range(of: open) else { return nil }
@@ -108,12 +135,33 @@ struct BgNotificationSummary {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func multilineTag(_ text: String, _ name: String) -> [String] {
-        guard let raw = tag(text, name), !raw.isEmpty else { return [] }
+    private static func multilineTag(
+        _ text: String,
+        _ name: String,
+        fallback: String? = nil
+    ) -> [String] {
+        // The preferred tag belongs to the new escaped format. The fallback
+        // belongs to legacy transcripts whose output tail was stored raw, so
+        // decoding it would incorrectly turn an original literal `&lt;` into
+        // `<` during resume rendering.
+        let raw = rawTag(text, name).map(decodeXMLEntities)
+            ?? fallback.flatMap { rawTag(text, $0) }
+        guard let raw, !raw.isEmpty else { return [] }
         return raw
             .components(separatedBy: "\n")
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
+    }
+
+    /// Decode exactly one layer of the entities emitted by
+    /// `BackgroundTaskNotification`. Decode `&amp;` last so an original literal
+    /// such as `&lt;` round-trips as `&lt;` instead of being decoded twice.
+    private static func decodeXMLEntities(_ text: String) -> String {
+        text.replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&apos;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
     }
 
     private func formatDuration(_ ms: Int) -> String {

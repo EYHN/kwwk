@@ -165,7 +165,11 @@ public struct LocalGrepOperations: GrepOperations {
     }
 }
 
-public func createGrepTool(cwd: String, options: GrepToolOptions = .init()) -> AgentTool {
+public func createGrepTool(
+    cwd: String,
+    options: GrepToolOptions = .init(),
+    fileAccessPolicy: FileAccessPolicy = .unrestricted
+) -> AgentTool {
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
@@ -183,7 +187,7 @@ public func createGrepTool(cwd: String, options: GrepToolOptions = .init()) -> A
     let defaultLimit = Truncate.grepDefaultLimit
     let maxLineChars = Truncate.grepMaxLineLength
     let maxTotalBytes = Truncate.grepMaxTotalBytes
-    return AgentTool(
+    var tool = AgentTool(
         name: "grep",
         label: "grep",
         description: """
@@ -200,11 +204,20 @@ public func createGrepTool(cwd: String, options: GrepToolOptions = .init()) -> A
                   case .string(let pattern) = obj["pattern"] ?? .null else {
                 throw CodingToolError.invalidArgument("grep: `pattern` is required")
             }
-            let path: String
+            let rawPath: String
             if case .string(let p) = obj["path"] ?? .null {
-                path = PathUtils.resolveToCwd(p, cwd: cwd)
+                rawPath = p
+            } else {
+                rawPath = "."
             }
-            else { path = cwd }
+            // Recursive local operations receive a canonical, authorized root.
+            // The policy is a path boundary, not an OS-level TOCTOU defense.
+            let path = try PathUtils.resolveForAccess(
+                rawPath,
+                cwd: cwd,
+                policy: fileAccessPolicy,
+                intent: .read
+            )
 
             let glob: String? = {
                 if case .string(let g) = obj["glob"] ?? .null {
@@ -296,4 +309,8 @@ public func createGrepTool(cwd: String, options: GrepToolOptions = .init()) -> A
             )
         }
     )
+    tool.fileAccessPolicy = fileAccessPolicy
+    tool.fileAccessCwd = cwd
+    tool.codingToolCapabilities = .grep
+    return tool
 }

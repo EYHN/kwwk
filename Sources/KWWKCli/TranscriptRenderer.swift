@@ -125,18 +125,38 @@ final class TranscriptRenderer {
 
     /// Start/end timestamps per thinking content-block index for the
     /// current streaming turn. `end == nil` while the block is still
-    /// receiving deltas. Reset on every `messageStart`.
+    /// receiving deltas. Reset on every assistant `messageStart`.
     private var thinkingTimings: [Int: (start: DispatchTime, end: DispatchTime?)] = [:]
 
     /// Streaming thinking text per content-block index, accumulated from
     /// `.thinkingDelta` and shown live (expanded mode) while the block is
-    /// open. Cleared when the block commits.
+    /// open. Cleared when the block settles into the display layer.
     private var thinkingBuffers: [Int: String] = [:]
 
-    /// Thinking blocks whose settled form has already been committed to
-    /// scrollback — guards against double-commit when `messageEnd` sweeps
-    /// up blocks that never saw an explicit `thinkingEnd`.
-    private var thinkingCommitted: Set<Int> = []
+    /// Thinking blocks whose duration/body has already been consumed by the
+    /// display layer. In expanded mode that means committed immediately; in
+    /// collapsed mode it means staged into `collapsedThinkingNanoseconds`.
+    /// Either way, this guards against double-counting when `messageEnd`
+    /// sweeps up blocks that never saw an explicit `thinkingEnd`.
+    private var settledThinkingBlocks: Set<Int> = []
+
+    /// Sum of the active durations for the current run of adjacent collapsed
+    /// thinking blocks. A `thinkingEnd` stages its duration here instead of
+    /// committing a permanent row immediately. Assistant text, a tool call,
+    /// user/runtime content, or the turn boundary flushes the run as one
+    /// `[thought for …]` row. This is display-only; the underlying assistant
+    /// content blocks remain untouched in the transcript and model context.
+    private var collapsedThinkingNanoseconds: UInt64?
+
+    /// Whether this stream attempt has irreversibly committed a thinking row
+    /// to terminal scrollback. Unlike the live zone, scrollback cannot be
+    /// erased on `.streamRewind`, so the retry path must annotate it as output
+    /// from a discarded attempt just as it does committed assistant text.
+    private var thinkingCommittedDuringAttempt = false
+
+    /// Deterministic monotonic-clock seam for transcript tests. Production
+    /// leaves this nil and reads `DispatchTime.now()`.
+    var thinkingNowOverride: DispatchTime?
 
     /// Terminal width used to render full-width blocks (the user-message bar).
     /// Updated by CodingTUI on init + resize. Committed lines are otherwise
@@ -171,9 +191,11 @@ final class TranscriptRenderer {
         case .messageStart(let message):
             switch message {
             case .user(let u):
+                flushCollapsedThinking()
                 let text = userText(u)
-                // Background-task completion notifications arrive as
-                // synthetic user messages carrying a `<task-notification>`
+                // Background-task completion notifications retain user role
+                // for provider compatibility but carry `source == .runtime`
+                // and a `<task-notification>`
                 // XML block. Rendering them raw dumps 15+ lines of tags
                 // into the UI; detect them by the fixed lead-in the bridge
                 // emits (see `BackgroundTaskNotification.messageText()`)
@@ -185,44 +207,75 @@ final class TranscriptRenderer {
                     // same single-text-block predicate as persistence so a real
                     // multi-block message that merely starts with the marker is
                     // still shown, not hidden.
-                } else if let summary = BgNotificationSummary.parse(text) {
+                } else if u.source == .runtime,
+                          let summary = BgNotificationSummary.parse(text) {
                     commit(summary.render())
                 } else {
                     commit([""] + Theme.userBar(text, width: displayWidth))
                 }
             case .assistant:
+                // A previous turn normally flushed at `.turnEnd`; keep this
+                // defensive boundary so an incomplete/custom event stream
+                // cannot silently discard its last staged run.
+                flushCollapsedThinking()
                 streaming = true
                 assistantIngestedCharacters = 0
                 assistantSegmentBuffer = ""
                 assistantCommittedDuringTurn = false
+                thinkingCommittedDuringAttempt = false
                 lastAssistantTextIndex = nil
                 // New turn — drop any prior turn's thinking state.
                 // Re-populated from `.thinkingStart` events below.
                 thinkingTimings.removeAll()
                 thinkingBuffers.removeAll()
-                thinkingCommitted.removeAll()
+                settledThinkingBlocks.removeAll()
+                collapsedThinkingNanoseconds = nil
                 recomputeLive()
             case .toolResult:
                 break
             }
 
         case .messageUpdate(let assistant, let amEvent):
+            // Thinking blocks remain mergeable only while they are adjacent.
+            // Flush before ingesting/rendering either assistant text or a tool
+            // call so the collapsed timing row stays in chronological order.
+            switch amEvent {
+            case .textStart, .textDelta, .textEnd,
+                 .toolCallStart, .toolCallDelta, .toolCallEnd:
+                flushCollapsedThinking()
+            default:
+                break
+            }
             // Track thinking block lifecycle so collapsed rendering can
             // show elapsed time. Timestamps are monotonic (DispatchTime)
             // so the counter isn't affected by wall-clock jumps.
             switch amEvent {
             case .thinkingStart(let idx, _):
+                // A text block that precedes this thinking block is now
+                // structurally complete even if it had no trailing newline.
+                // If the provider exposed that block only in this boundary's
+                // accumulated snapshot, it is also a hard boundary for any
+                // previously staged collapsed thought. Flush the thought
+                // before ingesting the text so the two thinking runs cannot
+                // merge across it or appear after it in scrollback.
+                ingestThinkingBoundaryTextPrefix(assistant, beforeContentIndex: idx)
                 if thinkingTimings[idx] == nil {
-                    thinkingTimings[idx] = (start: DispatchTime.now(), end: nil)
+                    thinkingTimings[idx] = (start: thinkingNow(), end: nil)
                 }
             case .thinkingDelta(let idx, let delta, _):
                 thinkingBuffers[idx, default: ""] += delta
             case .thinkingEnd(let idx, let content, _):
+                // Some providers expose preceding text only in the partial
+                // snapshot attached to the thinking boundary. Commit that
+                // prefix before the thought so expanded mode (which commits
+                // immediately) and the final-snapshot fallback preserve the
+                // original content-block order.
+                ingestThinkingBoundaryTextPrefix(assistant, beforeContentIndex: idx)
                 if var t = thinkingTimings[idx] {
-                    t.end = DispatchTime.now()
+                    t.end = thinkingNow()
                     thinkingTimings[idx] = t
                 }
-                commitThinkingBlock(idx, content: content)
+                settleThinkingBlock(idx, content: content)
             default:
                 break
             }
@@ -251,17 +304,21 @@ final class TranscriptRenderer {
                 // Seal any thinking blocks that didn't get an explicit
                 // `thinkingEnd` (e.g. turn aborted mid-thought). This
                 // freezes the elapsed counter at the abort moment.
+                let end = thinkingNow()
                 for (idx, t) in thinkingTimings where t.end == nil {
-                    thinkingTimings[idx] = (start: t.start, end: DispatchTime.now())
+                    thinkingTimings[idx] = (start: t.start, end: end)
+                }
+                for idx in thinkingTimings.keys.sorted() where !settledThinkingBlocks.contains(idx) {
+                    ingestThinkingBoundaryTextPrefix(a, beforeContentIndex: idx)
+                    settleThinkingBlock(idx, content: thinkingBuffers[idx] ?? "")
+                }
+                // A provider may omit text stream events and expose text only
+                // in its final snapshot. Treat that as the same hard boundary
+                // as `.textStart` before committing the snapshot.
+                if !assistantTextSnapshot(a).isEmpty {
+                    flushCollapsedThinking()
                 }
                 ingestAssistantText(a, flushAll: true)
-                // Commit blocks the sweep just sealed: an abort mid-thought
-                // still leaves a settled `[thought for Ns]` row (with
-                // whatever streamed, in expanded mode) instead of the block
-                // silently vanishing from the transcript.
-                for idx in thinkingTimings.keys.sorted() where !thinkingCommitted.contains(idx) {
-                    commitThinkingBlock(idx, content: thinkingBuffers[idx] ?? "")
-                }
                 var tail: [String] = []
                 if a.stopReason == .aborted {
                     tail.append(Style.dimmed("⋯ aborted"))
@@ -270,6 +327,7 @@ final class TranscriptRenderer {
                     tail.append(Style.error("✗ \(err)"))
                 }
                 if !tail.isEmpty {
+                    flushCollapsedThinking()
                     commitAssistantLines(tail)
                 }
                 streaming = false
@@ -284,6 +342,9 @@ final class TranscriptRenderer {
             }
 
         case .toolExecutionStart(let id, let name, let args):
+            // Also enforce the tool boundary at execution time for providers
+            // that don't stream a `.toolCallStart` event.
+            flushCollapsedThinking()
             toolSlots.append(ToolSlot(id: id, name: name, args: args, partial: nil, resolution: nil))
             recomputeLive()
 
@@ -308,7 +369,11 @@ final class TranscriptRenderer {
             drainResolvedToolFront()
             recomputeLive()
 
+        case .turnEnd:
+            flushCollapsedThinking()
+
         case .agentEnd:
+            flushCollapsedThinking()
             sealFoldRun()
             flushQueuedVerbose()
 
@@ -329,12 +394,13 @@ final class TranscriptRenderer {
             // un-scroll. Drop a visible marker so the user knows the earlier
             // output was from a failed attempt; the retry's body will follow
             // after the next messageStart.
-            if assistantCommittedDuringTurn {
+            if assistantCommittedDuringTurn || thinkingCommittedDuringAttempt {
                 commit([Style.dimmed("  ⋯ retry — prior partial above is discarded")])
             }
             assistantIngestedCharacters = 0
             assistantSegmentBuffer = ""
             assistantCommittedDuringTurn = false
+            thinkingCommittedDuringAttempt = false
             lastAssistantTextIndex = nil
             queuedVerboseLines.removeAll()
             // The failed attempt's thinking is gone with the stream; the
@@ -342,7 +408,8 @@ final class TranscriptRenderer {
             // zone must not show a ghost `[thinking Ns…]` in between.
             thinkingTimings.removeAll()
             thinkingBuffers.removeAll()
-            thinkingCommitted.removeAll()
+            settledThinkingBlocks.removeAll()
+            collapsedThinkingNanoseconds = nil
             recomputeLive()
 
         case .verbose(let event):
@@ -536,23 +603,42 @@ final class TranscriptRenderer {
             }
             out.append(assistantSegmentBuffer)
         }
-        // Open thinking blocks: a ticking `[thinking Ns…]` label, plus the
-        // streaming body in expanded mode. Settled blocks are already in
-        // scrollback (committed on thinkingEnd), so only open ones render.
-        // A collapsed block stays hidden until it crosses the visibility
-        // threshold, so short reasoning never flashes a label it won't keep.
+        // Open thinking: collapsed mode renders one ticking row whose elapsed
+        // value is the sum of the staged adjacent blocks plus the currently
+        // active block(s). Expanded mode keeps its per-block body rendering.
         // Rendered *after* the text tail so an interleaved text→thinking
-        // sequence keeps chronological order, matching `messageEnd`'s commit
-        // order (the text tail settles before the thinking sweep).
-        for (idx, t) in thinkingTimings.sorted(by: { $0.key < $1.key })
-        where t.end == nil && !thinkingCommitted.contains(idx) {
-            let buf = thinkingBuffers[idx] ?? ""
-            let secs = elapsedSeconds(from: t.start, to: .now())
-            guard thinkingVisible(seconds: secs, hasContent: !buf.isEmpty) else { continue }
-            out.append("")
-            out.append(Style.dimmed("[thinking \(formatElapsed(from: t.start, to: .now()))…]"))
-            if thinkingDisplay == .expanded, !buf.isEmpty {
-                out.append(contentsOf: buf.components(separatedBy: "\n").map { Style.dimmed("  " + $0) })
+        // sequence keeps chronological order.
+        let openThinking = thinkingTimings.sorted(by: { $0.key < $1.key }).filter {
+            $0.value.end == nil && !settledThinkingBlocks.contains($0.key)
+        }
+        switch thinkingDisplay {
+        case .collapsed:
+            if collapsedThinkingNanoseconds != nil || !openThinking.isEmpty {
+                let now = thinkingNow()
+                var nanoseconds = collapsedThinkingNanoseconds ?? 0
+                for (_, timing) in openThinking {
+                    nanoseconds = addingClamped(
+                        nanoseconds,
+                        durationNanoseconds(from: timing.start, to: now)
+                    )
+                }
+                let seconds = Double(nanoseconds) / 1_000_000_000
+                if thinkingVisible(seconds: seconds, hasContent: false) {
+                    out.append("")
+                    out.append(Style.dimmed("[thinking \(formatElapsed(nanoseconds: nanoseconds))…]"))
+                }
+            }
+        case .expanded:
+            let now = thinkingNow()
+            for (idx, timing) in openThinking {
+                let buf = thinkingBuffers[idx] ?? ""
+                let seconds = elapsedSeconds(from: timing.start, to: now)
+                guard thinkingVisible(seconds: seconds, hasContent: !buf.isEmpty) else { continue }
+                out.append("")
+                out.append(Style.dimmed("[thinking \(formatElapsed(from: timing.start, to: now))…]"))
+                if !buf.isEmpty {
+                    out.append(contentsOf: buf.components(separatedBy: "\n").map { Style.dimmed("  " + $0) })
+                }
             }
         }
         // Remaining slots — those past the leading foldable run consumed
@@ -619,9 +705,20 @@ final class TranscriptRenderer {
     }
 
     private func assistantTextSnapshot(_ a: AssistantMessage) -> String {
+        assistantTextSnapshot(a, beforeContentIndex: nil)
+    }
+
+    /// Build the same flattened text snapshot as `assistantTextSnapshot(_:)`,
+    /// optionally stopping before one content-block index. The prefix form is
+    /// used to settle provider snapshots in block order at a thinking boundary.
+    private func assistantTextSnapshot(
+        _ a: AssistantMessage,
+        beforeContentIndex: Int?
+    ) -> String {
         var out = ""
         var renderedAny = false
-        for block in a.content {
+        for (idx, block) in a.content.enumerated() {
+            if let beforeContentIndex, idx >= beforeContentIndex { break }
             switch block {
             case .text(let t):
                 if t.text.isEmpty { continue }
@@ -658,6 +755,51 @@ final class TranscriptRenderer {
             assistantIngestedCharacters = snapshot.count
         }
         drainAssistantSegmentBuffer(flushAll: flushAll)
+    }
+
+    /// Ingest only text blocks that precede `contentIndex`. Unlike the full
+    /// snapshot path, an already-consumed longer snapshot is left untouched;
+    /// a prefix must never rewind the global text cursor.
+    private func ingestAssistantTextPrefix(
+        _ assistant: AssistantMessage,
+        beforeContentIndex contentIndex: Int,
+        flushAll: Bool
+    ) {
+        let snapshot = assistantTextSnapshot(
+            assistant,
+            beforeContentIndex: contentIndex
+        )
+        guard assistantIngestedCharacters <= snapshot.count else { return }
+        if assistantIngestedCharacters < snapshot.count {
+            let start = snapshot.index(
+                snapshot.startIndex,
+                offsetBy: assistantIngestedCharacters
+            )
+            assistantSegmentBuffer += snapshot[start...]
+            assistantIngestedCharacters = snapshot.count
+        }
+        drainAssistantSegmentBuffer(flushAll: flushAll)
+    }
+
+    /// Settle text discovered only at a thinking lifecycle boundary. New text
+    /// splits collapsed thinking runs, but an adjacent thinking block with no
+    /// intervening text remains mergeable.
+    private func ingestThinkingBoundaryTextPrefix(
+        _ assistant: AssistantMessage,
+        beforeContentIndex contentIndex: Int
+    ) {
+        let prefixLength = assistantTextSnapshot(
+            assistant,
+            beforeContentIndex: contentIndex
+        ).count
+        if assistantIngestedCharacters < prefixLength {
+            flushCollapsedThinking()
+        }
+        ingestAssistantTextPrefix(
+            assistant,
+            beforeContentIndex: contentIndex,
+            flushAll: true
+        )
     }
 
     private func drainAssistantSegmentBuffer(flushAll: Bool) {
@@ -705,24 +847,61 @@ final class TranscriptRenderer {
         }
     }
 
-    /// Commit a thinking block's settled form into scrollback: a dimmed
-    /// `[thought for Ns]` label, plus the full body in expanded mode. Like
-    /// any other block, a shown thought seals the pending fold run (it flows
-    /// through `commit`), so the transcript stays in chronological order. A
-    /// block below the visibility threshold commits nothing and therefore
-    /// does not seal — short thinks stay out of the way entirely.
+    /// Consume one settled thinking block in the active display mode.
+    /// Expanded mode commits it immediately with its body. Collapsed mode
+    /// stages only its active duration so adjacent blocks can later flush as
+    /// a single row without altering the underlying assistant message.
+    private func settleThinkingBlock(_ idx: Int, content: String) {
+        guard !settledThinkingBlocks.contains(idx) else { return }
+        guard thinkingDisplay == .collapsed else {
+            commitThinkingBlock(idx, content: content)
+            return
+        }
+
+        settledThinkingBlocks.insert(idx)
+        thinkingBuffers[idx] = nil
+        let nanoseconds = thinkingTimings[idx].map {
+            durationNanoseconds(from: $0.start, to: $0.end ?? thinkingNow())
+        } ?? 0
+        collapsedThinkingNanoseconds = addingClamped(
+            collapsedThinkingNanoseconds ?? 0,
+            nanoseconds
+        )
+    }
+
+    /// Flush the current adjacent collapsed run at a visible-content boundary.
+    /// The threshold applies to the *sum*, so several individually-short
+    /// blocks can correctly surface as one meaningful reasoning interval.
+    private func flushCollapsedThinking() {
+        guard let nanoseconds = collapsedThinkingNanoseconds else { return }
+        collapsedThinkingNanoseconds = nil
+        let seconds = Double(nanoseconds) / 1_000_000_000
+        guard seconds >= collapsedThinkingMinSeconds else {
+            recomputeLive()
+            return
+        }
+        thinkingCommittedDuringAttempt = true
+        commit(["", Style.dimmed("[thought for \(formatElapsed(nanoseconds: nanoseconds))]")])
+        recomputeLive()
+    }
+
+    /// Commit one expanded thinking block's settled form into scrollback: a
+    /// dimmed timing label plus its full body. Like any other shown block it
+    /// seals the pending fold run via `commit`.
     private func commitThinkingBlock(_ idx: Int, content: String) {
-        guard !thinkingCommitted.contains(idx) else { return }
-        thinkingCommitted.insert(idx)
+        guard !settledThinkingBlocks.contains(idx) else { return }
+        settledThinkingBlocks.insert(idx)
         thinkingBuffers[idx] = nil
         let timing = thinkingTimings[idx]
-        let seconds = timing.map { elapsedSeconds(from: $0.start, to: $0.end ?? .now()) } ?? 0
+        let end = timing?.end ?? thinkingNow()
+        let seconds = timing.map { elapsedSeconds(from: $0.start, to: end) } ?? 0
         guard thinkingVisible(seconds: seconds, hasContent: !content.isEmpty) else { return }
-        let elapsed = timing.map { formatElapsed(from: $0.start, to: $0.end ?? .now()) } ?? "0.0s"
+        let elapsed = timing.map { formatElapsed(from: $0.start, to: end) } ?? "0.0s"
         var lines = ["", Style.dimmed("[thought for \(elapsed)]")]
         if thinkingDisplay == .expanded, !content.isEmpty {
             lines.append(contentsOf: content.components(separatedBy: "\n").map { Style.dimmed("  " + $0) })
         }
+        thinkingCommittedDuringAttempt = true
         commit(lines)
     }
 
@@ -733,21 +912,34 @@ final class TranscriptRenderer {
         recomputeLive()
     }
 
-    private func elapsedSeconds(from start: DispatchTime, to end: DispatchTime) -> Double {
-        let ns = end.uptimeNanoseconds >= start.uptimeNanoseconds
+    private func thinkingNow() -> DispatchTime {
+        thinkingNowOverride ?? DispatchTime.now()
+    }
+
+    private func durationNanoseconds(from start: DispatchTime, to end: DispatchTime) -> UInt64 {
+        end.uptimeNanoseconds >= start.uptimeNanoseconds
             ? end.uptimeNanoseconds - start.uptimeNanoseconds
             : 0
-        return Double(ns) / 1_000_000_000
+    }
+
+    private func addingClamped(_ lhs: UInt64, _ rhs: UInt64) -> UInt64 {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? UInt64.max : sum
+    }
+
+    private func elapsedSeconds(from start: DispatchTime, to end: DispatchTime) -> Double {
+        Double(durationNanoseconds(from: start, to: end)) / 1_000_000_000
     }
 
     /// Format a DispatchTime delta as a human-readable duration. 0.1s
     /// granularity under 10 seconds so the counter visibly ticks; full
     /// seconds above that; `Nm Ss` once we cross a minute.
     private func formatElapsed(from start: DispatchTime, to end: DispatchTime) -> String {
-        let ns = end.uptimeNanoseconds >= start.uptimeNanoseconds
-            ? end.uptimeNanoseconds - start.uptimeNanoseconds
-            : 0
-        let seconds = Double(ns) / 1_000_000_000
+        formatElapsed(nanoseconds: durationNanoseconds(from: start, to: end))
+    }
+
+    private func formatElapsed(nanoseconds: UInt64) -> String {
+        let seconds = Double(nanoseconds) / 1_000_000_000
         if seconds < 10 {
             return String(format: "%.1fs", seconds)
         }

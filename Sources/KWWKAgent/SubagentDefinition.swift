@@ -17,23 +17,72 @@ public struct SubagentDefinition: Sendable {
     public var description: String
     public var prompt: String
     public var tools: CodingTools?
+    /// Runtime restriction for a child Bash capability. This is evaluated
+    /// after inherited hooks rewrite tool arguments, so a hook cannot bypass
+    /// the selected specialist boundary.
+    public var bashCommandPolicy: BashCommandPolicy
+    /// Optional path boundary for built-in file tools. Nil inherits the
+    /// parent's policy. This does not constrain Bash or custom tools.
+    public var fileAccessPolicy: FileAccessPolicy?
     public var model: SubagentModel
     public var runInBackgroundByDefault: Bool
+    /// Optional per-run assistant-turn ceiling. The effective value is the
+    /// minimum of this value, the parent ceiling, and `SubagentLimits`.
+    public var maxTurns: Int?
+    /// Optional wall-clock deadline for both foreground and background runs.
+    /// The effective value is capped by `SubagentLimits`.
+    public var timeoutSeconds: Int?
 
     public init(
         name: String,
         description: String,
         prompt: String,
         tools: CodingTools? = nil,
+        bashCommandPolicy: BashCommandPolicy = .unrestricted,
+        fileAccessPolicy: FileAccessPolicy? = nil,
         model: SubagentModel = .inherit,
-        runInBackgroundByDefault: Bool = false
+        runInBackgroundByDefault: Bool = false,
+        maxTurns: Int? = nil,
+        timeoutSeconds: Int? = nil
     ) {
         self.name = name
         self.description = description
         self.prompt = prompt
         self.tools = tools
+        self.bashCommandPolicy = bashCommandPolicy
+        self.fileAccessPolicy = fileAccessPolicy
         self.model = model
         self.runInBackgroundByDefault = runInBackgroundByDefault
+        self.maxTurns = maxTurns
+        self.timeoutSeconds = timeoutSeconds
+    }
+}
+
+/// Resource limits shared by all invocations launched through one `agent`
+/// tool (or one `SubagentRunner`). Defaults are deliberately bounded so a
+/// single model turn cannot create an unbounded fan-out.
+public struct SubagentLimits: Sendable, Equatable {
+    public var maxConcurrent: Int
+    public var maxConcurrentMutating: Int
+    public var maxTotal: Int
+    public var maxCallsPerTurn: Int
+    public var maxTurns: Int?
+    public var timeoutSeconds: Int?
+
+    public init(
+        maxConcurrent: Int = 4,
+        maxConcurrentMutating: Int = 1,
+        maxTotal: Int = 64,
+        maxCallsPerTurn: Int = 4,
+        maxTurns: Int? = 16,
+        timeoutSeconds: Int? = 600
+    ) {
+        self.maxConcurrent = max(1, maxConcurrent)
+        self.maxConcurrentMutating = max(1, min(maxConcurrentMutating, self.maxConcurrent))
+        self.maxTotal = max(1, maxTotal)
+        self.maxCallsPerTurn = max(1, maxCallsPerTurn)
+        self.maxTurns = maxTurns.map { max(1, $0) }
+        self.timeoutSeconds = timeoutSeconds.map { max(1, $0) }
     }
 }
 
@@ -49,10 +98,21 @@ public struct BuiltinSubagentSelection: OptionSet, Sendable, Hashable {
     public static let general = BuiltinSubagentSelection(rawValue: 1 << 0)
     public static let explore = BuiltinSubagentSelection(rawValue: 1 << 1)
     public static let plan = BuiltinSubagentSelection(rawValue: 1 << 2)
+    public static let testRunner = BuiltinSubagentSelection(rawValue: 1 << 3)
+    public static let codeReviewer = BuiltinSubagentSelection(rawValue: 1 << 4)
+    /// Least-privilege investigation/review bundle. Test execution is omitted
+    /// because it requires a constrained Bash capability.
+    public static let readOnly: BuiltinSubagentSelection = [
+        .explore,
+        .plan,
+        .codeReviewer,
+    ]
     public static let all: BuiltinSubagentSelection = [
         .general,
         .explore,
         .plan,
+        .testRunner,
+        .codeReviewer,
     ]
 
     public static func named(_ raw: String) -> BuiltinSubagentSelection? {
@@ -67,6 +127,12 @@ public struct BuiltinSubagentSelection: OptionSet, Sendable, Hashable {
             return .explore
         case "plan":
             return .plan
+        case "test-runner", "test", "tests":
+            return .testRunner
+        case "code-reviewer", "review", "reviewer":
+            return .codeReviewer
+        case "read-only", "readonly":
+            return .readOnly
         default:
             return nil
         }
@@ -78,16 +144,30 @@ public struct BuiltinSubagentSelection: OptionSet, Sendable, Hashable {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         guard !parts.isEmpty else { return BuiltinSubagentSelection.none }
+
+        // Validate the complete list before applying meta selections. An early
+        // return for `all` used to make `all,typo` succeed while `typo,all`
+        // failed. Negative selections are intentionally exclusive: mixing
+        // `none` (or one of its aliases) with a positive selection is almost
+        // certainly a command-line mistake.
+        let normalized = parts.map { $0.lowercased() }
+        let noneAliases: Set<String> = ["none", "off", "false", "0"]
+        let parsed = parts.map(named)
+        guard parsed.allSatisfy({ $0 != nil }) else { return nil }
+        if normalized.contains(where: noneAliases.contains) {
+            return parts.count == 1 ? BuiltinSubagentSelection.none : nil
+        }
+        let values = parsed.compactMap { $0 }
+        if values.contains(.all) { return .all }
+
         var selection: BuiltinSubagentSelection = .none
-        for part in parts {
-            guard let value = named(part) else { return nil }
-            if value == .all { return .all }
+        for value in values {
             selection.insert(value)
         }
         return selection
     }
 
-    public static let validNames = "general, explore, plan, all, none"
+    public static let validNames = "general, explore, plan, test-runner, code-reviewer, read-only, all, none"
 }
 
 public extension SubagentDefinition {
@@ -96,7 +176,7 @@ public extension SubagentDefinition {
     ) -> SubagentDefinition {
         SubagentDefinition(
             name: "general",
-            description: "Use for broad code research, multi-step work, and tasks that do not need a narrower specialist.",
+            description: "Use for implementation work that needs write/edit access and has no narrower specialist. Do not use for read-only exploration, planning, review, or build/test verification.",
             prompt: """
             You are a general-purpose coding agent.
 
@@ -141,7 +221,8 @@ public extension SubagentDefinition {
             - Use line references when they are available and useful.
             - Mention uncertainty when evidence is incomplete.
             """,
-            tools: tools.intersection(.readOnly)
+            tools: tools.intersection(.readOnly),
+            fileAccessPolicy: .workspaceOnly
         )
     }
 
@@ -167,7 +248,8 @@ public extension SubagentDefinition {
             - Rollback or compatibility risks when relevant.
             - Open questions only if they block execution.
             """,
-            tools: tools.intersection(.readOnly)
+            tools: tools.intersection(.readOnly),
+            fileAccessPolicy: .workspaceOnly
         )
     }
 
@@ -191,7 +273,8 @@ public extension SubagentDefinition {
             - Explain the user-visible impact for each real bug.
             - If no issues are found, say so and call out residual risk or test gaps.
             """,
-            tools: tools.intersection(.readOnly)
+            tools: tools.intersection(.readOnly),
+            fileAccessPolicy: .workspaceOnly
         )
     }
 
@@ -201,7 +284,7 @@ public extension SubagentDefinition {
         var safeTools = tools.intersection(.readOnly)
         if tools.contains(.bash) { safeTools.insert(.bash) }
         if tools.contains(.taskStatus) { safeTools.insert(.taskStatus) }
-        if tools.contains(.waitTask) { safeTools.insert(.waitTask) }
+        if tools.contains(.job) { safeTools.insert(.job) }
         return SubagentDefinition(
             name: "test-runner",
             description: "Use for running tests and analyzing test or build failures.",
@@ -214,6 +297,7 @@ public extension SubagentDefinition {
             - Analyze failures and report likely causes.
             - Do not edit, create, delete, or move files.
             - Do not run destructive commands.
+            - Bash is runtime-restricted to one direct build/test process per call. Shell composition, redirection, command substitution, cleanup commands, and unrelated executables are rejected before launch.
             - Prefer non-interactive commands and bounded timeouts.
 
             Output:
@@ -222,7 +306,9 @@ public extension SubagentDefinition {
             - Failure analysis with relevant log excerpts.
             - Recommended next steps.
             """,
-            tools: safeTools
+            tools: safeTools,
+            bashCommandPolicy: .buildAndTestOnly,
+            fileAccessPolicy: .workspaceOnly
         )
     }
 
@@ -234,16 +320,22 @@ public extension SubagentDefinition {
         let readOnly = tools.intersection(.readOnly)
 
         var agents: [SubagentDefinition] = []
-        if selection.contains(.general) {
-            agents.append(.general())
-        }
         if selection.contains(.explore) {
-            guard !readOnly.isEmpty else { return agents }
-            agents.append(.explore(tools: readOnly))
+            if !readOnly.isEmpty { agents.append(.explore(tools: readOnly)) }
         }
         if selection.contains(.plan) {
-            guard !readOnly.isEmpty else { return agents }
-            agents.append(.plan(tools: readOnly))
+            if !readOnly.isEmpty { agents.append(.plan(tools: readOnly)) }
+        }
+        if selection.contains(.codeReviewer) {
+            if !readOnly.isEmpty { agents.append(.codeReviewer(tools: readOnly)) }
+        }
+        if selection.contains(.testRunner), tools.contains(.bash) {
+            agents.append(.testRunner(tools: tools))
+        }
+        // Keep the broad, mutating agent last so the model sees narrower
+        // specialists first and must make an explicit choice for full access.
+        if selection.contains(.general) {
+            agents.append(.general())
         }
         return agents
     }

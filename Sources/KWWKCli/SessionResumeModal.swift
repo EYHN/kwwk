@@ -9,6 +9,7 @@ import KWWKAgent
 @MainActor
 final class SessionResumeModal: Modal {
     private let sessions: [SessionStore.SessionInfo]
+    private let currentSessionId: String
     private let core: ModalListCore
     private let onSelect: @MainActor (SessionStore.SessionInfo) -> Void
     private let onCancel: @MainActor () -> Void
@@ -20,6 +21,7 @@ final class SessionResumeModal: Modal {
         onCancel: @MainActor @escaping () -> Void
     ) {
         self.sessions = sessions
+        self.currentSessionId = currentSessionId
         self.onSelect = onSelect
         self.onCancel = onCancel
         self.core = ModalListCore(
@@ -45,7 +47,16 @@ final class SessionResumeModal: Modal {
 
     func confirm() {
         guard !core.isEmpty, sessions.indices.contains(core.selectedIndex) else { return }
-        onSelect(sessions[core.selectedIndex])
+        let selected = sessions[core.selectedIndex]
+        // Reloading the live session is destructive rather than useful: the
+        // replacement path retires its Agent and closes every active job in the
+        // session namespace. Treat the explicitly-labelled current row as a
+        // close/no-op so an accidental Enter cannot kill ongoing work.
+        guard selected.id != currentSessionId else {
+            onCancel()
+            return
+        }
+        onSelect(selected)
     }
 
     func cancel() { onCancel() }

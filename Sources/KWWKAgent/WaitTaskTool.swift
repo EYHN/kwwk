@@ -56,7 +56,7 @@ public func createWaitTaskTool(
     Useful immediately after kicking off a long-running bash task whose output you need before you can proceed. The `waited` field in the result tells you whether the task actually finished (true) or the timeout fired first (false).
     """
 
-    return AgentTool(
+    var tool = AgentTool(
         name: "wait_task",
         label: "wait_task",
         description: description,
@@ -72,12 +72,12 @@ public func createWaitTaskTool(
             guard let snap0 = await manager.get(taskId) else {
                 throw CodingToolError.invalidArgument("task not found: \(taskId)")
             }
-            if let sessionId, snap0.sessionId != nil, snap0.sessionId != sessionId {
+            if let sessionId, snap0.sessionId != sessionId {
                 throw CodingToolError.invalidArgument("task not found in this session: \(taskId)")
             }
             // Fast path — already terminal. Still pay the snapshot read
             // so the model gets the tail, but skip the poll loop.
-            if snap0.status != .running {
+            if snap0.status.isTerminal {
                 return buildResult(snap: snap0, waited: true, timedOut: false)
             }
 
@@ -95,7 +95,7 @@ public func createWaitTaskTool(
                 }
                 try? await Task.sleep(nanoseconds: pollInterval)
                 if let snap = await manager.get(taskId),
-                   snap.status != .running {
+                   snap.status.isTerminal {
                     return buildResult(snap: snap, waited: true, timedOut: false)
                 }
             }
@@ -111,6 +111,8 @@ public func createWaitTaskTool(
             )
         }
     )
+    tool.codingToolCapabilities = .job
+    return tool
 }
 
 // MARK: - Helpers

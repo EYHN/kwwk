@@ -1,4 +1,5 @@
 import Foundation
+import KWWKAI
 import KWWKAgent
 
 /// Outcome of a `performCompact` call. Callers decide how to render
@@ -30,16 +31,58 @@ func performCompact(
     // For the between-turns hook the guard is inverted: we run *inside*
     // the loop, in a windowed gap where no LLM call is in flight and the
     // loop is awaiting the hook - safe to compact. Pass true to skip.
-    ignoreStreaming: Bool = false
+    ignoreStreaming: Bool = false,
+    settle: @escaping @MainActor @Sendable (CompactOutcome) async -> Void = { _ in }
 ) async -> CompactOutcome {
-    let outcome = await AgentContextCompactor.compactAgent(
-        agent: agent,
-        backgroundManager: backgroundManager,
-        sessionId: sessionId,
-        config: agent.autoCompact?.config ?? AgentContextCompactionConfig(),
-        ignoreStreaming: ignoreStreaming
-    )
+    if !ignoreStreaming && agent.state.isStreaming {
+        let outcome = CompactOutcome.refusedAgentBusy
+        await settle(outcome)
+        return outcome
+    }
+    let compact: @Sendable (CancellationHandle?) async -> AgentContextCompactionOutcome = { cancellation in
+        await AgentContextCompactor.compactAgent(
+            agent: agent,
+            backgroundManager: backgroundManager,
+            sessionId: sessionId,
+            config: agent.autoCompact?.config ?? AgentContextCompactionConfig(),
+            // `withMaintenance` is the authoritative ownership guard. Skip
+            // the secondary streaming check while that ownership is held.
+            ignoreStreaming: true,
+            cancellation: cancellation
+        )
+    }
 
+    let outcome: CompactOutcome
+    if ignoreStreaming {
+        // The automatic path already owns the enclosing Agent run.
+        outcome = compactOutcome(from: await compact(nil))
+        await settle(outcome)
+    } else {
+        do {
+            outcome = try await agent.withMaintenance { cancellation in
+                let outcome = compactOutcome(from: await compact(cancellation))
+                // Settlement is part of the maintenance transaction. In
+                // particular, background-delivery idle waiters are not resumed
+                // until the compacted projection is durable and its UI boundary
+                // has been committed.
+                await settle(outcome)
+                return outcome
+            }
+        } catch AgentError.alreadyRunning {
+            outcome = .refusedAgentBusy
+            await settle(outcome)
+        } catch {
+            outcome = .failed("\(error)")
+            await settle(outcome)
+        }
+    }
+
+    return outcome
+}
+
+private func compactOutcome(
+    from outcome: AgentContextCompactionOutcome
+) -> CompactOutcome {
     switch outcome {
     case .compacted(let messagesCompacted, let hasRunningTasksLedger):
         return .compacted(

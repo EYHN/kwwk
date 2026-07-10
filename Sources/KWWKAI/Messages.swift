@@ -224,19 +224,38 @@ public struct UserMessage: Codable, Sendable, Hashable {
     public var role: Role
     public var content: [UserBlock]
     public var timestamp: Int64
+    /// Identifies machine-generated context that is delivered through the
+    /// agent's internal aside channel. Providers still receive these as user
+    /// role messages, but UI queue affordances can distinguish them from text
+    /// the user actually submitted.
+    public var source: UserMessageSource?
 
-    public init(content: [UserBlock], timestamp: Int64 = Timestamp.now()) {
+    public init(
+        content: [UserBlock],
+        timestamp: Int64 = Timestamp.now(),
+        source: UserMessageSource? = nil
+    ) {
         self.role = .user
         self.content = content
         self.timestamp = timestamp
+        self.source = source
     }
 
     /// Convenience: plain string content.
-    public init(text: String, timestamp: Int64 = Timestamp.now()) {
+    public init(
+        text: String,
+        timestamp: Int64 = Timestamp.now(),
+        source: UserMessageSource? = nil
+    ) {
         self.role = .user
         self.content = [.text(TextContent(text: text))]
         self.timestamp = timestamp
+        self.source = source
     }
+}
+
+public enum UserMessageSource: String, Codable, Sendable, Hashable {
+    case runtime
 }
 
 public struct AssistantMessage: Codable, Sendable, Hashable {

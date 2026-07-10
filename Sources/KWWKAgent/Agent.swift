@@ -77,6 +77,11 @@ public struct AgentOptions: Sendable {
     public var maxRetryDelayMs: Int?
     /// Hard cap on assistant turns per run. Nil = unlimited.
     public var maxTurns: Int?
+    /// Subagent-only lifecycle policy. Kept internal so the public Agent SDK's
+    /// maxTurns contract remains a strict hard stop by default.
+    var finalTextOnlyOnLastTurn = false
+    var terminalToolName: String?
+    var terminalToolReminderLimit = 0
     public var beforeToolCall: BeforeToolCallHook?
     public var afterToolCall: AfterToolCallHook?
     public var userPromptSubmit: UserPromptSubmitHook?
@@ -142,12 +147,21 @@ public final class Agent: @unchecked Sendable {
     private let lock = NSLock()
     private var listeners: [(id: UUID, handler: AgentListener)] = []
     private var activeCancellation: CancellationHandle?
+    /// Exclusive non-generation work (currently manual context compaction).
+    /// A maintenance owner and a model run are mutually exclusive. Keeping
+    /// this beside `activeCancellation` makes the check-and-acquire atomic,
+    /// rather than relying on the UI's eventually-consistent streaming flag.
+    private var maintenanceCancellation: CancellationHandle?
+    /// Permanently closes this Agent instance to new runs. Session rotation
+    /// uses this before detaching bridges so already-scheduled wake tasks can
+    /// never revive the outgoing session.
+    private var retired = false
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// Immutable session identity: one `Agent` == one session. Rotating to a
     /// new session means building a fresh `Agent`/`SessionRecorder` through the
-    /// supported path (the CLI's `/new` and `/resume` re-point the recorder and
-    /// clear the live context). There is deliberately no in-place setter —
+    /// supported path (the CLI's `/new` and `/resume` replace both together).
+    /// There is deliberately no in-place setter —
     /// mutating it would leave tools, the recorder, and background attachments
     /// scoped to different ids.
     public let sessionId: String?
@@ -163,6 +177,9 @@ public final class Agent: @unchecked Sendable {
     private var _thinkingBudgets: ThinkingBudgets?
     private var _maxRetryDelayMs: Int?
     private var _maxTurns: Int?
+    private let finalTextOnlyOnLastTurn: Bool
+    private let terminalToolName: String?
+    private let terminalToolReminderLimit: Int
     private var _toolExecution: ToolExecutionMode
     private var _toolChoice: ToolChoice?
     private var _parallelToolCalls: Bool?
@@ -242,6 +259,10 @@ public final class Agent: @unchecked Sendable {
 
     private let steeringQueue: PendingMessageQueue
     private let followUpQueue: PendingMessageQueue
+    /// Machine-generated context (background completions, runtime notices).
+    /// Kept separate from steering so it never appears in editable user queue
+    /// UI, while still being drained at the next model step boundary.
+    private let runtimeAsideQueue: PendingMessageQueue
     internal let backgroundAttachmentList = AgentBackgroundAttachmentList()
 
     public convenience init(
@@ -286,6 +307,9 @@ public final class Agent: @unchecked Sendable {
         self._thinkingBudgets = options.thinkingBudgets
         self._maxRetryDelayMs = options.maxRetryDelayMs
         self._maxTurns = options.maxTurns
+        self.finalTextOnlyOnLastTurn = options.finalTextOnlyOnLastTurn
+        self.terminalToolName = options.terminalToolName
+        self.terminalToolReminderLimit = max(0, options.terminalToolReminderLimit)
         self._beforeToolCall = options.beforeToolCall
         self._afterToolCall = options.afterToolCall
         self._userPromptSubmit = options.userPromptSubmit
@@ -296,6 +320,7 @@ public final class Agent: @unchecked Sendable {
         self._authResolver = options.authResolver
         self.steeringQueue = PendingMessageQueue(mode: options.steeringMode)
         self.followUpQueue = PendingMessageQueue(mode: options.followUpMode)
+        self.runtimeAsideQueue = PendingMessageQueue(mode: .all)
     }
 
     internal func streamForCompaction(
@@ -308,6 +333,19 @@ public final class Agent: @unchecked Sendable {
 
     /// Queue a message to inject after the current assistant turn finishes.
     public func steer(_ message: Message) { steeringQueue.enqueue(message) }
+
+    /// Queue machine-generated context for the next model step without
+    /// exposing it through the user's editable steering queue.
+    public func aside(_ message: UserMessage) {
+        var runtimeMessage = message
+        runtimeMessage.source = .runtime
+        runtimeAsideQueue.enqueue(.user(runtimeMessage))
+    }
+
+    /// Convenience: enqueue a plain-text runtime aside.
+    public func aside(_ text: String) {
+        aside(UserMessage(text: text, source: .runtime))
+    }
 
     /// Convenience: steer a plain-text user message.
     public func steer(_ text: String) { steer(.user(UserMessage(text: text))) }
@@ -326,9 +364,21 @@ public final class Agent: @unchecked Sendable {
 
     public func clearSteeringQueue() { steeringQueue.clear() }
     public func clearFollowUpQueue() { followUpQueue.clear() }
-    public func clearAllQueues() { clearSteeringQueue(); clearFollowUpQueue() }
+    public func clearAllQueues() {
+        clearSteeringQueue()
+        clearFollowUpQueue()
+        runtimeAsideQueue.clear()
+        for attachment in backgroundAttachmentList.list() {
+            attachment.deliveryConsumer.clearPendingMessages()
+        }
+    }
     public func hasQueuedMessages() -> Bool {
-        steeringQueue.hasItems() || followUpQueue.hasItems()
+        runtimeAsideQueue.hasItems()
+            || backgroundAttachmentList.list().contains(where: {
+                $0.deliveryConsumer.hasPendingMessages()
+            })
+            || steeringQueue.hasItems()
+            || followUpQueue.hasItems()
     }
 
     /// Number of steering messages waiting to be injected at the next
@@ -429,13 +479,68 @@ extension Agent {
     }
 
     public func `continue`() async throws {
+        // Own the run before touching any queue. Background wake-ups race with
+        // direct user prompts; draining first would lose messages when the
+        // subsequent lifecycle acquisition throws `alreadyRunning`.
+        let cancellation = try acquireRun()
+
+        // Queued work always wins over the role-based continuation. This is
+        // important after manual compaction: the replacement recap has role
+        // `.user`, while a prompt submitted during the maintenance window is
+        // already queued. Answer that real prompt in the recap context instead
+        // of first generating an unsolicited response to the recap itself.
+        let queuedAsides = drainRuntimeMessages()
+        if !queuedAsides.isEmpty {
+            await runOwnedLifecycle(cancellation: cancellation) { [self] cancellation, emit in
+                try await AgentLoop.run(
+                    prompts: queuedAsides,
+                    context: snapshotContext(),
+                    config: loopConfig(skipInitialRuntimePoll: true),
+                    emit: emit,
+                    cancellation: cancellation,
+                    streamFn: streamFn
+                )
+            }
+            return
+        }
+        let queuedSteering = steeringQueue.drain()
+        if !queuedSteering.isEmpty {
+            await runOwnedLifecycle(cancellation: cancellation) { [self] cancellation, emit in
+                try await AgentLoop.run(
+                    prompts: queuedSteering,
+                    context: snapshotContext(),
+                    config: loopConfig(skipInitialSteeringPoll: true),
+                    emit: emit,
+                    cancellation: cancellation,
+                    streamFn: streamFn
+                )
+            }
+            return
+        }
+        let queuedFollowUps = followUpQueue.drain()
+        if !queuedFollowUps.isEmpty {
+            await runOwnedLifecycle(cancellation: cancellation) { [self] cancellation, emit in
+                try await AgentLoop.run(
+                    prompts: queuedFollowUps,
+                    context: snapshotContext(),
+                    config: loopConfig(),
+                    emit: emit,
+                    cancellation: cancellation,
+                    streamFn: streamFn
+                )
+            }
+            return
+        }
+
         let messages = state.messages
         guard let last = messages.last else {
+            finishRun()
             throw AgentError.noMessagesToContinue
         }
+
         switch last.role {
         case .user, .toolResult:
-            try await runLifecycle { [self] cancellation, emit in
+            await runOwnedLifecycle(cancellation: cancellation) { [self] cancellation, emit in
                 try await AgentLoop.runContinue(
                     context: snapshotContext(),
                     config: loopConfig(),
@@ -445,33 +550,12 @@ extension Agent {
                 )
             }
         case .assistant:
-            // Drain queued messages: steering first, then follow-up.
-            let queuedSteering = steeringQueue.drain()
-            if !queuedSteering.isEmpty {
-                try await runLifecycle { [self] cancellation, emit in
-                    try await AgentLoop.run(
-                        prompts: queuedSteering,
-                        context: snapshotContext(),
-                        config: loopConfig(skipInitialSteeringPoll: true),
-                        emit: emit,
-                        cancellation: cancellation,
-                        streamFn: streamFn
-                    )
-                }
-                return
-            }
-            let queuedFollowUps = followUpQueue.drain()
-            if !queuedFollowUps.isEmpty {
-                try await runLifecycle { [self] cancellation, emit in
-                    try await AgentLoop.run(
-                        prompts: queuedFollowUps,
-                        context: snapshotContext(),
-                        config: loopConfig(),
-                        emit: emit,
-                        cancellation: cancellation,
-                        streamFn: streamFn
-                    )
-                }
+            finishRun()
+            // A consumer can enqueue after the empty drain while this run still
+            // owns the streaming flag, so its wake callback intentionally does
+            // not start a competing run. Recheck after releasing ownership.
+            if hasQueuedMessages() {
+                try await self.continue()
                 return
             }
             throw AgentError.cannotContinueFromRole(last.role.rawValue)
@@ -479,20 +563,88 @@ extension Agent {
     }
 
     public func abort() {
-        let cancellation = lock.withLock { activeCancellation }
-        cancellation?.cancel(reason: "aborted")
+        let cancellations = lock.withLock {
+            [activeCancellation, maintenanceCancellation].compactMap { $0 }
+        }
+        for cancellation in cancellations {
+            cancellation.cancel(reason: "aborted")
+        }
+    }
+
+    /// Permanently reject future prompt/continue/maintenance acquisition.
+    /// Existing work is cancelled; callers may await `waitForIdle()` before
+    /// closing provider resources.
+    public func retire() {
+        let cancellations = lock.withLock { () -> [CancellationHandle] in
+            retired = true
+            return [activeCancellation, maintenanceCancellation].compactMap { $0 }
+        }
+        for cancellation in cancellations {
+            cancellation.cancel(reason: "session retired")
+        }
+        clearAllQueues()
     }
 
     public func waitForIdle() async {
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             let shouldResume: Bool = lock.withLock {
-                // activeCancellation is the authoritative flag: only non-nil while
-                // a run owns the agent.
-                if activeCancellation == nil { return true }
+                if activeCancellation == nil && maintenanceCancellation == nil { return true }
                 idleWaiters.append(cont)
                 return false
             }
             if shouldResume { cont.resume() }
+        }
+    }
+
+    /// Run transcript-mutating maintenance under the same exclusive ownership
+    /// used by model runs. Prompts/background wake-ups that race this window
+    /// receive `alreadyRunning` without touching queues.
+    ///
+    /// Releasing maintenance deliberately does not start queued work. Callers
+    /// often have durable/UI settlement to finish after mutating the transcript
+    /// (manual compaction must persist its projection before another turn can
+    /// append). Once that settlement is complete, call `resumeQueuedWork()`.
+    public func withMaintenance<T: Sendable>(
+        _ body: @escaping @Sendable (CancellationHandle) async -> T
+    ) async throws -> T {
+        let cancellation = try lock.withLock { () throws -> CancellationHandle in
+            if retired || activeCancellation != nil || maintenanceCancellation != nil {
+                throw AgentError.alreadyRunning
+            }
+            let cancellation = CancellationHandle()
+            maintenanceCancellation = cancellation
+            return cancellation
+        }
+
+        let result = await body(cancellation)
+        finishMaintenance(cancellation)
+        return result
+    }
+
+    /// Convenience overload for maintenance that does not itself need to
+    /// observe cancellation. Exit/session teardown still owns and releases the
+    /// underlying handle; cancellable operations such as compaction should use
+    /// the handle-taking overload above.
+    public func withMaintenance<T: Sendable>(
+        _ body: @escaping @Sendable () async -> T
+    ) async throws -> T {
+        try await withMaintenance { _ in await body() }
+    }
+
+    /// Resume work queued while a maintenance owner was active.
+    ///
+    /// This is intentionally fire-and-forget: UI callers can finish their
+    /// persistence and repaint transaction, release maintenance, then hand the
+    /// queue back to the normal run arbiter without blocking on the model turn.
+    /// Waiting for idle first also makes the method safe when a competing run or
+    /// a background-delivery wake already acquired ownership.
+    public func resumeQueuedWork() {
+        guard hasQueuedMessages() else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.waitForIdle()
+            guard self.hasQueuedMessages() else { return }
+            try? await self.continue()
         }
     }
 
@@ -506,10 +658,14 @@ extension Agent {
         )
     }
 
-    private func loopConfig(skipInitialSteeringPoll: Bool = false) -> AgentLoopConfig {
+    private func loopConfig(
+        skipInitialSteeringPoll: Bool = false,
+        skipInitialRuntimePoll: Bool = false
+    ) -> AgentLoopConfig {
         let steering = steeringQueue
         let followUp = followUpQueue
-        let skipBox = FlagBox(initial: skipInitialSteeringPoll)
+        let skipSteeringBox = FlagBox(initial: skipInitialSteeringPoll)
+        let skipRuntimeBox = FlagBox(initial: skipInitialRuntimePoll)
         // Filter reasoning intent by the live model's capability. Non-
         // reasoning models (e.g. Copilot GPT-4.1) would otherwise receive
         // a `reasoning`/`thinking` field they don't understand — some
@@ -519,7 +675,7 @@ extension Agent {
             guard state.model.reasoning, state.thinkingLevel != .off else { return nil }
             return thinkingLevelToReasoning(state.thinkingLevel)
         }()
-        return AgentLoopConfig(
+        var config = AgentLoopConfig(
             model: state.model,
             reasoning: effectiveReasoning,
             thinkingBudgets: thinkingBudgets,
@@ -532,10 +688,15 @@ extension Agent {
             parallelToolCalls: parallelToolCalls,
             maxTurns: maxTurns,
             retryBaseDelayMs: retryBaseDelayMs,
+            getRuntimeMessages: {
+                if skipRuntimeBox.swapFalse() { return [] }
+                return self.drainRuntimeMessages()
+            },
             getSteeringMessages: {
-                if skipBox.swapFalse() { return [] }
+                if skipSteeringBox.swapFalse() { return [] }
                 return steering.drain()
             },
+            hasSteeringMessages: { steering.hasItems() },
             getFollowUpMessages: { followUp.drain() },
             authResolver: authResolver,
             beforeToolCall: beforeToolCall,
@@ -545,6 +706,10 @@ extension Agent {
             transformContext: transformContext,
             betweenTurns: builtInBetweenTurnsHook()
         )
+        config.finalTextOnlyOnLastTurn = finalTextOnlyOnLastTurn
+        config.terminalToolName = terminalToolName
+        config.terminalToolReminderLimit = terminalToolReminderLimit
+        return config
     }
 
     private func thinkingLevelToReasoning(_ level: ThinkingLevel) -> ReasoningLevel? {
@@ -562,8 +727,15 @@ extension Agent {
     private func runLifecycle(
         _ executor: @escaping @Sendable (_ cancellation: CancellationHandle, _ emit: @escaping AgentEventSink) async throws -> Void
     ) async throws {
+        let cancellation = try acquireRun()
+        await runOwnedLifecycle(cancellation: cancellation, executor)
+    }
+
+    private func acquireRun() throws -> CancellationHandle {
         try lock.withLock { () throws -> Void in
-            if activeCancellation != nil { throw AgentError.alreadyRunning }
+            if retired || activeCancellation != nil || maintenanceCancellation != nil {
+                throw AgentError.alreadyRunning
+            }
             let handle = CancellationHandle()
             activeCancellation = handle
         }
@@ -572,7 +744,13 @@ extension Agent {
         state.setStreaming(true)
         state.setStreamingMessage(nil)
         state.setErrorMessage(nil)
+        return cancellation
+    }
 
+    private func runOwnedLifecycle(
+        cancellation: CancellationHandle,
+        _ executor: @escaping @Sendable (_ cancellation: CancellationHandle, _ emit: @escaping AgentEventSink) async throws -> Void
+    ) async {
         let emit: AgentEventSink = { [weak self] event in
             await self?.processEvent(event, cancellation: cancellation)
         }
@@ -583,17 +761,42 @@ extension Agent {
             await handleRunFailure(error: error, aborted: cancellation.isCancelled)
         }
 
-        // finishRun — clear state and resume waiters.
+        finishRun()
+    }
+
+    private func finishRun() {
+        // Publish the non-streaming state before releasing run ownership. If
+        // ownership were cleared first, a new prompt could acquire and set
+        // streaming=true only for this old run to overwrite it with false.
+        state.setStreaming(false)
+        state.setStreamingMessage(nil)
+        state.clearPendingToolCalls()
         let waiters: [CheckedContinuation<Void, Never>] = lock.withLock {
             activeCancellation = nil
             let drained = idleWaiters
             idleWaiters.removeAll()
             return drained
         }
-        state.setStreaming(false)
-        state.setStreamingMessage(nil)
-        state.clearPendingToolCalls()
         for waiter in waiters { waiter.resume() }
+    }
+
+    private func finishMaintenance(_ cancellation: CancellationHandle) {
+        let waiters: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard maintenanceCancellation === cancellation else { return [] }
+            maintenanceCancellation = nil
+            let drained = idleWaiters
+            idleWaiters.removeAll()
+            return drained
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func drainRuntimeMessages() -> [Message] {
+        var messages = runtimeAsideQueue.drain()
+        for attachment in backgroundAttachmentList.list() {
+            messages.append(contentsOf: attachment.deliveryConsumer.drainMessages())
+        }
+        return messages
     }
 
     private func builtInBetweenTurnsHook() -> BetweenTurnsHook? {
@@ -659,6 +862,13 @@ extension Agent {
         for listener in snapshotListeners() {
             await listener(event, cancellation)
         }
+    }
+
+    /// Emit process-local telemetry that originates outside an active model
+    /// run (for example a background subagent terminal event). It deliberately
+    /// bypasses transcript/state mutation.
+    func emitExternalRuntimeEvent(_ event: AgentRuntimeEvent) async {
+        await emitSynthetic(.runtimeEvent(event), cancellation: nil)
     }
 
     private func handleRunFailure(error: Error, aborted: Bool) async {

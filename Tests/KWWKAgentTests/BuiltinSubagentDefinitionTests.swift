@@ -21,6 +21,10 @@ struct BuiltinSubagentDefinitionTests {
         #expect(plan.name == "plan")
         #expect(plan.tools == .readOnly)
         #expect(plan.prompt.contains("read-only implementation planner"))
+
+        let testRunner = SubagentDefinition.testRunner(tools: .standard)
+        #expect(testRunner.tools == [.read, .grep, .find, .ls, .bash, .job])
+        #expect(testRunner.bashCommandPolicy == .buildAndTestOnly)
     }
 
     @Test("builtins respect selection and available tools")
@@ -29,7 +33,7 @@ struct BuiltinSubagentDefinitionTests {
             for: .readOnly,
             selection: [.general, .explore]
         )
-        #expect(readOnly.map(\.name) == ["general", "explore"])
+        #expect(readOnly.map(\.name) == ["explore", "general"])
         #expect(readOnly.first { $0.name == "general" }?.tools == nil)
 
         let selected = SubagentDefinition.builtins(
@@ -44,7 +48,30 @@ struct BuiltinSubagentDefinitionTests {
         #expect(BuiltinSubagentSelection.parseList("general,Explore") == [.general, .explore])
         #expect(BuiltinSubagentSelection.parseList("none") == BuiltinSubagentSelection.none)
         #expect(BuiltinSubagentSelection.parseList("all") == .all)
+        #expect(BuiltinSubagentSelection.parseList("test-runner") == .testRunner)
+        #expect(BuiltinSubagentSelection.parseList("read-only") == .readOnly)
         #expect(BuiltinSubagentSelection.parseList("bad") == nil)
+    }
+
+    @Test("builtin selection validates every token before applying all")
+    func selectionValidatesBeforeApplyingAll() {
+        #expect(BuiltinSubagentSelection.parseList("all,typo") == nil)
+        #expect(BuiltinSubagentSelection.parseList("typo,all") == nil)
+        #expect(BuiltinSubagentSelection.parseList("default,typo") == nil)
+        #expect(BuiltinSubagentSelection.parseList("all,plan") == .all)
+        #expect(BuiltinSubagentSelection.parseList("general,ALL,explore") == .all)
+        #expect(BuiltinSubagentSelection.parseList("defaults,plan") == .all)
+    }
+
+    @Test("builtin negative selections must appear alone")
+    func negativeSelectionMustAppearAlone() {
+        for alias in ["none", "off", "false", "0"] {
+            #expect(BuiltinSubagentSelection.parseList(alias) == BuiltinSubagentSelection.none)
+            #expect(BuiltinSubagentSelection.parseList("\(alias),general") == nil)
+            #expect(BuiltinSubagentSelection.parseList("general,\(alias)") == nil)
+            #expect(BuiltinSubagentSelection.parseList("all,\(alias)") == nil)
+            #expect(BuiltinSubagentSelection.parseList("\(alias),all") == nil)
+        }
     }
 
     @Test("CodingAgentConfig helper installs builtins")
@@ -57,7 +84,7 @@ struct BuiltinSubagentDefinitionTests {
         )
 
         let configured = base.withBuiltinSubagents(.general.union(.plan))
-        #expect(configured.subagents.map { $0.name } == ["general", "plan"])
+        #expect(configured.subagents.map { $0.name } == ["plan", "general"])
         #expect(base.subagents.isEmpty)
     }
 }

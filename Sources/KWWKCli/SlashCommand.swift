@@ -40,10 +40,12 @@ enum SlashInput: Equatable {
 /// to the user.
 @MainActor
 final class SlashContext {
-    let agent: Agent
+    private let agentProvider: @MainActor @Sendable () -> Agent
     let modal: ModalHost
     let backgroundManager: BackgroundTaskManager
-    let sessionId: String
+    private let sessionIdProvider: @MainActor @Sendable () -> String
+    var agent: Agent { agentProvider() }
+    var sessionId: String { sessionIdProvider() }
     /// Append one semantic block of dimmed notification text to the
     /// transcript. All lines in the array are committed together with a
     /// single leading blank row (the "every scrollback block opens with
@@ -110,10 +112,44 @@ final class SlashContext {
         withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() },
         setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
     ) {
-        self.agent = agent
+        self.agentProvider = { agent }
         self.modal = modal
         self.backgroundManager = backgroundManager
-        self.sessionId = sessionId
+        self.sessionIdProvider = { sessionId }
+        self.notifyBlock = notifyBlock
+        self.commitScrollback = commitScrollback
+        self.refreshTranscript = refreshTranscript
+        self.recordCompaction = recordCompaction
+        self.setSessionTitle = setSessionTitle
+        self.sessionProviders = sessionProviders
+        self.authResolvers = authResolvers
+        self.context1m = context1m
+        self.withSuspendedTUI = withSuspendedTUI
+        self.setCompacting = setCompacting
+    }
+
+    /// Runtime-backed variant used by the interactive TUI, whose `/new` and
+    /// `/resume` commands replace the complete session-scoped Agent.
+    init(
+        agentProvider: @MainActor @escaping @Sendable () -> Agent,
+        modal: ModalHost,
+        backgroundManager: BackgroundTaskManager,
+        sessionIdProvider: @MainActor @escaping @Sendable () -> String,
+        notifyBlock: @MainActor @escaping ([String]) -> Void,
+        commitScrollback: @MainActor @escaping ((Int) -> [String]) -> Void,
+        refreshTranscript: @MainActor @escaping () -> Void,
+        recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in },
+        setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in },
+        sessionProviders: SessionProviders = SessionProviders(),
+        authResolvers: SessionAuthResolvers? = nil,
+        context1m: Bool = false,
+        withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() },
+        setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
+    ) {
+        self.agentProvider = agentProvider
+        self.modal = modal
+        self.backgroundManager = backgroundManager
+        self.sessionIdProvider = sessionIdProvider
         self.notifyBlock = notifyBlock
         self.commitScrollback = commitScrollback
         self.refreshTranscript = refreshTranscript

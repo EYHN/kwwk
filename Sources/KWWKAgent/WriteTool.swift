@@ -32,7 +32,11 @@ public struct LocalWriteOperations: WriteOperations {
     }
 }
 
-public func createWriteTool(cwd: String, options: WriteToolOptions = .init()) -> AgentTool {
+public func createWriteTool(
+    cwd: String,
+    options: WriteToolOptions = .init(),
+    fileAccessPolicy: FileAccessPolicy = .unrestricted
+) -> AgentTool {
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
@@ -42,7 +46,7 @@ public func createWriteTool(cwd: String, options: WriteToolOptions = .init()) ->
         "required": ["path", "content"],
     ]
     let ops = options.operations
-    return AgentTool(
+    var tool = AgentTool(
         name: "write",
         label: "write",
         description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
@@ -55,7 +59,12 @@ public func createWriteTool(cwd: String, options: WriteToolOptions = .init()) ->
                 throw CodingToolError.invalidArgument("write: `path` and `content` are required")
             }
 
-            let absolutePath = PathUtils.resolveToCwd(rawPath, cwd: cwd)
+            let absolutePath = try PathUtils.resolveForAccess(
+                rawPath,
+                cwd: cwd,
+                policy: fileAccessPolicy,
+                intent: .write
+            )
             return try await FileMutationQueue.shared.run(absolutePath) {
                 try await ops.createParentDirectories(absolutePath)
                 try await ops.writeFile(absolutePath, content: Data(content.utf8))
@@ -67,4 +76,8 @@ public func createWriteTool(cwd: String, options: WriteToolOptions = .init()) ->
             }
         }
     )
+    tool.fileAccessPolicy = fileAccessPolicy
+    tool.fileAccessCwd = cwd
+    tool.codingToolCapabilities = .write
+    return tool
 }

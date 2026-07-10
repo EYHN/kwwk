@@ -48,6 +48,10 @@ public struct AgentToolResult: Sendable, Hashable {
     /// Pure UI-side data — never leaves the process, never seen by any
     /// provider. Doesn't affect `content` → wire serialization.
     public var uiDisplay: [String]?
+    /// Process-local delivery transaction carried by results that replace an
+    /// automatic runtime notification. It is deliberately internal: providers,
+    /// persisted transcripts, and SDK callers only see the paired tool result.
+    var retentionLease: AgentToolRetentionLease?
 
     public init(
         content: [ToolResultBlock],
@@ -59,6 +63,60 @@ public struct AgentToolResult: Sendable, Hashable {
         self.details = details
         self.runtimeEvents = runtimeEvents
         self.uiDisplay = uiDisplay
+        self.retentionLease = nil
+    }
+}
+
+/// A tiny commit/rollback token for side-channel delivery ownership. Identity
+/// hashing keeps `AgentToolResult` Hashable without comparing closures.
+final class AgentToolRetentionLease: @unchecked Sendable, Hashable {
+    private let id = UUID()
+    private let lock = NSLock()
+    private var resolution: Resolution?
+    private let onCommit: @Sendable () -> Void
+    private let onRollback: @Sendable () -> Void
+
+    private enum Resolution {
+        case committed
+        case rolledBack
+    }
+
+    init(
+        onCommit: @escaping @Sendable () -> Void,
+        onRollback: @escaping @Sendable () -> Void
+    ) {
+        self.onCommit = onCommit
+        self.onRollback = onRollback
+    }
+
+    deinit {
+        rollback()
+    }
+
+    func commit() {
+        let shouldRun = lock.withLock { () -> Bool in
+            guard resolution == nil else { return false }
+            resolution = .committed
+            return true
+        }
+        if shouldRun { onCommit() }
+    }
+
+    func rollback() {
+        let shouldRun = lock.withLock { () -> Bool in
+            guard resolution == nil else { return false }
+            resolution = .rolledBack
+            return true
+        }
+        if shouldRun { onRollback() }
+    }
+
+    static func == (lhs: AgentToolRetentionLease, rhs: AgentToolRetentionLease) -> Bool {
+        lhs.id == rhs.id
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
     }
 }
 
@@ -145,6 +203,34 @@ public struct AgentTool: Sendable {
     public var label: String
     public var description: String
     public var parameters: JSONValue
+    /// Long-running, side-effect-free waits may opt in so queued user
+    /// steering can end the wait without aborting the whole agent run.
+    public var interruptible: Bool
+    /// Internal semantic marker used after schema validation and hook rewrites
+    /// to apply the turn-scoped blocking-poll gate. A name match is not enough:
+    /// SDK users may register an unrelated custom tool called `job`.
+    var isBackgroundJobTool: Bool
+    /// Optional semantic quota shared by every execution path for one
+    /// assistant turn. Tools with the same key consume the same allowance;
+    /// nil `maxCallsPerTurn` means unlimited. Internal so tool factories can
+    /// opt in without exposing an unenforced prompt-only policy to SDK users.
+    var turnLimitKey: String?
+    var maxCallsPerTurn: Int?
+    /// Filesystem boundary attached to the registered write capability so
+    /// provider-native file operations (notably Cursor delete) cannot bypass
+    /// the same policy.
+    var fileAccessPolicy: FileAccessPolicy?
+    var fileAccessCwd: String?
+    /// Unforgeable-by-name marker set only by kwwk's built-in coding-tool
+    /// factories. Security decisions must use this marker, never `name`.
+    var codingToolCapabilities: CodingTools
+    /// Shared with the Agent's background attachment so explicit job results
+    /// and automatic runtime asides coordinate in the same consumer mailbox.
+    var backgroundDeliveryConsumer: BackgroundTaskDeliveryConsumer?
+    /// Manager identity paired with `backgroundDeliveryConsumer`. An Agent may
+    /// attach several managers under the same session id; matching both keeps
+    /// one manager's detach from disabling another manager's wake path.
+    var backgroundTaskManager: BackgroundTaskManager?
     public var execute: @Sendable (
         _ toolCallId: String,
         _ args: JSONValue,
@@ -157,6 +243,7 @@ public struct AgentTool: Sendable {
         label: String,
         description: String,
         parameters: JSONValue,
+        interruptible: Bool = false,
         execute: @escaping @Sendable (
             _ toolCallId: String,
             _ args: JSONValue,
@@ -168,6 +255,15 @@ public struct AgentTool: Sendable {
         self.label = label
         self.description = description
         self.parameters = parameters
+        self.interruptible = interruptible
+        self.isBackgroundJobTool = false
+        self.turnLimitKey = nil
+        self.maxCallsPerTurn = nil
+        self.fileAccessPolicy = nil
+        self.fileAccessCwd = nil
+        self.codingToolCapabilities = []
+        self.backgroundDeliveryConsumer = nil
+        self.backgroundTaskManager = nil
         self.execute = execute
     }
 }
@@ -195,6 +291,10 @@ public struct AgentRunSummary: Sendable {
     /// or the provider's native reason. Nil if the run emitted no
     /// assistant messages at all.
     public var finalStopReason: StopReason?
+    /// True only when the loop itself synthesized the max-turn terminal
+    /// message. This keeps downstream failure classification independent of
+    /// provider/localized error text.
+    public var reachedMaxTurns: Bool
     /// Subagent invocations observed during this run. Foreground subagents
     /// carry final usage; background subagents are recorded at spawn time and
     /// report completion through background-task notifications.
@@ -206,6 +306,7 @@ public struct AgentRunSummary: Sendable {
         cost: Cost = Cost(),
         durationMs: Int = 0,
         finalStopReason: StopReason? = nil,
+        reachedMaxTurns: Bool = false,
         subagents: [SubagentRunSummary] = []
     ) {
         self.turns = turns
@@ -213,6 +314,7 @@ public struct AgentRunSummary: Sendable {
         self.cost = cost
         self.durationMs = durationMs
         self.finalStopReason = finalStopReason
+        self.reachedMaxTurns = reachedMaxTurns
         self.subagents = subagents
     }
 }
@@ -330,6 +432,11 @@ public enum AgentEvent: Sendable {
 
 internal struct StructuredToolExecutionError: LocalizedError, @unchecked Sendable {
     let message: String
+    /// Optional model-facing content when the concise error message is not
+    /// enough. Callers use this for explicitly delimited, untrusted salvage
+    /// evidence without making that evidence part of `errorDescription` or UI
+    /// chrome.
+    let content: [ToolResultBlock]?
     let details: JSONValue?
     let runtimeEvents: [AgentRuntimeEvent]?
 
@@ -337,10 +444,12 @@ internal struct StructuredToolExecutionError: LocalizedError, @unchecked Sendabl
 
     init(
         message: String,
+        content: [ToolResultBlock]? = nil,
         details: JSONValue? = nil,
         runtimeEvents: [AgentRuntimeEvent]? = nil
     ) {
         self.message = message
+        self.content = content
         self.details = details
         self.runtimeEvents = runtimeEvents
     }

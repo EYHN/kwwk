@@ -42,7 +42,11 @@ public struct LocalReadOperations: ReadOperations {
     }
 }
 
-public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> AgentTool {
+public func createReadTool(
+    cwd: String,
+    options: ReadToolOptions = .init(),
+    fileAccessPolicy: FileAccessPolicy = .unrestricted
+) -> AgentTool {
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
@@ -57,7 +61,7 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
     let maxLines = options.maxLines
     let maxBytes = options.maxBytes
 
-    return AgentTool(
+    var tool = AgentTool(
         name: "read",
         label: "read",
         description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files.",
@@ -79,7 +83,12 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
                 return nil
             }()
 
-            let absolutePath = PathUtils.resolveToCwd(rawPath, cwd: cwd)
+            let absolutePath = try PathUtils.resolveForAccess(
+                rawPath,
+                cwd: cwd,
+                policy: fileAccessPolicy,
+                intent: .read
+            )
             try await ops.access(absolutePath)
 
             // Image path. The image is base64-inlined as-is: there is no
@@ -165,6 +174,10 @@ public func createReadTool(cwd: String, options: ReadToolOptions = .init()) -> A
             )
         }
     )
+    tool.fileAccessPolicy = fileAccessPolicy
+    tool.fileAccessCwd = cwd
+    tool.codingToolCapabilities = .read
+    return tool
 }
 
 private func encodeTruncation(_ t: Truncate.Result) -> JSONValue {

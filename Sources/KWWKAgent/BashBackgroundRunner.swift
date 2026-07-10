@@ -193,6 +193,31 @@ struct SpawnedBashProcess: Sendable {
 
     let pid: pid_t
 
+    /// Enable pipeline failure propagation for Bourne-style shells without
+    /// breaking shells that do not implement `pipefail`. Some `/bin/sh`
+    /// implementations (notably dash) terminate the current shell when an
+    /// unknown `set -o` option is used, even when followed by `|| true`, so the
+    /// capability probe must run in a subshell. Non-Bourne/unknown shells keep
+    /// the original command byte-for-byte because this prelude would not be
+    /// valid in their command language.
+    static func commandEnablingPipefailIfSupported(
+        shellPath: String,
+        command: String
+    ) -> String {
+        let shellName = URL(fileURLWithPath: shellPath).lastPathComponent.lowercased()
+        let bourneShellNames: Set<String> = [
+            "sh", "ash", "bash", "dash", "ksh", "ksh93", "mksh", "pdksh", "zsh",
+        ]
+        guard bourneShellNames.contains(shellName) else { return command }
+
+        return """
+        if (set -o pipefail) >/dev/null 2>&1; then
+            set -o pipefail
+        fi
+        \(command)
+        """
+    }
+
     /// Spawn a shell redirecting stdout+stderr into `outputFile` (truncated).
     /// Bytes go straight from the kernel to disk without entering Swift memory.
     static func start(
@@ -269,7 +294,11 @@ struct SpawnedBashProcess: Sendable {
         posix_spawnattr_setflags(&attr, flags)
         posix_spawnattr_setpgroup(&attr, 0)
 
-        let argvStrings = [shellPath, "-c", command]
+        let effectiveCommand = commandEnablingPipefailIfSupported(
+            shellPath: shellPath,
+            command: command
+        )
+        let argvStrings = [shellPath, "-c", effectiveCommand]
         var argv = argvStrings.map { strdup($0) }
         argv.append(nil)
         defer { argv.compactMap { $0 }.forEach { free($0) } }

@@ -76,6 +76,9 @@ public enum AgentContextCompactor {
         ignoreStreaming: Bool = false,
         cancellation: CancellationHandle? = nil
     ) async -> AgentContextCompactionOutcome {
+        if cancellation?.isCancelled == true {
+            return .failed(AgentContextCompactionError.cancelled.localizedDescription)
+        }
         if !ignoreStreaming && agent.state.isStreaming {
             return .refusedAgentBusy
         }
@@ -102,6 +105,12 @@ public enum AgentContextCompactor {
 
         switch result {
         case .success(let replacement):
+            // Teardown may cancel after the provider produced a final message
+            // but before this task resumes. Never let that narrow race replace
+            // the live transcript during exit/session retirement.
+            if cancellation?.isCancelled == true {
+                return .failed(AgentContextCompactionError.cancelled.localizedDescription)
+            }
             agent.state.messages = replacement.messages
             return .compacted(
                 messagesCompacted: replacement.messagesCompacted,
@@ -155,6 +164,9 @@ public enum AgentContextCompactor {
         streamFn: StreamFn? = nil,
         cancellation: CancellationHandle? = nil
     ) async -> Result<AgentContextCompactionResult, AgentContextCompactionFailure> {
+        if cancellation?.isCancelled == true {
+            return .failure(.failed(AgentContextCompactionError.cancelled.localizedDescription))
+        }
         guard messages.count >= config.minMessages else {
             return .failure(.tooFewMessages(count: messages.count))
         }
@@ -180,6 +192,9 @@ public enum AgentContextCompactor {
                 streamFn: streamFn,
                 cancellation: cancellation
             )
+            if cancellation?.isCancelled == true {
+                throw AgentContextCompactionError.cancelled
+            }
             var body = """
             <previous-session-summary>
             \(summary)
@@ -251,6 +266,9 @@ public enum AgentContextCompactor {
         streamFn: StreamFn? = nil,
         cancellation: CancellationHandle? = nil
     ) async throws -> String {
+        if cancellation?.isCancelled == true {
+            throw AgentContextCompactionError.cancelled
+        }
         let transcript = renderForSummary(
             messages,
             toolOutputCharacterLimit: config.toolOutputCharacterLimit
@@ -286,6 +304,9 @@ public enum AgentContextCompactor {
         )
 
         let resolvedAuth = try await authResolver?(model, sessionId)
+        if cancellation?.isCancelled == true {
+            throw AgentContextCompactionError.cancelled
+        }
         var requestModel = model
         if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
             requestModel.baseURL = baseURL
@@ -307,6 +328,9 @@ public enum AgentContextCompactor {
         }
         let response = try await requestStream(requestModel, context, options)
         let result = await response.result()
+        if cancellation?.isCancelled == true || result.stopReason == .aborted {
+            throw AgentContextCompactionError.cancelled
+        }
 
         if result.stopReason == .error {
             throw AgentContextCompactionError.summarizationFailed(result.errorMessage ?? "unknown")
@@ -421,11 +445,13 @@ public enum AgentContextCompactionFailure: Error, Sendable, Equatable {
 public enum AgentContextCompactionError: Error, LocalizedError {
     case summarizationFailed(String)
     case emptySummary
+    case cancelled
 
     public var errorDescription: String? {
         switch self {
         case .summarizationFailed(let reason): return "summarization failed: \(reason)"
         case .emptySummary: return "LLM returned an empty summary"
+        case .cancelled: return "compaction cancelled"
         }
     }
 }

@@ -10,7 +10,10 @@ import KWWKAgent
 /// `SlashContext` for every command.
 @MainActor
 struct SessionCommandContext {
-    let agent: Agent
+    let agentProvider: @MainActor @Sendable () -> Agent
+    /// Replace the complete session-scoped runtime and return the new Agent.
+    let replaceSessionAgent: @MainActor @Sendable (String, [Message]) async -> Agent
+    var agent: Agent { agentProvider() }
     let modal: ModalHost
     let frame: CodingFrame
     let cwd: String
@@ -52,7 +55,7 @@ struct SessionCommandContext {
 /// the pre-extraction registration order.
 @MainActor
 func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: SessionCommandContext) {
-    let agent = ctx.agent
+    var agent: Agent { ctx.agent }
     let modal = ctx.modal
     let frame = ctx.frame
     let cwd = ctx.cwd
@@ -93,38 +96,39 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
                         guard let loaded = try? await sessionStore.resolveResume(
                             .id(info.id), cwd: cwd) else { return }
 
-                        // Repoint persistence at the restored session.
+                        // Goals belong to the outgoing session. Strip their
+                        // system-prompt context before preferences are copied
+                        // into the replacement Agent.
+                        goalStore.stop()
+                        applyGoalContext()
+
+                        // Stop persistence before replacing the Agent so no
+                        // outgoing callback can append to the restored file.
                         recorderBox.unsubscribe()
+                        let restoredAgent = await ctx.replaceSessionAgent(
+                            info.id, loaded.messages
+                        )
                         let recorder = SessionRecorder(
                             store: sessionStore,
                             sessionId: info.id,
                             cwd: cwd,
-                            model: agent.state.model.id,
-                            provider: agent.state.model.provider,
+                            model: restoredAgent.state.model.id,
+                            provider: restoredAgent.state.model.provider,
                             persistedCount: loaded.persistedCount
                         )
                         recorderBox.recorder = recorder
-                        recorderBox.unsubscribe = recorder.attach(to: agent)
+                        recorderBox.unsubscribe = recorder.attach(to: restoredAgent)
                         recorderBox.sessionId = info.id
 
-                        // Swap the live context; the repaint below replaces
-                        // the on-screen transcript with the restored one.
-                        agent.state.messages = loaded.messages
                         // Clear per-session transient state so a pending /retry,
                         // queued steer, attachment, or dequeue cursor from the
                         // outgoing session can't leak into the restored one.
                         resetSessionTransientState(
-                            agent: agent,
+                            agent: restoredAgent,
                             retry: retry,
                             attachments: attachments,
                             dequeueCycle: dequeueCycle
                         )
-                        // Goals are session-scoped: drop the outgoing session's
-                        // goal and strip its <goal_context> so it can't drive the
-                        // restored session. A pending continuation kick re-checks
-                        // goalStore after its idle wait and bails once inactive.
-                        goalStore.stop()
-                        applyGoalContext()
                         // Close first: the modal's restore hook drains any
                         // commits queued behind it, and the replace below must
                         // be the last writer so nothing stale lands after it.
@@ -169,6 +173,7 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
                 recorderBox: recorderBox,
                 sessionStore: sessionStore,
                 agent: agent,
+                replaceSessionAgent: ctx.replaceSessionAgent,
                 cwd: cwd,
                 attachments: attachments,
                 retry: retry,

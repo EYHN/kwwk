@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Subagent tool")
 struct SubagentToolTests {
-    @Test("coding agent only exposes agent tool when subagents are configured")
+    @Test("coding agent only exposes agent and history tools when subagents are configured")
     func agentToolIsConditional() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -19,6 +19,7 @@ struct SubagentToolTests {
             bashEnvironment: [:]
         )).agent
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent" })
+        #expect(!withoutSubagents.state.tools.contains { $0.name == "agent_history" })
 
         let withSubagents = await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
@@ -28,6 +29,7 @@ struct SubagentToolTests {
             bashEnvironment: [:]
         )).agent
         #expect(withSubagents.state.tools.contains { $0.name == "agent" })
+        #expect(withSubagents.state.tools.contains { $0.name == "agent_history" })
     }
 
     @Test("unknown subagent type returns a clear error")
@@ -56,11 +58,10 @@ struct SubagentToolTests {
         }
     }
 
-    @Test("omitted subagent type falls back to general")
-    func omittedSubagentTypeFallsBackToGeneral() async throws {
+    @Test("omitted subagent type is rejected instead of gaining general permissions")
+    func omittedSubagentTypeIsRejected() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("general answer"))])
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [
@@ -76,18 +77,17 @@ struct SubagentToolTests {
             bashEnvironment: testBashEnvironment
         )
 
-        let result = try await tool.execute(
-            "call-1",
-            .object([
-                "description": .string("fallback child"),
-                "prompt": .string("answer from fallback"),
-            ]),
-            nil,
-            nil
-        )
-
-        #expect(resultText(result).contains("general answer"))
-        #expect(detailString(result, "subagent_type") == "general")
+        await #expect(throws: Error.self) {
+            _ = try await tool.execute(
+                "call-1",
+                .object([
+                    "description": .string("ambiguous child"),
+                    "prompt": .string("answer without a declared capability boundary"),
+                ]),
+                nil,
+                nil
+            )
+        }
     }
 
     @Test("definition without tools inherits parent coding tools")
@@ -101,7 +101,7 @@ struct SubagentToolTests {
                     messageCount: context.messages.count,
                     toolNames: context.tools?.map(\.name) ?? []
                 )
-                return fauxAssistantMessage("captured wildcard")
+                return subagentYieldMessage("captured wildcard")
             },
         ])
         let tool = createAgentTool(
@@ -136,7 +136,7 @@ struct SubagentToolTests {
     func foregroundReturnsText() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("subagent answer"))])
+        faux.setResponses([.message(subagentYieldMessage("subagent answer"))])
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
@@ -177,7 +177,7 @@ struct SubagentToolTests {
     func sdkRunnerForeground() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("direct subagent answer"))])
+        faux.setResponses([.message(subagentYieldMessage("direct subagent answer"))])
         let runner = SubagentRunner(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
@@ -197,7 +197,7 @@ struct SubagentToolTests {
     func sdkRunnerBackground() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("direct background answer"))])
+        faux.setResponses([.message(subagentYieldMessage("direct background answer"))])
         let manager = BackgroundTaskManager()
         let runner = SubagentRunner(
             cwd: FileManager.default.currentDirectoryPath,
@@ -223,10 +223,13 @@ struct SubagentToolTests {
         #expect(done)
         guard done else { return }
 
-        let waitTool = createWaitTaskTool(manager: manager, sessionId: "sdk-parent")
-        let waitResult = try await waitTool.execute(
+        let jobTool = createJobTool(manager: manager, sessionId: "sdk-parent")
+        let waitResult = try await jobTool.execute(
             "wait",
-            .object(["task_id": .string(started.taskId), "timeout_ms": .int(1000)]),
+            .object([
+                "poll": .array([.string(started.taskId)]),
+                "timeout_seconds": .int(1),
+            ]),
             nil,
             nil
         )
@@ -240,7 +243,7 @@ struct SubagentToolTests {
             tokenSize: FauxTokenSize(min: 1, max: 1)
         ))
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("subagent token answer"))])
+        faux.setResponses([.message(subagentYieldMessage("subagent token answer"))])
         let updates = ToolUpdateCapture()
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
@@ -290,7 +293,7 @@ struct SubagentToolTests {
                 ],
                 stopReason: .toolUse
             )),
-            .message(fauxAssistantMessage("child lifecycle answer")),
+            .message(subagentYieldMessage("child lifecycle answer")),
             .message(fauxAssistantMessage("parent done")),
         ])
 
@@ -421,7 +424,7 @@ struct SubagentToolTests {
                     messageCount: context.messages.count,
                     toolNames: context.tools?.map(\.name) ?? []
                 )
-                return fauxAssistantMessage("captured")
+                return subagentYieldMessage("captured")
             },
         ])
         let tool = createAgentTool(
@@ -446,6 +449,9 @@ struct SubagentToolTests {
         let snapshot = await capture.snapshot()
         #expect(snapshot.messageCount == 1)
         #expect(!snapshot.toolNames.contains("agent"))
+        #expect(!snapshot.toolNames.contains("write"))
+        #expect(!snapshot.toolNames.contains("edit"))
+        #expect(!snapshot.toolNames.contains("bash"))
     }
 
     @Test("definition model override and tool-call model override precedence")
@@ -454,14 +460,16 @@ struct SubagentToolTests {
             models: [
                 FauxModelDefinition(id: "parent-model"),
                 FauxModelDefinition(id: "definition-model"),
+                FauxModelDefinition(id: "tool-model"),
             ]
         ))
         defer { faux.unregister() }
         let parent = faux.getModel(id: "parent-model")!
         let definitionModel = faux.getModel(id: "definition-model")!
+        let toolModel = faux.getModel(id: "tool-model")!
         faux.setResponses([
-            .message(fauxAssistantMessage("definition model result")),
-            .message(fauxAssistantMessage("tool model result")),
+            .message(subagentYieldMessage("definition model result")),
+            .message(subagentYieldMessage("tool model result")),
         ])
         let definition = minimalSubagent(model: .override(definitionModel))
         let tool = createAgentTool(
@@ -469,6 +477,7 @@ struct SubagentToolTests {
             subagents: [definition],
             parentModel: parent,
             parentTools: .readOnly,
+            allowedModelOverrides: [toolModel],
             bashEnvironment: testBashEnvironment
         )
 
@@ -508,7 +517,6 @@ struct SubagentToolTests {
             models: [FauxModelDefinition(id: "parent-model")]
         ))
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("same provider result"))])
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
@@ -517,20 +525,19 @@ struct SubagentToolTests {
             bashEnvironment: testBashEnvironment
         )
 
-        let result = try await tool.execute(
-            "call-cross-provider-model",
-            .object([
-                "description": .string("foreign model id"),
-                "prompt": .string("use parent provider"),
-                "subagent_type": .string("mini"),
-                "model": .string(foreign.id),
-            ]),
-            nil,
-            nil
-        )
-
-        #expect(resultText(result).contains("same provider result"))
-        #expect(detailString(result, "model") == foreign.id)
+        await #expect(throws: Error.self) {
+            _ = try await tool.execute(
+                "call-cross-provider-model",
+                .object([
+                    "description": .string("foreign model id"),
+                    "prompt": .string("use parent provider"),
+                    "subagent_type": .string("mini"),
+                    "model": .string(foreign.id),
+                ]),
+                nil,
+                nil
+            )
+        }
     }
 
     @Test("public agent tool overload reads live parent agent state")
@@ -553,7 +560,7 @@ struct SubagentToolTests {
             bashEnvironment: testBashEnvironment
         )
         parentAgent.state.model = faux.getModel(id: "live-parent")!
-        faux.setResponses([.message(fauxAssistantMessage("live model result"))])
+        faux.setResponses([.message(subagentYieldMessage("live model result"))])
 
         let result = try await tool.execute(
             "call-1",
@@ -569,11 +576,11 @@ struct SubagentToolTests {
         #expect(detailString(result, "model") == "live-parent")
     }
 
-    @Test("background subagent writes output and can be read with wait_task")
+    @Test("background subagent writes output and can be read with job poll")
     func backgroundSubagent() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("background subagent answer"))])
+        faux.setResponses([.message(subagentYieldMessage("background subagent answer"))])
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
@@ -602,6 +609,8 @@ struct SubagentToolTests {
             Issue.record("expected task_id detail")
             return
         }
+        #expect(resultText(result).contains("agent_history(task_id: \"\(taskId)\")"))
+        #expect(resultText(result).contains("poll only when otherwise blocked"))
 
         let done = await awaitUntil(12000) {
             let snap = await manager.get(taskId)
@@ -614,14 +623,193 @@ struct SubagentToolTests {
         let contents = snap?.outputFile.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
         #expect(contents.contains("background subagent answer"))
 
-        let waitTool = createWaitTaskTool(manager: manager, sessionId: "s1")
-        let waitResult = try await waitTool.execute(
+        let jobTool = createJobTool(manager: manager, sessionId: "s1")
+        let waitResult = try await jobTool.execute(
             "wait-1",
-            .object(["task_id": .string(taskId), "timeout_seconds": .int(1)]),
+            .object([
+                "poll": .array([.string(taskId)]),
+                "timeout_seconds": .int(1),
+            ]),
             nil,
             nil
         )
         #expect(resultText(waitResult).contains("background subagent answer"))
+    }
+
+    @Test("background progress is visible through job list before completion")
+    func backgroundProgressIsVisibleWhileRunning() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(
+            tokensPerSecond: 50,
+            tokenSize: FauxTokenSize(min: 1, max: 1)
+        ))
+        defer { faux.unregister() }
+        let finalAnswer = "background progress final " + String(repeating: "x", count: 48)
+        let bashSecret = "BASH_COMMAND_SECRET_MUST_NOT_APPEAR"
+        faux.setResponses([
+            .message(fauxAssistantMessage(
+                blocks: [fauxToolCall(
+                    name: "bash",
+                    arguments: .object([
+                        "command": .string("AWS_SECRET_ACCESS_KEY=\(bashSecret) sleep 1"),
+                        "description": .string("Pause briefly"),
+                    ]),
+                    id: "progress-bash"
+                )],
+                stopReason: .toolUse
+            )),
+            .message(subagentYieldMessage(finalAnswer)),
+        ])
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let tool = createAgentTool(
+            cwd: FileManager.default.currentDirectoryPath,
+            subagents: [minimalSubagent(tools: [.bash])],
+            parentModel: faux.getModel(),
+            parentTools: .standard,
+            backgroundManager: manager,
+            sessionId: "progress-parent",
+            bashEnvironment: testBashEnvironment
+        )
+
+        let started = try await tool.execute(
+            "progress-background",
+            .object([
+                "description": .string("report live progress"),
+                "prompt": .string("produce the requested answer"),
+                "subagent_type": .string("mini"),
+                "run_in_background": .bool(true),
+            ]),
+            nil,
+            nil
+        )
+        guard let taskId = detailString(started, "task_id") else {
+            Issue.record("expected task_id detail")
+            return
+        }
+
+        let progressVisible = await awaitUntil(2_000) {
+            guard let snapshot = await manager.get(taskId) else { return false }
+            return snapshot.status == .running
+                && snapshot.outputTail.contains("tool bash started")
+                && snapshot.outputTail.contains("command=AWS_SECRET_ACCESS_KEY=<redacted> sleep 1")
+                && snapshot.outputTail.contains("description=Pause briefly")
+        }
+        #expect(progressVisible)
+
+        let jobTool = createJobTool(manager: manager, sessionId: "progress-parent")
+        let listed = try await jobTool.execute(
+            "list-progress",
+            .object(["list": .bool(true)]),
+            nil,
+            nil
+        )
+        #expect(resultText(listed).contains("output_tail:"))
+        #expect(resultText(listed).contains("[progress]"))
+        #expect(resultText(listed).contains("tool bash started"))
+        guard case .object(let details) = listed.details ?? .null,
+              case .array(let tasks) = details["tasks"] ?? .null,
+              case .object(let task) = tasks.first ?? .null,
+              case .string(let outputTail) = task["output_tail"] ?? .null else {
+            Issue.record("expected structured output_tail in job list")
+            return
+        }
+        #expect(outputTail.contains("[progress]"))
+
+        let completed = await awaitUntil(5_000) {
+            await manager.get(taskId)?.status == .completed
+        }
+        #expect(completed)
+        let contents = try String(
+            contentsOf: outputDir.appendingPathComponent("\(taskId).log"),
+            encoding: .utf8
+        )
+        #expect(contents.contains("[progress]"))
+        #expect(contents.contains("[final]\n\(finalAnswer)"))
+        #expect(contents.contains("command=AWS_SECRET_ACCESS_KEY=<redacted> sleep 1"))
+        #expect(contents.contains("tool bash finished · exit_code=0"))
+        #expect(!contents.contains(bashSecret))
+        let progressLineCount = contents.split(separator: "\n").filter {
+            $0.hasPrefix("[progress]")
+        }.count
+        #expect(progressLineCount <= 8, "token updates were not throttled: \(progressLineCount)")
+        guard let progressRange = contents.range(of: "[progress]"),
+              let finalRange = contents.range(of: "[final]") else {
+            Issue.record("expected progress and final sections")
+            return
+        }
+        #expect(progressRange.lowerBound < finalRange.lowerBound)
+    }
+
+    @Test("background progress excludes thinking and write contents")
+    func backgroundProgressDoesNotLeakHiddenOrLargeArguments() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(
+            tokenSize: FauxTokenSize(min: 1, max: 1)
+        ))
+        defer { faux.unregister() }
+        let cwd = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cwd) }
+        let manager = BackgroundTaskManager(outputDir: cwd.appendingPathComponent("jobs"))
+        let thinkingSecret = "THINKING_SECRET_MUST_NOT_APPEAR"
+        let writeSecret = "WRITE_CONTENT_SECRET_MUST_NOT_APPEAR"
+        faux.setResponses([
+            .message(fauxAssistantMessage(
+                blocks: [
+                    fauxThinking(thinkingSecret),
+                    fauxText("Writing the requested fixture."),
+                    fauxToolCall(
+                        name: "write",
+                        arguments: .object([
+                            "path": .string("fixture.txt"),
+                            "content": .string(writeSecret),
+                        ]),
+                        id: "progress-write"
+                    ),
+                ],
+                stopReason: .toolUse
+            )),
+            .message(subagentYieldMessage("safe final answer")),
+        ])
+        let tool = createAgentTool(
+            cwd: cwd.path,
+            subagents: [minimalSubagent(tools: [.write])],
+            parentModel: faux.getModel(),
+            parentTools: .standard,
+            parentFileAccessPolicy: .workspaceOnly,
+            backgroundManager: manager,
+            sessionId: "redacted-progress-parent",
+            bashEnvironment: testBashEnvironment
+        )
+
+        let started = try await tool.execute(
+            "redacted-progress",
+            .object([
+                "description": .string("verify progress redaction"),
+                "prompt": .string("write the fixture and finish"),
+                "subagent_type": .string("mini"),
+                "run_in_background": .bool(true),
+            ]),
+            nil,
+            nil
+        )
+        guard let taskId = detailString(started, "task_id") else {
+            Issue.record("expected task_id detail")
+            return
+        }
+        let completed = await awaitUntil(3_000) {
+            await manager.get(taskId)?.status == .completed
+        }
+        #expect(completed)
+        guard let outputFile = await manager.get(taskId)?.outputFile else {
+            Issue.record("expected output file")
+            return
+        }
+        let contents = try String(contentsOfFile: outputFile, encoding: .utf8)
+        #expect(contents.contains("tool write started"))
+        #expect(contents.contains("path=fixture.txt"))
+        #expect(contents.contains("assistant text (untrusted): Writing the requested fixture."))
+        #expect(!contents.contains(thinkingSecret))
+        #expect(!contents.contains(writeSecret))
     }
 
     @Test("subagent internal background tasks use child session and are killed on completion")
@@ -643,8 +831,8 @@ struct SubagentToolTests {
                 ],
                 stopReason: .toolUse
             )),
-            .message(fauxAssistantMessage("child finished after starting background work")),
-            .message(fauxAssistantMessage("child finished after starting background work")),
+            .message(subagentYieldMessage("child finished after starting background work")),
+            .message(subagentYieldMessage("child finished after starting background work")),
         ])
 
         let outputDir = makeTempDir()
@@ -654,7 +842,7 @@ struct SubagentToolTests {
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent(tools: [.bash])],
             parentModel: faux.getModel(),
-            parentTools: .readOnly,
+            parentTools: .standard,
             backgroundManager: manager,
             sessionId: "parent-session",
             bashEnvironment: testBashEnvironment
@@ -769,7 +957,10 @@ struct SubagentToolTests {
         }
 
         let prefix = "\(parentSessionId):subagent:mini:"
-        #expect(provider.closedSessions.contains { $0.hasPrefix(prefix) })
+        let closed = await awaitUntil(2_000) {
+            provider.closedSessions.contains { $0.hasPrefix(prefix) }
+        }
+        #expect(closed)
     }
 }
 
@@ -783,6 +974,24 @@ private func minimalSubagent(
         prompt: "Return the requested test answer. Do not edit files.",
         tools: tools,
         model: model
+    )
+}
+
+private func subagentYieldMessage(
+    _ result: String,
+    status: String = "complete",
+    id: String = UUID().uuidString
+) -> AssistantMessage {
+    fauxAssistantMessage(
+        blocks: [fauxToolCall(
+            name: "subagent_yield",
+            arguments: .object([
+                "status": .string(status),
+                "result": .string(result),
+            ]),
+            id: id
+        )],
+        stopReason: .toolUse
     )
 }
 

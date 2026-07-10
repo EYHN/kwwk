@@ -50,6 +50,24 @@ struct SessionResumeModalTests {
     }
 
     @MainActor
+    @Test("confirming the current session closes without replacing it")
+    func currentSessionIsNoOp() {
+        let picked = Ref<String?>(nil)
+        let cancelled = Ref<Bool>(false)
+        let modal = SessionResumeModal(
+            sessions: [info("current"), info("other")],
+            currentSessionId: "current",
+            onSelect: { picked.value = $0.id },
+            onCancel: { cancelled.value = true }
+        )
+
+        modal.confirm()
+
+        #expect(picked.value == nil, "the destructive replacement callback must not run")
+        #expect(cancelled.value, "the host's cancel callback closes the modal")
+    }
+
+    @MainActor
     @Test("up wraps from the top to the bottom row")
     func wrapAround() {
         let sessions = [info("aaa"), info("bbb"), info("ccc")]

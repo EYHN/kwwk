@@ -36,23 +36,34 @@ func runCodingTUIInternal(
     let openResumePickerOnStart = (resume == .pickInteractive)
     let effectiveResume: SessionResume = openResumePickerOnStart ? .none : resume
     let resolvedResume = try await sessionStore.resolveResume(effectiveResume, cwd: cwd)
-    let sessionId = resolvedResume.sessionId
+    let initialSessionId = resolvedResume.sessionId
 
     let environment = ProcessInfo.processInfo.environment
-    let agent = await makeCodingAgent(CodingAgentConfig(
+    let initialCodingAgent = await makeCodingAgent(CodingAgentConfig(
         model: model,
         cwd: cwd,
         tools: tools,
         contextFiles: loadProjectContextFiles(cwd: cwd),
         skillDirectories: Skills.defaultDirectories(cwd: cwd, includeUserDirectory: true),
         backgroundManager: bgManager,
-        subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
-        sessionId: sessionId,
+        subagents: defaultCLISubagents(
+            for: tools,
+            selection: builtinSubagents,
+            runInBackgroundByDefault: true
+        ),
+        sessionId: initialSessionId,
         authResolver: authResolver,
         autoCompactThreshold: autoCompactThreshold,
         bashEnvironment: environment,
         bashShellPath: cliShellPath(environment: environment)
-    )).agent
+    ))
+    let agentBox = AgentSessionBox(initialCodingAgent)
+    // Local computed values deliberately resolve through the box on every
+    // access. `/new` and `/resume` replace the entire CodingAgent so immutable
+    // session-scoped tools, delivery mailboxes, and provider resources rotate
+    // together instead of merely swapping messages under an old session id.
+    var agent: Agent { agentBox.agent }
+    var sessionId: String { agentBox.sessionId }
 
     // Seed the transcript from disk when resuming so the model continues
     // where it left off.
@@ -66,7 +77,7 @@ func runCodingTUIInternal(
     // closure under Swift 6 concurrency).
     let initialRecorder = SessionRecorder(
         store: sessionStore,
-        sessionId: sessionId,
+        sessionId: initialSessionId,
         cwd: cwd,
         model: model.id,
         provider: model.provider,
@@ -78,7 +89,7 @@ func runCodingTUIInternal(
     let recorderBox = RecorderBox(
         recorder: initialRecorder,
         unsubscribe: initialRecorder.attach(to: agent),
-        sessionId: sessionId
+        sessionId: initialSessionId
     )
     defer { recorderBox.unsubscribe() }
     // Turn on extended thinking by default — otherwise reasoning-capable
@@ -237,6 +248,10 @@ func runCodingTUIInternal(
         frame.queuedPrompts = agent.queuedSteeringMessages().map { queuedPromptPreview($0) }
         // Slash commands are idle-only; mirror that into the popup footer hint.
         frame.isBusy = agent.state.isStreaming
+            || frameStatus.isAutoCompacting
+            || frameStatus.isManualCompacting
+            || frameStatus.isRewinding
+            || frameStatus.isSessionSwitching
         // Keep the re-renderable welcome header in sync with live login/model
         // state (same composite condition as the launch banner) so a resize
         // repaint after /login, /logout, or /model reflects the current state.
@@ -343,8 +358,13 @@ func runCodingTUIInternal(
             return
         }
         goalLoggedOutHint.shown = false
+        let continuationAgent = agent
         Task.detached {
-            await agent.waitForIdle()
+            await continuationAgent.waitForIdle()
+            let isCurrentSession = await MainActor.run {
+                agentBox.agent === continuationAgent
+            }
+            guard isCurrentSession else { return }
             // Re-check on the far side of the idle wait: `/goal off`, a cap
             // pause, completion, or a replaced objective may have landed while
             // we waited. Read the current objective so we never fire a stale
@@ -357,7 +377,7 @@ func runCodingTUIInternal(
             guard snap.status == .active else { return }
             goalStore.recordAutoContinue()
             do {
-                try await agent.prompt(GoalMode.continuationText(objective: snap.objective))
+                try await continuationAgent.prompt(GoalMode.continuationText(objective: snap.objective))
             } catch {
                 // Lost the race to a user prompt / another kick (alreadyRunning)
                 // — no turn started, so don't spend a cap slot on it.
@@ -386,10 +406,10 @@ func runCodingTUIInternal(
     // not survive into a fresh or restored session.
     let dequeueCycle = DequeueCycleState()
 
-    // Background-task poll controller. The poll refreshes the "N bg running"
+    // Background-task poll controller. The poll refreshes the "N bg active"
     // count + abort/retry countdowns, but only needs to run while something is
     // actually live: a turn is in flight (which may spawn tasks) or at least
-    // one background task is still running. `ensurePoll` (re)starts it on
+    // one background task is queued or running. `ensurePoll` (re)starts it on
     // activity; the loop stops itself once idle so an idle prompt isn't
     // re-queried and repainted 4×/second for nothing.
     let pollHandle = PollHandle()
@@ -398,8 +418,10 @@ func runCodingTUIInternal(
         pollHandle.task = Task { @MainActor in
             defer { pollHandle.task = nil }
             while !Task.isCancelled {
-                let running = await bgManager.list(sessionId: sessionId)
-                    .filter { $0.status == .running }.count
+                // Counting should not read every retained job's output tail.
+                // The manager already exposes an active-only metadata path for
+                // this high-frequency status refresh.
+                let running = await bgManager.activeTaskIds(sessionId: sessionId).count
                 frameStatus.runningBackgroundTasks = running
                 updateFrameStatus()
                 runner.tui.requestRender()
@@ -419,169 +441,245 @@ func runCodingTUIInternal(
         updateFrameStatus()
         runner.tui.requestRender()
     }
-    _ = agent.subscribe { event, _ in
-        await MainActor.run {
-            renderer.setThinkingDisplay(agent.state.thinkingDisplay)
-            renderer.apply(event)
-            // Settled rows move into retained history; live rows stay mutable
-            // in the same full-screen frame. When a modal is open we keep the
-            // transcript behind it stable and drain pending rows on close.
-            if !modal.isOpen {
-                recomputeTranscript()
-            }
-            let flushedCommits = flushCommits()
-            // A pure token delta that settled nothing only mutates the live
-            // tail — render it on the coalesced ~30fps cadence rather than
-            // synchronously per delta. Anything that reached scrollback (or
-            // any non-delta event) keeps the immediate render below.
-            if isPureStreamDelta(event) && !flushedCommits {
-                streamCoalescer.schedule()
-                return
-            }
-            switch event {
-            case .agentStart:
-                break
-            case .agentEnd(_, let summary):
-                frameStatus.mode = .idle
-                // A genuine failure (retries exhausted, turn cap, abort) returns
-                // NORMALLY from `agent.prompt()` — the executor error is caught
-                // inside `runLifecycle` and surfaced as a synthetic `.agentEnd`
-                // whose `summary.finalStopReason` is `.error` / `.aborted`. The
-                // detached-task `catch` only fires for `AgentError.alreadyRunning`,
-                // so this is the primary place `/retry` learns a turn failed.
-                // Only user-initiated turns (trackedActive) arm /retry, and the
-                // target is derived from the message actually executed — never a
-                // separately-recorded copy that a steer or command could stale.
-                if let t = retryArmTarget(
-                    summary: summary,
-                    aborted: false,
-                    trackedActive: retry.trackedActive,
-                    messages: agent.state.messages
-                ) {
-                    retry.lastText = t.text
-                    retry.lastImages = t.images
-                    retry.failed = true
+    let subscribeToAgentEvents: @MainActor @Sendable (Agent) -> Unsubscribe = { observedAgent in
+        observedAgent.subscribe { event, _ in
+            await MainActor.run {
+                // An event already queued onto MainActor before a hot session
+                // switch must not repaint or mutate retry/goal state for the
+                // replacement session.
+                guard agentBox.agent === observedAgent else { return }
+                renderer.setThinkingDisplay(agent.state.thinkingDisplay)
+                renderer.apply(event)
+                // Settled rows move into retained history; live rows stay mutable
+                // in the same full-screen frame. When a modal is open we keep the
+                // transcript behind it stable and drain pending rows on close.
+                if !modal.isOpen {
+                    recomputeTranscript()
                 }
-                // Consume the tracking flag: the turn is over either way.
-                retry.trackedActive = false
-
-                // --- goal mode autonomous loop ---
-                let gsnap = goalStore.snapshot()
-                // Attribute this turn's spend to the goal while it drove the
-                // turn — still active, or completed by the model mid-turn (so
-                // the final "done" notice reports the full spend). Feeds the
-                // omp-style `🎯 Goal 27K` breadcrumb segment and `/goal`.
-                if gsnap.status == .active || gsnap.status == .complete {
-                    goalStore.addTokens(summary.usage.totalTokens)
+                let flushedCommits = flushCommits()
+                // A pure token delta that settled nothing only mutates the live
+                // tail — render it on the coalesced ~30fps cadence rather than
+                // synchronously per delta. Anything that reached scrollback (or
+                // any non-delta event) keeps the immediate render below.
+                if isPureStreamDelta(event), !flushedCommits {
+                    streamCoalescer.schedule()
+                    return
                 }
-                if gsnap.status == .complete {
-                    // The model called goal({op:"complete"}) during this turn.
-                    // Drop the goal so this branch fires exactly once — .complete
-                    // has no other exit transition, so without clearing it the
-                    // done notice would re-print on every subsequent turn.
-                    // Read the spend before stop() zeroes it with the goal.
-                    let spent = compactTokenCount(goalStore.snapshot().tokensUsed)
-                    goalStore.stop()
-                    applyGoalContext()
-                    runner.tui.commit([
-                        "",
-                        Style.dimmed("  🎯 goal complete (\(spent) tokens) — autonomous loop stopped."),
-                    ])
-                } else {
-                    switch goalLoopDecision(
-                        isActive: gsnap.status == .active,
-                        stopReason: summary.finalStopReason,
-                        alreadyContinued: gsnap.autoContinueCount,
-                        cap: GoalMode.autoContinueCap
+                switch event {
+                case .agentStart:
+                    break
+                case let .agentEnd(_, summary):
+                    frameStatus.mode = .idle
+                    // A genuine failure (retries exhausted, turn cap, abort) returns
+                    // NORMALLY from `agent.prompt()` — the executor error is caught
+                    // inside `runLifecycle` and surfaced as a synthetic `.agentEnd`
+                    // whose `summary.finalStopReason` is `.error` / `.aborted`. The
+                    // detached-task `catch` only fires for `AgentError.alreadyRunning`,
+                    // so this is the primary place `/retry` learns a turn failed.
+                    // Only user-initiated turns (trackedActive) arm /retry, and the
+                    // target is derived from the message actually executed — never a
+                    // separately-recorded copy that a steer or command could stale.
+                    if let t = retryArmTarget(
+                        summary: summary,
+                        aborted: false,
+                        trackedActive: retry.trackedActive,
+                        messages: agent.state.messages
                     ) {
-                    case .inject:
-                        kickGoalContinuation()
-                    case .pauseCap:
-                        goalStore.pauseForCap()
-                        // Strip the ACTIVE <goal_context> from the system prompt
-                        // to match the paused state — otherwise the next user
-                        // message still ships "Goal mode is active" at
-                        // system-prompt priority while the status line shows no
-                        // goal (the .stop path already does this).
+                        retry.lastText = t.text
+                        retry.lastImages = t.images
+                        retry.failed = true
+                    }
+                    // Consume the tracking flag: the turn is over either way.
+                    retry.trackedActive = false
+
+                    // --- goal mode autonomous loop ---
+                    let gsnap = goalStore.snapshot()
+                    // Attribute this turn's spend to the goal while it drove the
+                    // turn — still active, or completed by the model mid-turn (so
+                    // the final "done" notice reports the full spend). Feeds the
+                    // omp-style `🎯 Goal 27K` breadcrumb segment and `/goal`.
+                    if gsnap.status == .active || gsnap.status == .complete {
+                        goalStore.addTokens(summary.usage.totalTokens)
+                    }
+                    if gsnap.status == .complete {
+                        // The model called goal({op:"complete"}) during this turn.
+                        // Drop the goal so this branch fires exactly once — .complete
+                        // has no other exit transition, so without clearing it the
+                        // done notice would re-print on every subsequent turn.
+                        // Read the spend before stop() zeroes it with the goal.
+                        let spent = compactTokenCount(goalStore.snapshot().tokensUsed)
+                        goalStore.stop()
                         applyGoalContext()
                         runner.tui.commit([
                             "",
-                            Style.error("  goal: hit auto-continue cap (\(GoalMode.autoContinueCap)) — paused. /goal resume to keep going, /goal off to stop."),
+                            Style.dimmed("  🎯 goal complete (\(spent) tokens) — autonomous loop stopped."),
                         ])
-                    case .stop:
-                        // The loop was active but the turn ended on a non-natural
-                        // stop reason (abort / provider error / output-length cap).
-                        // Pause the goal so the status line stops advertising it
-                        // as actively working and the user gets a resume affordance
-                        // instead of a silent stall. A plain no-goal turn (status
-                        // not active) falls through with no notice.
-                        if gsnap.status == .active {
+                    } else {
+                        switch goalLoopDecision(
+                            isActive: gsnap.status == .active,
+                            stopReason: summary.finalStopReason,
+                            alreadyContinued: gsnap.autoContinueCount,
+                            cap: GoalMode.autoContinueCap
+                        ) {
+                        case .inject:
+                            kickGoalContinuation()
+                        case .pauseCap:
                             goalStore.pauseForCap()
+                            // Strip the ACTIVE <goal_context> from the system prompt
+                            // to match the paused state — otherwise the next user
+                            // message still ships "Goal mode is active" at
+                            // system-prompt priority while the status line shows no
+                            // goal (the .stop path already does this).
                             applyGoalContext()
-                            let reason: String
-                            switch summary.finalStopReason {
-                            case .aborted: reason = "interrupted"
-                            case .length: reason = "output limit reached"
-                            case .error: reason = "provider error"
-                            default: reason = "turn did not complete"
-                            }
                             runner.tui.commit([
                                 "",
-                                Style.error("  goal: autonomous loop stopped (\(reason)) — /goal resume to keep going, /goal off to stop."),
+                                Style.error(
+                                    "  goal: hit auto-continue cap (\(GoalMode.autoContinueCap)) — paused. /goal resume to keep going, /goal off to stop."
+                                ),
                             ])
+                        case .stop:
+                            // The loop was active but the turn ended on a non-natural
+                            // stop reason (abort / provider error / output-length cap).
+                            // Pause the goal so the status line stops advertising it
+                            // as actively working and the user gets a resume affordance
+                            // instead of a silent stall. A plain no-goal turn (status
+                            // not active) falls through with no notice.
+                            if gsnap.status == .active {
+                                goalStore.pauseForCap()
+                                applyGoalContext()
+                                let reason: String
+                                switch summary.finalStopReason {
+                                case .aborted: reason = "interrupted"
+                                case .length: reason = "output limit reached"
+                                case .error: reason = "provider error"
+                                default: reason = "turn did not complete"
+                                }
+                                runner.tui.commit([
+                                    "",
+                                    Style.error(
+                                        "  goal: autonomous loop stopped (\(reason)) — /goal resume to keep going, /goal off to stop."
+                                    ),
+                                ])
+                            }
                         }
                     }
-                }
-            case .compactStart(let count, _):
-                frameStatus.isAutoCompacting = true
-                frameStatus.mode = .compacting(messageCount: count)
-                runner.tui.commit([
-                    "",
-                    Style.dimmed("  ◐ auto-compacting \(count) messages…"),
-                ])
-            case .compactEnd(let outcome):
-                frameStatus.isAutoCompacting = false
-                frameStatus.mode = .idle
-                switch outcome {
-                case .compacted(let n, let hasLedger):
-                    runner.tui.commit(renderCompactBoundary(
-                        messagesCompacted: n,
-                        hasRunningTasksLedger: hasLedger,
-                        width: runner.terminal.width
-                    ))
-                case .refusedAgentBusy:
+                case let .compactStart(count, _):
+                    frameStatus.isAutoCompacting = true
+                    frameStatus.mode = .compacting(messageCount: count)
                     runner.tui.commit([
                         "",
-                        Style.error("  auto-compact: agent is busy; compact skipped"),
-                        "",
+                        Style.dimmed("  ◐ auto-compacting \(count) messages…"),
                     ])
-                case .refusedTooFewMessages:
+                case let .compactEnd(outcome):
+                    frameStatus.isAutoCompacting = false
+                    frameStatus.mode = .idle
+                    switch outcome {
+                    case let .compacted(n, hasLedger):
+                        runner.tui.commit(
+                            renderCompactBoundary(
+                                messagesCompacted: n,
+                                hasRunningTasksLedger: hasLedger,
+                                width: runner.terminal.width
+                            )
+                        )
+                    case .refusedAgentBusy:
+                        runner.tui.commit([
+                            "",
+                            Style.error("  auto-compact: agent is busy; compact skipped"),
+                            "",
+                        ])
+                    case .refusedTooFewMessages:
+                        break
+                    case let .failed(msg):
+                        runner.tui.commit([
+                            "",
+                            Style.error("  auto-compact failed: \(msg)"),
+                            "",
+                        ])
+                    }
+                case let .streamRetry(attempt, delayMs, reason):
+                    frameStatus.mode = .retrying(
+                        attempt: attempt,
+                        until: Date().addingTimeInterval(Double(delayMs) / 1000.0),
+                        reason: reason
+                    )
+                case .messageStart:
+                    frameStatus.mode = .idle
+                case .messageUpdate:
                     break
-                case .failed(let msg):
-                    runner.tui.commit([
-                        "",
-                        Style.error("  auto-compact failed: \(msg)"),
-                        "",
-                    ])
+                default: break
                 }
-            case .streamRetry(let attempt, let delayMs, let reason):
-                frameStatus.mode = .retrying(
-                    attempt: attempt,
-                    until: Date().addingTimeInterval(Double(delayMs) / 1000.0),
-                    reason: reason
-                )
-            case .messageStart:
-                frameStatus.mode = .idle
-            case .messageUpdate:
-                break
-            default: break
+                // A turn is live (and may spawn background tasks) — make sure the
+                // bg-task poll is running so the count + countdowns stay fresh.
+                if agent.state.isStreaming { ensurePoll() }
+                updateFrameStatus()
+                runner.tui.requestRender()
             }
-            // A turn is live (and may spawn background tasks) — make sure the
-            // bg-task poll is running so the count + countdowns stay fresh.
-            if agent.state.isStreaming { ensurePoll() }
+        }
+    }
+    agentBox.eventUnsubscribe = subscribeToAgentEvents(agent)
+
+    /// Replace every session-scoped runtime component as one idle-only
+    /// transaction. In particular, tools and the background delivery consumer
+    /// are rebuilt with `newSessionId`; none retain the outgoing job namespace.
+    let replaceSessionAgent: @MainActor @Sendable (String, [Message]) async -> Agent = {
+        newSessionId, messages in
+        frameStatus.isSessionSwitching = true
+        updateFrameStatus()
+        runner.tui.requestRender()
+        defer {
+            frameStatus.isSessionSwitching = false
             updateFrameStatus()
             runner.tui.requestRender()
         }
+        let outgoingCodingAgent = agentBox.codingAgent
+        let outgoing = outgoingCodingAgent.agent
+        let outgoingSessionId = outgoing.sessionId
+
+        // Stop all outgoing observers before cancelling its work. Session
+        // closure is silent, so killed tasks cannot wake an idle old Agent and
+        // generate an unsolicited continuation during the handoff.
+        outgoing.retire()
+        agentBox.eventUnsubscribe?()
+        agentBox.eventUnsubscribe = nil
+        await outgoingCodingAgent.detachBackground?()
+        outgoing.clearAllQueues()
+        if let outgoingSessionId, !outgoingSessionId.isEmpty {
+            await bgManager.closeSession(sessionId: outgoingSessionId)
+        }
+        await outgoing.waitForIdle()
+        await outgoing.closeSession()
+
+        let replacementCodingAgent = await makeCodingAgent(CodingAgentConfig(
+            model: outgoing.state.model,
+            cwd: cwd,
+            tools: tools,
+            contextFiles: loadProjectContextFiles(cwd: cwd),
+            skillDirectories: Skills.defaultDirectories(cwd: cwd, includeUserDirectory: true),
+            backgroundManager: bgManager,
+            subagents: defaultCLISubagents(
+                for: tools,
+                selection: builtinSubagents,
+                runInBackgroundByDefault: true
+            ),
+            sessionId: newSessionId,
+            authResolver: outgoing.authResolver ?? authResolver,
+            autoCompactThreshold: outgoing.autoCompact?.threshold ?? autoCompactThreshold,
+            autoCompactConfig: outgoing.autoCompact?.config ?? .init(),
+            bashEnvironment: environment,
+            bashShellPath: cliShellPath(environment: environment)
+        ))
+        let replacement = replacementCodingAgent.agent
+        copyAgentRuntimePreferences(from: outgoing, to: replacement)
+        replacement.state.messages = messages
+        var replacementTools = replacement.state.tools
+        replacementTools.append(createGoalTool(store: goalStore))
+        replacement.state.tools = replacementTools
+
+        agentBox.replace(with: replacementCodingAgent)
+        agentBox.eventUnsubscribe = subscribeToAgentEvents(replacement)
+        renderer.setThinkingDisplay(replacement.state.thinkingDisplay)
+        return replacement
     }
 
     // Single submission path. Fires the prompt on a detached task (so the UI
@@ -596,17 +694,21 @@ func runCodingTUIInternal(
         retry.trackedActive = true
         retry.failed = false
         goalStore.resetAutoContinue()
+        let submittedAgent = agent
         Task.detached {
             do {
-                try await agent.prompt(text, images: images)
+                try await promptPreservingContention(
+                    agent: submittedAgent,
+                    text: text,
+                    images: images,
+                    isCurrent: {
+                        await MainActor.run {
+                            agentBox.agent === submittedAgent
+                        }
+                    }
+                )
             } catch {
                 await MainActor.run {
-                    // Do NOT arm /retry here. The only error escaping prompt()
-                    // is `alreadyRunning` (a submit that never started, e.g. a
-                    // double-Enter race) — the turn that IS running arms /retry
-                    // via its own `.agentEnd`. Arming here would flip failed=true
-                    // without refreshing the arm-time-derived target, so /retry
-                    // could resurrect a stale, unrelated prompt.
                     runner.tui.commit([
                         "",
                         Style.error("  error: \(error)"),
@@ -622,8 +724,10 @@ func runCodingTUIInternal(
     // `/rewind`. Defined once here so both trigger points share the exact
     // same opener (candidate list, truncation, persistence, recap).
     let openRewind: @MainActor @Sendable () -> Void = {
+        let rewindAgent = agent
+        let rewindGeneration = agentBox.generation
         openRewindSelector(
-            agent: agent,
+            agent: rewindAgent,
             modal: modal,
             frame: frame,
             sessionStore: sessionStore,
@@ -636,7 +740,16 @@ func runCodingTUIInternal(
             replaceTranscript: { runner.tui.replaceCommitted($0) },
             recomputeTranscript: recomputeTranscript,
             updateFrameStatus: updateFrameStatus,
-            requestRender: { runner.tui.requestRender() }
+            requestRender: { runner.tui.requestRender() },
+            isCurrentSession: {
+                !frameStatus.isSessionSwitching
+                    && agentBox.isCurrent(agent: rewindAgent, generation: rewindGeneration)
+            },
+            setRewinding: { active in
+                frameStatus.isRewinding = active
+                updateFrameStatus()
+                runner.tui.requestRender()
+            }
         )
     }
 
@@ -654,7 +767,8 @@ func runCodingTUIInternal(
     // handlers close over live session state (recorder box, goal store, retry
     // record) and the TUI's repaint closures; see SessionSlashCommands.swift.
     registerSessionSlashCommands(slashRegistry, ctx: SessionCommandContext(
-        agent: agent,
+        agentProvider: { agent },
+        replaceSessionAgent: replaceSessionAgent,
         modal: modal,
         frame: frame,
         cwd: cwd,
@@ -689,10 +803,10 @@ func runCodingTUIInternal(
         return slashCompletion(for: input, commands: slashCommandInfos)?.suffix
     }
     let slashContext = SlashContext(
-        agent: agent,
+        agentProvider: { agent },
         modal: modal,
         backgroundManager: bgManager,
-        sessionId: sessionId,
+        sessionIdProvider: { sessionId },
         notifyBlock: { lines in
             guard !lines.isEmpty else { return }
             // "Every transcript block opens with a leading blank, never
@@ -780,7 +894,12 @@ func runCodingTUIInternal(
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
-            let busy = agent.state.isStreaming || frameStatus.isAutoCompacting || frameStatus.isManualCompacting
+            let busy = agent.state.isStreaming
+                || frameStatus.isAutoCompacting
+                || frameStatus.isManualCompacting
+                || frameStatus.isRewinding
+                || frameStatus.isSessionSwitching
+                || retry.trackedActive
 
             // Logged-out gate: with no registered provider a prompt has
             // nowhere to route — surface the /login hint instead of letting
@@ -968,7 +1087,7 @@ func runCodingTUIInternal(
     }
 
     // Ctrl-C: pi/omp two-stage convention. The first press does the least
-    // destructive useful thing — cancel a live generation, else clear a
+    // destructive useful thing — cancel a live generation/compaction, else clear a
     // non-empty input, else arm the exit and hint — and a second press within
     // the window quits. This stops a single accidental Ctrl-C from tearing the
     // app down mid-stream. (Ctrl-D on an empty input is still the one-tap exit.)
@@ -987,24 +1106,29 @@ func runCodingTUIInternal(
                 modal.routeCancel()
                 return
             }
-            if agent.state.isStreaming {
-                // Cancel the active generation, mirroring Esc's abort path. The
+            let wasStreaming = agent.state.isStreaming
+            if abortInteractiveAgentWork(
+                agent: agent,
+                isManualCompacting: frameStatus.isManualCompacting
+            ) {
+                // Cancel the active generation or compaction, mirroring Esc's abort path. The
                 // "Ctrl-C to force quit" state line already tells the user a
                 // second press exits, so no extra scrollback notice here.
-                agent.abort()
                 frameStatus.mode = .aborting
-                agent.clearSteeringQueue()
-                if let t = retryArmTarget(
-                    summary: nil,
-                    aborted: true,
-                    trackedActive: retry.trackedActive,
-                    messages: agent.state.messages
-                ) {
-                    retry.lastText = t.text
-                    retry.lastImages = t.images
-                    retry.failed = true
+                if wasStreaming {
+                    agent.clearSteeringQueue()
+                    if let t = retryArmTarget(
+                        summary: nil,
+                        aborted: true,
+                        trackedActive: retry.trackedActive,
+                        messages: agent.state.messages
+                    ) {
+                        retry.lastText = t.text
+                        retry.lastImages = t.images
+                        retry.failed = true
+                    }
+                    retry.trackedActive = false
                 }
-                retry.trackedActive = false
             } else if !frame.input.value.isEmpty {
                 frame.input.value = ""
                 runner.tui.commit(["", Style.dimmed("  cleared — press Ctrl-C again to exit")])
@@ -1034,82 +1158,70 @@ func runCodingTUIInternal(
         runner.tui.forceRepaint()
     }
 
-    // Esc. Four modes of operation:
+    // Esc. Three modes of operation:
     //   1. modal open → cancel the modal (no agent state touched).
-    //   2. agent streaming → abort the current generation.
-    //   3. idle AND background tasks running → kill them all.
-    //   4. idle, no bg tasks, empty editor → arm double-Esc; a second press
+    //   2. agent streaming or manual compacting → abort the active owner.
+    //   3. idle with an empty editor → arm double-Esc; a second press
     //      within the window opens the rewind-to-message selector.
     //
     // Double-Esc invariant: only an Esc that did NOTHING else may count as a
     // tap of the double-tap. Every branch that consumes the press for another
-    // purpose (modal cancel, abort, bg kill) — and any press with draft text
+    // purpose (modal cancel or abort) — and any press with draft text
     // in the editor — resets the arm, so cancelling a modal and then pressing
     // Esc again can never surprise-open the selector.
     let doubleEsc = DoubleEscState()
     runner.bind(.init("escape")) { _ in
         Task { @MainActor in
-            // Timestamp captured before the bg-manager hop below, so the
-            // 500ms window measures key-to-key time, not actor latency.
             let now = Date()
             if modal.isOpen {
                 doubleEsc.lastPress = nil
                 modal.routeCancel()
                 return
             }
-            if agent.state.isStreaming {
+            let wasStreaming = agent.state.isStreaming
+            if abortInteractiveAgentWork(
+                agent: agent,
+                isManualCompacting: frameStatus.isManualCompacting
+            ) {
                 doubleEsc.lastPress = nil
-                agent.abort()
                 frameStatus.mode = .aborting
-                // Drop any queued-but-unstarted steer messages so they can't
-                // double-drain: without this the initial steering drain would
-                // still inject them AND /retry would resubmit, sending twice.
-                agent.clearSteeringQueue()
-                // Arm /retry from the message actually in flight (the last user
-                // message in the transcript), gated to user-initiated turns. The
-                // trailing `.agentEnd(.aborted)` won't re-arm because we consume
-                // trackedActive here.
-                if let t = retryArmTarget(
-                    summary: nil,
-                    aborted: true,
-                    trackedActive: retry.trackedActive,
-                    messages: agent.state.messages
-                ) {
-                    retry.lastText = t.text
-                    retry.lastImages = t.images
-                    retry.failed = true
+                if wasStreaming {
+                    // Drop any queued-but-unstarted steer messages so they can't
+                    // double-drain: without this the initial steering drain would
+                    // still inject them AND /retry would resubmit, sending twice.
+                    agent.clearSteeringQueue()
+                    // Arm /retry from the message actually in flight (the last user
+                    // message in the transcript), gated to user-initiated turns. The
+                    // trailing `.agentEnd(.aborted)` won't re-arm because we consume
+                    // trackedActive here.
+                    if let t = retryArmTarget(
+                        summary: nil,
+                        aborted: true,
+                        trackedActive: retry.trackedActive,
+                        messages: agent.state.messages
+                    ) {
+                        retry.lastText = t.text
+                        retry.lastImages = t.images
+                        retry.failed = true
+                    }
+                    retry.trackedActive = false
                 }
-                retry.trackedActive = false
                 updateFrameStatus()
                 runner.tui.requestRender()
                 return
             }
-            let running = await bgManager.list(sessionId: sessionId)
-                .filter { $0.status == .running }.count
-            if running > 0 {
-                doubleEsc.lastPress = nil
-                await bgManager.killAll(sessionId: sessionId)
-                frameStatus.runningBackgroundTasks = 0
-                runner.tui.commit([
-                    "",
-                    Style.dimmed("  killed \(running) background \(running == 1 ? "task" : "tasks")"),
-                ])
-                updateFrameStatus()
-                runner.tui.requestRender()
-                return
-            }
-            // Idle fall-through: nothing streaming, no bg tasks. Rewind arms
+            // Idle fall-through. Background jobs are deliberately left alone:
+            // cancellation is an explicit job action, never a destructive
+            // side effect of a navigation key. Rewind arms
             // only with an empty editor while no compaction (auto or manual)
             // is mutating the transcript — any other idle Esc resets the arm
             // so a stray earlier press can't complete the double-tap.
-            // `isStreaming` is re-checked because the bg-manager hop above is
-            // a suspension point: a notification-kicked turn that started
-            // during it must not get the picker opened over it (whatever
-            // slips past even this gets force-aborted by the confirm handler
-            // — the rewind is forced, omp-style).
             guard frame.input.value.isEmpty,
                   !agent.state.isStreaming,
-                  !frameStatus.isAutoCompacting, !frameStatus.isManualCompacting
+                  !frameStatus.isAutoCompacting,
+                  !frameStatus.isManualCompacting,
+                  !frameStatus.isRewinding,
+                  !frameStatus.isSessionSwitching
             else {
                 doubleEsc.lastPress = nil
                 return
@@ -1126,7 +1238,7 @@ func runCodingTUIInternal(
     }
 
     // The background-task poll (see `ensurePoll` above) refreshes the
-    // "N bg running" count + retry/abort countdowns at a relaxed 250ms cadence,
+    // "N bg active" count + retry/abort countdowns at a relaxed 250ms cadence,
     // but only while a turn or a background task is live — it is started on
     // demand rather than spinning forever. The spinner is NOT advanced there —
     // it has its own faster tick below — so a slow bg poll can't make the
@@ -1154,10 +1266,18 @@ func runCodingTUIInternal(
     }
 
     let shutdown: @MainActor @Sendable () async -> Void = {
-        // Kill any still-running background tasks and close provider-held
-        // session resources so we don't leak processes after the user exits.
-        await agent.abortAndKillBackgroundTasks()
-        await agent.closeSession()
+        // Detach delivery before silent cancellation. Otherwise a terminal
+        // kill notification can win the shutdown race and start a fresh,
+        // billable continuation while the process is trying to exit.
+        let currentCodingAgent = agentBox.codingAgent
+        currentCodingAgent.agent.retire()
+        agentBox.eventUnsubscribe?()
+        agentBox.eventUnsubscribe = nil
+        await currentCodingAgent.detachBackground?()
+        await bgManager.closeSession(sessionId: agentBox.sessionId)
+        currentCodingAgent.agent.clearAllQueues()
+        await currentCodingAgent.agent.waitForIdle()
+        await currentCodingAgent.agent.closeSession()
     }
 
     // `--resume`: open the arrow-key session picker on the first frame, reusing
@@ -1232,6 +1352,8 @@ private final class FrameStatusState {
     var runningBackgroundTasks = 0
     var isAutoCompacting = false
     var isManualCompacting = false
+    var isRewinding = false
+    var isSessionSwitching = false
 }
 
 /// Tracks the last idle no-op Esc press so a second press within `window`
@@ -1251,6 +1373,56 @@ final class DoubleEscState {
 @MainActor
 final class PollHandle {
     var task: Task<Void, Never>?
+}
+
+/// Owns the complete session-scoped coding runtime. An Agent's session id and
+/// its bash/job/subagent tools are immutable by design, so a hot session switch
+/// replaces this whole value rather than mutating transcript state in place.
+@MainActor
+final class AgentSessionBox {
+    private(set) var codingAgent: CodingAgent
+    var eventUnsubscribe: Unsubscribe?
+    private(set) var generation: UInt64 = 0
+
+    init(_ codingAgent: CodingAgent) {
+        self.codingAgent = codingAgent
+    }
+
+    var agent: Agent { codingAgent.agent }
+    var sessionId: String { agent.sessionId ?? "" }
+
+    func replace(with replacement: CodingAgent) {
+        codingAgent = replacement
+        generation &+= 1
+    }
+
+    func isCurrent(agent expectedAgent: Agent, generation expectedGeneration: UInt64) -> Bool {
+        generation == expectedGeneration && agent === expectedAgent
+    }
+}
+
+/// Carry user/runtime preferences across a session replacement without
+/// copying session-scoped tools, queues, listeners, messages, or background
+/// attachments. Those are intentionally rebuilt for the new identity.
+@MainActor
+func copyAgentRuntimePreferences(from source: Agent, to destination: Agent) {
+    destination.state.systemPrompt = source.state.systemPrompt
+    destination.state.model = source.state.model
+    destination.state.thinkingLevel = source.state.thinkingLevel
+    destination.state.thinkingDisplay = source.state.thinkingDisplay
+    destination.state.verboseEnabled = source.state.verboseEnabled
+    destination.thinkingBudgets = source.thinkingBudgets
+    destination.maxRetryDelayMs = source.maxRetryDelayMs
+    destination.maxTurns = source.maxTurns
+    destination.toolExecution = source.toolExecution
+    destination.toolChoice = source.toolChoice
+    destination.parallelToolCalls = source.parallelToolCalls
+    destination.beforeToolCall = source.beforeToolCall
+    destination.afterToolCall = source.afterToolCall
+    destination.userPromptSubmit = source.userPromptSubmit
+    destination.convertToLlm = source.convertToLlm
+    destination.transformContext = source.transformContext
+    destination.betweenTurns = source.betweenTurns
 }
 
 /// Whether the goal-continuation loop's logged-out "/login" hint has already
@@ -1339,6 +1511,19 @@ private enum CodingFrameMode {
     }
 }
 
+/// Cancel whichever user-visible operation currently owns the Agent. Manual
+/// compaction is maintenance rather than generation, so `state.isStreaming`
+/// alone is not an adequate Esc/Ctrl-C gate.
+@discardableResult
+func abortInteractiveAgentWork(
+    agent: Agent,
+    isManualCompacting: Bool
+) -> Bool {
+    guard agent.state.isStreaming || isManualCompacting else { return false }
+    agent.abort()
+    return true
+}
+
 /// Tracks the prompt most recently popped back into the editor by Alt+↑ so a
 /// repeat press can keep cycling through the remaining queued items instead of
 /// stopping after one. Reference type so the @MainActor keybinding closures can
@@ -1395,6 +1580,28 @@ func retryArmTarget(
     return (text: text, images: images)
 }
 
+/// Submit a direct prompt without losing it if another run acquires ownership
+/// in the gap between the UI's idle check and the detached prompt task. The
+/// exact content is converted to a steer and is then picked up by the competing
+/// run or by one continuation after it becomes idle.
+func promptPreservingContention(
+    agent: Agent,
+    text: String,
+    images: [ImageContent],
+    isCurrent: @escaping @Sendable () async -> Bool = { true }
+) async throws {
+    do {
+        try await agent.prompt(text, images: images)
+    } catch AgentError.alreadyRunning {
+        guard await isCurrent() else { return }
+        var blocks: [UserBlock] = [.text(TextContent(text: text))]
+        for image in images { blocks.append(.image(image)) }
+        agent.steer(.user(UserMessage(content: blocks)))
+        await agent.waitForIdle()
+        try? await agent.continue()
+    }
+}
+
 /// Reset the per-session transient state that must not survive a session swap
 /// (`/new` or `/resume`): drain the steering queue, clear the `/retry` record,
 /// drop pending attachments, and forget the Alt+↑ dequeue cursor. Shared by both
@@ -1428,6 +1635,7 @@ func performNewSession(
     recorderBox: RecorderBox,
     sessionStore: SessionStore,
     agent: Agent,
+    replaceSessionAgent: (@MainActor @Sendable (String, [Message]) async -> Agent)? = nil,
     cwd: String,
     attachments: AttachmentStore,
     retry: TurnRetryState,
@@ -1439,27 +1647,36 @@ func performNewSession(
     updateStatus: () -> Void,
     requestRender: () -> Void
 ) async {
-    // Repoint persistence at a brand-new session file.
+    // Stop the outgoing recorder before the runtime replacement so a late
+    // callback cannot append to the new session file.
     recorderBox.unsubscribe()
+    let sessionAgent: Agent
+    if let replaceSessionAgent {
+        sessionAgent = await replaceSessionAgent(newId, [])
+    } else {
+        // Retained for focused helper tests and embedders that don't own a
+        // rebuild factory. The interactive TUI always supplies the factory.
+        agent.state.messages = []
+        sessionAgent = agent
+    }
     let recorder = SessionRecorder(
         store: sessionStore,
         sessionId: newId,
         cwd: cwd,
-        model: agent.state.model.id,
-        provider: agent.state.model.provider,
+        model: sessionAgent.state.model.id,
+        provider: sessionAgent.state.model.provider,
         persistedCount: 0
     )
     await recorder.ensureCreated()
     recorderBox.recorder = recorder
-    recorderBox.unsubscribe = recorder.attach(to: agent)
+    recorderBox.unsubscribe = recorder.attach(to: sessionAgent)
     recorderBox.sessionId = newId
 
     // Reset the live context. Native scrollback can't be cleared, so the prior
     // conversation stays above a labeled separator and the fresh session begins
     // below it.
-    agent.state.messages = []
     resetSessionTransientState(
-        agent: agent,
+        agent: sessionAgent,
         retry: retry,
         attachments: attachments,
         dequeueCycle: dequeueCycle
@@ -1574,6 +1791,7 @@ private func codingFrameStateLine(
     case .compacting(let count):
         parts.append(Theme.paint("\(spinner) compacting \(count)", Theme.warn, bold: true))
         parts.append(Theme.faintText("new prompts queue"))
+        parts.append(Theme.faintText("Esc to cancel"))
     case .aborting:
         parts.append(Theme.paint("\(spinner) aborting", Theme.warn, bold: true))
         parts.append(Theme.faintText("Ctrl-C to force quit"))
@@ -1598,10 +1816,7 @@ private func codingFrameStateLine(
         parts.append(Theme.paint("\(queuedPrompts) queued", Theme.accentDim))
     }
     if runningBackgroundTasks > 0 {
-        parts.append(Theme.paint("\(runningBackgroundTasks) bg running", Theme.accentDim))
-        if !isStreaming {
-            parts.append(Theme.faintText("Esc to stop"))
-        }
+        parts.append(Theme.paint("\(runningBackgroundTasks) bg active", Theme.accentDim))
     }
 
     return parts.joined(separator: Theme.faintText("  ·  "))

@@ -32,9 +32,10 @@ public func createTaskStatusTool(
             ]),
         ]),
         "required": .array([.string("action")]),
+        "additionalProperties": .bool(false),
     ])
 
-    return AgentTool(
+    var tool = AgentTool(
         name: "task_status",
         label: "task_status",
         description: "Inspect and manage background tasks. Use action=list to see all tasks for this session, action=status with task_id for details on a single task, or action=kill with task_id to terminate a running task.",
@@ -44,6 +45,12 @@ public func createTaskStatusTool(
             guard case .object(let obj) = args,
                   case .string(let action) = obj["action"] ?? .null else {
                 throw CodingToolError.invalidArgument("task_status: `action` is required")
+            }
+            let allowedKeys: Set<String> = ["action", "task_id"]
+            if let unknown = obj.keys.filter({ !allowedKeys.contains($0) }).sorted().first {
+                throw CodingToolError.invalidArgument(
+                    "task_status: unknown argument `\(unknown)`"
+                )
             }
             let taskId: String? = {
                 if case .string(let s) = obj["task_id"] ?? .null { return s }
@@ -96,7 +103,7 @@ public func createTaskStatusTool(
                 }
                 // Cross-session guard: if the tool was created with a session,
                 // only surface tasks that belong to it.
-                if let sessionId, snap.sessionId != nil, snap.sessionId != sessionId {
+                if let sessionId, snap.sessionId != sessionId {
                     throw CodingToolError.invalidArgument("task not found in this session: \(id)")
                 }
                 var details: [String: JSONValue] = [
@@ -129,10 +136,10 @@ public func createTaskStatusTool(
                 guard let snap = await manager.get(id) else {
                     throw CodingToolError.invalidArgument("task not found: \(id)")
                 }
-                if let sessionId, snap.sessionId != nil, snap.sessionId != sessionId {
+                if let sessionId, snap.sessionId != sessionId {
                     throw CodingToolError.invalidArgument("task not found in this session: \(id)")
                 }
-                if snap.status != .running {
+                if snap.status.isTerminal {
                     return AgentToolResult(
                         content: [.text(TextContent(text: "Task \(id) is not running (status: \(snap.status.rawValue))."))],
                         details: .object([
@@ -156,6 +163,8 @@ public func createTaskStatusTool(
             }
         }
     )
+    tool.codingToolCapabilities = .taskStatus
+    return tool
 }
 
 // MARK: - Rendering
@@ -166,33 +175,50 @@ private func formatListBody(entries: [BackgroundTaskSnapshot]) -> String {
     }
     var lines: [String] = []
     for snap in entries {
-        let status = snap.status.rawValue
-        let label = snap.spec.description ?? snap.spec.label
-        let file = snap.outputFile ?? "-"
-        lines.append("- [\(snap.id)] (\(status)) \(label) — output=\(file)")
+        let status = taskStatusEscapeUntrustedOutput(snap.status.rawValue)
+        let label = taskStatusEscapeUntrustedOutput(
+            snap.spec.description ?? snap.spec.label
+        )
+        let file = taskStatusEscapeUntrustedOutput(snap.outputFile ?? "-")
+        lines.append("- [\(taskStatusEscapeUntrustedOutput(snap.id))] (\(status)) <untrusted-task-label>\(label)</untrusted-task-label> — output=\(file)")
     }
     return lines.joined(separator: "\n")
 }
 
 private func formatStatusBody(snap: BackgroundTaskSnapshot) -> String {
-    var out = "task \(snap.id): \(snap.status.rawValue)\n"
-    out += "kind: \(snap.spec.kind)\n"
-    out += "label: \(snap.spec.label)\n"
+    var out = "task \(taskStatusEscapeUntrustedOutput(snap.id)): \(taskStatusEscapeUntrustedOutput(snap.status.rawValue))\n"
+    out += "<untrusted-task-metadata>\n"
+    out += "kind: \(taskStatusEscapeUntrustedOutput(snap.spec.kind))\n"
+    out += "label: \(taskStatusEscapeUntrustedOutput(snap.spec.label))\n"
     if let d = snap.spec.description {
-        out += "description: \(d)\n"
+        out += "description: \(taskStatusEscapeUntrustedOutput(d))\n"
     }
     if let file = snap.outputFile {
-        out += "output_file: \(file)  (use the Read tool to inspect full stdout/stderr)\n"
+        out += "output_file: \(taskStatusEscapeUntrustedOutput(file))  (use job read with this task id for manager-authorized full output)\n"
     }
     if let outcome = snap.outcome {
-        out += "summary: \(outcome.summary)\n"
+        out += "summary: \(taskStatusEscapeUntrustedOutput(outcome.summary))\n"
         if let err = outcome.errorMessage {
-            out += "error: \(err)\n"
+            out += "error: \(taskStatusEscapeUntrustedOutput(err))\n"
         }
     }
+    out += "</untrusted-task-metadata>\n"
     if !snap.outputTail.isEmpty {
         out += "output_tail:\n"
-        out += snap.outputTail.trimmingCharacters(in: CharacterSet(charactersIn: "\n"))
+        out += "<untrusted-output>\n"
+        out += taskStatusEscapeUntrustedOutput(
+            snap.outputTail.trimmingCharacters(in: CharacterSet(charactersIn: "\n"))
+        )
+        out += "\n</untrusted-output>"
+    }
+    if snap.outputTailTruncated {
+        out += "\noutput_truncated: true (use the job tool's manager-owned output reader for the complete artifact)"
     }
     return out
+}
+
+private func taskStatusEscapeUntrustedOutput(_ value: String) -> String {
+    value.replacingOccurrences(of: "&", with: "&amp;")
+        .replacingOccurrences(of: "<", with: "&lt;")
+        .replacingOccurrences(of: ">", with: "&gt;")
 }

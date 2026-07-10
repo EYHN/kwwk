@@ -24,6 +24,61 @@ public enum PathUtils {
         return URL(fileURLWithPath: resolved).standardized.path
     }
 
+    /// Resolve and authorize a path for a built-in file tool.
+    ///
+    /// Workspace containment compares canonical path components, not lexical
+    /// prefixes. Existing targets are resolved with `realpath`; for a target
+    /// that does not exist yet (normally a write), its nearest existing
+    /// ancestor is canonicalized before the remaining components are appended.
+    /// This rejects `..` escapes, absolute/home paths outside allowed roots,
+    /// prefix collisions, and symlink escapes.
+    ///
+    /// This check is not an OS sandbox. A hostile process that can replace path
+    /// components between this check and the eventual I/O can still create a
+    /// time-of-check/time-of-use race; defending that threat model requires
+    /// descriptor-relative I/O (`openat`/`O_NOFOLLOW`) or process sandboxing.
+    public static func resolveForAccess(
+        _ path: String,
+        cwd: String,
+        policy: FileAccessPolicy,
+        intent: FileAccessIntent
+    ) throws -> String {
+        let resolved = resolveToCwd(path, cwd: cwd)
+        guard policy.scope == .workspaceOnly else { return resolved }
+
+        let canonicalTarget: String
+        do {
+            canonicalTarget = try canonicalPathAllowingMissing(resolved)
+        } catch {
+            throw CodingToolError.invalidArgument(
+                "Access denied: path '\(path)' could not be safely resolved"
+            )
+        }
+
+        let extraRoots: [String]
+        switch intent {
+        case .read:
+            extraRoots = policy.additionalReadRoots
+        case .write:
+            extraRoots = policy.additionalWriteRoots
+        }
+        let roots = [cwd] + extraRoots
+        for root in roots {
+            let lexicalRoot = resolveToCwd(root, cwd: cwd)
+            guard let canonicalRoot = try? canonicalPathAllowingMissing(lexicalRoot) else {
+                continue
+            }
+            if isPath(canonicalTarget, containedIn: canonicalRoot) {
+                return canonicalTarget
+            }
+        }
+
+        let operation = intent == .read ? "read" : "write"
+        throw CodingToolError.invalidArgument(
+            "Access denied: \(operation) path '\(path)' resolves outside the allowed roots"
+        )
+    }
+
     /// Normalize model/user path spelling the same way pi's `expandPath` does:
     /// strip a leading `@`, normalize Unicode spaces, and expand `~`/`~/...`.
     public static func expandPath(_ path: String) -> String {
@@ -49,6 +104,80 @@ public enum PathUtils {
             }
         }
         return out
+    }
+
+    private static func canonicalPathAllowingMissing(_ path: String) throws -> String {
+        let standardized = URL(fileURLWithPath: path).standardized.path
+        if let canonical = canonicalExistingPath(standardized) {
+            return canonical
+        }
+
+        var cursor = standardized
+        var missingComponents: [String] = []
+        while true {
+            switch pathEntryStatus(cursor) {
+            case .exists:
+                // `lstat` succeeded but `realpath` did not. Most commonly this
+                // is a dangling symlink; never reinterpret it as a creatable
+                // directory because a later write would follow the link.
+                guard let canonical = canonicalExistingPath(cursor) else {
+                    throw CodingToolError.invalidArgument("path contains an unresolvable component")
+                }
+                var result = canonical
+                for component in missingComponents.reversed() {
+                    result = (result as NSString).appendingPathComponent(component)
+                }
+                return URL(fileURLWithPath: result).standardized.path
+
+            case .missing:
+                let parent = (cursor as NSString).deletingLastPathComponent
+                guard !parent.isEmpty, parent != cursor else {
+                    throw CodingToolError.invalidArgument("path has no resolvable ancestor")
+                }
+                missingComponents.append((cursor as NSString).lastPathComponent)
+                cursor = parent
+
+            case .inaccessible:
+                throw CodingToolError.invalidArgument("path contains an inaccessible component")
+            }
+        }
+    }
+
+    private static func canonicalExistingPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    private enum PathEntryStatus {
+        case exists
+        case missing
+        case inaccessible
+    }
+
+    private static func pathEntryStatus(_ path: String) -> PathEntryStatus {
+        #if canImport(Darwin)
+        var info = Darwin.stat()
+        let result = path.withCString { Darwin.lstat($0, &info) }
+        #elseif canImport(Glibc)
+        var info = Glibc.stat()
+        let result = path.withCString { Glibc.lstat($0, &info) }
+        #else
+        let result: Int32 = FileManager.default.fileExists(atPath: path) ? 0 : -1
+        #endif
+        if result == 0 { return .exists }
+        #if canImport(Darwin) || canImport(Glibc)
+        if errno == ENOENT || errno == ENOTDIR { return .missing }
+        return .inaccessible
+        #else
+        return .missing
+        #endif
+    }
+
+    private static func isPath(_ path: String, containedIn root: String) -> Bool {
+        if path == root { return true }
+        let prefix = root == "/" ? "/" : root + "/"
+        return path.hasPrefix(prefix)
     }
 
     /// Write `data` to `path` in place: open the existing file (following any

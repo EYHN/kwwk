@@ -5,6 +5,31 @@ import Testing
 
 @Suite("wait_task tool", .serialized)
 struct WaitTaskToolTests {
+    @Test("scoped legacy wait rejects an unscoped task")
+    func scopedWaitRejectsUnscopedTask() async throws {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let (taskId, _) = await manager.spawn(
+            runner: NeverCompletingRunner(label: "unscoped"),
+            sessionId: nil
+        )
+        defer { Task { try? await manager.kill(taskId) } }
+        let tool = createWaitTaskTool(manager: manager, sessionId: "s1")
+
+        do {
+            _ = try await tool.execute(
+                "wait-unscoped",
+                .object(["task_id": .string(taskId), "timeout_seconds": .int(1)]),
+                nil,
+                nil
+            )
+            Issue.record("expected session-scoped rejection")
+        } catch let error as CodingToolError {
+            #expect(error.localizedDescription.contains("not found in this session"))
+        }
+    }
+
 
     @Test("returns immediately when the task is already terminal")
     func fastPathTerminal() async throws {

@@ -228,6 +228,63 @@ struct ParallelToolsTests {
         }
         #expect(results == ["slow", "fast"])
     }
+
+    @Test("parallel mode publishes immediate rejection before a slow sibling finishes")
+    func publishesImmediateRejectionWithoutWaitAllDelay() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        faux.setResponses([
+            .message(fauxAssistantMessage(
+                blocks: [
+                    fauxToolCall(name: "limited_slow", arguments: [:], id: "slow"),
+                    fauxToolCall(name: "limited_slow", arguments: [:], id: "rejected"),
+                ],
+                stopReason: .toolUse
+            )),
+            .message(fauxAssistantMessage("done")),
+        ])
+
+        let timeline = TimelineRecorder()
+        var tool = AgentTool(
+            name: "limited_slow",
+            label: "limited slow",
+            description: "one slow permitted call",
+            parameters: ["type": "object"],
+            execute: { _, _, _, _ in
+                await timeline.mark("slow-body-start")
+                try? await Task.sleep(nanoseconds: 150_000_000)
+                await timeline.mark("slow-body-finished")
+                return AgentToolResult(content: [.text(TextContent(text: "slow"))])
+            }
+        )
+        tool.turnLimitKey = "limited-slow"
+        tool.maxCallsPerTurn = 1
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: faux.getModel(), tools: [tool]),
+            toolExecution: .parallel
+        ))
+        _ = agent.subscribe { event, _ in
+            if case .toolExecutionEnd(let id, _, _, _) = event {
+                await timeline.mark("\(id)-published")
+            }
+        }
+
+        try await agent.prompt("run one and reject one")
+
+        let events = await timeline.events
+        guard let rejection = events.firstIndex(of: "rejected-published"),
+              let slowFinished = events.firstIndex(of: "slow-body-finished") else {
+            Issue.record("expected rejection and slow-body timeline events")
+            return
+        }
+        #expect(rejection < slowFinished)
+        let results = agent.state.messages.compactMap { message -> ToolResultMessage? in
+            guard case .toolResult(let result) = message else { return nil }
+            return result
+        }
+        #expect(results.map(\.toolCallId) == ["slow", "rejected"])
+        #expect(results.last?.isError == true)
+    }
 }
 
 actor TimelineRecorder {

@@ -3,7 +3,14 @@ import KWWKAgent
 
 func defaultCLISubagents(
     for tools: CodingTools,
-    selection: BuiltinSubagentSelection = .all
+    selection: BuiltinSubagentSelection = .all,
+    runInBackgroundByDefault: Bool = false
 ) -> [SubagentDefinition] {
-    SubagentDefinition.builtins(for: tools, selection: selection)
+    var definitions = SubagentDefinition.builtins(for: tools, selection: selection)
+    if runInBackgroundByDefault {
+        for index in definitions.indices {
+            definitions[index].runInBackgroundByDefault = true
+        }
+    }
+    return definitions
 }

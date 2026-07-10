@@ -20,10 +20,23 @@ public struct AgentLoopConfig: Sendable {
     // `max_turns` — prevents runaway tool-loops from burning budget.
     // Nil = unlimited.
     public var maxTurns: Int?
+    /// Internal subagent mode: reserve the last permitted provider turn for
+    /// synthesis by hiding tools and requiring a text response. The ordinary
+    /// Agent SDK keeps its existing hard-cap behavior unless explicitly
+    /// enabled by the subagent runner.
+    var finalTextOnlyOnLastTurn: Bool = false
+    /// Internal completion contract used by subagents. A successful call to
+    /// this tool is the only terminal success signal. Natural provider stops
+    /// receive bounded runtime reminders instead of being mistaken for a
+    /// completed delegated task.
+    var terminalToolName: String?
+    var terminalToolReminderLimit: Int = 0
     // Base delay for exponential backoff between stream retries. Prod
     // defaults to 1_000 ms; tests override to something small.
     public var retryBaseDelayMs: UInt64
+    public var getRuntimeMessages: @Sendable () async -> [Message]
     public var getSteeringMessages: @Sendable () async -> [Message]
+    public var hasSteeringMessages: @Sendable () -> Bool
     public var getFollowUpMessages: @Sendable () async -> [Message]
     public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     public var beforeToolCall: BeforeToolCallHook?
@@ -46,7 +59,9 @@ public struct AgentLoopConfig: Sendable {
         parallelToolCalls: Bool? = nil,
         maxTurns: Int? = nil,
         retryBaseDelayMs: UInt64 = 1_000,
+        getRuntimeMessages: @escaping @Sendable () async -> [Message] = { [] },
         getSteeringMessages: @escaping @Sendable () async -> [Message] = { [] },
+        hasSteeringMessages: @escaping @Sendable () -> Bool = { false },
         getFollowUpMessages: @escaping @Sendable () async -> [Message] = { [] },
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         beforeToolCall: BeforeToolCallHook? = nil,
@@ -68,7 +83,9 @@ public struct AgentLoopConfig: Sendable {
         self.parallelToolCalls = parallelToolCalls
         self.maxTurns = maxTurns
         self.retryBaseDelayMs = retryBaseDelayMs
+        self.getRuntimeMessages = getRuntimeMessages
         self.getSteeringMessages = getSteeringMessages
+        self.hasSteeringMessages = hasSteeringMessages
         self.getFollowUpMessages = getFollowUpMessages
         self.authResolver = authResolver
         self.beforeToolCall = beforeToolCall
@@ -81,6 +98,8 @@ public struct AgentLoopConfig: Sendable {
 }
 
 public typealias AgentEventSink = @Sendable (AgentEvent) async -> Void
+
+private let multipleJobPollsCancellationReason = "multiple-job-polls"
 
 /// A snapshot of the agent's context at the start of a run. The loop copies
 /// these arrays before mutating so the caller's state is never aliased.
@@ -116,7 +135,7 @@ public enum AgentLoop {
         // so downstream emit/append sees the sanitized version.
         var effectivePrompts: [Message] = []
         for prompt in prompts {
-            if case .user(let u) = prompt {
+            if case .user(let u) = prompt, u.source != .runtime {
                 if let kept = await applyUserPromptSubmitHook(
                     message: u,
                     context: currentContext,
@@ -250,11 +269,14 @@ public enum AgentLoop {
         }
 
         var firstTurn = initialFirstTurn
-        var pendingMessages = await config.getSteeringMessages()
+        var pendingMessages = await config.getRuntimeMessages()
+        pendingMessages += await config.getSteeringMessages()
         // Count assistant turns actually executed (post-stream). Checked
         // against `config.maxTurns` right before each streaming call so
         // the cap applies to what the API *would* see, not the loop head.
         var turnsExecuted = 0
+        var terminalRemindersSent = 0
+        var forceTerminalTool = false
 
         outer: while true {
             var hasMoreToolCalls = true
@@ -272,7 +294,7 @@ public enum AgentLoop {
                         // the same way `run()` does for initial prompts,
                         // so steering / follow-up injections get the
                         // same redaction / block semantics.
-                        if case .user(let u) = message {
+                        if case .user(let u) = message, u.source != .runtime {
                             guard let kept = await applyUserPromptSubmitHook(
                                 message: u,
                                 context: currentContext,
@@ -309,6 +331,7 @@ public enum AgentLoop {
                     // the provider, so don't bump `turns` or usage.
                     // Just record the stop reason for the summary.
                     summary.finalStopReason = .error
+                    summary.reachedMaxTurns = true
                     await emit(.messageStart(message: .assistant(capped)))
                     await emit(.messageEnd(message: .assistant(capped)))
                     currentContext.messages.append(.assistant(capped))
@@ -317,14 +340,21 @@ public enum AgentLoop {
                     return
                 }
 
+                let finalTextOnly = config.finalTextOnlyOnLastTurn
+                    && config.maxTurns.map { turnsExecuted == $0 - 1 } == true
+                let terminalToolOnly = finalTextOnly || forceTerminalTool
                 let cursorResults = CursorToolResultBox()
+                let turnToolState = TurnToolExecutionState()
                 let assistant = try await streamAssistantResponse(
                     context: &currentContext,
                     config: config,
+                    finalTextOnly: finalTextOnly,
+                    terminalToolOnly: terminalToolOnly,
                     cancellation: cancellation,
                     emit: emit,
                     streamFn: streamFn,
-                    cursorResults: cursorResults
+                    cursorResults: cursorResults,
+                    turnToolState: turnToolState
                 )
                 // Append to the in-loop context BEFORE running tools, so the
                 // next turn's request body carries the assistant turn
@@ -341,7 +371,13 @@ public enum AgentLoop {
                 // the `cursorExecResolved` toolCall blocks inside it.
                 let inlineResults = cursorResults.drain()
                 for result in inlineResults {
+                    // Cursor executed this while the assistant was streaming.
+                    // Emit/persist the result only now, after its paired
+                    // assistant tool-call message has been retained.
+                    await emit(.messageStart(message: .toolResult(result)))
+                    await emit(.messageEnd(message: .toolResult(result)))
                     currentContext.messages.append(.toolResult(result))
+                    turnToolState.commitLease(for: result.toolCallId)
                 }
 
                 if assistant.stopReason == .error || assistant.stopReason == .aborted {
@@ -353,9 +389,21 @@ public enum AgentLoop {
                 // Skip calls the Cursor provider already resolved inline — the
                 // results are in `inlineResults`; running them again would
                 // duplicate side effects.
-                let toolCalls = assistant.content.compactMap { block -> ToolCall? in
+                let emittedToolCalls = assistant.content.compactMap { block -> ToolCall? in
                     guard case .toolCall(let tc) = block, tc.cursorExecResolved != true else { return nil }
                     return tc
+                }
+                // A terminal tool is a transaction boundary, not an ordinary
+                // member of a parallel batch. Keep every emitted call here so
+                // `executeToolCalls` can reject the *whole* malformed batch and
+                // still publish one paired error result per call. Filtering out
+                // siblings would silently drop their results and, on ordinary
+                // turns, used to let them execute beside a successful yield.
+                let toolCalls = emittedToolCalls
+                if finalTextOnly,
+                   let terminalToolName = config.terminalToolName,
+                   (toolCalls.count != 1 || toolCalls.first?.name != terminalToolName) {
+                    summary.reachedMaxTurns = true
                 }
                 hasMoreToolCalls = !toolCalls.isEmpty
 
@@ -367,19 +415,71 @@ public enum AgentLoop {
                         toolCalls: toolCalls,
                         mode: config.toolExecution,
                         config: config,
+                        terminalToolOnly: terminalToolOnly,
                         cancellation: cancellation,
+                        turnToolState: turnToolState,
                         emit: emit
                     )
                     toolResults += executed
                     for result in executed {
                         currentContext.messages.append(.toolResult(result))
+                        turnToolState.commitLease(for: result.toolCallId)
                         if let subagent = subagentRunSummary(from: result) {
                             summary.subagents.append(subagent)
                         }
                     }
                 }
 
+                // Defensive rollback for a tool result that failed to make it
+                // into either retained result list.
+                turnToolState.rollbackAllLeases()
+
                 await emit(.turnEnd(message: .assistant(assistant), toolResults: toolResults))
+
+                let terminalToolSucceeded = config.terminalToolName.map { terminalToolName in
+                    toolResults.contains {
+                        $0.toolName == terminalToolName && !$0.isError
+                    }
+                } ?? false
+                if terminalToolSucceeded {
+                    await emit(.agentEnd(messages: delta(), summary: finalize(.stop)))
+                    return
+                }
+
+                if config.terminalToolName != nil, !hasMoreToolCalls {
+                    if finalTextOnly {
+                        summary.reachedMaxTurns = true
+                        await emit(.agentEnd(messages: delta(), summary: finalize(.error)))
+                        return
+                    }
+                    let reminderLimit = max(0, config.terminalToolReminderLimit)
+                    if terminalRemindersSent < reminderLimit {
+                        terminalRemindersSent += 1
+                        forceTerminalTool = terminalRemindersSent == reminderLimit
+                        pendingMessages = [terminalToolReminder(
+                            toolName: config.terminalToolName!,
+                            isFinal: forceTerminalTool
+                        )]
+                        continue
+                    }
+                    await emit(.agentEnd(messages: delta(), summary: finalize(nil)))
+                    return
+                }
+                if hasMoreToolCalls {
+                    terminalRemindersSent = 0
+                    forceTerminalTool = false
+                }
+
+                // A reserved synthesis turn is terminal by definition. Do
+                // not let an arriving runtime aside, steer, or follow-up
+                // create another iteration that immediately trips the hard
+                // cap and overwrites a valid final answer with a synthetic
+                // max-turn error. Queued user input remains queued for the
+                // parent/session to handle after this child run ends.
+                if finalTextOnly {
+                    await emit(.agentEnd(messages: delta(), summary: finalize(nil)))
+                    return
+                }
 
                 // Between-turn hook: the auto-compact driver injects a
                 // summarized transcript here so the next LLM call
@@ -422,7 +522,8 @@ public enum AgentLoop {
                     return
                 }
 
-                pendingMessages = await config.getSteeringMessages()
+                pendingMessages = await config.getRuntimeMessages()
+                pendingMessages += await config.getSteeringMessages()
             }
 
             let followUps = await config.getFollowUpMessages()
@@ -484,10 +585,13 @@ public enum AgentLoop {
     private static func streamAssistantResponse(
         context: inout AgentContext,
         config: AgentLoopConfig,
+        finalTextOnly: Bool,
+        terminalToolOnly: Bool,
         cancellation: CancellationHandle?,
         emit: @escaping AgentEventSink,
         streamFn: @escaping StreamFn,
-        cursorResults: CursorToolResultBox
+        cursorResults: CursorToolResultBox,
+        turnToolState: TurnToolExecutionState
     ) async throws -> AssistantMessage {
         var messages = context.messages
         if let transform = config.transformContext {
@@ -496,28 +600,29 @@ public enum AgentLoop {
         if let convert = config.convertToLlm {
             messages = await convert(messages)
         }
+        let systemPrompt = terminalToolOnly
+            ? appendFinalTurnInstruction(
+                to: context.systemPrompt,
+                terminalToolName: config.terminalToolName
+            )
+            : context.systemPrompt
+        let availableTools: [Tool]
+        if terminalToolOnly, let terminalToolName = config.terminalToolName {
+            availableTools = context.tools
+                .filter { $0.name == terminalToolName }
+                .map { $0.toKWAITool() }
+        } else if finalTextOnly {
+            availableTools = []
+        } else {
+            availableTools = context.tools.map { $0.toKWAITool() }
+        }
         let llmContext = Context(
-            systemPrompt: context.systemPrompt,
+            systemPrompt: systemPrompt,
             messages: messages,
-            tools: context.tools.map { $0.toKWAITool() }
+            tools: availableTools
         )
 
-        // Inline tool execution for Cursor's server-driven exec channel: the
-        // provider calls this mid-stream; results are buffered and appended to
-        // the transcript after the assistant message closes.
         let bridgeContext = context
-        let cursorExecBridge = CursorExecBridge(cwd: config.cwd) { call in
-            let result = await executeCursorExec(
-                call: call,
-                context: bridgeContext,
-                config: config,
-                cancellation: cancellation,
-                emit: emit
-            )
-            cursorResults.append(result)
-            return result
-        }
-
         let resolvedAuth = try await config.authResolver?(config.model, config.sessionId)
         var requestModel = config.model
         if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
@@ -527,31 +632,62 @@ public enum AgentLoop {
             guard let authMetadata = resolvedAuth?.metadata, !authMetadata.isEmpty else { return nil }
             return authMetadata
         }()
-        let options = StreamOptions(
-            apiKey: resolvedAuth?.token,
-            cacheRetention: nil,
-            sessionId: config.sessionId,
-            maxRetryDelayMs: config.maxRetryDelayMs,
-            metadata: mergedMetadata,
-            resolvedAuth: resolvedAuth,
-            reasoning: config.reasoning,
-            thinkingBudgets: config.thinkingBudgets,
-            cancellation: cancellation,
-            toolChoice: config.toolChoice,
-            parallelToolCalls: config.parallelToolCalls,
-            cursorExecBridge: cursorExecBridge,
-            verbose: config.verboseEnabled,
-            onVerbose: { event in
-                await emit(.verbose(event))
-            }
-        )
-
         var lastError: Error?
 
-        for attempt in 0..<maxRetries {
+        for attemptIndex in 0..<maxRetries {
             if cancellation?.isCancelled == true {
                 throw AgentError.aborted
             }
+
+            // A provider retry is a new assistant attempt. Give its inline
+            // tools a distinct cancellation domain and bridge so an old Cursor
+            // exec task can never append into the next attempt's result box.
+            let inlineAttempt = CursorInlineExecutionAttempt(parentCancellation: cancellation)
+            let cursorExecBridge: CursorExecBridge? = terminalToolOnly ? nil : CursorExecBridge(cwd: config.cwd) { call in
+                guard let attemptCancellation = inlineAttempt.beginInvocation() else {
+                    return closedCursorAttemptResult(for: call)
+                }
+                let result = await executeCursorExec(
+                    call: call,
+                    context: bridgeContext,
+                    config: config,
+                    cancellation: attemptCancellation,
+                    turnToolState: turnToolState,
+                    emit: emit
+                )
+                let retained = inlineAttempt.finishInvocation {
+                    cursorResults.append(result)
+                }
+                if !retained {
+                    turnToolState.rollbackLeases(for: [call.id])
+                }
+                return result
+            }
+            let options = StreamOptions(
+                apiKey: resolvedAuth?.token,
+                cacheRetention: nil,
+                sessionId: config.sessionId,
+                maxRetryDelayMs: config.maxRetryDelayMs,
+                metadata: mergedMetadata,
+                resolvedAuth: resolvedAuth,
+                // The child already spent earlier turns gathering evidence.
+                // On its reserved synthesis turn, extended thinking can
+                // consume the entire response and produce stop-without-text
+                // (observed with Anthropic). Give the final answer the whole
+                // output budget instead.
+                reasoning: terminalToolOnly ? nil : config.reasoning,
+                thinkingBudgets: terminalToolOnly ? nil : config.thinkingBudgets,
+                cancellation: cancellation,
+                toolChoice: terminalToolOnly
+                    ? config.terminalToolName.map { ToolChoice.tool(name: $0) }
+                    : (finalTextOnly ? ToolChoice.none : config.toolChoice),
+                parallelToolCalls: terminalToolOnly ? false : config.parallelToolCalls,
+                cursorExecBridge: cursorExecBridge,
+                verbose: config.verboseEnabled,
+                onVerbose: { event in
+                    await emit(.verbose(event))
+                }
+            )
 
             do {
                 let response = try await streamFn(requestModel, llmContext, options)
@@ -604,31 +740,25 @@ public enum AgentLoop {
                 if final.stopReason == .error,
                    let msg = final.errorMessage,
                    isRetryableError(msg),
-                   attempt < maxRetries - 1 {
+                   attemptIndex < maxRetries - 1 {
+                    await inlineAttempt.invalidateAndWait(reason: "cursor-attempt-retry")
                     // Discard inline Cursor tool results from the rewound
                     // attempt — their toolCall blocks are gone with it, and the
                     // retried stream produces fresh pairs.
-                    _ = cursorResults.drain()
+                    let discarded = cursorResults.drain()
+                    turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
+                    turnToolState.resetPollGateForRetry()
                     if emittedStart {
                         await emit(.streamRewind)
                     }
-                    let delayMs = min(config.retryBaseDelayMs * (1 << attempt), 30_000)
-                    await emit(.streamRetry(attempt: attempt, delayMs: delayMs, reason: msg))
-                    // Sleep in 100ms increments so an Esc press (abort)
-                    // cuts through the backoff instead of waiting out the
-                    // full 30s exponential cap.
-                    let tickMs: UInt64 = 100
-                    var remainingMs = delayMs
-                    while remainingMs > 0 {
-                        if cancellation?.isCancelled == true { throw AgentError.aborted }
-                        let step = min(remainingMs, tickMs)
-                        try? await Task.sleep(nanoseconds: step * 1_000_000)
-                        remainingMs -= step
-                    }
+                    let delayMs = min(config.retryBaseDelayMs * (1 << attemptIndex), 30_000)
+                    await emit(.streamRetry(attempt: attemptIndex, delayMs: delayMs, reason: msg))
+                    try await waitForRetryDelay(delayMs, cancellation: cancellation)
                     lastError = AgentError.maxRetriesExceeded
                     continue
                 }
 
+                await inlineAttempt.sealAndWait()
                 if !emittedStart {
                     await emit(.messageStart(message: .assistant(final)))
                 }
@@ -636,14 +766,20 @@ public enum AgentLoop {
                 return final
 
             } catch {
+                await inlineAttempt.invalidateAndWait(reason: "cursor-attempt-error")
                 lastError = error
-                let reason = "\(error)"
-                if isRetryableError(reason), attempt < maxRetries - 1 {
-                    let delayMs = min(config.retryBaseDelayMs * (1 << attempt), 30_000)
-                    await emit(.streamRetry(attempt: attempt, delayMs: delayMs, reason: reason))
-                    try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                if isRetryableError(reason), attemptIndex < maxRetries - 1 {
+                    let discarded = cursorResults.drain()
+                    turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
+                    turnToolState.resetPollGateForRetry()
+                    let delayMs = min(config.retryBaseDelayMs * (1 << attemptIndex), 30_000)
+                    await emit(.streamRetry(attempt: attemptIndex, delayMs: delayMs, reason: reason))
+                    try await waitForRetryDelay(delayMs, cancellation: cancellation)
                     continue
                 }
+                let discarded = cursorResults.drain()
+                turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                 throw error
             }
         }
@@ -651,19 +787,86 @@ public enum AgentLoop {
         throw lastError ?? AgentError.maxRetriesExceeded
     }
 
+    /// Sleep in short increments so cancellation/steering does not disappear
+    /// inside a provider retry backoff. Both stream-error and thrown-error retry
+    /// paths use this one implementation to keep their abort semantics equal.
+    private static func waitForRetryDelay(
+        _ delayMs: UInt64,
+        cancellation: CancellationHandle?
+    ) async throws {
+        let tickMs: UInt64 = 100
+        var remainingMs = delayMs
+        while remainingMs > 0 {
+            if cancellation?.isCancelled == true || Task.isCancelled {
+                throw AgentError.aborted
+            }
+            let step = min(remainingMs, tickMs)
+            do {
+                try await Task.sleep(nanoseconds: step * 1_000_000)
+            } catch {
+                throw AgentError.aborted
+            }
+            remainingMs -= step
+        }
+    }
+
+    private static func appendFinalTurnInstruction(
+        to systemPrompt: String?,
+        terminalToolName: String?
+    ) -> String {
+        let instruction: String
+        if let terminalToolName {
+            instruction = """
+            This is your final permitted turn. Do not call any exploration or mutation tools. Call `\(terminalToolName)` exactly once with the best complete result supported by the evidence already gathered. Use status `incomplete` and explain what remains if you cannot deliver the requested result.
+            """
+        } else {
+            instruction = """
+            This is your final permitted turn. Do not call tools. Return the best complete final answer you can from the evidence already gathered, and clearly note any uncertainty.
+            """
+        }
+        guard let systemPrompt, !systemPrompt.isEmpty else { return instruction }
+        return systemPrompt + "\n\n" + instruction
+    }
+
+    private static func terminalToolReminder(toolName: String, isFinal: Bool) -> Message {
+        let text: String
+        if isFinal {
+            text = """
+            Your delegated task is not complete until you call `\(toolName)`. This is the final completion reminder: call `\(toolName)` exactly once now. Do not call any other tool. Put the deliverable in `result`; use status `incomplete` and preserve useful evidence if work remains.
+            """
+        } else {
+            text = """
+            Your previous response stopped without the required `\(toolName)` completion signal. Continue the task if needed, then call `\(toolName)` exactly once with the deliverable. Do not merely describe what you plan to do next.
+            """
+        }
+        return .user(UserMessage(text: text, source: .runtime))
+    }
+
     // MARK: - Cursor inline exec
+
+    private static func closedCursorAttemptResult(for call: ToolCall) -> ToolResultMessage {
+        ToolResultMessage(
+            toolCallId: call.id,
+            toolName: call.name,
+            content: [.text(TextContent(text: "Cursor inline attempt already closed"))],
+            isError: true
+        )
+    }
 
     /// Execute one tool call on behalf of the Cursor provider's exec channel.
     /// Registered tools run through the same prepare (validation + hooks) /
-    /// execute / finalize path as loop-driven calls; `write` and `delete` —
-    /// native Cursor tools kwwk has no registered counterpart for — get
-    /// built-in file implementations, still gated by the beforeToolCall hook.
+    /// execute / finalize path as loop-driven calls. Cursor's native `delete`
+    /// has no registered counterpart, so its built-in implementation is only
+    /// available when the agent explicitly registered file-write capability.
+    /// An unregistered native `write` is subject to the same gate; normally it
+    /// resolves through kwwk's registered `write` tool above.
     /// Never throws: failures fold into an `isError` result.
     private static func executeCursorExec(
         call: ToolCall,
         context: AgentContext,
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
+        turnToolState: TurnToolExecutionState,
         emit: @escaping AgentEventSink
     ) async -> ToolResultMessage {
         await emit(.toolExecutionStart(toolCallId: call.id, toolName: call.name, args: call.arguments))
@@ -678,34 +881,149 @@ public enum AgentLoop {
             model: config.model.id
         )
 
+        // Cursor executes MCP calls online before the enclosing assistant
+        // message is complete, so the normal whole-batch validator cannot know
+        // whether a sibling call will arrive later. Never accept the terminal
+        // completion contract through that side channel. Cursor's forced/final
+        // turn disables the inline bridge and the unresolved, sole terminal call
+        // is then validated and executed by the normal post-stream path.
+        if call.name == config.terminalToolName {
+            return await finalize(
+                call: call,
+                assistantMessage: placeholder,
+                args: call.arguments,
+                context: context,
+                outcome: ExecutedOutcome(
+                    result: terminalToolBatchError(toolName: call.name),
+                    isError: true
+                ),
+                config: config,
+                cancellation: cancellation,
+                turnToolState: turnToolState,
+                emitMessageEvents: false,
+                emit: emit
+            )
+        }
+
+        // Cursor invokes tools online, before the enclosing assistant message
+        // is complete, so the normal batch duplicate scan cannot protect this
+        // path. Execute the first id at most once across stream retries and
+        // reject every later occurrence before it reaches hooks or tool code.
+        guard turnToolState.reserveCursorCallId(call.id) else {
+            turnToolState.cancelActiveCursorPoll(matching: call.id)
+            return await finalize(
+                call: call,
+                assistantMessage: placeholder,
+                args: call.arguments,
+                context: context,
+                outcome: ExecutedOutcome(
+                    result: duplicateToolCallIdError(call.id),
+                    isError: true
+                ),
+                config: config,
+                cancellation: cancellation,
+                turnToolState: turnToolState,
+                emitMessageEvents: false,
+                emit: emit
+            )
+        }
+
         if context.tools.contains(where: { $0.name == call.name }) {
             let prep = await prepareToolCall(
                 context: context,
                 assistantMessage: placeholder,
                 toolCall: call,
                 config: config,
-                cancellation: cancellation
+                cancellation: cancellation,
+                turnToolState: turnToolState
             )
             switch prep {
             case .immediate(let result, let isError):
                 return await finalize(
                     call: call, assistantMessage: placeholder, args: call.arguments,
                     context: context, outcome: ExecutedOutcome(result: result, isError: isError),
-                    config: config, cancellation: cancellation, emit: emit
+                    config: config, cancellation: cancellation,
+                    turnToolState: turnToolState, emitMessageEvents: false, emit: emit
                 )
             case .prepared(let prepared):
-                let executed = await executePrepared(prepared, cancellation: cancellation, emit: emit)
+                var executionCancellation = cancellation
+                var cursorPollCancellation: CancellationHandle?
+                var cursorPollParentRegistration: CancellationRegistration?
+                if isBlockingJobPoll(prepared) {
+                    let pollCancellation = CancellationHandle()
+                    let parentRegistration = cancellation?.onCancel { reason in
+                        pollCancellation.cancel(reason: reason ?? "aborted")
+                    }
+                    guard turnToolState.reserveCursorPoll(
+                        callId: call.id,
+                        cancellation: pollCancellation
+                    ) else {
+                        parentRegistration?.cancel()
+                        return await finalize(
+                            call: call, assistantMessage: placeholder, args: prepared.args,
+                            context: context,
+                            outcome: ExecutedOutcome(
+                                result: multipleJobPollsError(), isError: true
+                            ),
+                            config: config, cancellation: cancellation,
+                            turnToolState: turnToolState, emitMessageEvents: false, emit: emit
+                        )
+                    }
+                    executionCancellation = pollCancellation
+                    cursorPollCancellation = pollCancellation
+                    cursorPollParentRegistration = parentRegistration
+                }
+                let executed = await executePrepared(
+                    prepared, cancellation: executionCancellation, config: config, emit: emit
+                )
+                if let cursorPollCancellation {
+                    turnToolState.finishCursorPoll(
+                        callId: call.id,
+                        cancellation: cursorPollCancellation
+                    )
+                }
+                cursorPollParentRegistration?.cancel()
                 return await finalize(
                     call: call, assistantMessage: placeholder, args: prepared.args,
                     context: context, outcome: executed,
-                    config: config, cancellation: cancellation, emit: emit
+                    config: config, cancellation: cancellation,
+                    turnToolState: turnToolState, emitMessageEvents: false, emit: emit
                 )
             }
         }
 
+        var finalizedArgs = call.arguments
         let outcome: ExecutedOutcome
         switch call.name {
         case "write", "delete":
+            // Cursor advertises native file tools independently of kwwk's
+            // AgentTool list. Never let that provider-side surface expand a
+            // read-only/custom agent's whitelist. The registered `write` tool
+            // is the explicit opt-in used by `.standard`; registered calls
+            // have already taken the normal validation + hook path above.
+            guard let writeCapability = context.tools.first(where: {
+                $0.codingToolCapabilities.contains(.write)
+            }) else {
+                outcome = ExecutedOutcome(
+                    result: errorToolResult(
+                        "Tool \(call.name) is not allowed: this agent has no file-write capability"
+                    ),
+                    isError: true
+                )
+                break
+            }
+            do {
+                try JSONSchema.validate(
+                    call.arguments,
+                    against: builtinFileToolSchema(name: call.name)
+                )
+            } catch {
+                outcome = ExecutedOutcome(
+                    result: errorToolResult(schemaValidationMessage(error)),
+                    isError: true
+                )
+                break
+            }
             var effectiveArgs = call.arguments
             var blocked: String?
             if let before = config.beforeToolCall {
@@ -717,14 +1035,42 @@ public enum AgentLoop {
                     if result.block {
                         blocked = result.reason ?? "Tool execution was blocked"
                     } else if let rewritten = result.modifiedArgs {
-                        effectiveArgs = rewritten
+                        do {
+                            try JSONSchema.validate(
+                                rewritten,
+                                against: builtinFileToolSchema(name: call.name)
+                            )
+                            effectiveArgs = rewritten
+                        } catch {
+                            blocked = schemaValidationMessage(error)
+                        }
                     }
                 }
             }
             if let blocked {
                 outcome = ExecutedOutcome(result: errorToolResult(blocked), isError: true)
             } else {
-                outcome = executeBuiltinFileTool(name: call.name, args: effectiveArgs)
+                do {
+                    guard case .object(var object) = effectiveArgs,
+                          case .string(let path) = object["path"] ?? .null else {
+                        throw CodingToolError.invalidArgument("\(call.name): `path` is required")
+                    }
+                    let authorizedPath = try PathUtils.resolveForAccess(
+                        path,
+                        cwd: writeCapability.fileAccessCwd
+                            ?? config.cwd
+                            ?? FileManager.default.currentDirectoryPath,
+                        policy: writeCapability.fileAccessPolicy ?? .unrestricted,
+                        intent: .write
+                    )
+                    object["path"] = .string(authorizedPath)
+                    effectiveArgs = .object(object)
+                    finalizedArgs = effectiveArgs
+                    outcome = executeBuiltinFileTool(name: call.name, args: effectiveArgs)
+                } catch {
+                    let message = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                    outcome = ExecutedOutcome(result: errorToolResult(message), isError: true)
+                }
             }
         default:
             outcome = ExecutedOutcome(
@@ -732,14 +1078,31 @@ public enum AgentLoop {
             )
         }
         return await finalize(
-            call: call, assistantMessage: placeholder, args: call.arguments,
+            call: call, assistantMessage: placeholder, args: finalizedArgs,
             context: context, outcome: outcome,
-            config: config, cancellation: cancellation, emit: emit
+            config: config, cancellation: cancellation,
+            turnToolState: turnToolState, emitMessageEvents: false, emit: emit
         )
     }
 
     /// Built-in `write` (`{path, content}`) and `delete` (`{path}`) used only
     /// for Cursor's native exec tools.
+    private static func builtinFileToolSchema(name: String) -> JSONValue {
+        var properties: [String: JSONValue] = [
+            "path": .object(["type": .string("string")]),
+        ]
+        var required: [JSONValue] = [.string("path")]
+        if name == "write" {
+            properties["content"] = .object(["type": .string("string")])
+            required.append(.string("content"))
+        }
+        return .object([
+            "type": .string("object"),
+            "properties": .object(properties),
+            "required": .array(required),
+        ])
+    }
+
     private static func executeBuiltinFileTool(name: String, args: JSONValue) -> ExecutedOutcome {
         guard case .object(let obj) = args, case .string(let path)? = obj["path"], !path.isEmpty else {
             return ExecutedOutcome(result: errorToolResult("\(name): `path` is required"), isError: true)
@@ -781,9 +1144,69 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         mode: ToolExecutionMode,
         config: AgentLoopConfig,
+        terminalToolOnly: Bool,
         cancellation: CancellationHandle?,
+        turnToolState: TurnToolExecutionState,
         emit: @escaping AgentEventSink
     ) async -> [ToolResultMessage] {
+        var seenCallIds: Set<String> = []
+        var duplicateCallIds: Set<String> = []
+        for call in toolCalls where !seenCallIds.insert(call.id).inserted {
+            duplicateCallIds.insert(call.id)
+        }
+        duplicateCallIds.formUnion(turnToolState.cursorCallIds(in: seenCallIds))
+        let rejectedTerminalCallIds: Set<String> = {
+            guard let terminalToolName = config.terminalToolName else { return [] }
+            let terminalCount = toolCalls.lazy.filter { $0.name == terminalToolName }.count
+            let hasTerminalBoundary = terminalToolOnly || terminalCount > 0
+            guard hasTerminalBoundary,
+                  toolCalls.count != 1 || terminalCount != 1 else {
+                return []
+            }
+            return Set(toolCalls.map(\.id))
+        }()
+        // A model can emit several tool calls in one assistant message. Two
+        // independent blocking polls would recreate the wait-all barrier this
+        // tool is designed to avoid, so enforce one poll at runtime. The
+        // one call may watch every relevant id. If the model emits more than
+        // one, reject the entire poll set immediately; running the first could
+        // still strand the turn on a slow id that appeared separately from a
+        // fast one. Every call still receives a paired tool result.
+        // Prepare actual job tools up front so schema validation and
+        // `beforeToolCall` rewrites are part of the classification. Other tools
+        // retain their existing just-in-time sequential behavior.
+        var preparedJobCalls: [String: ToolPreparation] = [:]
+        for call in toolCalls {
+            guard !duplicateCallIds.contains(call.id) else { continue }
+            guard !rejectedTerminalCallIds.contains(call.id) else { continue }
+            guard currentContext.tools.first(where: { $0.name == call.name })?
+                .isBackgroundJobTool == true else { continue }
+            preparedJobCalls[call.id] = await prepareToolCall(
+                context: currentContext,
+                assistantMessage: assistantMessage,
+                toolCall: call,
+                config: config,
+                cancellation: cancellation,
+                turnToolState: turnToolState
+            )
+        }
+        let pollCallIds = preparedJobCalls.compactMap { id, preparation -> String? in
+            guard case .prepared(let prepared) = preparation,
+                  isBlockingJobPoll(prepared) else { return nil }
+            return id
+        }
+        var rejectedPollCallIds = turnToolState.rejectedNormalPollCallIds(pollCallIds)
+        let pollCallIdSet = Set(pollCallIds)
+        let hasNonPollSibling = !pollCallIds.isEmpty && toolCalls.contains { call in
+            !duplicateCallIds.contains(call.id) && !pollCallIdSet.contains(call.id)
+        }
+        if hasNonPollSibling {
+            // A steered poll can return immediately, but a non-interruptible
+            // sibling would still keep the assistant turn open. Reject the
+            // entire mixed batch before execution; the model can reissue the
+            // non-poll work separately without recreating a wait-all barrier.
+            rejectedPollCallIds.formUnion(toolCalls.map(\.id))
+        }
         switch mode {
         case .sequential:
             return await executeSequential(
@@ -792,6 +1215,11 @@ public enum AgentLoop {
                 toolCalls: toolCalls,
                 config: config,
                 cancellation: cancellation,
+                preparedJobCalls: preparedJobCalls,
+                rejectedPollCallIds: rejectedPollCallIds,
+                rejectedTerminalCallIds: rejectedTerminalCallIds,
+                duplicateCallIds: duplicateCallIds,
+                turnToolState: turnToolState,
                 emit: emit
             )
         case .parallel:
@@ -801,9 +1229,44 @@ public enum AgentLoop {
                 toolCalls: toolCalls,
                 config: config,
                 cancellation: cancellation,
+                preparedJobCalls: preparedJobCalls,
+                rejectedPollCallIds: rejectedPollCallIds,
+                rejectedTerminalCallIds: rejectedTerminalCallIds,
+                duplicateCallIds: duplicateCallIds,
+                turnToolState: turnToolState,
                 emit: emit
             )
         }
+    }
+
+    private static func isBlockingJobPoll(_ prepared: PreparedToolCall) -> Bool {
+        prepared.tool.isBackgroundJobTool && jobRequestWillPoll(prepared.args)
+    }
+
+    private static func multipleJobPollsError() -> AgentToolResult {
+        errorToolResult(
+            "Multiple job polls, or a blocking job poll batched with another tool call, are rejected. Make one poll containing every task id and issue it alone."
+        )
+    }
+
+    private static func terminalToolBatchError(toolName: String) -> AgentToolResult {
+        errorToolResult(
+            "Terminal tool `\(toolName)` must be the only tool call in its assistant turn. The complete batch was rejected without executing any call.",
+            details: .object([
+                "error": .string("invalid_terminal_tool_batch"),
+                "terminal_tool": .string(toolName),
+            ])
+        )
+    }
+
+    private static func duplicateToolCallIdError(_ id: String) -> AgentToolResult {
+        errorToolResult(
+            "Duplicate tool call id '\(id)' in one assistant turn is rejected; every call must have a unique id.",
+            details: .object([
+                "error": .string("duplicate_tool_call_id"),
+                "tool_call_id": .string(id),
+            ])
+        )
     }
 
     private static func executeSequential(
@@ -812,18 +1275,38 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
+        preparedJobCalls: [String: ToolPreparation],
+        rejectedPollCallIds: Set<String>,
+        rejectedTerminalCallIds: Set<String>,
+        duplicateCallIds: Set<String>,
+        turnToolState: TurnToolExecutionState,
         emit: @escaping AgentEventSink
     ) async -> [ToolResultMessage] {
         var out: [ToolResultMessage] = []
         for call in toolCalls {
             await emit(.toolExecutionStart(toolCallId: call.id, toolName: call.name, args: call.arguments))
-            let prep = await prepareToolCall(
-                context: currentContext,
-                assistantMessage: assistantMessage,
-                toolCall: call,
-                config: config,
-                cancellation: cancellation
-            )
+            let prep: ToolPreparation
+            if rejectedTerminalCallIds.contains(call.id) {
+                prep = .immediate(
+                    terminalToolBatchError(toolName: config.terminalToolName ?? call.name),
+                    true
+                )
+            } else if duplicateCallIds.contains(call.id) {
+                prep = .immediate(duplicateToolCallIdError(call.id), true)
+            } else if rejectedPollCallIds.contains(call.id) {
+                prep = .immediate(multipleJobPollsError(), true)
+            } else if let prepared = preparedJobCalls[call.id] {
+                prep = prepared
+            } else {
+                prep = await prepareToolCall(
+                    context: currentContext,
+                    assistantMessage: assistantMessage,
+                    toolCall: call,
+                    config: config,
+                    cancellation: cancellation,
+                    turnToolState: turnToolState
+                )
+            }
             switch prep {
             case .immediate(let result, let isError):
                 out.append(await finalize(
@@ -834,10 +1317,13 @@ public enum AgentLoop {
                     outcome: ExecutedOutcome(result: result, isError: isError),
                     config: config,
                     cancellation: cancellation,
+                    turnToolState: turnToolState,
                     emit: emit
                 ))
             case .prepared(let prepared):
-                let executed = await executePrepared(prepared, cancellation: cancellation, emit: emit)
+                let executed = await executePrepared(
+                    prepared, cancellation: cancellation, config: config, emit: emit
+                )
                 out.append(await finalize(
                     call: call,
                     assistantMessage: assistantMessage,
@@ -846,6 +1332,7 @@ public enum AgentLoop {
                     outcome: executed,
                     config: config,
                     cancellation: cancellation,
+                    turnToolState: turnToolState,
                     emit: emit
                 ))
             }
@@ -859,6 +1346,11 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
+        preparedJobCalls: [String: ToolPreparation],
+        rejectedPollCallIds: Set<String>,
+        rejectedTerminalCallIds: Set<String>,
+        duplicateCallIds: Set<String>,
+        turnToolState: TurnToolExecutionState,
         emit: @escaping AgentEventSink
     ) async -> [ToolResultMessage] {
         enum Run {
@@ -868,62 +1360,92 @@ public enum AgentLoop {
         var runs: [Run] = []
         for call in toolCalls {
             await emit(.toolExecutionStart(toolCallId: call.id, toolName: call.name, args: call.arguments))
-            let prep = await prepareToolCall(
-                context: currentContext,
-                assistantMessage: assistantMessage,
-                toolCall: call,
-                config: config,
-                cancellation: cancellation
-            )
+            let prep: ToolPreparation
+            if rejectedTerminalCallIds.contains(call.id) {
+                prep = .immediate(
+                    terminalToolBatchError(toolName: config.terminalToolName ?? call.name),
+                    true
+                )
+            } else if duplicateCallIds.contains(call.id) {
+                prep = .immediate(duplicateToolCallIdError(call.id), true)
+            } else if rejectedPollCallIds.contains(call.id) {
+                prep = .immediate(multipleJobPollsError(), true)
+            } else if let prepared = preparedJobCalls[call.id] {
+                prep = prepared
+            } else {
+                prep = await prepareToolCall(
+                    context: currentContext,
+                    assistantMessage: assistantMessage,
+                    toolCall: call,
+                    config: config,
+                    cancellation: cancellation,
+                    turnToolState: turnToolState
+                )
+            }
             switch prep {
             case .immediate(let res, let isError): runs.append(.immediate(call, res, isError))
             case .prepared(let p): runs.append(.prepared(p))
             }
         }
 
-        let runningTasks: [(id: String, task: Task<ExecutedOutcome, Never>)] = runs.compactMap { run in
-            if case .prepared(let p) = run {
-                let t = Task.detached { () -> ExecutedOutcome in
-                    await executePrepared(p, cancellation: cancellation, emit: emit)
-                }
-                return (p.call.id, t)
-            }
-            return nil
-        }
-
-        var taskResults: [String: ExecutedOutcome] = [:]
-        for entry in runningTasks {
-            taskResults[entry.id] = await entry.task.value
-        }
-
-        var results: [ToolResultMessage] = []
-        for run in runs {
+        // Execute *and finalize* each call in its own task. Finalization emits
+        // toolExecutionEnd, runtime lifecycle events, and after-tool hooks, so
+        // keeping it outside this task used to make a fast completion (or an
+        // immediate quota error) look "running" until the slowest sibling
+        // finished. Model-visible tool-result messages are still published
+        // below in source order to preserve provider transcript invariants.
+        var finalizationTasks: [(index: Int, task: Task<ToolResultMessage, Never>)] = []
+        for (index, run) in runs.enumerated() {
+            let task: Task<ToolResultMessage, Never>
             switch run {
-            case .immediate(let call, let res, let isError):
-                results.append(await finalize(
-                    call: call,
-                    assistantMessage: assistantMessage,
-                    args: call.arguments,
-                    context: currentContext,
-                    outcome: ExecutedOutcome(result: res, isError: isError),
-                    config: config,
-                    cancellation: cancellation,
-                    emit: emit
-                ))
-            case .prepared(let p):
-                if let executed = taskResults[p.call.id] {
-                    results.append(await finalize(
-                        call: p.call,
+            case .immediate(let call, let result, let isError):
+                task = Task.detached {
+                    await finalize(
+                        call: call,
                         assistantMessage: assistantMessage,
-                        args: p.args,
+                        args: call.arguments,
+                        context: currentContext,
+                        outcome: ExecutedOutcome(result: result, isError: isError),
+                        config: config,
+                        cancellation: cancellation,
+                        turnToolState: turnToolState,
+                        emitMessageEvents: false,
+                        emit: emit
+                    )
+                }
+            case .prepared(let prepared):
+                task = Task.detached {
+                    let executed = await executePrepared(
+                        prepared,
+                        cancellation: cancellation,
+                        config: config,
+                        emit: emit
+                    )
+                    return await finalize(
+                        call: prepared.call,
+                        assistantMessage: assistantMessage,
+                        args: prepared.args,
                         context: currentContext,
                         outcome: executed,
                         config: config,
                         cancellation: cancellation,
+                        turnToolState: turnToolState,
+                        emitMessageEvents: false,
                         emit: emit
-                    ))
+                    )
                 }
             }
+            finalizationTasks.append((index, task))
+        }
+
+        var orderedResults = Array<ToolResultMessage?>(repeating: nil, count: runs.count)
+        for entry in finalizationTasks {
+            orderedResults[entry.index] = await entry.task.value
+        }
+        let results = orderedResults.compactMap { $0 }
+        for result in results {
+            await emit(.messageStart(message: .toolResult(result)))
+            await emit(.messageEnd(message: .toolResult(result)))
         }
         return results
     }
@@ -951,18 +1473,34 @@ public enum AgentLoop {
         assistantMessage: AssistantMessage,
         toolCall: ToolCall,
         config: AgentLoopConfig,
-        cancellation: CancellationHandle?
+        cancellation: CancellationHandle?,
+        turnToolState: TurnToolExecutionState
     ) async -> ToolPreparation {
         guard let tool = context.tools.first(where: { $0.name == toolCall.name }) else {
             return .immediate(errorToolResult("Tool \(toolCall.name) not found"), true)
         }
+        if let configuredMax = tool.maxCallsPerTurn {
+            let maxCalls = max(0, configuredMax)
+            let configuredKey = tool.turnLimitKey?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let limitKey = configuredKey.flatMap { $0.isEmpty ? nil : $0 } ?? tool.name
+            if !turnToolState.reserveLimitedCall(
+                callId: toolCall.id,
+                key: limitKey,
+                maxCalls: maxCalls
+            ) {
+                return .immediate(
+                    turnCallLimitError(toolName: tool.name, key: limitKey, maxCalls: maxCalls),
+                    true
+                )
+            }
+        }
+        let kwaiTool = tool.toKWAITool()
         let args: JSONValue
         do {
-            let kwaiTool = tool.toKWAITool()
             args = try validateToolArguments(tool: kwaiTool, toolCall: toolCall)
         } catch {
-            let msg = (error as? JSONSchemaError)?.description ?? "\(error)"
-            return .immediate(errorToolResult(msg), true)
+            return .immediate(errorToolResult(schemaValidationMessage(error)), true)
         }
 
         var effectiveArgs = args
@@ -987,16 +1525,50 @@ public enum AgentLoop {
                 // who care about the diff can read `args` on the after-
                 // hook context or the toolExecutionEnd event).
                 if let rewritten = result.modifiedArgs {
-                    effectiveArgs = rewritten
+                    var rewrittenCall = toolCall
+                    rewrittenCall.arguments = rewritten
+                    do {
+                        effectiveArgs = try validateToolArguments(
+                            tool: kwaiTool,
+                            toolCall: rewrittenCall
+                        )
+                    } catch {
+                        return .immediate(
+                            errorToolResult(schemaValidationMessage(error)),
+                            true
+                        )
+                    }
                 }
             }
         }
         return .prepared(PreparedToolCall(call: toolCall, tool: tool, args: effectiveArgs))
     }
 
+    private static func schemaValidationMessage(_ error: Error) -> String {
+        (error as? JSONSchemaError)?.description ?? "\(error)"
+    }
+
+    private static func turnCallLimitError(
+        toolName: String,
+        key: String,
+        maxCalls: Int
+    ) -> AgentToolResult {
+        errorToolResult(
+            "Tool \(toolName) exceeded its per-turn call limit of \(maxCalls); "
+                + "additional calls in this assistant turn are rejected.",
+            details: .object([
+                "error": .string("turn_call_limit_exceeded"),
+                "tool": .string(toolName),
+                "limit_key": .string(key),
+                "max_calls_per_turn": .int(maxCalls),
+            ])
+        )
+    }
+
     private static func executePrepared(
         _ prepared: PreparedToolCall,
         cancellation: CancellationHandle?,
+        config: AgentLoopConfig,
         emit: @escaping AgentEventSink
     ) async -> ExecutedOutcome {
         let emitBox = EmitBox(emit: emit)
@@ -1012,12 +1584,46 @@ public enum AgentLoop {
                 emitBox.launchUpdate(.runtimeEvent(runtimeEvent))
             }
         }
+        let effectiveCancellation: CancellationHandle?
+        let parentRegistration: CancellationRegistration?
+        let steeringMonitor: Task<Void, Never>?
+        if prepared.tool.interruptible {
+            let child = CancellationHandle()
+            parentRegistration = cancellation?.onCancel { reason in
+                child.cancel(reason: reason ?? "aborted")
+            }
+            let hasSteeringMessages = config.hasSteeringMessages
+            steeringMonitor = Task.detached {
+                while !Task.isCancelled && !child.isCancelled {
+                    if hasSteeringMessages() {
+                        child.cancel(reason: "steering")
+                        return
+                    }
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+            }
+            effectiveCancellation = child
+        } else {
+            effectiveCancellation = cancellation
+            parentRegistration = nil
+            steeringMonitor = nil
+        }
+        defer {
+            steeringMonitor?.cancel()
+            parentRegistration?.cancel()
+        }
+
         do {
-            let result = try await prepared.tool.execute(prepared.call.id, prepared.args, cancellation, onUpdate)
+            let result = try await prepared.tool.execute(
+                prepared.call.id, prepared.args, effectiveCancellation, onUpdate
+            )
             await emitBox.waitForPending()
             return ExecutedOutcome(result: result, isError: false)
         } catch {
             await emitBox.waitForPending()
+            if effectiveCancellation?.reason == multipleJobPollsCancellationReason {
+                return ExecutedOutcome(result: multipleJobPollsError(), isError: true)
+            }
             let message: String
             if error is CancellationError || (error as? CodingToolError) == .aborted {
                 message = "aborted by user"
@@ -1026,8 +1632,8 @@ public enum AgentLoop {
             }
             if let structured = error as? StructuredToolExecutionError {
                 return ExecutedOutcome(
-                    result: errorToolResult(
-                        message,
+                    result: AgentToolResult(
+                        content: structured.content ?? [.text(TextContent(text: message))],
                         details: structured.details,
                         runtimeEvents: structured.runtimeEvents
                     ),
@@ -1046,6 +1652,8 @@ public enum AgentLoop {
         outcome: ExecutedOutcome,
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
+        turnToolState: TurnToolExecutionState,
+        emitMessageEvents: Bool = true,
         emit: @escaping AgentEventSink
     ) async -> ToolResultMessage {
         var final = outcome.result
@@ -1083,8 +1691,13 @@ public enum AgentLoop {
             details: final.details,
             isError: isError
         )
-        await emit(.messageStart(message: .toolResult(message)))
-        await emit(.messageEnd(message: .toolResult(message)))
+        if let lease = final.retentionLease {
+            turnToolState.trackLease(lease, for: call.id)
+        }
+        if emitMessageEvents {
+            await emit(.messageStart(message: .toolResult(message)))
+            await emit(.messageEnd(message: .toolResult(message)))
+        }
         return message
     }
 
@@ -1193,6 +1806,220 @@ final class CursorToolResultBox: @unchecked Sendable {
             results.removeAll()
             return out
         }
+    }
+}
+
+/// Owns every Cursor inline execution started by one provider stream attempt.
+/// Invalidating an attempt stops accepting calls, cancels its child tool
+/// signal, and waits until all calls have either been discarded or appended to
+/// that same attempt's result box.
+private final class CursorInlineExecutionAttempt: @unchecked Sendable {
+    private let lock = NSLock()
+    private let cancellation = CancellationHandle()
+    private var parentRegistration: CancellationRegistration?
+    private var acceptingInvocations = true
+    private var retainResults = true
+    private var activeInvocations = 0
+    private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+
+    init(parentCancellation: CancellationHandle?) {
+        let child = cancellation
+        parentRegistration = parentCancellation?.onCancel { reason in
+            child.cancel(reason: reason ?? "aborted")
+        }
+    }
+
+    deinit {
+        cancellation.cancel(reason: "cursor-attempt-deinit")
+        parentRegistration?.cancel()
+    }
+
+    func beginInvocation() -> CancellationHandle? {
+        lock.withLock {
+            guard acceptingInvocations else { return nil }
+            activeInvocations += 1
+            return cancellation
+        }
+    }
+
+    /// `retain` runs while the attempt lock is held, before the active count is
+    /// decremented. Therefore invalidation cannot finish/drain the result box
+    /// and then have a late invocation append behind it.
+    func finishInvocation(_ retain: () -> Void) -> Bool {
+        var waiters: [CheckedContinuation<Void, Never>] = []
+        let retained = lock.withLock { () -> Bool in
+            let shouldRetain = retainResults
+            if shouldRetain { retain() }
+            activeInvocations = max(0, activeInvocations - 1)
+            if activeInvocations == 0 {
+                waiters = idleWaiters
+                idleWaiters.removeAll()
+            }
+            return shouldRetain
+        }
+        for waiter in waiters { waiter.resume() }
+        return retained
+    }
+
+    func invalidateAndWait(reason: String) async {
+        lock.withLock {
+            acceptingInvocations = false
+            retainResults = false
+        }
+        cancellation.cancel(reason: reason)
+        await waitUntilIdle()
+        parentRegistration?.cancel()
+        parentRegistration = nil
+    }
+
+    func sealAndWait() async {
+        lock.withLock { acceptingInvocations = false }
+        await waitUntilIdle()
+        parentRegistration?.cancel()
+        parentRegistration = nil
+    }
+
+    private func waitUntilIdle() async {
+        await withCheckedContinuation { continuation in
+            let resumeNow = lock.withLock { () -> Bool in
+                if activeInvocations == 0 { return true }
+                idleWaiters.append(continuation)
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+}
+
+/// Per-assistant-turn coordination for blocking polls and side-channel result
+/// delivery. Cursor may execute tools concurrently while its assistant message
+/// is still streaming, so this state is shared by both inline and normal paths.
+private final class TurnToolExecutionState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sawBlockingPoll = false
+    private var activeCursorPoll: (callId: String, cancellation: CancellationHandle)?
+    private var cursorCallIds: Set<String> = []
+    private var duplicateCursorCallIds: Set<String> = []
+    private var limitedCallIds: [String: Set<String>] = [:]
+    private var leases: [String: AgentToolRetentionLease] = [:]
+
+    deinit {
+        rollbackAllLeases()
+    }
+
+    func reserveCursorCallId(_ callId: String) -> Bool {
+        lock.withLock {
+            guard cursorCallIds.insert(callId).inserted else {
+                duplicateCursorCallIds.insert(callId)
+                return false
+            }
+            return true
+        }
+    }
+
+    func cursorCallIds(in candidates: Set<String>) -> Set<String> {
+        lock.withLock { candidates.intersection(cursorCallIds) }
+    }
+
+    func cancelActiveCursorPoll(matching callId: String) {
+        let cancellation = lock.withLock { () -> CancellationHandle? in
+            guard activeCursorPoll?.callId == callId else { return nil }
+            return activeCursorPoll?.cancellation
+        }
+        cancellation?.cancel(reason: multipleJobPollsCancellationReason)
+    }
+
+    func reserveCursorPoll(callId: String, cancellation: CancellationHandle) -> Bool {
+        var pollToCancel: CancellationHandle?
+        let accepted = lock.withLock {
+            guard !duplicateCursorCallIds.contains(callId) else {
+                pollToCancel = activeCursorPoll?.cancellation
+                return false
+            }
+            guard !sawBlockingPoll else {
+                pollToCancel = activeCursorPoll?.cancellation
+                return false
+            }
+            sawBlockingPoll = true
+            activeCursorPoll = (callId, cancellation)
+            return true
+        }
+        // A later Cursor inline poll must not merely fail itself while the
+        // first one keeps the provider stream open. Cancel the first outside
+        // the lock so cancellation listeners can safely re-enter loop state.
+        pollToCancel?.cancel(reason: multipleJobPollsCancellationReason)
+        return accepted
+    }
+
+    func finishCursorPoll(callId: String, cancellation: CancellationHandle) {
+        lock.withLock {
+            guard activeCursorPoll?.callId == callId,
+                  activeCursorPoll?.cancellation === cancellation else { return }
+            activeCursorPoll = nil
+        }
+    }
+
+    func rejectedNormalPollCallIds(_ callIds: [String]) -> Set<String> {
+        let ids = Set(callIds)
+        guard !ids.isEmpty else { return [] }
+        return lock.withLock {
+            if sawBlockingPoll || ids.count > 1 {
+                sawBlockingPoll = true
+                return ids
+            }
+            sawBlockingPoll = true
+            return []
+        }
+    }
+
+    func resetPollGateForRetry() {
+        // Poll attempts are allowed to retry, but semantic tool-call quotas are
+        // deliberately not reset. Reusing the same call id remains idempotent;
+        // genuinely new calls from a retried stream still consume the original
+        // assistant turn's allowance.
+        lock.withLock {
+            sawBlockingPoll = false
+            activeCursorPoll = nil
+        }
+    }
+
+    func reserveLimitedCall(callId: String, key: String, maxCalls: Int) -> Bool {
+        lock.withLock {
+            var ids = limitedCallIds[key, default: []]
+            // A retry/duplicate is another real execution attempt. Never let
+            // an untrusted repeated id make that attempt quota-free.
+            if ids.contains(callId) { return false }
+            guard ids.count < maxCalls else { return false }
+            ids.insert(callId)
+            limitedCallIds[key] = ids
+            return true
+        }
+    }
+
+    func trackLease(_ lease: AgentToolRetentionLease, for toolCallId: String) {
+        let replaced = lock.withLock { leases.updateValue(lease, forKey: toolCallId) }
+        replaced?.rollback()
+    }
+
+    func commitLease(for toolCallId: String) {
+        let lease = lock.withLock { leases.removeValue(forKey: toolCallId) }
+        lease?.commit()
+    }
+
+    func rollbackLeases(for toolCallIds: [String]) {
+        let rolledBack = lock.withLock { () -> [AgentToolRetentionLease] in
+            toolCallIds.compactMap { leases.removeValue(forKey: $0) }
+        }
+        for lease in rolledBack { lease.rollback() }
+    }
+
+    func rollbackAllLeases() {
+        let rolledBack = lock.withLock { () -> [AgentToolRetentionLease] in
+            let all = Array(leases.values)
+            leases.removeAll()
+            return all
+        }
+        for lease in rolledBack { lease.rollback() }
     }
 }
 

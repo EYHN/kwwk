@@ -18,7 +18,11 @@ public struct LocalFindOperations: FindOperations {
     }
 }
 
-public func createFindTool(cwd: String, options: FindToolOptions = .init()) -> AgentTool {
+public func createFindTool(
+    cwd: String,
+    options: FindToolOptions = .init(),
+    fileAccessPolicy: FileAccessPolicy = .unrestricted
+) -> AgentTool {
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
@@ -29,7 +33,7 @@ public func createFindTool(cwd: String, options: FindToolOptions = .init()) -> A
         "required": ["pattern"],
     ]
     let ops = options.operations
-    return AgentTool(
+    var tool = AgentTool(
         name: "find",
         label: "find",
         description: """
@@ -45,12 +49,20 @@ public func createFindTool(cwd: String, options: FindToolOptions = .init()) -> A
                   case .string(let pattern) = obj["pattern"] ?? .null else {
                 throw CodingToolError.invalidArgument("find: `pattern` is required")
             }
-            let root: String
+            let rawRoot: String
             if case .string(let p) = obj["path"] ?? .null {
-                root = PathUtils.resolveToCwd(p, cwd: cwd)
+                rawRoot = p
             } else {
-                root = cwd
+                rawRoot = "."
             }
+            // Authorize the traversal root before handing it to the recursive
+            // operation. This is canonical containment, not an OS sandbox.
+            let root = try PathUtils.resolveForAccess(
+                rawRoot,
+                cwd: cwd,
+                policy: fileAccessPolicy,
+                intent: .read
+            )
             let limit: Int? = {
                 if case .int(let v) = obj["limit"] ?? .null { return v }
                 if case .double(let v) = obj["limit"] ?? .null { return Int(v) }
@@ -70,4 +82,8 @@ public func createFindTool(cwd: String, options: FindToolOptions = .init()) -> A
             )
         }
     )
+    tool.fileAccessPolicy = fileAccessPolicy
+    tool.fileAccessCwd = cwd
+    tool.codingToolCapabilities = .find
+    return tool
 }

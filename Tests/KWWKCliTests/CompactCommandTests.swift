@@ -223,6 +223,261 @@ struct CompactCommandTests {
     }
 
     @MainActor
+    @Test("queued prompt is persisted after the manual compaction projection")
+    func queuedPromptSettlesAfterCompactionMarker() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let summaryGate = CompactCommandGate()
+        faux.setResponses([
+            .factory { _, _, _, _ in
+                await summaryGate.enterAndWait()
+                return fauxAssistantMessage("durable compact summary")
+            },
+            .message(fauxAssistantMessage("queued prompt reply")),
+        ])
+
+        let messages: [Message] = [
+            .user(UserMessage(text: "one")),
+            .assistant(fauxAssistantMessage("two")),
+            .user(UserMessage(text: "three")),
+            .assistant(fauxAssistantMessage("four")),
+        ]
+        let agent = Agent(initialState: AgentInitialState(
+            model: faux.getModel(),
+            messages: messages
+        ))
+
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SessionStore(directory: dir)
+        let sessionId = "compact-settlement-order"
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: sessionId,
+            cwd: dir.path,
+            model: agent.state.model.id,
+            provider: agent.state.model.provider
+        )
+        await recorder.ensureCreated()
+        await recorder.flush(messages: messages)
+        let unsubscribe = recorder.attach(to: agent)
+        defer { unsubscribe() }
+
+        let ctx = SlashContext(
+            agent: agent,
+            modal: makeStubModalHost(),
+            backgroundManager: BackgroundTaskManager(
+                outputDir: dir.appendingPathComponent("background", isDirectory: true)
+            ),
+            sessionId: sessionId,
+            notifyBlock: { _ in },
+            commitScrollback: { _ in },
+            refreshTranscript: {},
+            recordCompaction: { count in
+                await recorder.recordCompaction(
+                    messages: agent.state.messages,
+                    messagesCompacted: count,
+                    reason: .compact
+                )
+            }
+        )
+        let registry = SlashCommandRegistry()
+        registerBuiltinSlashCommands(registry)
+
+        let command = Task { @MainActor in
+            await registry.find("compact")?.handler(ctx, "")
+        }
+        await summaryGate.waitUntilEntered()
+        agent.steer("queued during compact")
+        await summaryGate.release()
+        await command.value
+
+        // `resumeQueuedWork` is deliberately fire-and-forget. Wait for the
+        // queued reply to appear, then for all recorder listeners to settle.
+        for _ in 0..<400 {
+            if agent.state.messages.contains(where: {
+                compactTestText($0).contains("queued prompt reply")
+            }) { break }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await agent.waitForIdle()
+
+        let loaded = try await store.load(id: sessionId)
+        #expect(loaded.messages.count == 3)
+        #expect(compactTestText(loaded.messages[0]).contains("durable compact summary"))
+        #expect(compactTestText(loaded.messages[1]) == "queued during compact")
+        #expect(compactTestText(loaded.messages[2]).contains("queued prompt reply"))
+
+        let raw = try String(
+            contentsOf: dir.appendingPathComponent("\(sessionId).jsonl"),
+            encoding: .utf8
+        )
+        let lines = raw.split(separator: "\n")
+        let marker = lines.firstIndex(where: {
+            $0.contains(#""type":"compaction""#)
+        })
+        let queued = lines.firstIndex(where: {
+            $0.contains("queued during compact")
+        })
+        #expect(marker != nil && queued != nil)
+        #expect((marker ?? 0) < (queued ?? 0))
+    }
+
+    @MainActor
+    @Test("shutdown cancels a hung manual compact without replacing or persisting context")
+    func shutdownCancelsHungManualCompact() async throws {
+        let model = Model(
+            id: "cancel-compact-model",
+            api: "cancel-compact-api",
+            provider: "cancel-compact-provider"
+        )
+        let streamController = CancelAwareCompactionStream()
+        let original: [Message] = [
+            .user(UserMessage(text: "one")),
+            .assistant(compactAssistant("two", model: model)),
+            .user(UserMessage(text: "three")),
+            .assistant(compactAssistant("four", model: model)),
+        ]
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: model, messages: original),
+            streamFn: { model, _, options in
+                streamController.makeStream(
+                    model: model,
+                    cancellation: options?.cancellation
+                )
+            },
+            sessionId: "cancel-compact-session"
+        ))
+
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = SessionStore(directory: dir)
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: "cancel-compact-session",
+            cwd: dir.path,
+            model: model.id,
+            provider: model.provider
+        )
+        await recorder.ensureCreated()
+        await recorder.flush(messages: original)
+
+        let compact = Task { @MainActor in
+            await performCompact(
+                agent: agent,
+                backgroundManager: BackgroundTaskManager(
+                    outputDir: dir.appendingPathComponent("background", isDirectory: true)
+                ),
+                sessionId: "cancel-compact-session",
+                settle: { outcome in
+                    // Mirror the production handler: only a successful compact
+                    // may append a projection marker.
+                    if case .compacted(let count, _) = outcome {
+                        await recorder.recordCompaction(
+                            messages: agent.state.messages,
+                            messagesCompacted: count,
+                            reason: .compact
+                        )
+                    }
+                }
+            )
+        }
+        for _ in 0..<200 where !streamController.started {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(streamController.started)
+
+        let shutdownDone = CompactLockedFlag()
+        let shutdown = Task {
+            await cleanupHeadlessAgent(agent)
+            shutdownDone.set()
+        }
+        for _ in 0..<200 where !shutdownDone.value {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let returnedPromptly = shutdownDone.value
+        if !returnedPromptly {
+            // Keep a failed regression test from leaving a permanently blocked
+            // provider task in the test process.
+            streamController.forceAbort()
+        }
+        await shutdown.value
+        let outcome = await compact.value
+
+        #expect(returnedPromptly, "shutdown should not wait indefinitely for compaction")
+        if case .failed(let reason) = outcome {
+            #expect(reason.contains("cancel"))
+        } else {
+            Issue.record("cancelled maintenance unexpectedly reported compaction success")
+        }
+        #expect(agent.state.messages == original)
+
+        let loaded = try await store.load(id: "cancel-compact-session")
+        #expect(loaded.messages == original)
+        let raw = try String(
+            contentsOf: dir.appendingPathComponent("cancel-compact-session.jsonl"),
+            encoding: .utf8
+        )
+        #expect(!raw.contains(#""type":"compaction""#))
+    }
+
+    @MainActor
+    @Test("Esc and first Ctrl-C cancellation gate aborts manual compact maintenance")
+    func interactiveInterruptCancelsManualCompact() async throws {
+        let model = Model(
+            id: "interactive-cancel-compact-model",
+            api: "interactive-cancel-compact-api",
+            provider: "interactive-cancel-compact-provider"
+        )
+        let streamController = CancelAwareCompactionStream()
+        let original: [Message] = [
+            .user(UserMessage(text: "one")),
+            .assistant(compactAssistant("two", model: model)),
+            .user(UserMessage(text: "three")),
+            .assistant(compactAssistant("four", model: model)),
+        ]
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: model, messages: original),
+            streamFn: { model, _, options in
+                streamController.makeStream(
+                    model: model,
+                    cancellation: options?.cancellation
+                )
+            }
+        ))
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let compact = Task { @MainActor in
+            await performCompact(
+                agent: agent,
+                backgroundManager: BackgroundTaskManager(
+                    outputDir: dir.appendingPathComponent("background", isDirectory: true)
+                ),
+                sessionId: "interactive-cancel-compact-session"
+            )
+        }
+        for _ in 0..<200 where !streamController.started {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        #expect(streamController.started)
+
+        // Both key bindings route through this gate. Manual compaction owns a
+        // maintenance handle while `isStreaming` deliberately remains false.
+        #expect(agent.state.isStreaming == false)
+        #expect(abortInteractiveAgentWork(agent: agent, isManualCompacting: true))
+        let outcome = await compact.value
+
+        if case .failed(let reason) = outcome {
+            #expect(reason.contains("cancel"))
+        } else {
+            Issue.record("interactive cancellation unexpectedly reported compaction success")
+        }
+        #expect(agent.state.messages == original)
+        #expect(!abortInteractiveAgentWork(agent: agent, isManualCompacting: false))
+    }
+
+    @MainActor
     @Test("renderCompactBoundary fills the width with a compacted rule")
     func renderCompactBoundaryShape() {
         let lines = renderCompactBoundary(
@@ -269,6 +524,120 @@ private func makeTempDir() -> URL {
         .appendingPathComponent("kwwk-compact-\(UUID().uuidString.prefix(8))", isDirectory: true)
     try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
+}
+
+private func compactTestText(_ message: Message) -> String {
+    switch message {
+    case .user(let user):
+        return user.content.compactMap { block in
+            if case .text(let text) = block { return text.text }
+            return nil
+        }.joined(separator: "\n")
+    case .assistant(let assistant):
+        return assistant.content.compactMap { block in
+            if case .text(let text) = block { return text.text }
+            return nil
+        }.joined(separator: "\n")
+    case .toolResult:
+        return ""
+    }
+}
+
+private actor CompactCommandGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func enterAndWait() async {
+        entered = true
+        let waiters = enteredWaiters
+        enteredWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+        guard !released else { return }
+        await withCheckedContinuation { releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        guard !entered else { return }
+        await withCheckedContinuation { enteredWaiters.append($0) }
+    }
+
+    func release() {
+        released = true
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        for waiter in waiters { waiter.resume() }
+    }
+}
+
+private final class CompactLockedFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored = false
+
+    var value: Bool { lock.withLock { stored } }
+    func set() { lock.withLock { stored = true } }
+}
+
+private final class CancelAwareCompactionStream: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didStart = false
+    private var didFinish = false
+    private var continuation: AssistantMessageStream.Continuation?
+    private var model: Model?
+
+    var started: Bool { lock.withLock { didStart } }
+
+    func makeStream(
+        model: Model,
+        cancellation: CancellationHandle?
+    ) -> AssistantMessageStream {
+        let pair = AssistantMessageStream.makeStream()
+        lock.withLock {
+            didStart = true
+            continuation = pair.continuation
+            self.model = model
+        }
+        _ = cancellation?.onCancel { [weak self] _ in
+            self?.finishAborted()
+        }
+        return pair.stream
+    }
+
+    func forceAbort() {
+        finishAborted()
+    }
+
+    private func finishAborted() {
+        let settled: (AssistantMessageStream.Continuation, AssistantMessage)? = lock.withLock {
+            guard !didFinish, let continuation, let model else { return nil }
+            didFinish = true
+            let message = AssistantMessage(
+                content: [],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                usage: Usage(),
+                stopReason: .aborted,
+                errorMessage: "compaction cancelled"
+            )
+            return (continuation, message)
+        }
+        guard let (continuation, message) = settled else { return }
+        continuation.push(.error(reason: .aborted, error: message))
+        continuation.end(message)
+    }
+}
+
+private func compactAssistant(_ text: String, model: Model) -> AssistantMessage {
+    AssistantMessage(
+        content: [.text(TextContent(text: text))],
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage: Usage(),
+        stopReason: .stop
+    )
 }
 
 @MainActor

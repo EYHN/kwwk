@@ -41,7 +41,11 @@ public struct LocalLSOperations: LSOperations {
     }
 }
 
-public func createLSTool(cwd: String, options: LSToolOptions = .init()) -> AgentTool {
+public func createLSTool(
+    cwd: String,
+    options: LSToolOptions = .init(),
+    fileAccessPolicy: FileAccessPolicy = .unrestricted
+) -> AgentTool {
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
@@ -50,19 +54,25 @@ public func createLSTool(cwd: String, options: LSToolOptions = .init()) -> Agent
         ],
     ]
     let ops = options.operations
-    return AgentTool(
+    var tool = AgentTool(
         name: "ls",
         label: "ls",
         description: "List the contents of a directory.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
-            let path: String
+            let rawPath: String
             if case .object(let obj) = args, case .string(let p) = obj["path"] ?? .null {
-                path = PathUtils.resolveToCwd(p, cwd: cwd)
+                rawPath = p
             } else {
-                path = cwd
+                rawPath = "."
             }
+            let path = try PathUtils.resolveForAccess(
+                rawPath,
+                cwd: cwd,
+                policy: fileAccessPolicy,
+                intent: .read
+            )
             let limit: Int? = {
                 if case .object(let obj) = args {
                     if case .int(let v) = obj["limit"] ?? .null { return v }
@@ -94,6 +104,10 @@ public func createLSTool(cwd: String, options: LSToolOptions = .init()) -> Agent
             )
         }
     )
+    tool.fileAccessPolicy = fileAccessPolicy
+    tool.fileAccessCwd = cwd
+    tool.codingToolCapabilities = .ls
+    return tool
 }
 
 private func kindName(_ kind: LSEntry.Kind) -> String {

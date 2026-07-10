@@ -2,10 +2,11 @@ import Foundation
 import KWWKAI
 
 /// Which coding tools to register on a freshly-built agent. Use `.standard`
-/// for the full set, `.readOnly` for a sandboxed reviewer-style agent, or
-/// compose an arbitrary subset (`[.read, .grep, .bash]`).
+/// for the full set, `.readOnly` for a reviewer-style tool whitelist, or
+/// compose an arbitrary subset (`[.read, .grep, .bash]`). Filesystem path
+/// containment is configured separately through `FileAccessPolicy`.
 ///
-/// `.taskStatus` and `.waitTask` are only honored when a `backgroundManager`
+/// `.taskStatus` and `.job` are only honored when a `backgroundManager`
 /// is supplied. `.bash` works without a manager (legacy pipe executor) —
 /// it just loses `run_in_background` and the auto-background-on-timeout flip.
 public struct CodingTools: OptionSet, Sendable {
@@ -20,15 +21,20 @@ public struct CodingTools: OptionSet, Sendable {
     public static let find       = CodingTools(rawValue: 1 << 5)
     public static let ls         = CodingTools(rawValue: 1 << 6)
     public static let taskStatus = CodingTools(rawValue: 1 << 7)
-    public static let waitTask   = CodingTools(rawValue: 1 << 8)
+    public static let job        = CodingTools(rawValue: 1 << 8)
+    /// Source-compatible alias. The default catalog now exposes `job`, not
+    /// the legacy single-id `wait_task` tool.
+    @available(*, deprecated, renamed: "job")
+    public static let waitTask   = job
 
-    /// Filesystem-scan only — no write, no edit, no shell.
+    /// Filesystem-scan tool whitelist — no write, edit, or shell. This does not
+    /// constrain readable host paths; pair it with `.workspaceOnly` when needed.
     public static let readOnly: CodingTools = [.read, .grep, .find, .ls]
 
     /// Common editing tools. Includes shell and mutation capabilities; SDK
     /// callers must opt in explicitly when they want those effects.
     public static let standard: CodingTools = [
-        .read, .write, .edit, .bash, .grep, .find, .ls, .taskStatus, .waitTask,
+        .read, .write, .edit, .bash, .grep, .find, .ls, .job,
     ]
 }
 
@@ -39,6 +45,9 @@ public struct CodingAgentConfig: Sendable {
     public var model: Model
     public var cwd: String
     public var tools: CodingTools
+    /// Path boundary for the built-in file tools. This is independent of the
+    /// tool whitelist and does not constrain Bash or custom tools.
+    public var fileAccessPolicy: FileAccessPolicy
     /// If nil, a default system prompt is synthesized. Pass a non-nil string
     /// to fully override.
     public var systemPrompt: String?
@@ -50,12 +59,16 @@ public struct CodingAgentConfig: Sendable {
     public var skillDirectories: [String]
     /// When non-nil, wired into both the bash tool (for
     /// `run_in_background` + auto-background-on-timeout) and the
-    /// agent's notification bridge (so `<task-notification>` user messages
-    /// appear at turn boundaries).
+    /// agent's notification bridge (so task results arrive as internal runtime
+    /// asides at turn boundaries).
     public var backgroundManager: BackgroundTaskManager?
     /// Programmatic subagents available to the model through the `agent` tool.
     /// When empty, no `agent` tool is registered.
     public var subagents: [SubagentDefinition]
+    public var subagentLimits: SubagentLimits
+    /// Extra models a model-issued subagent override may select. Programmatic
+    /// `SubagentModel.override` remains a trusted host configuration path.
+    public var allowedSubagentModels: [Model]
     public var sessionId: String
     public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     public var autoCompactThreshold: Double?
@@ -74,11 +87,14 @@ public struct CodingAgentConfig: Sendable {
         model: Model,
         cwd: String,
         tools: CodingTools,
+        fileAccessPolicy: FileAccessPolicy = .unrestricted,
         systemPrompt: String? = nil,
         contextFiles: [(path: String, content: String)] = [],
         skillDirectories: [String] = [],
         backgroundManager: BackgroundTaskManager? = nil,
         subagents: [SubagentDefinition] = [],
+        subagentLimits: SubagentLimits = .init(),
+        allowedSubagentModels: [Model] = [],
         sessionId: String = UUID().uuidString,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         autoCompactThreshold: Double? = 0.75,
@@ -91,11 +107,14 @@ public struct CodingAgentConfig: Sendable {
         self.model = model
         self.cwd = cwd
         self.tools = tools
+        self.fileAccessPolicy = fileAccessPolicy
         self.systemPrompt = systemPrompt
         self.contextFiles = contextFiles
         self.skillDirectories = skillDirectories
         self.backgroundManager = backgroundManager
         self.subagents = subagents
+        self.subagentLimits = subagentLimits
+        self.allowedSubagentModels = allowedSubagentModels
         self.sessionId = sessionId
         self.authResolver = authResolver
         self.autoCompactThreshold = autoCompactThreshold
@@ -154,7 +173,7 @@ public struct CodingAgent: Sendable {
 /// ```
 ///
 /// If `config.backgroundManager` is non-nil, the agent is automatically
-/// attached so completion notifications surface as steered user messages — and
+/// attached so completion notifications surface as internal runtime asides — and
 /// that bridge will autonomously start new (billable) model runs when
 /// background tasks complete. Call the returned `CodingAgent.detachBackground`
 /// handle to stop that; ignore it to keep the default auto-continue behavior.
@@ -162,6 +181,10 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
     let cwd = config.cwd
     let bgManager = config.backgroundManager
     let sessionId = config.sessionId
+    let backgroundDeliveryConsumer = bgManager.map { _ in
+        BackgroundTaskDeliveryConsumer(sessionId: sessionId)
+    }
+    let availableSkills = Skills.load(directories: config.skillDirectories).skills
 
     let autoCompact = config.autoCompactThreshold.map {
         AgentAutoCompactOptions(
@@ -175,39 +198,56 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
         cwd: cwd,
         selected: config.tools,
         backgroundManager: bgManager,
+        backgroundDeliveryConsumer: backgroundDeliveryConsumer,
         sessionId: sessionId,
+        fileAccessPolicy: config.fileAccessPolicy,
         bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
         bashEnvironment: config.bashEnvironment,
         bashShellPath: config.bashShellPath
     )
     let subagentParent = SubagentParentBox(
+        childCwd: cwd,
         fallbackModel: config.model,
         fallbackTools: config.tools,
         fallbackThinkingLevel: .off,
         fallbackThinkingBudgets: nil,
         fallbackMaxRetryDelayMs: nil,
+        fallbackMaxTurns: nil,
+        fallbackBeforeToolCall: nil,
+        fallbackAfterToolCall: nil,
         fallbackAutoCompact: autoCompact,
-        fallbackAuthResolver: config.authResolver
+        fallbackAuthResolver: config.authResolver,
+        projectContextFiles: config.contextFiles,
+        availableSkills: availableSkills,
+        fallbackFileAccessPolicy: config.fileAccessPolicy,
+        allowedModelOverrides: config.allowedSubagentModels
     )
     if !config.subagents.isEmpty {
+        let subagentHistoryStore = SubagentHistoryStore()
         tools.append(_createAgentTool(
             cwd: cwd,
             subagents: config.subagents,
             backgroundManager: bgManager,
             sessionId: sessionId,
+            historyStore: subagentHistoryStore,
             parentSnapshot: { subagentParent.snapshot() },
+            limits: config.subagentLimits,
             bashEnvironment: config.bashEnvironment,
             bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
             bashShellPath: config.bashShellPath
+        ))
+        tools.append(createSubagentHistoryTool(
+            store: subagentHistoryStore,
+            sessionId: sessionId
         ))
     }
 
     let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(
         cwd: cwd,
         contextFiles: config.contextFiles,
-        availableSkills: Skills.load(directories: config.skillDirectories).skills
+        availableSkills: availableSkills
     ))
 
     let agent = Agent(options: AgentOptions(
@@ -225,7 +265,11 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
 
     var detachBackground: (@Sendable () async -> Void)?
     if let bgManager {
-        detachBackground = await agent.attachBackgroundManager(bgManager, sessionId: sessionId)
+        detachBackground = await agent.attachBackgroundManager(
+            bgManager,
+            sessionId: sessionId,
+            deliveryConsumer: backgroundDeliveryConsumer
+        )
     }
 
     return CodingAgent(agent: agent, detachBackground: detachBackground)
@@ -235,16 +279,25 @@ internal func buildCodingToolList(
     cwd: String,
     selected: CodingTools,
     backgroundManager: BackgroundTaskManager?,
+    backgroundDeliveryConsumer: BackgroundTaskDeliveryConsumer? = nil,
     sessionId: String?,
+    fileAccessPolicy: FileAccessPolicy = .unrestricted,
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
     bashEnvironment: [String: String],
-    bashShellPath: String = kwwkDefaultShellPath
+    bashShellPath: String = kwwkDefaultShellPath,
+    bashCommandPolicy: BashCommandPolicy = .unrestricted
 ) -> [AgentTool] {
     var tools: [AgentTool] = []
-    if selected.contains(.read)  { tools.append(createReadTool(cwd: cwd)) }
-    if selected.contains(.write) { tools.append(createWriteTool(cwd: cwd)) }
-    if selected.contains(.edit)  { tools.append(createEditTool(cwd: cwd)) }
+    if selected.contains(.read) {
+        tools.append(createReadTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
+    }
+    if selected.contains(.write) {
+        tools.append(createWriteTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
+    }
+    if selected.contains(.edit) {
+        tools.append(createEditTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
+    }
     if selected.contains(.bash) {
         tools.append(createBashTool(cwd: cwd, options: BashToolOptions(
             environment: bashEnvironment,
@@ -253,17 +306,28 @@ internal func buildCodingToolList(
             manager: backgroundManager,
             sessionId: sessionId,
             autoBackgroundOnTimeout: true,
-            shellPath: bashShellPath
+            shellPath: bashShellPath,
+            commandPolicy: bashCommandPolicy
         )))
     }
-    if selected.contains(.grep) { tools.append(createGrepTool(cwd: cwd)) }
-    if selected.contains(.find) { tools.append(createFindTool(cwd: cwd)) }
-    if selected.contains(.ls)   { tools.append(createLSTool(cwd: cwd)) }
+    if selected.contains(.grep) {
+        tools.append(createGrepTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
+    }
+    if selected.contains(.find) {
+        tools.append(createFindTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
+    }
+    if selected.contains(.ls) {
+        tools.append(createLSTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
+    }
     if selected.contains(.taskStatus), let backgroundManager {
         tools.append(createTaskStatusTool(manager: backgroundManager, sessionId: sessionId))
     }
-    if selected.contains(.waitTask), let backgroundManager {
-        tools.append(createWaitTaskTool(manager: backgroundManager, sessionId: sessionId))
+    if selected.contains(.job), let backgroundManager {
+        tools.append(createJobTool(
+            manager: backgroundManager,
+            sessionId: sessionId,
+            deliveryConsumer: backgroundDeliveryConsumer
+        ))
     }
     return tools
 }

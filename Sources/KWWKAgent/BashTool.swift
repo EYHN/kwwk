@@ -6,6 +6,18 @@ import KWWKAI
 /// ambient behavior.
 public let kwwkDefaultShellPath = "/bin/sh"
 
+/// Runtime command boundary for shell-enabled coding tools.
+///
+/// `.buildAndTestOnly` is intentionally conservative: it accepts one direct
+/// build/test process and rejects shell composition, redirection, command
+/// substitution, and unrelated executables before a process is spawned. It is
+/// an accidental-destruction guard for specialist agents, not an OS sandbox;
+/// the selected build system still executes trusted project code.
+public enum BashCommandPolicy: Sendable, Equatable {
+    case unrestricted
+    case buildAndTestOnly
+}
+
 public struct BashToolOptions: Sendable {
     /// Legacy pipe-based executor used when `manager` is nil. Tests can
     /// inject a fake here.
@@ -30,6 +42,9 @@ public struct BashToolOptions: Sendable {
     public var shellPath: String
     /// Exact environment passed to spawned shell processes.
     public var environment: [String: String]
+    /// Optional runtime restriction applied after schema validation and any
+    /// `beforeToolCall` argument rewrite, immediately before execution.
+    public var commandPolicy: BashCommandPolicy
 
     public init(
         environment: [String: String],
@@ -40,7 +55,8 @@ public struct BashToolOptions: Sendable {
         sessionId: String? = nil,
         autoBackgroundOnTimeout: Bool = true,
         hardTimeoutSeconds: Int = 1800,
-        shellPath: String = kwwkDefaultShellPath
+        shellPath: String = kwwkDefaultShellPath,
+        commandPolicy: BashCommandPolicy = .unrestricted
     ) {
         self.operations = operations ?? LocalBashOperations(
             shellPath: shellPath,
@@ -54,6 +70,7 @@ public struct BashToolOptions: Sendable {
         self.hardTimeoutSeconds = hardTimeoutSeconds
         self.shellPath = shellPath
         self.environment = environment
+        self.commandPolicy = commandPolicy
     }
 }
 
@@ -209,8 +226,9 @@ public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
     let hardTimeoutSec = options.hardTimeoutSeconds
     let shellPath = options.shellPath
     let environment = options.environment
+    let commandPolicy = options.commandPolicy
 
-    return AgentTool(
+    var tool = AgentTool(
         name: "bash",
         label: "bash",
         description: bashToolDescription(hasManager: hasManager, cwd: cwd),
@@ -226,6 +244,7 @@ public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
                 defaultTimeoutSec: defaultTimeoutSec,
                 maxTimeoutSec: maxTimeoutSec
             )
+            try validateBashCommand(input.command, policy: commandPolicy)
 
             // Dispatch: background spawn → foreground-with-auto-flip → legacy pipe.
             // Only the first two paths need a manager; without one we fall
@@ -261,21 +280,26 @@ public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
             )
         }
     )
+    tool.codingToolCapabilities = .bash
+    return tool
 }
 
 // MARK: - Schema
 
 private func bashToolDescription(hasManager: Bool, cwd: String) -> String {
+    let outputGuidance = "Inline output is already bounded. Do not append `head` or `tail` merely to truncate output; use them only when they are part of the command's actual intent."
     if hasManager {
         return """
         Execute a shell command. Runs in \(cwd) by default. Stdout and stderr are returned on completion.
 
-        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID and output file path immediately; you will receive a <task-notification> user message when the task finishes. Use the Read tool on the output file path to inspect stdout/stderr in the meantime — do NOT poll or sleep.
+        \(outputGuidance)
+
+        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use job(list:true) for bounded live status and job(read:{task_id,offset,limit}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
 
         Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.
         """
     }
-    return "Execute a shell command and return its output."
+    return "Execute a shell command and return its output. \(outputGuidance)"
 }
 
 private func bashToolParameters(
@@ -353,6 +377,239 @@ private struct BashInput {
     }
 }
 
+private func validateBashCommand(
+    _ command: String,
+    policy: BashCommandPolicy
+) throws {
+    guard policy == .buildAndTestOnly else { return }
+    do {
+        let words = try restrictedShellWords(command)
+        try validateBuildAndTestWords(words)
+    } catch let error as RestrictedBashCommandError {
+        throw CodingToolError.invalidArgument(
+            "bash: command rejected by build-and-test policy: \(error.message). "
+                + "Run one direct build/test command per call; bash already runs in the "
+                + "workspace and captures bounded stdout/stderr without pipes or redirection."
+        )
+    }
+}
+
+private struct RestrictedBashCommandError: Error {
+    var message: String
+}
+
+/// Parse one shell command into words while rejecting composition before the
+/// shell sees it. Quotes and backslash escapes remain available for ordinary
+/// arguments, but operators capable of adding a second process or writing an
+/// arbitrary path are forbidden. This is deliberately smaller than a shell
+/// grammar so unsupported syntax fails closed.
+private func restrictedShellWords(_ command: String) throws -> [String] {
+    enum Quote: Equatable {
+        case none
+        case single
+        case double
+    }
+
+    let characters = Array(command)
+    var quote = Quote.none
+    var escaped = false
+    var word = ""
+    var words: [String] = []
+
+    func reject(_ syntax: Character) throws -> Never {
+        throw RestrictedBashCommandError(
+            message: "shell operator '\(syntax)' is not allowed"
+        )
+    }
+
+    func finishWord() {
+        guard !word.isEmpty else { return }
+        words.append(word)
+        word = ""
+    }
+
+    var index = 0
+    while index < characters.count {
+        let character = characters[index]
+        if escaped {
+            word.append(character)
+            escaped = false
+            index += 1
+            continue
+        }
+
+        switch quote {
+        case .single:
+            if character == "'" { quote = .none }
+            else { word.append(character) }
+
+        case .double:
+            if character == "\"" {
+                quote = .none
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "`"
+                || (character == "$"
+                    && index + 1 < characters.count
+                    && characters[index + 1] == "(") {
+                throw RestrictedBashCommandError(
+                    message: "command substitution is not allowed"
+                )
+            } else {
+                word.append(character)
+            }
+
+        case .none:
+            if character == "'" {
+                quote = .single
+            } else if character == "\"" {
+                quote = .double
+            } else if character == "\\" {
+                escaped = true
+            } else if character.isWhitespace {
+                finishWord()
+            } else if character == "`"
+                || (character == "$"
+                    && index + 1 < characters.count
+                    && characters[index + 1] == "(") {
+                throw RestrictedBashCommandError(
+                    message: "command substitution is not allowed"
+                )
+            } else if [";", "|", "&", ">", "<", "(", ")", "{", "}"].contains(character) {
+                try reject(character)
+            } else {
+                word.append(character)
+            }
+        }
+        index += 1
+    }
+
+    guard quote == .none, !escaped else {
+        throw RestrictedBashCommandError(message: "unterminated quote or escape")
+    }
+    finishWord()
+    guard !words.isEmpty else {
+        throw RestrictedBashCommandError(message: "command is empty")
+    }
+    return words
+}
+
+private func validateBuildAndTestWords(_ originalWords: [String]) throws {
+    var words = originalWords
+    while let first = words.first, isShellEnvironmentAssignment(first) {
+        words.removeFirst()
+    }
+    if words.first == "env" {
+        words.removeFirst()
+        while let first = words.first,
+              first.hasPrefix("-") || isShellEnvironmentAssignment(first) {
+            words.removeFirst()
+        }
+    }
+    if words.first == "time" { words.removeFirst() }
+    guard !words.isEmpty else {
+        throw RestrictedBashCommandError(message: "missing build/test executable")
+    }
+
+    if words.first == "xcrun" {
+        words.removeFirst()
+        while let first = words.first, first.hasPrefix("-") {
+            words.removeFirst()
+        }
+    }
+    if words.starts(with: ["bundle", "exec"])
+        || words.starts(with: ["poetry", "run"])
+        || words.starts(with: ["uv", "run"]) {
+        words.removeFirst(2)
+    }
+    guard let executableWord = words.first else {
+        throw RestrictedBashCommandError(message: "missing build/test executable")
+    }
+    let executable = URL(fileURLWithPath: executableWord).lastPathComponent.lowercased()
+    let arguments = Array(words.dropFirst())
+    let loweredArguments = arguments.map { $0.lowercased() }
+
+    let destructiveWords = [
+        "clean", "distclean", "clobber", "purge", "reset", "install", "uninstall",
+    ]
+    if let destructive = loweredArguments.first(where: { argument in
+        destructiveWords.contains(argument)
+            || destructiveWords.contains { argument.contains("--\($0)") }
+    }) {
+        throw RestrictedBashCommandError(
+            message: "destructive build argument '\(destructive)' is not allowed"
+        )
+    }
+
+    let accepted: Bool
+    switch executable {
+    case "swift":
+        accepted = loweredArguments.first.map { ["build", "test"].contains($0) } ?? false
+    case "python", "python3":
+        accepted = loweredArguments.count >= 2
+            && loweredArguments[0] == "-m"
+            && ["pytest", "unittest", "tox", "nox"].contains(loweredArguments[1])
+    case "npm", "pnpm", "yarn", "bun":
+        accepted = packageManagerArgumentsAreBuildOrTest(loweredArguments)
+    case "cargo":
+        accepted = loweredArguments.first.map {
+            ["build", "test", "check", "clippy", "bench"].contains($0)
+        } ?? false
+    case "go":
+        accepted = loweredArguments.first.map {
+            ["build", "test", "vet"].contains($0)
+        } ?? false
+    case "dotnet":
+        accepted = loweredArguments.first.map { ["build", "test"].contains($0) } ?? false
+    case "mix":
+        accepted = loweredArguments.first.map { ["compile", "test"].contains($0) } ?? false
+    case "cmake":
+        accepted = loweredArguments.contains("--build") || loweredArguments.contains("--workflow")
+    case "make", "gmake", "ninja":
+        accepted = makeLikeArgumentsAreBuildOrTest(loweredArguments)
+    case "xcodebuild":
+        accepted = !loweredArguments.contains("clean")
+    case "gradle", "gradlew", "mvn", "mvnw", "bazel", "buck", "buck2":
+        accepted = loweredArguments.contains { buildOrTestToken($0) }
+    case "pytest", "py.test", "tox", "nox", "rspec", "rake", "jest", "vitest", "mocha", "ctest":
+        accepted = true
+    default:
+        accepted = false
+    }
+
+    guard accepted else {
+        throw RestrictedBashCommandError(
+            message: "executable '\(executable)' is not an allowed build/test invocation"
+        )
+    }
+}
+
+private func isShellEnvironmentAssignment(_ word: String) -> Bool {
+    guard let equal = word.firstIndex(of: "=") else { return false }
+    let name = word[..<equal]
+    guard let first = name.first,
+          first == "_" || first.isLetter else { return false }
+    return name.dropFirst().allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+}
+
+private func packageManagerArgumentsAreBuildOrTest(_ arguments: [String]) -> Bool {
+    guard let first = arguments.first else { return false }
+    if ["test", "build", "check", "lint", "typecheck"].contains(first) { return true }
+    guard first == "run", arguments.count >= 2 else { return false }
+    return buildOrTestToken(arguments[1])
+}
+
+private func makeLikeArgumentsAreBuildOrTest(_ arguments: [String]) -> Bool {
+    let targets = arguments.filter { !$0.hasPrefix("-") && !$0.contains("=") }
+    return targets.isEmpty || targets.allSatisfy(buildOrTestToken)
+}
+
+private func buildOrTestToken(_ token: String) -> Bool {
+    let normalized = token.lowercased()
+    return ["build", "test", "check", "lint", "verify", "typecheck", "compile", "bench"]
+        .contains { normalized.contains($0) }
+}
+
 // MARK: - Path 1: explicit background
 
 private func runBashInBackground(
@@ -377,7 +634,7 @@ private func runBashInBackground(
         runner: runner,
         sessionId: sessionId
     )
-    let msg = "Command started in background with task id \(taskId). You will receive a <task-notification> user message when it completes. Output is being written to: \(outputFile.path). Use the Read tool on that file to inspect stdout/stderr in the meantime; do NOT poll or sleep."
+    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. Output is being written to: \(outputFile.path). Use the Read tool on that file to inspect stdout/stderr in the meantime; do NOT poll or sleep."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
@@ -476,7 +733,7 @@ private func runBashForegroundWithFlip(
             await bundle.awaitAdoptedCompletion(cancellation: bgCancel)
         }
     )
-    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive a <task-notification> user message when it completes. Full output is being written to: \(adoptedFile.path). Use the Read tool on that path to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start."
+    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. Full output is being written to: \(adoptedFile.path). Use the Read tool on that path to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([

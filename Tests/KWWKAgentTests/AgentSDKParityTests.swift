@@ -180,6 +180,53 @@ struct AgentSDKParityTests {
         }
     }
 
+    @Test("reserved final-text turn ends before queued follow-up can replace it with a cap error")
+    func finalTextTurnIsTerminal() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+        let toolCall = AssistantMessage(
+            content: [fauxToolCall(
+                name: "calculate",
+                arguments: ["expression": "1+1"],
+                id: "collect-once"
+            )],
+            api: registration.getModel().api,
+            provider: registration.getModel().provider,
+            model: registration.getModel().id,
+            stopReason: .toolUse
+        )
+        registration.setResponses([
+            .message(toolCall),
+            .message(fauxAssistantMessage("final synthesis")),
+            .message(fauxAssistantMessage("follow-up must not run")),
+        ])
+        var options = AgentOptions(
+            initialState: AgentInitialState(
+                model: registration.getModel(),
+                tools: [makeCalculateTool()]
+            ),
+            maxTurns: 2
+        )
+        options.finalTextOnlyOnLastTurn = true
+        let agent = Agent(options: options)
+        agent.followUp("queued while the capped run is active")
+
+        try await agent.prompt("collect then summarize")
+
+        #expect(registration.state.callCount == 2)
+        #expect(agent.hasQueuedMessages())
+        guard case .assistant(let final) = agent.state.messages.last else {
+            Issue.record("expected final assistant text")
+            return
+        }
+        #expect(final.stopReason == .stop)
+        #expect(final.errorMessage == nil)
+        #expect(final.content.contains { block in
+            if case .text(let text) = block { return text.text == "final synthesis" }
+            return false
+        })
+    }
+
     // MARK: - Item 5: UserPromptSubmit hook
 
     @Test("UserPromptSubmit hook can rewrite the user message before it enters context")

@@ -37,8 +37,6 @@ func runHeadlessInternal(
         context1m: context1m
     )
 
-    let bgManager = BackgroundTaskManager()
-
     // Resolve session persistence: a fresh id by default, or a stored
     // transcript when `--resume` / `--session` was passed.
     let store = SessionStore(directory: SessionStore.defaultDirectory())
@@ -46,20 +44,19 @@ func runHeadlessInternal(
     let sessionId = resolvedResume.sessionId
 
     let environment = ProcessInfo.processInfo.environment
-    let agent = await makeCodingAgent(CodingAgentConfig(
+    let agent = await makeHeadlessCodingAgent(CodingAgentConfig(
         model: resolved.model,
         cwd: cwd,
         tools: tools,
         contextFiles: loadProjectContextFiles(cwd: cwd),
         skillDirectories: Skills.defaultDirectories(cwd: cwd, includeUserDirectory: true),
-        backgroundManager: bgManager,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
         authResolver: resolved.authResolver,
         autoCompactThreshold: autoCompactThreshold,
         bashEnvironment: environment,
         bashShellPath: cliShellPath(environment: environment)
-    )).agent
+    ))
     agent.state.thinkingLevel = thinkingLevel
 
     // Seed the transcript from disk when resuming so the model continues
@@ -131,15 +128,77 @@ func runHeadlessInternal(
     do {
         try await agent.prompt(text)
     } catch {
-        await agent.closeSession()
+        await cleanupHeadlessAgent(agent)
         let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         writeStderr("kwwk: \(msg)\n")
         return 1
     }
 
     let stop = box.lock.withLock { box.finalStopReason }
-    await agent.closeSession()
+    await cleanupHeadlessAgent(agent)
     return stop == .stop ? 0 : 1
+}
+
+/// Build a one-shot agent with background execution forcibly disabled.
+///
+/// The caller may hand us a reusable config that has a manager attached; copy
+/// it and clear that capability so `kwwk -p` can never report "started in the
+/// background" immediately before its process exits. Without a manager the
+/// bash schema omits background options, job/task-status tools are absent, and
+/// a subagent request that smuggles `run_in_background=true` is rejected by the
+/// agent tool at runtime.
+func makeHeadlessCodingAgent(_ input: CodingAgentConfig) async -> Agent {
+    var config = input
+    config.backgroundManager = nil
+    // Reusable interactive definitions may default to background execution.
+    // Hiding the explicit flag is not enough: an omitted argument would still
+    // select that default and then fail because headless intentionally has no
+    // manager. Make the semantic default foreground before building the tool.
+    config.subagents = config.subagents.map { definition in
+        var foreground = definition
+        foreground.runInBackgroundByDefault = false
+        return foreground
+    }
+    let agent = await makeCodingAgent(config).agent
+    agent.state.tools = removingHeadlessBackgroundOptions(from: agent.state.tools)
+    return agent
+}
+
+private func removingHeadlessBackgroundOptions(from tools: [AgentTool]) -> [AgentTool] {
+    tools.map { original in
+        guard original.name == "agent" else { return original }
+        var tool = original
+        if case .object(var schema) = tool.parameters,
+           case .object(var properties) = schema["properties"] ?? .null {
+            properties.removeValue(forKey: "run_in_background")
+            schema["properties"] = .object(properties)
+            tool.parameters = .object(schema)
+        }
+        tool.description = tool.description
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { line in
+                !line.contains("run_in_background")
+                    && !line.contains("Background tasks started by the subagent")
+            }
+            .joined(separator: "\n")
+        return tool
+    }
+}
+
+/// Deterministic one-shot teardown for both success and failure paths. The
+/// headless builder currently installs no background attachment, but keeping
+/// the ownership cleanup here prevents future configuration changes (or an SDK
+/// attachment added around this helper) from leaving work behind at exit.
+func cleanupHeadlessAgent(_ agent: Agent) async {
+    agent.retire()
+    await agent.abortAndKillBackgroundTasks()
+    // Retirement makes already-scheduled bridge wakes harmless. Discard any
+    // exit-only queues and wait until an in-flight run observes cancellation
+    // before closing provider resources.
+    agent.abort()
+    agent.clearAllQueues()
+    await agent.waitForIdle()
+    await agent.closeSession()
 }
 
 private func writeStdout(_ s: String) {

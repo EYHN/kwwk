@@ -721,7 +721,7 @@ struct TranscriptCommitTests {
     }
 
     @MainActor
-    @Test("collapsed thinking shows a ticking label live and commits a timing row")
+    @Test("collapsed thinking stays live until turn end commits its timing row")
     func collapsedThinkingLabel() {
         let r = TranscriptRenderer()
         // Show reasoning of any length so the synchronous test doesn't have
@@ -748,11 +748,366 @@ struct TranscriptCommitTests {
             message: partial,
             assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "pondering deeply", partial: partial)
         ))
+        // `thinkingEnd` alone is not a settlement boundary in collapsed mode:
+        // another adjacent thinking block may follow and join this duration.
+        #expect(r.drainCommits().isEmpty)
+        #expect(r.liveLines.map(ANSI.stripEscapes).contains(where: {
+            $0.hasPrefix("[thinking ")
+        }))
+        r.apply(.turnEnd(message: .assistant(partial), toolResults: []))
         let commits = r.drainCommits().map(ANSI.stripEscapes)
         #expect(commits.contains(where: { $0.hasPrefix("[thought for ") }))
         #expect(!commits.contains(where: { $0.contains("pondering deeply") }))
         #expect(!r.hasActiveThinking)
         #expect(!r.liveLines.contains(where: { $0.contains("[thinking") }))
+    }
+
+    @MainActor
+    @Test("adjacent collapsed thinking blocks commit once with summed active duration")
+    func collapsedThinkingSumsAdjacentBlocks() {
+        let r = TranscriptRenderer()
+        let partial = stubAssistant("")
+        r.apply(.messageStart(message: .assistant(partial)))
+
+        // Two 2-second blocks separated by an 7-second inactive gap. The
+        // visible duration must be 4s (active time), not 11s wall time, and
+        // the default 3s threshold applies to that aggregate.
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: partial)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 3_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "first", partial: partial)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 10_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 1, partial: partial)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 12_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 1, content: "second", partial: partial)
+        ))
+
+        #expect(r.drainCommits().isEmpty)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .textStart(contentIndex: 2, partial: partial)
+        ))
+        let thoughts = r.drainCommits().map(ANSI.stripEscapes).filter {
+            $0.hasPrefix("[thought for ")
+        }
+        #expect(thoughts == ["[thought for 4.0s]"])
+    }
+
+    @MainActor
+    @Test("snapshot-only text at thinkingStart splits collapsed thinking in order")
+    func thinkingStartSnapshotTextSplitsCollapsedRuns() {
+        let r = TranscriptRenderer()
+        r.collapsedThinkingMinSeconds = 0
+        let empty = stubAssistant("")
+        r.apply(.messageStart(message: .assistant(empty)))
+
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        r.apply(.messageUpdate(
+            message: empty,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: empty)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 2_000_000_000)
+        r.apply(.messageUpdate(
+            message: empty,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "first", partial: empty)
+        ))
+
+        // No text event arrives. The next thinking boundary is the first
+        // snapshot that exposes the intervening text block.
+        let secondPartial = stubAssistant(blocks: [
+            .thinking(ThinkingContent(thinking: "first")),
+            .text(TextContent(text: "middle")),
+            .thinking(ThinkingContent(thinking: "second")),
+        ])
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 3_000_000_000)
+        r.apply(.messageUpdate(
+            message: secondPartial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 2, partial: secondPartial)
+        ))
+
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 4_000_000_000)
+        r.apply(.messageUpdate(
+            message: secondPartial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 2, content: "second", partial: secondPartial)
+        ))
+        r.apply(.turnEnd(message: .assistant(secondPartial), toolResults: []))
+
+        let commits = r.drainCommits().map(ANSI.stripEscapes)
+        let firstThought = commits.firstIndex(of: "[thought for 1.0s]")
+        let text = commits.firstIndex(of: "middle")
+        let secondThought = commits.lastIndex(of: "[thought for 1.0s]")
+        #expect(firstThought != nil && text != nil && secondThought != nil)
+        #expect((firstThought ?? 0) < (text ?? 0))
+        #expect((text ?? 0) < (secondThought ?? 0))
+        #expect(!commits.contains("[thought for 2.0s]"))
+    }
+
+    @MainActor
+    @Test("snapshot-only text at thinkingEnd splits collapsed thinking in order")
+    func thinkingEndSnapshotTextSplitsCollapsedRuns() {
+        let r = TranscriptRenderer()
+        r.collapsedThinkingMinSeconds = 0
+        let empty = stubAssistant("")
+        r.apply(.messageStart(message: .assistant(empty)))
+
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        r.apply(.messageUpdate(
+            message: empty,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: empty)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 2_000_000_000)
+        r.apply(.messageUpdate(
+            message: empty,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "first", partial: empty)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 3_000_000_000)
+        r.apply(.messageUpdate(
+            message: empty,
+            assistantMessageEvent: .thinkingStart(contentIndex: 2, partial: empty)
+        ))
+
+        let final = stubAssistant(blocks: [
+            .thinking(ThinkingContent(thinking: "first")),
+            .text(TextContent(text: "middle")),
+            .thinking(ThinkingContent(thinking: "second")),
+        ])
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 4_000_000_000)
+        r.apply(.messageUpdate(
+            message: final,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 2, content: "second", partial: final)
+        ))
+        r.apply(.turnEnd(message: .assistant(final), toolResults: []))
+
+        let commits = r.drainCommits().map(ANSI.stripEscapes)
+        let firstThought = commits.firstIndex(of: "[thought for 1.0s]")
+        let text = commits.firstIndex(of: "middle")
+        let secondThought = commits.lastIndex(of: "[thought for 1.0s]")
+        #expect(firstThought != nil && text != nil && secondThought != nil)
+        #expect((firstThought ?? 0) < (text ?? 0))
+        #expect((text ?? 0) < (secondThought ?? 0))
+        #expect(!commits.contains("[thought for 2.0s]"))
+    }
+
+    @MainActor
+    @Test("stream rewind marks committed collapsed and expanded thoughts as discarded")
+    func thinkingCommitsAreMarkedDiscardedOnRewind() {
+        let partial = stubAssistant("")
+
+        let collapsed = TranscriptRenderer()
+        collapsed.collapsedThinkingMinSeconds = 0
+        collapsed.apply(.messageStart(message: .assistant(partial)))
+        collapsed.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        collapsed.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: partial)
+        ))
+        collapsed.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 2_000_000_000)
+        collapsed.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(
+                contentIndex: 0,
+                content: "failed collapsed thought",
+                partial: partial
+            )
+        ))
+        collapsed.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .textStart(contentIndex: 1, partial: partial)
+        ))
+        collapsed.apply(.streamRewind)
+
+        let collapsedCommits = collapsed.drainCommits().map(ANSI.stripEscapes)
+        let collapsedThought = collapsedCommits.firstIndex(of: "[thought for 1.0s]")
+        let collapsedDiscard = collapsedCommits.firstIndex(where: { $0.contains("discarded") })
+        #expect(collapsedThought != nil && collapsedDiscard != nil)
+        #expect((collapsedThought ?? 0) < (collapsedDiscard ?? 0))
+
+        let expanded = TranscriptRenderer()
+        expanded.setThinkingDisplay(.expanded)
+        expanded.apply(.messageStart(message: .assistant(partial)))
+        expanded.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 3_000_000_000)
+        expanded.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: partial)
+        ))
+        expanded.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 4_000_000_000)
+        expanded.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(
+                contentIndex: 0,
+                content: "failed expanded thought",
+                partial: partial
+            )
+        ))
+        expanded.apply(.streamRewind)
+
+        let expandedCommits = expanded.drainCommits().map(ANSI.stripEscapes)
+        let expandedThought = expandedCommits.firstIndex(of: "[thought for 1.0s]")
+        let expandedDiscard = expandedCommits.firstIndex(where: { $0.contains("discarded") })
+        #expect(expandedThought != nil && expandedDiscard != nil)
+        #expect((expandedThought ?? 0) < (expandedDiscard ?? 0))
+    }
+
+    @MainActor
+    @Test("tool call splits collapsed thinking runs")
+    func toolCallSplitsCollapsedThinking() {
+        let r = TranscriptRenderer()
+        r.collapsedThinkingMinSeconds = 0
+        let partial = stubAssistant("")
+        r.apply(.messageStart(message: .assistant(partial)))
+
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: partial)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 3_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "before tool", partial: partial)
+        ))
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .toolCallStart(contentIndex: 1, partial: partial)
+        ))
+        let beforeTool = r.drainCommits().map(ANSI.stripEscapes)
+        #expect(beforeTool.contains("[thought for 2.0s]"))
+
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 4_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 2, partial: partial)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 7_000_000_000)
+        r.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 2, content: "after tool", partial: partial)
+        ))
+        r.apply(.turnEnd(message: .assistant(partial), toolResults: []))
+        let afterTool = r.drainCommits().map(ANSI.stripEscapes)
+        #expect(afterTool.contains("[thought for 3.0s]"))
+        #expect(!afterTool.contains("[thought for 5.0s]"))
+    }
+
+    @MainActor
+    @Test("collapsed thought cannot overtake preceding assistant text")
+    func collapsedThinkingKeepsTextOrder() {
+        let r = TranscriptRenderer()
+        r.collapsedThinkingMinSeconds = 0
+        r.apply(.messageStart(message: .assistant(stubAssistant(""))))
+
+        let textPartial = stubAssistant("before")
+        r.apply(.messageUpdate(
+            message: textPartial,
+            assistantMessageEvent: .textDelta(contentIndex: 0, delta: "before", partial: textPartial)
+        ))
+        let thinkingPartial = stubAssistant(blocks: [
+            .text(TextContent(text: "before")),
+            .thinking(ThinkingContent(thinking: "reason")),
+        ])
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        r.apply(.messageUpdate(
+            message: thinkingPartial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 1, partial: thinkingPartial)
+        ))
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 2_000_000_000)
+        r.apply(.messageUpdate(
+            message: thinkingPartial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 1, content: "reason", partial: thinkingPartial)
+        ))
+        r.apply(.messageUpdate(
+            message: thinkingPartial,
+            assistantMessageEvent: .toolCallStart(contentIndex: 2, partial: thinkingPartial)
+        ))
+
+        let commits = r.drainCommits().map(ANSI.stripEscapes)
+        let text = commits.firstIndex(of: "before")
+        let thought = commits.firstIndex(of: "[thought for 1.0s]")
+        #expect(text != nil && thought != nil)
+        #expect((text ?? 0) < (thought ?? 0))
+    }
+
+    @MainActor
+    @Test("final snapshot only preserves text before thinking order")
+    func finalSnapshotThinkingKeepsTextOrder() {
+        let r = TranscriptRenderer()
+        r.collapsedThinkingMinSeconds = 0
+        let empty = stubAssistant("")
+        r.apply(.messageStart(message: .assistant(empty)))
+
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        r.apply(.messageUpdate(
+            message: empty,
+            assistantMessageEvent: .thinkingStart(contentIndex: 1, partial: empty)
+        ))
+
+        let final = stubAssistant(blocks: [
+            .text(TextContent(text: "before")),
+            .thinking(ThinkingContent(thinking: "reason")),
+        ])
+        r.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 2_000_000_000)
+        r.apply(.messageEnd(message: .assistant(final)))
+
+        let commits = r.drainCommits().map(ANSI.stripEscapes)
+        let text = commits.firstIndex(of: "before")
+        let thought = commits.firstIndex(of: "[thought for 1.0s]")
+        #expect(text != nil && thought != nil)
+        #expect((text ?? 0) < (thought ?? 0))
+    }
+
+    @MainActor
+    @Test("human and runtime-sourced messages flush staged collapsed thinking")
+    func userAndRuntimeFlushCollapsedThinking() {
+        let runtimeRenderer = TranscriptRenderer()
+        runtimeRenderer.collapsedThinkingMinSeconds = 0
+        let partial = stubAssistant("")
+        runtimeRenderer.apply(.messageStart(message: .assistant(partial)))
+        runtimeRenderer.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 1_000_000_000)
+        runtimeRenderer.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: partial)
+        ))
+        runtimeRenderer.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 2_000_000_000)
+        runtimeRenderer.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "runtime boundary", partial: partial)
+        ))
+        runtimeRenderer.apply(.messageStart(message: .user(UserMessage(
+            text: "runtime aside",
+            source: .runtime
+        ))))
+        #expect(runtimeRenderer.drainCommits().map(ANSI.stripEscapes).contains("[thought for 1.0s]"))
+
+        let userRenderer = TranscriptRenderer()
+        userRenderer.collapsedThinkingMinSeconds = 0
+        userRenderer.apply(.messageStart(message: .assistant(partial)))
+        userRenderer.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 3_000_000_000)
+        userRenderer.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingStart(contentIndex: 0, partial: partial)
+        ))
+        userRenderer.thinkingNowOverride = DispatchTime(uptimeNanoseconds: 4_000_000_000)
+        userRenderer.apply(.messageUpdate(
+            message: partial,
+            assistantMessageEvent: .thinkingEnd(contentIndex: 0, content: "user boundary", partial: partial)
+        ))
+        userRenderer.apply(.messageStart(message: .user(UserMessage(text: "steer"))))
+        let commits = userRenderer.drainCommits().map(ANSI.stripEscapes)
+        let thought = commits.firstIndex(of: "[thought for 1.0s]")
+        let user = commits.firstIndex(where: { $0.hasPrefix("❯ steer") })
+        #expect(thought != nil && user != nil)
+        #expect((thought ?? 0) < (user ?? 0))
     }
 
     @MainActor

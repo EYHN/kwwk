@@ -698,34 +698,43 @@ private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
     // overwrites `agent.state.messages`. The "summarizing…" notice prints
     // BEFORE the (multi-second) round-trip, not after it.
     ctx.setCompacting(true)
-    defer { ctx.setCompacting(false) }
     ctx.notify(Style.dimmed("  /compact: summarizing the conversation…"))
 
-    let outcome = await performCompact(
-        agent: ctx.agent,
+    let compactAgent = ctx.agent
+    _ = await performCompact(
+        agent: compactAgent,
         backgroundManager: ctx.backgroundManager,
-        sessionId: ctx.sessionId
+        sessionId: ctx.sessionId,
+        settle: { outcome in
+            switch outcome {
+            case .refusedAgentBusy:
+                ctx.notify(Style.error("  /compact: agent is busy; stop it first (Esc)"))
+            case .refusedTooFewMessages(let count):
+                ctx.notify(Style.dimmed("  /compact: only \(count) message(s); nothing to compact"))
+            case .compacted(let n, let hasLedger):
+                // Persist the replacement and commit its visual boundary while
+                // maintenance ownership is still held. A queued user/runtime
+                // turn must never append ahead of this projection marker.
+                await ctx.recordCompaction(n)
+                ctx.commitScrollback { width in
+                    renderCompactBoundary(
+                        messagesCompacted: n,
+                        hasRunningTasksLedger: hasLedger,
+                        width: width
+                    )
+                }
+            case .failed(let msg):
+                ctx.notify(Style.error("  /compact: \(msg)"))
+            }
+            // Clear the busy UI before maintenance releases idle waiters. A
+            // background delivery wake may acquire immediately afterwards.
+            ctx.setCompacting(false)
+        }
     )
 
-    switch outcome {
-    case .refusedAgentBusy:
-        ctx.notify(Style.error("  /compact: agent is busy; stop it first (Esc)"))
-    case .refusedTooFewMessages(let count):
-        ctx.notify(Style.dimmed("  /compact: only \(count) message(s); nothing to compact"))
-    case .compacted(let n, let hasLedger):
-        // Show a compact record + durable boundary so the user can
-        // scroll up later and see where the compact happened.
-        await ctx.recordCompaction(n)
-        ctx.commitScrollback { width in
-            renderCompactBoundary(
-                messagesCompacted: n,
-                hasRunningTasksLedger: hasLedger,
-                width: width
-            )
-        }
-    case .failed(let msg):
-        ctx.notify(Style.error("  /compact: \(msg)"))
-    }
+    // User prompts queued by Enter do not install their own idle waiter. Hand
+    // them to the normal arbiter only after persistence + UI settlement above.
+    compactAgent.resumeQueuedWork()
 }
 
 // MARK: - /context
