@@ -57,6 +57,7 @@ public enum ModelThinkingLevel: String, Codable, Sendable, Hashable, CaseIterabl
     case medium
     case high
     case xhigh
+    case max
 
     public init(reasoning: ReasoningLevel?) {
         guard let reasoning else { self = .off; return }
@@ -66,6 +67,7 @@ public enum ModelThinkingLevel: String, Codable, Sendable, Hashable, CaseIterabl
         case .medium: self = .medium
         case .high: self = .high
         case .xhigh: self = .xhigh
+        case .max: self = .max
         }
     }
 
@@ -78,21 +80,25 @@ public enum ModelThinkingLevel: String, Codable, Sendable, Hashable, CaseIterabl
         case .medium: return .medium
         case .high: return .high
         case .xhigh: return .xhigh
+        case .max: return .max
         }
     }
 }
 
-private let extendedThinkingLevels: [ModelThinkingLevel] = [.off, .minimal, .low, .medium, .high, .xhigh]
+private let extendedThinkingLevels: [ModelThinkingLevel] = [
+    .off, .minimal, .low, .medium, .high, .xhigh, .max,
+]
 
 /// Ported from pi `getSupportedThinkingLevels`. Honors `thinkingLevelMap`:
-/// a level mapped to an explicit `null` is unsupported, `xhigh` requires an
-/// explicit mapping entry to be offered at all.
+/// a level mapped to an explicit `null` is unsupported, while `xhigh` and
+/// `max` require an explicit mapping entry to be offered at all.
 public func supportedThinkingLevels(_ model: Model) -> [ModelThinkingLevel] {
     guard model.reasoning else { return [.off] }
     return extendedThinkingLevels.filter { level in
         guard let map = model.thinkingLevelMap, let entry = map[level.rawValue] else {
-            // key absent: supported (except xhigh which needs an explicit entry)
-            return level != .xhigh
+            // Extended levels need an explicit entry; lower levels use the
+            // provider default when absent.
+            return level != .xhigh && level != .max
         }
         // entry present: nil (NSNull) => unsupported
         if entry == nil { return false }

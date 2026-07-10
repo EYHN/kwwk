@@ -415,11 +415,12 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
 
     private static func mapThinkingLevelToEffort(_ model: Model, _ level: ReasoningLevel) -> String {
         if level == .xhigh, supportsNativeXhighEffort(model) { return "xhigh" }
-        if let mapped = model.thinkingLevelMap?[level.rawValue], let m = mapped { return m }
-        switch level {
+        let clamped = clampThinkingLevel(model, ModelThinkingLevel(reasoning: level))
+        if let mapped = model.thinkingLevelMap?[clamped.rawValue], let m = mapped { return m }
+        switch clamped {
         case .minimal, .low: return "low"
         case .medium: return "medium"
-        case .high, .xhigh: return "high"
+        case .off, .high, .xhigh, .max: return "high"
         }
     }
 
@@ -455,9 +456,10 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             ]
         } else {
             let defaults: [ReasoningLevel: Int] = [
-                .minimal: 1024, .low: 2048, .medium: 8192, .high: 16384, .xhigh: 16384,
+                .minimal: 1024, .low: 2048, .medium: 8192, .high: 16384,
+                .xhigh: 16384, .max: 16384,
             ]
-            let budgetLevel: ReasoningLevel = reasoning == .xhigh ? .high : reasoning
+            let budgetLevel: ReasoningLevel = reasoning == .xhigh || reasoning == .max ? .high : reasoning
             let budget = options?.thinkingBudgets?.budget(for: budgetLevel) ?? defaults[reasoning]!
             var thinking: [String: Any] = ["type": "enabled", "budget_tokens": budget]
             if let display { thinking["display"] = display }

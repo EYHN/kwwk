@@ -60,16 +60,10 @@ public final class CursorAgentProvider: APIProvider, @unchecked Sendable {
     /// reasoning level to its wire id.
     static func wireModelId(model: Model, reasoning: ReasoningLevel?) -> String {
         guard let map = model.thinkingLevelMap else { return model.id }
-        let level = reasoning?.rawValue ?? "off"
-        // Fall down the ladder when the exact level has no entry (e.g. xhigh
-        // on a model whose routing tops out at high).
-        let ladder = ["xhigh", "high", "medium", "low", "minimal"]
-        var candidates = [level]
-        if let idx = ladder.firstIndex(of: level) {
-            candidates.append(contentsOf: ladder[(idx + 1)...])
-        }
-        for candidate in candidates {
-            if let entry = map[candidate], let mapped = entry { return mapped }
+        let requested = ModelThinkingLevel(reasoning: reasoning)
+        let clamped = clampThinkingLevel(model, requested)
+        if let entry = map[clamped.rawValue], let mapped = entry {
+            return mapped
         }
         return model.id
     }

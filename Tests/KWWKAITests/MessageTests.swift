@@ -65,4 +65,58 @@ struct CostTests {
         #expect(cost.cacheWrite == 0.375)
         #expect(cost.total == 10.95)
     }
+
+    @Test("calculateCost applies the highest request-wide tier above its input threshold")
+    func tieredCostCalc() {
+        let model = Model(
+            id: "tiered",
+            api: "faux",
+            provider: "faux",
+            cost: ModelCost(
+                input: 1,
+                output: 2,
+                cacheRead: 0.1,
+                cacheWrite: 1.25,
+                tiers: [
+                    ModelCostTier(
+                        inputTokensAbove: 200,
+                        input: 3,
+                        output: 6,
+                        cacheRead: 0.3,
+                        cacheWrite: 3.75
+                    ),
+                    ModelCostTier(
+                        inputTokensAbove: 100,
+                        input: 2,
+                        output: 4,
+                        cacheRead: 0.2,
+                        cacheWrite: 2.5
+                    ),
+                ]
+            )
+        )
+
+        let atThreshold = calculateCost(
+            model: model,
+            usage: Usage(input: 100, output: 1_000_000)
+        )
+        #expect(atThreshold.output == 2)
+
+        let firstTier = calculateCost(
+            model: model,
+            usage: Usage(input: 50, output: 1_000_000, cacheRead: 51)
+        )
+        #expect(firstTier.input == 0.0001)
+        #expect(firstTier.output == 4)
+        #expect(firstTier.cacheRead == 0.0000102)
+
+        let highestTier = calculateCost(
+            model: model,
+            usage: Usage(input: 50, output: 1_000_000, cacheRead: 51, cacheWrite: 100)
+        )
+        #expect(highestTier.input == 0.00015)
+        #expect(highestTier.output == 6)
+        #expect(highestTier.cacheRead == 0.0000153)
+        #expect(highestTier.cacheWrite == 0.000375)
+    }
 }

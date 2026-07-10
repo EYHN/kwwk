@@ -57,10 +57,12 @@ struct ModelsCatalogTests {
 
     @Test("decodes thinkingLevelMap incl. explicit-null entries")
     func thinkingLevelMapDecoded() {
-        // amazon-bedrock Opus 4.6 maps xhigh -> "max".
+        // New catalogs expose max as a distinct level on Opus 4.6.
         let bedrock = ModelsCatalog.models(for: "amazon-bedrock").first { $0.id.contains("opus-4-6") }
-        if let map = bedrock?.thinkingLevelMap, let xhigh = map["xhigh"] {
-            #expect(xhigh == "max")
+        if let map = bedrock?.thinkingLevelMap, let max = map["max"] {
+            #expect(max == "max")
+        } else {
+            Issue.record("expected Bedrock Opus 4.6 to declare max thinking")
         }
         let withMap = ModelsCatalog.all.filter { $0.thinkingLevelMap != nil }
         #expect(withMap.count >= 100)
@@ -73,10 +75,14 @@ struct ModelsCatalogTests {
             #expect(supportedThinkingLevels(nonReasoning) == [.off])
             #expect(resolveThinkingLevel(nonReasoning, .high) == nil)
         }
-        // Bedrock Opus 4.6: requesting xhigh resolves to the mapped "max".
-        if let bedrock = ModelsCatalog.models(for: "amazon-bedrock").first(where: { $0.id.contains("opus-4-6") }),
-           bedrock.thinkingLevelMap?["xhigh"] != nil {
+        // Bedrock Opus 4.6 supports max but not native xhigh. Upstream clamping
+        // searches upward first, preserving old xhigh callers by routing them
+        // to the new max level.
+        if let bedrock = ModelsCatalog.models(for: "amazon-bedrock").first(where: { $0.id.contains("opus-4-6") }) {
+            #expect(resolveThinkingLevel(bedrock, .max) == "max")
             #expect(resolveThinkingLevel(bedrock, .xhigh) == "max")
+        } else {
+            Issue.record("expected Bedrock Opus 4.6 in the catalog")
         }
     }
 
@@ -89,5 +95,15 @@ struct ModelsCatalogTests {
             #expect(m.cost.input < 500)
             #expect(m.cost.output < 1000)
         }
+
+        let tiered = ModelsCatalog.all.filter { !($0.cost.tiers ?? []).isEmpty }
+        #expect(!tiered.isEmpty)
+        #expect(
+            ModelsCatalog.model(provider: "openai", id: "gpt-5.4")?
+                .cost.tiers?.first?.inputTokensAbove == 272_000
+        )
+        #expect(tiered.allSatisfy { model in
+            model.cost.tiers?.allSatisfy { $0.inputTokensAbove > 0 } == true
+        })
     }
 }

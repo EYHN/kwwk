@@ -32,6 +32,7 @@ public enum ReasoningLevel: String, Codable, Sendable, Hashable {
     case medium
     case high
     case xhigh
+    case max
 }
 
 /// OpenAI Responses reasoning-summary verbosity. `nil` (field absent) ⇒

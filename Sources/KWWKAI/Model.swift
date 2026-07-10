@@ -5,18 +5,52 @@ public enum InputModality: String, Codable, Sendable, Hashable {
     case image
 }
 
-public struct ModelCost: Codable, Sendable, Hashable {
+public struct ModelCostTier: Codable, Sendable, Hashable {
+    /// Apply this tier when total input usage is strictly above the threshold.
+    public var inputTokensAbove: Int
     /// USD per 1M tokens.
     public var input: Double
     public var output: Double
     public var cacheRead: Double
     public var cacheWrite: Double
 
-    public init(input: Double = 0, output: Double = 0, cacheRead: Double = 0, cacheWrite: Double = 0) {
+    public init(
+        inputTokensAbove: Int,
+        input: Double,
+        output: Double,
+        cacheRead: Double,
+        cacheWrite: Double
+    ) {
+        self.inputTokensAbove = inputTokensAbove
         self.input = input
         self.output = output
         self.cacheRead = cacheRead
         self.cacheWrite = cacheWrite
+    }
+}
+
+public struct ModelCost: Codable, Sendable, Hashable {
+    /// USD per 1M tokens.
+    public var input: Double
+    public var output: Double
+    public var cacheRead: Double
+    public var cacheWrite: Double
+    /// Request-wide pricing tiers. The highest matching threshold applies to
+    /// every token in the request, not only the tokens above the threshold.
+    public var tiers: [ModelCostTier]?
+
+    public init(
+        input: Double = 0,
+        output: Double = 0,
+        cacheRead: Double = 0,
+        cacheWrite: Double = 0,
+        tiers: [ModelCostTier]? = nil
+    ) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.tiers = tiers
     }
 }
 
@@ -36,7 +70,7 @@ public struct Model: Codable, Sendable, Hashable {
     /// Per-API compatibility overrides (cache format, thinking format, store
     /// support, etc.). nil = auto-detect from baseURL / provider defaults.
     public var compat: ModelCompat?
-    /// Maps pi thinking levels (off/minimal/low/medium/high/xhigh) to
+    /// Maps pi thinking levels (off/minimal/low/medium/high/xhigh/max) to
     /// provider/model-specific wire values. A `.some(nil)` entry marks a level
     /// as unsupported; a missing key uses provider defaults.
     public var thinkingLevelMap: [String: String?]?
@@ -86,11 +120,27 @@ public func modelsAreEqual(_ a: Model, _ b: Model) -> Bool {
 
 /// Compute USD cost from usage and model pricing (per 1M tokens).
 public func calculateCost(model: Model, usage: Usage) -> Cost {
+    let inputTokens = usage.input + usage.cacheRead + usage.cacheWrite
+    var inputRate = model.cost.input
+    var outputRate = model.cost.output
+    var cacheReadRate = model.cost.cacheRead
+    var cacheWriteRate = model.cost.cacheWrite
+    var matchedThreshold = -1
+
+    for tier in model.cost.tiers ?? []
+    where inputTokens > tier.inputTokensAbove && tier.inputTokensAbove > matchedThreshold {
+        inputRate = tier.input
+        outputRate = tier.output
+        cacheReadRate = tier.cacheRead
+        cacheWriteRate = tier.cacheWrite
+        matchedThreshold = tier.inputTokensAbove
+    }
+
     let scale = 1_000_000.0
-    let input = Double(usage.input) * model.cost.input / scale
-    let output = Double(usage.output) * model.cost.output / scale
-    let cacheRead = Double(usage.cacheRead) * model.cost.cacheRead / scale
-    let cacheWrite = Double(usage.cacheWrite) * model.cost.cacheWrite / scale
+    let input = Double(usage.input) * inputRate / scale
+    let output = Double(usage.output) * outputRate / scale
+    let cacheRead = Double(usage.cacheRead) * cacheReadRate / scale
+    let cacheWrite = Double(usage.cacheWrite) * cacheWriteRate / scale
     return Cost(
         input: input,
         output: output,

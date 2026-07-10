@@ -554,8 +554,16 @@ struct CursorModelRoutingTests {
         )
         #expect(CursorAgentProvider.wireModelId(model: model, reasoning: nil) == "claude-4.5-sonnet")
         #expect(CursorAgentProvider.wireModelId(model: model, reasoning: .medium) == "claude-4.5-sonnet-thinking")
-        // xhigh not mapped — falls down the ladder to high.
+        // Neither extended level is mapped, so both clamp down to high.
         #expect(CursorAgentProvider.wireModelId(model: model, reasoning: .xhigh) == "claude-4.5-sonnet-thinking")
+        #expect(CursorAgentProvider.wireModelId(model: model, reasoning: .max) == "claude-4.5-sonnet-thinking")
+
+        var maxOnly = model
+        maxOnly.thinkingLevelMap = ["max": "claude-max"]
+        // Clamping searches upward first: legacy xhigh callers route to max
+        // when max is the model's only explicitly supported extended level.
+        #expect(CursorAgentProvider.wireModelId(model: maxOnly, reasoning: .xhigh) == "claude-max")
+        #expect(CursorAgentProvider.wireModelId(model: maxOnly, reasoning: .max) == "claude-max")
     }
 
     @Test("normalize applies curated capabilities and collapses -thinking variants")

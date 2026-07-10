@@ -14,7 +14,7 @@ import KWWKCli
 ///   kwwk --help             → usage
 ///
 /// Global flags (apply to both TUI and headless `-p`):
-///   `--thinking <off|minimal|low|medium|high|xhigh>` — reasoning effort,
+///   `--thinking <off|minimal|low|medium|high|xhigh|max>` — reasoning effort,
 ///                        defaulting to `medium`.
 ///   `--model <id>`     — override the resolved provider's default model id
 ///                        (e.g. `--model claude-opus-4-5`). Catalog metadata
@@ -84,7 +84,7 @@ struct KwwkCLI {
 
         global options:
           --thinking <level>          reasoning effort: off, minimal, low,
-                                      medium, high, xhigh
+                                      medium, high, xhigh, max
                                       (default: medium)
           --model <id>                override the provider's default model id
                                       (e.g. --model claude-opus-4-5)
@@ -120,7 +120,7 @@ struct KwwkCLI {
             if argv[i] == "--thinking" {
                 guard i + 1 < argv.count, let parsed = ThinkingLevel(rawValue: argv[i + 1]) else {
                     FileHandle.standardError.write(Data(
-                        "kwwk: --thinking needs one of: off, minimal, low, medium, high, xhigh\n".utf8
+                        "kwwk: --thinking needs one of: off, minimal, low, medium, high, xhigh, max\n".utf8
                     ))
                     Foundation.exit(2)
                 }

@@ -374,7 +374,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             if adaptive {
                 // Adaptive thinking (Opus 4.6/4.7/4.8, Fable 5): Claude decides
                 // when/how much to think; we only pass an effort level via
-                // `output_config`. `max` is Opus-4.6-only; 4.7+/Fable map xhigh.
+                // `output_config`. Newer catalogs distinguish native `xhigh`
+                // from the unconstrained `max` effort.
                 root["thinking"] = ["type": "adaptive", "display": "summarized"]
                 root["output_config"] = ["effort": adaptiveEffort(model, reasoning)]
             } else {
@@ -487,26 +488,26 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         message["content"] = content
     }
 
+    /// Map a reasoning level to an Anthropic adaptive-thinking effort, honoring
+    /// the per-model `thinkingLevelMap`. Falls back to pi's defaults:
+    /// minimal/low→low, medium→medium, and extended levels→high.
+    /// Valid efforts are low/medium/high/xhigh/max.
+    private static func adaptiveEffort(_ model: Model, _ reasoning: ReasoningLevel) -> String {
+        let level = clampThinkingLevel(model, ModelThinkingLevel(reasoning: reasoning))
+        if let map = model.thinkingLevelMap, let entry = map[level.rawValue], let mapped = entry {
+            return mapped
+        }
+        switch level {
+        case .minimal, .low: return "low"
+        case .medium: return "medium"
+        case .off, .high, .xhigh, .max: return "high"
+        }
+    }
+
     /// Fallback thinking budget per reasoning level when the caller didn't
     /// supply explicit `ThinkingBudgets`. Anthropic requires a minimum of
     /// 1024; these numbers are conservative enough to work across Claude
     /// 4.x Sonnet/Haiku/Opus without tripping per-model caps.
-    /// Map a reasoning level to an Anthropic adaptive-thinking effort, honoring
-    /// the per-model `thinkingLevelMap` (e.g. Opus 4.6 maps xhigh→"max"). Falls
-    /// back to pi's defaults: minimal/low→low, medium→medium, high/xhigh→high.
-    /// Valid efforts are low/medium/high/xhigh/max.
-    private static func adaptiveEffort(_ model: Model, _ reasoning: ReasoningLevel) -> String {
-        let level = ModelThinkingLevel(reasoning: reasoning)
-        if let map = model.thinkingLevelMap, let entry = map[level.rawValue], let mapped = entry {
-            return mapped
-        }
-        switch reasoning {
-        case .minimal, .low: return "low"
-        case .medium: return "medium"
-        case .high, .xhigh: return "high"
-        }
-    }
-
     private static func defaultThinkingBudget(for level: ReasoningLevel) -> Int {
         switch level {
         case .minimal: return 1024
@@ -514,6 +515,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         case .medium: return 8192
         case .high: return 16_384
         case .xhigh: return 24_576
+        case .max: return 16_384
         }
     }
 

@@ -40,7 +40,7 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
     ))
     registry.register(SlashCommand(
         name: "thinking",
-        description: "Show / set thinking level (off|minimal|low|medium|high|xhigh) or display (show|hide)",
+        description: "Show / set thinking level (off|minimal|low|medium|high|xhigh|max) or display (show|hide)",
         handler: handleThinkingCommand
     ))
     registry.register(SlashCommand(
@@ -554,7 +554,7 @@ private func handleVerboseCommand(_ ctx: SlashContext, _ args: String) async {
 // MARK: - /thinking
 
 /// `/thinking` (no args) — show current level.
-/// `/thinking off|minimal|low|medium|high|xhigh` — set it.
+/// `/thinking off|minimal|low|medium|high|xhigh|max` — set it.
 ///
 /// Extended thinking is auto-enabled at `.medium` on startup for
 /// reasoning-capable models so users see `[thinking]` blocks without
@@ -573,7 +573,7 @@ private func handleThinkingCommand(_ ctx: SlashContext, _ args: String) async {
         if level != .off && !model.reasoning {
             lines.append(Style.dimmed("    (current model \(model.id) is non-reasoning — level stored but won't be sent until `/model` switch)"))
         }
-        lines.append(Style.dimmed("    level: off, minimal, low, medium, high, xhigh"))
+        lines.append(Style.dimmed("    level: off, minimal, low, medium, high, xhigh, max"))
         lines.append(Style.dimmed("    display: show, hide"))
         ctx.notifyBlock(lines)
         return
@@ -590,7 +590,7 @@ private func handleThinkingCommand(_ ctx: SlashContext, _ args: String) async {
         return
     }
     guard let level = parseThinkingLevel(trimmed) else {
-        ctx.notify(Style.error("  /thinking: unknown arg '\(args)'. Levels: off|minimal|low|medium|high|xhigh. Display: show|hide"))
+        ctx.notify(Style.error("  /thinking: unknown arg '\(args)'. Levels: off|minimal|low|medium|high|xhigh|max. Display: show|hide"))
         return
     }
     let previous = ctx.agent.state.thinkingLevel
@@ -608,14 +608,15 @@ private func handleThinkingCommand(_ ctx: SlashContext, _ args: String) async {
     ctx.notifyBlock(lines)
 }
 
-private func parseThinkingLevel(_ s: String) -> ThinkingLevel? {
+func parseThinkingLevel(_ s: String) -> ThinkingLevel? {
     switch s {
     case "off": return .off
     case "minimal": return .minimal
     case "low": return .low
     case "medium", "med": return .medium
     case "high": return .high
-    case "xhigh", "x-high", "max": return .xhigh
+    case "xhigh", "x-high": return .xhigh
+    case "max": return .max
     default: return nil
     }
 }
