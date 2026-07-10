@@ -24,10 +24,11 @@ public enum KWWK {
     /// Pass `.readOnly` for a reviewer-style tool whitelist. It does not by
     /// itself create an operating-system filesystem sandbox.
     ///
-    /// `autoCompactThreshold` fires a silent `/compact` (summarize the
-    /// transcript → replace with a recap) once the turn's reported
-    /// `usage.input + usage.output` crosses that ratio of the model's
-    /// `contextWindow`. Pass `nil` to disable.
+    /// `autoCompactThreshold` summarizes older turns into a structured recap
+    /// while retaining a recent raw tail once the estimated full prompt
+    /// (system instructions, tools, and messages) crosses that ratio of the
+    /// model context window. It also performs one recovery attempt for a
+    /// provider-reported input-context overflow. Pass `nil` to disable.
     public static func runCodingTUI(
         cwd: String? = nil,
         tools: CodingTools = .standard,

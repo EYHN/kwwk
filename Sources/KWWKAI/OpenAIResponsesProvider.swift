@@ -752,7 +752,10 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             "stream": .bool(true),
             "input": .array(encodeInput(context: context, model: model)),
         ]
-        if let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil) {
+        if let maxTokens = OutputTokenPolicy.effectiveLimit(
+            for: model,
+            requested: options?.maxTokens
+        ) {
             root["max_output_tokens"] = .int(maxTokens)
         }
         if let temp = options?.temperature { root["temperature"] = .double(temp) }

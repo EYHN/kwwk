@@ -198,7 +198,8 @@ public enum ProviderVariants {
                 "x-app": "cli",
             ],
             authHeaderBuilder: { token in ["authorization": "Bearer \(token)"] },
-            systemPromptPrefix: "You are Claude Code, Anthropic's official CLI for Claude."
+            systemPromptPrefix: "You are Claude Code, Anthropic's official CLI for Claude.",
+            maximumOutputTokens: AnthropicProvider.claudeCodeMaximumOutputTokens
         )
     }
 

@@ -118,21 +118,29 @@ struct AgentInitTests {
         #expect(agent.state.messages.count == 1)
     }
 
-    @Test("coding agent carries configured session id into stream options")
+    @Test("coding agent carries configured session and compaction model")
     func codingAgentKeepsSessionId() async throws {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
+        let compactionModel = Model(
+            id: "summary-model",
+            api: "summary-api",
+            provider: "summary-provider"
+        )
 
         let agent = await makeCodingAgent(CodingAgentConfig(
             model: registration.getModel(),
             cwd: FileManager.default.temporaryDirectory.path,
             tools: [],
             sessionId: "stable-session",
+            compactionModel: compactionModel,
             bashEnvironment: [:]
         )).agent
 
         #expect(agent.sessionId == "stable-session")
         #expect(agent.autoCompact?.threshold == 0.75)
+        #expect(agent.compactionModel?.id == compactionModel.id)
+        #expect(agent.compactionModel?.provider == compactionModel.provider)
     }
 
     @Test("coding agent does not scan skill directories unless configured")

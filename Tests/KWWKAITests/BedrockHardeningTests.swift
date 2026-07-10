@@ -610,14 +610,15 @@ struct BedrockCacheAndAuthTests {
         #expect(final?.stopReason == .error)
     }
 
-    @Test("model_context_window_exceeded maps to .length")
-    func stopReasonContextWindowIsLength() async throws {
+    @Test("model_context_window_exceeded remains a classifiable input error")
+    func stopReasonContextWindowIsInputError() async throws {
         let body = Self.frames([
             ("messageStart", "{\"role\":\"assistant\"}"),
             ("messageStop", "{\"stopReason\":\"model_context_window_exceeded\"}"),
         ])
         let final = await Self.drive(frames: body)
-        #expect(final?.stopReason == .length)
+        #expect(final?.stopReason == .error)
+        #expect(final?.errorMessage == "model_context_window_exceeded")
     }
 
     @Test("totalTokens prefers upstream value")

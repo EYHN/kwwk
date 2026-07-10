@@ -363,7 +363,10 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         if compat.supportsStore {
             root["store"] = false
         }
-        if let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil) {
+        if let maxTokens = OutputTokenPolicy.effectiveLimit(
+            for: model,
+            requested: options?.maxTokens
+        ) {
             root[compat.maxTokensField] = maxTokens
         }
         if let temp = options?.temperature { root["temperature"] = temp }

@@ -17,7 +17,7 @@ import Crypto
 /// mid-stream through ``CursorExecBridge`` supplied by the agent loop. Each
 /// inline-executed call surfaces as a `toolCall` block marked
 /// `cursorExecResolved` so the loop does not run it a second time.
-public final class CursorAgentProvider: APIProvider, @unchecked Sendable {
+public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle, @unchecked Sendable {
     public static let defaultBaseHost = "api2.cursor.sh"
     public static let defaultClientVersion = "cli-2026.01.09-231024f"
 
@@ -53,6 +53,10 @@ public final class CursorAgentProvider: APIProvider, @unchecked Sendable {
             await run(out: out, model: model, context: context, options: options)
         }
         return out
+    }
+
+    public func closeSession(sessionId: String) async {
+        Self.conversations.remove(conversationId: sessionId)
     }
 
     /// The model id sent on the wire. Cursor selects thinking by model id
@@ -772,6 +776,12 @@ private final class ConversationRegistry: @unchecked Sendable {
             var entry = entries[conversationId] ?? Entry(blobStore: CursorBlobStore(), checkpoint: nil)
             entry.checkpoint = data
             entries[conversationId] = entry
+        }
+    }
+
+    func remove(conversationId: String) {
+        _ = lock.withLock {
+            entries.removeValue(forKey: conversationId)
         }
     }
 }

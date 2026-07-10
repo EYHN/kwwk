@@ -288,10 +288,38 @@ struct AnthropicProviderTests {
         let body = client.lastRequest?.body ?? Data()
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         #expect(json?["model"] as? String == "claude-test")
+        #expect(json?["max_tokens"] as? Int == Self.sampleModel.maxTokens)
         #expect(json?["system"] as? String == "Be concise.")
         #expect((json?["messages"] as? [[String: Any]])?.count == 4)
         let tools = json?["tools"] as? [[String: Any]]
         #expect(tools?.first?["name"] as? String == "calc")
+    }
+
+    @Test("rejects a non-positive required max_tokens before transport")
+    func rejectsNonPositiveMaxTokens() async {
+        var zeroMetadataModel = Self.sampleModel
+        zeroMetadataModel.maxTokens = 0
+        let cases: [(Model, StreamOptions?)] = [
+            (zeroMetadataModel, nil),
+            (Self.sampleModel, StreamOptions(maxTokens: 0)),
+            (Self.sampleModel, StreamOptions(maxTokens: 0, reasoning: .high)),
+            (Self.sampleModel, StreamOptions(maxTokens: -1, reasoning: .high)),
+        ]
+
+        for (model, options) in cases {
+            let client = StubSSEClient(body: Self.textSSE)
+            let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+            let response = provider.stream(
+                model: model,
+                context: Context(messages: [.user(UserMessage(text: "hi"))]),
+                options: options
+            )
+            let result = await response.result()
+
+            #expect(result.stopReason == .error)
+            #expect(result.errorMessage?.contains("max_tokens must be positive") == true)
+            #expect(client.lastRequest == nil)
+        }
     }
 
     @Test("emits cache_control breakpoints on system, last tool, and final message by default")
@@ -367,8 +395,11 @@ struct AnthropicProviderTests {
     func thinkingBody() async throws {
         let client = StubSSEClient(body: Self.textSSE)
         let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.sampleModel
+        model.reasoning = true
+        model.maxTokens = 16_384
         _ = provider.stream(
-            model: Self.sampleModel,
+            model: model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: StreamOptions(temperature: 0.2, reasoning: .medium)
         )
@@ -377,11 +408,53 @@ struct AnthropicProviderTests {
         let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
         let thinking = json?["thinking"] as? [String: Any]
         #expect(thinking?["type"] as? String == "enabled")
+        #expect(json?["max_tokens"] as? Int == model.maxTokens)
         // Default medium = 8192 tokens when no explicit ThinkingBudgets passed.
         #expect(thinking?["budget_tokens"] as? Int == 8192)
         // Claude Messages API rejects any temperature != 1 when thinking
         // is on, so we drop it from the body.
         #expect(json?["temperature"] == nil)
+    }
+
+    @Test("manual thinking raises a low explicit cap to preserve answer headroom")
+    func thinkingRaisesLowExplicitMaxTokens() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.reasoningModel
+        model.maxTokens = 64_000
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(maxTokens: 4_096, reasoning: .medium)
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        let json = Self.decodeBody(client)
+        let thinking = json["thinking"] as? [String: Any]
+        #expect(json["max_tokens"] as? Int == 12_192)
+        #expect(thinking?["type"] as? String == "enabled")
+        #expect(thinking?["budget_tokens"] as? Int == 8_192)
+    }
+
+    @Test("manual thinking is not silently disabled by a low explicit cap")
+    func thinkingStaysEnabledBelowMinimumCombinedBudget() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        var model = Self.reasoningModel
+        model.maxTokens = 64_000
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(temperature: 0.2, maxTokens: 2_047, reasoning: .high)
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        let json = Self.decodeBody(client)
+        let thinking = json["thinking"] as? [String: Any]
+        #expect(json["max_tokens"] as? Int == 20_384)
+        #expect(thinking?["type"] as? String == "enabled")
+        #expect(thinking?["budget_tokens"] as? Int == 16_384)
+        #expect(json["temperature"] == nil)
     }
 
     @Test("thinking is omitted when reasoning level is nil, temperature passes through")
@@ -648,8 +721,11 @@ struct AnthropicProviderTests {
     func oauthVariantSendsIdentityHeaders() async throws {
         let client = StubSSEClient(body: Self.textSSE)
         let provider = ProviderVariants.anthropicOAuth(accessToken: "sk-ant-oat-x", client: client)
+        var model = Self.sampleModel
+        model.contextWindow = 1_000_000
+        model.maxTokens = 128_000
         _ = provider.stream(
-            model: Self.sampleModel,
+            model: model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
@@ -660,6 +736,7 @@ struct AnthropicProviderTests {
         #expect(headers["anthropic-beta"]?.contains("claude-code-20250219") == true)
         #expect(headers["anthropic-beta"]?.contains("oauth-2025-04-20") == true)
         #expect(headers["authorization"] == "Bearer sk-ant-oat-x")
+        #expect(Self.decodeBody(client)["max_tokens"] as? Int == 64_000)
     }
 
     @Test("api-key provider has no Claude Code identity headers")

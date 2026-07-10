@@ -92,8 +92,8 @@ final class SlashContext {
     /// Mark the TUI busy for the duration of a manual `/compact`: shows the
     /// compacting spinner and makes the Enter handler treat the round-trip as
     /// busy, so a prompt submitted mid-compact queues (steers) instead of
-    /// starting a turn that the compactor would clobber when it overwrites
-    /// `agent.state.messages`. A no-op in headless / test contexts.
+    /// starting a competing turn before the revision-checked projection is
+    /// committed. A no-op in headless / test contexts.
     let setCompacting: @MainActor (_ active: Bool) -> Void
 
     init(

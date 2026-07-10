@@ -332,6 +332,23 @@ struct LoginLogoutModalTests {
             )
             #expect(without1m?.model.contextWindow == 200_000)
 
+            // Newer catalog entries advertise a 1M native window, but the
+            // subscription route still needs the explicit beta. Without the
+            // flag, both its context and Claude Code output cap stay bounded.
+            let opusWithout1m = try await registerStored(
+                storeId: "anthropic", store: store,
+                modelOverride: "claude-opus-4-8", context1m: false
+            )
+            #expect(opusWithout1m?.model.contextWindow == 200_000)
+            #expect(opusWithout1m?.model.maxTokens == 64_000)
+
+            let opusWith1m = try await registerStored(
+                storeId: "anthropic", store: store,
+                modelOverride: "claude-opus-4-8", context1m: true
+            )
+            #expect(opusWith1m?.model.contextWindow == 1_000_000)
+            #expect(opusWith1m?.model.maxTokens == 64_000)
+
             // Full chain: a session launched with --context-1m carries the flag on
             // its SlashContext; activateFreshLogin must forward it through
             // registerStoredProviderLive so the freshly-registered provider's
@@ -375,6 +392,7 @@ struct LoginLogoutModalTests {
                 displayName: "OpenRouter", template: template
             ))
             ctx.agent.state.model = template
+            ctx.agent.compactionModel = template
 
             await performLogout(ctx, "openrouter", store: store)
 
@@ -383,7 +401,9 @@ struct LoginLogoutModalTests {
             // Back on the sentinel: empty id/provider, gated until the next /login.
             #expect(ctx.agent.state.model.provider.isEmpty)
             #expect(ctx.agent.state.model.id.isEmpty)
+            #expect(ctx.agent.compactionModel == nil)
             #expect(harness.notified.contains("no providers left; /login to sign in"))
+            #expect(harness.notified.contains("compaction model now follows /model"))
 
             // The prompt gate re-engages against the emptied slot list.
             var committed: [String] = []

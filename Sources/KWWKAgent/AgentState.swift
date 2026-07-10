@@ -17,6 +17,10 @@ public final class AgentState: @unchecked Sendable {
     private var _verboseEnabled: Bool
     private var _tools: [AgentTool]
     private var _messages: [Message]
+    /// Advances whenever model-facing context changes. Compaction uses it as a
+    /// compare-and-swap guard so a summary built from one prompt snapshot can
+    /// never replace a newer one.
+    private var _contextRevision: UInt64 = 0
     private var _isStreaming: Bool = false
     private var _streamingMessage: Message?
     private var _pendingToolCalls: Set<String> = []
@@ -44,12 +48,22 @@ public final class AgentState: @unchecked Sendable {
 
     public var systemPrompt: String {
         get { lock.withLock { _systemPrompt } }
-        set { lock.withLock { _systemPrompt = newValue } }
+        set {
+            lock.withLock {
+                _systemPrompt = newValue
+                _contextRevision &+= 1
+            }
+        }
     }
 
     public var model: Model {
         get { lock.withLock { _model } }
-        set { lock.withLock { _model = newValue } }
+        set {
+            lock.withLock {
+                _model = newValue
+                _contextRevision &+= 1
+            }
+        }
     }
 
     public var thinkingLevel: ThinkingLevel {
@@ -71,12 +85,22 @@ public final class AgentState: @unchecked Sendable {
     /// snapshot copy as well.
     public var tools: [AgentTool] {
         get { lock.withLock { _tools } }
-        set { lock.withLock { _tools = Array(newValue) } }
+        set {
+            lock.withLock {
+                _tools = Array(newValue)
+                _contextRevision &+= 1
+            }
+        }
     }
 
     public var messages: [Message] {
         get { lock.withLock { _messages } }
-        set { lock.withLock { _messages = Array(newValue) } }
+        set {
+            lock.withLock {
+                _messages = Array(newValue)
+                _contextRevision &+= 1
+            }
+        }
     }
 
     public var isStreaming: Bool {
@@ -98,7 +122,37 @@ public final class AgentState: @unchecked Sendable {
     // MARK: - Internal mutators (used by Agent)
 
     func appendMessage(_ message: Message) {
-        lock.withLock { _messages.append(message) }
+        lock.withLock {
+            _messages.append(message)
+            _contextRevision &+= 1
+        }
+    }
+
+    func snapshotModelContext() -> (revision: UInt64, context: AgentContext, model: Model) {
+        lock.withLock {
+            (
+                _contextRevision,
+                AgentContext(
+                    systemPrompt: _systemPrompt,
+                    messages: _messages,
+                    tools: _tools
+                ),
+                _model
+            )
+        }
+    }
+
+    func hasContextRevision(_ expectedRevision: UInt64) -> Bool {
+        lock.withLock { _contextRevision == expectedRevision }
+    }
+
+    func replaceMessages(_ messages: [Message], ifRevision expectedRevision: UInt64) -> Bool {
+        lock.withLock {
+            guard _contextRevision == expectedRevision else { return false }
+            _messages = Array(messages)
+            _contextRevision &+= 1
+            return true
+        }
     }
 
     func setStreaming(_ value: Bool) {

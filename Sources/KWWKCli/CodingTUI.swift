@@ -666,6 +666,7 @@ func runCodingTUIInternal(
             authResolver: outgoing.authResolver ?? authResolver,
             autoCompactThreshold: outgoing.autoCompact?.threshold ?? autoCompactThreshold,
             autoCompactConfig: outgoing.autoCompact?.config ?? .init(),
+            compactionModel: outgoing.compactionModel,
             bashEnvironment: environment,
             bashShellPath: cliShellPath(environment: environment)
         ))
@@ -1426,6 +1427,7 @@ func copyAgentRuntimePreferences(from source: Agent, to destination: Agent) {
     destination.convertToLlm = source.convertToLlm
     destination.transformContext = source.transformContext
     destination.betweenTurns = source.betweenTurns
+    destination.compactionModel = source.compactionModel
 }
 
 /// Whether the goal-continuation loop's logged-out "/login" hint has already

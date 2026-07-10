@@ -12,10 +12,10 @@ enum CompactOutcome: Sendable {
     case failed(String)
 }
 
-/// Run the shared compact flow: validate -> grab a running-task snapshot ->
-/// one-shot LLM summarize -> replace `agent.state.messages` with a
-/// `<previous-session-summary>` recap. Returns the outcome; never
-/// surfaces anything to the UI itself.
+/// Run the shared compact flow: plan a tool-safe cut, iteratively update the
+/// durable summary, retain the recent raw tail, attach deterministic file and
+/// running-task facts, then revision-check the projected replacement. Returns
+/// the outcome; never surfaces anything to the UI itself.
 ///
 /// Used by the manual `/compact` slash command. The automatic path uses
 /// the same KWWKAgent compactor directly from `Agent`, so every agent

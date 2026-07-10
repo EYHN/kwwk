@@ -7,6 +7,29 @@ import Testing
 @Suite("performNewSession reset")
 struct NewSessionResetTests {
 
+    @MainActor
+    @Test("session replacement preserves the compaction-model preference")
+    func replacementCopiesCompactionModel() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let summaryModel = Model(
+            id: "summary-model",
+            api: "summary-api",
+            provider: "summary-provider"
+        )
+        let source = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: faux.getModel()),
+            compactionModel: summaryModel
+        ))
+        let destination = Agent(initialState: AgentInitialState(model: faux.getModel()))
+
+        copyAgentRuntimePreferences(from: source, to: destination)
+
+        #expect(destination.compactionModel?.id == summaryModel.id)
+        #expect(destination.compactionModel?.provider == summaryModel.provider)
+        #expect(destination.state.model.id == source.state.model.id)
+    }
+
     @Test("Enter contention preserves the cleared prompt exactly once")
     func promptContentionFallback() async throws {
         let faux = await registerFauxProvider()

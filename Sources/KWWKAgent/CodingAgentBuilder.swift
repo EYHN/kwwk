@@ -73,6 +73,9 @@ public struct CodingAgentConfig: Sendable {
     public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     public var autoCompactThreshold: Double?
     public var autoCompactConfig: AgentContextCompactionConfig
+    /// Optional model dedicated to compaction summaries. `nil` follows
+    /// `model`, including later runtime model switches.
+    public var compactionModel: Model?
     /// Soft foreground timeout for bash commands. The command auto-moves to
     /// the background on this deadline when a `backgroundManager` is attached.
     public var bashDefaultTimeoutSeconds: Int
@@ -99,6 +102,7 @@ public struct CodingAgentConfig: Sendable {
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         autoCompactThreshold: Double? = 0.75,
         autoCompactConfig: AgentContextCompactionConfig = .init(),
+        compactionModel: Model? = nil,
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
@@ -119,6 +123,7 @@ public struct CodingAgentConfig: Sendable {
         self.authResolver = authResolver
         self.autoCompactThreshold = autoCompactThreshold
         self.autoCompactConfig = autoCompactConfig
+        self.compactionModel = compactionModel
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
         self.bashEnvironment = bashEnvironment
@@ -217,6 +222,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
         fallbackBeforeToolCall: nil,
         fallbackAfterToolCall: nil,
         fallbackAutoCompact: autoCompact,
+        fallbackCompactionModel: config.compactionModel,
         fallbackAuthResolver: config.authResolver,
         projectContextFiles: config.contextFiles,
         availableSkills: availableSkills,
@@ -259,6 +265,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
         sessionId: sessionId,
         cwd: cwd,
         autoCompact: autoCompact,
+        compactionModel: config.compactionModel,
         authResolver: config.authResolver
     ))
     subagentParent.attach(agent)

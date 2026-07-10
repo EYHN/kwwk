@@ -14,6 +14,12 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
         handler: handleModelCommand
     ))
     registry.register(SlashCommand(
+        name: "compact-model",
+        description: "Pick the model used for context summaries; clear to follow /model",
+        aliases: ["compaction-model"],
+        handler: handleCompactionModelCommand
+    ))
+    registry.register(SlashCommand(
         name: "login",
         description: "Log in to another provider (kept alongside existing logins)",
         handler: handleLoginCommand
@@ -25,7 +31,7 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
     ))
     registry.register(SlashCommand(
         name: "compact",
-        description: "Summarize the transcript to reclaim context",
+        description: "Summarize older turns and retain recent context",
         handler: handleCompactCommand
     ))
     registry.register(SlashCommand(
@@ -106,7 +112,6 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
 @MainActor
 private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
     let current = ctx.agent.state.model
-    let slots = ctx.sessionProviders.slots
 
     // Logged-out session (sentinel model, no slots): the fallback below would
     // list nothing useful — point at /login instead. The extra
@@ -118,52 +123,20 @@ private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
         return
     }
 
-    // Build a flat, provider-grouped list of routed models. Each entry carries
-    // a model already stamped with its provider's routing (via `adoptFields`),
-    // so selection is a straight assignment.
-    var models: [Model] = []
-    var groups: [String] = []
-    var currentIndex: Int?
-
-    let slotList: [ProviderSlot] = slots.isEmpty
-        // No session slots (e.g. a test/headless path): fall back to the
-        // active provider's own catalog so `/model` still works.
-        ? [ProviderSlot(
-            storeId: current.provider,
-            catalogProvider: catalogProviderKey(forAgentProvider: current.provider),
-            displayName: current.provider,
-            template: current)]
-        : slots
-
-    for slot in slotList {
-        let catalog = ModelsCatalog.models(for: slot.catalogProvider)
-            .sorted { $0.id < $1.id }
-        // Providers whose active model isn't catalogued (custom openai-compatible
-        // endpoints) still get their template as a selectable row.
-        let base = catalog.isEmpty ? [slot.template] : catalog
-        for m in base {
-            let routed = adoptFields(from: slot.template, into: m)
-            if routed.provider == current.provider && routed.id == current.id {
-                currentIndex = models.count
-            }
-            models.append(routed)
-            groups.append(slot.displayName)
-        }
-    }
-
-    if models.isEmpty {
+    let choices = modelChoices(selected: current, providers: ctx.sessionProviders)
+    if choices.models.isEmpty {
         ctx.notify(Style.error("  /model: no models available for the logged-in providers"))
         return
     }
 
-    let multi = slotList.count > 1
-    let title = multi ? "Select a model  (\(slotList.count) providers)" : "Select a model"
+    let multi = choices.providerCount > 1
+    let title = multi ? "Select a model  (\(choices.providerCount) providers)" : "Select a model"
     let modal = ModelSelectorModal(
         title: title,
-        models: models,
+        models: choices.models,
         currentModelId: current.id,
-        groupLabels: multi ? groups : nil,
-        currentIndex: currentIndex,
+        groupLabels: multi ? choices.groups : nil,
+        currentIndex: choices.currentIndex,
         onSelect: { [agent = ctx.agent, notifyBlock = ctx.notifyBlock, modal = ctx.modal] picked in
             let previous = agent.state.model
             agent.state.model = picked
@@ -183,6 +156,158 @@ private func handleModelCommand(_ ctx: SlashContext, _ args: String) async {
         }
     )
     ctx.modal.open(modal)
+}
+
+/// `/compact-model` — configures a model used only for context-summary LLM
+/// requests. The main conversation model still owns context-window planning
+/// and is never changed by this command. With no override the effective model
+/// follows `/model` dynamically.
+@MainActor
+private func handleCompactionModelCommand(_ ctx: SlashContext, _ args: String) async {
+    let action = args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    switch action {
+    case "status":
+        if let configured = ctx.agent.compactionModel {
+            ctx.notify(Style.dimmed(
+                "  /compact-model: \(modelDisplay(configured)) (override)"
+            ))
+        } else {
+            ctx.notify(Style.dimmed(
+                "  /compact-model: \(modelDisplay(ctx.agent.state.model)) (follows /model)"
+            ))
+        }
+        return
+
+    case "clear", "reset", "default", "off", "current":
+        guard ctx.agent.compactionModel != nil else {
+            ctx.notify(Style.dimmed(
+                "  /compact-model: already following /model (\(modelDisplay(ctx.agent.state.model)))"
+            ))
+            return
+        }
+        ctx.agent.compactionModel = nil
+        ctx.notify(Style.dimmed(
+            "  /compact-model: now following /model (\(modelDisplay(ctx.agent.state.model)))"
+        ))
+        return
+
+    case "", "set":
+        break
+
+    default:
+        ctx.notify(Style.error(
+            "  /compact-model: usage: /compact-model [set|status|clear]"
+        ))
+        return
+    }
+
+    let selected = ctx.agent.compactionModel ?? ctx.agent.state.model
+    if ctx.sessionProviders.isLoggedOut && selected.provider.isEmpty {
+        ctx.notify(Style.dimmed(
+            "  /compact-model: no provider configured — /login to sign in"
+        ))
+        return
+    }
+
+    let choices = modelChoices(selected: selected, providers: ctx.sessionProviders)
+    guard !choices.models.isEmpty else {
+        ctx.notify(Style.error(
+            "  /compact-model: no models available for the logged-in providers"
+        ))
+        return
+    }
+
+    let multi = choices.providerCount > 1
+    let title = multi
+        ? "Select a compaction model  (\(choices.providerCount) providers)"
+        : "Select a compaction model"
+    let modal = ModelSelectorModal(
+        title: title,
+        models: choices.models,
+        currentModelId: selected.id,
+        groupLabels: multi ? choices.groups : nil,
+        currentIndex: choices.currentIndex,
+        onSelect: { [agent = ctx.agent, notifyBlock = ctx.notifyBlock, modal = ctx.modal] picked in
+            let previous = agent.compactionModel
+            agent.compactionModel = picked
+            modal.close()
+            if let previous,
+               previous.provider == picked.provider,
+               previous.id == picked.id {
+                notifyBlock([Style.dimmed(
+                    "  /compact-model: already using \(modelDisplay(picked))"
+                )])
+            } else {
+                notifyBlock([Style.dimmed(
+                    "  /compact-model: summaries now use \(modelDisplay(picked))"
+                )])
+            }
+        },
+        onCancel: { [modal = ctx.modal, notifyBlock = ctx.notifyBlock] in
+            modal.close()
+            notifyBlock([Style.dimmed("  /compact-model: cancelled")])
+        }
+    )
+    ctx.modal.open(modal)
+}
+
+@MainActor
+private struct ModelChoices {
+    let models: [Model]
+    let groups: [String]
+    let currentIndex: Int?
+    let providerCount: Int
+}
+
+/// Build routed model rows shared by `/model` and `/compact-model`. Every
+/// catalog entry inherits its logged-in provider's API/base URL/headers, so a
+/// cross-provider compaction choice resolves through the correct account.
+@MainActor
+private func modelChoices(
+    selected: Model,
+    providers: SessionProviders
+) -> ModelChoices {
+    let slots = providers.slots
+    let slotList: [ProviderSlot] = slots.isEmpty
+        ? [ProviderSlot(
+            storeId: selected.provider,
+            catalogProvider: catalogProviderKey(forAgentProvider: selected.provider),
+            displayName: selected.provider,
+            template: selected
+        )]
+        : slots
+
+    var models: [Model] = []
+    var groups: [String] = []
+    var currentIndex: Int?
+    for slot in slotList {
+        let catalog = ModelsCatalog.models(for: slot.catalogProvider)
+            .sorted { $0.id < $1.id }
+        let base = catalog.isEmpty ? [slot.template] : catalog
+        for model in base {
+            let routed = adoptFields(
+                from: slot.template,
+                into: model,
+                clampToSessionLimits: !slots.isEmpty && slot.storeId == "anthropic"
+            )
+            if routed.provider == selected.provider && routed.id == selected.id {
+                currentIndex = models.count
+            }
+            models.append(routed)
+            groups.append(slot.displayName)
+        }
+    }
+    return ModelChoices(
+        models: models,
+        groups: groups,
+        currentIndex: currentIndex,
+        providerCount: slotList.count
+    )
+}
+
+private func modelDisplay(_ model: Model) -> String {
+    let provider = ProviderAttribution.getProviderDisplayName(model.provider)
+    return provider.isEmpty ? model.id : "\(model.id) · \(provider)"
 }
 
 // MARK: - /login  ·  /logout
@@ -428,6 +553,13 @@ func performLogout(_ ctx: SlashContext, _ args: String, store: OAuthStore) async
     await APIRegistry.shared.unregisterScope(scope)
     if let ar = ctx.authResolvers { await ar.remove(scope: scope) }
     ctx.sessionProviders.remove(storeId: target)
+    let resetCompactionModel = ctx.agent.compactionModel?.provider == scope
+    if resetCompactionModel {
+        ctx.agent.compactionModel = nil
+    }
+    let compactionSuffix = resetCompactionModel
+        ? "; compaction model now follows /model"
+        : ""
 
     // If the removed provider was the one in use, switch to a survivor so the
     // next request doesn't hit a now-unregistered provider. (A same-vendor
@@ -439,13 +571,13 @@ func performLogout(_ ctx: SlashContext, _ args: String, store: OAuthStore) async
     if ctx.agent.state.model.provider == scope {
         if let next = ctx.sessionProviders.slots.first {
             ctx.agent.state.model = next.template
-            ctx.notify(Style.dimmed("  /logout: removed \(target); now on \(next.template.id) · \(next.displayName)"))
+            ctx.notify(Style.dimmed("  /logout: removed \(target); now on \(next.template.id) · \(next.displayName)\(compactionSuffix)"))
         } else {
             ctx.agent.state.model = loggedOutModel
-            ctx.notify(Style.dimmed("  /logout: removed \(target) — no providers left; /login to sign in"))
+            ctx.notify(Style.dimmed("  /logout: removed \(target) — no providers left; /login to sign in\(compactionSuffix)"))
         }
     } else {
-        ctx.notify(Style.dimmed("  /logout: removed \(target)"))
+        ctx.notify(Style.dimmed("  /logout: removed \(target)\(compactionSuffix)"))
     }
 }
 
@@ -466,8 +598,16 @@ func performLogout(_ ctx: SlashContext, _ args: String, store: OAuthStore) async
 ///     Codex-specific `maxTokens == 0` sentinel (do not emit
 ///     `max_output_tokens`).
 ///
+/// `clampToSessionLimits` preserves route-level limits that are stricter than
+/// the shared catalog (currently Anthropic OAuth without the 1M beta and the
+/// Claude Code 64k output ceiling). API-key sessions leave it false.
+///
 /// Internal (not private) so regression tests can pin the sentinel logic.
-func adoptFields(from current: Model, into picked: Model) -> Model {
+func adoptFields(
+    from current: Model,
+    into picked: Model,
+    clampToSessionLimits: Bool = false
+) -> Model {
     if current.provider == picked.provider {
         // Same provider — adopt picked's identity, wire (api), and
         // capabilities, but keep the session's `baseURL`. The session
@@ -481,6 +621,17 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
         // into double-`/v1` when our providers append their own
         // suffix. Holding the session value is both correct and
         // defensive.
+        let isLimitedAnthropicSessionRoute = clampToSessionLimits
+            && current.provider == "anthropic"
+            && current.api == "anthropic-messages"
+        let routedContextWindow = isLimitedAnthropicSessionRoute
+            ? min(current.contextWindow, picked.contextWindow)
+            : picked.contextWindow
+        let routedMaxTokens = isLimitedAnthropicSessionRoute
+            ? (picked.maxTokens > 0
+                ? min(AnthropicProvider.claudeCodeMaximumOutputTokens, picked.maxTokens)
+                : AnthropicProvider.claudeCodeMaximumOutputTokens)
+            : picked.maxTokens
         return Model(
             id: picked.id,
             name: picked.name,
@@ -490,8 +641,8 @@ func adoptFields(from current: Model, into picked: Model) -> Model {
             reasoning: picked.reasoning,
             input: picked.input,
             cost: picked.cost,
-            contextWindow: picked.contextWindow,
-            maxTokens: picked.maxTokens,
+            contextWindow: routedContextWindow,
+            maxTokens: routedMaxTokens,
             headers: picked.headers,
             compat: picked.compat,
             thinkingLevelMap: picked.thinkingLevelMap
@@ -694,9 +845,9 @@ private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
     // Route the manual compact through the same busy machinery as a normal
     // run: flip the compacting spinner on and make the Enter handler treat the
     // round-trip as busy, so a prompt submitted mid-compact queues (steers)
-    // instead of starting a turn that the compactor would clobber when it
-    // overwrites `agent.state.messages`. The "summarizing…" notice prints
-    // BEFORE the (multi-second) round-trip, not after it.
+    // instead of starting a competing turn. The compactor commits with a
+    // revision check, and the "summarizing…" notice prints before the
+    // multi-second round-trip rather than after it.
     ctx.setCompacting(true)
     ctx.notify(Style.dimmed("  /compact: summarizing the conversation…"))
 

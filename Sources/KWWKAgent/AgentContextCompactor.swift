@@ -3,6 +3,11 @@ import KWWKAI
 
 public let agentCompactMinMessages = 4
 
+public enum AgentContextCompactionStrategy: String, Sendable, Equatable {
+    case legacyFullSummary = "legacy"
+    case retainedTailV1 = "retained-tail-v1"
+}
+
 public struct AgentContextUsage: Equatable, Sendable {
     public let tokens: Int
     public let window: Int
@@ -21,15 +26,47 @@ public struct AgentContextCompactionConfig: Sendable {
     public var minMessages: Int
     public var toolOutputCharacterLimit: Int
     public var summaryWordTarget: Int
+    public var strategy: AgentContextCompactionStrategy
+    public var keepRecentTokens: Int
+    public var messageTextByteLimit: Int
+    public var thinkingByteLimit: Int
+    public var toolArgumentByteLimit: Int
+    public var toolDetailsByteLimit: Int
+    /// Optional hard cap for summary generation. `0` leaves the stream option
+    /// unset so the provider/model default is used; positive values opt into
+    /// an explicit cap. A positive value also seeds the total stored-recap
+    /// allowance; automatic mode derives that allowance from
+    /// `summaryWordTarget`. Window planning still reserves safe output headroom.
+    public var summaryMaxTokens: Int
+    public var recoveryRatio: Double
+    public var maxSummaryAttempts: Int
 
     public init(
         minMessages: Int = agentCompactMinMessages,
-        toolOutputCharacterLimit: Int = 500,
-        summaryWordTarget: Int = 400
+        toolOutputCharacterLimit: Int = 4_000,
+        summaryWordTarget: Int = 900,
+        strategy: AgentContextCompactionStrategy = .retainedTailV1,
+        keepRecentTokens: Int = 20_000,
+        messageTextByteLimit: Int = 12_000,
+        thinkingByteLimit: Int = 8_000,
+        toolArgumentByteLimit: Int = 4_000,
+        toolDetailsByteLimit: Int = 2_000,
+        summaryMaxTokens: Int = 0,
+        recoveryRatio: Double = 0.8,
+        maxSummaryAttempts: Int = 2
     ) {
         self.minMessages = minMessages
         self.toolOutputCharacterLimit = toolOutputCharacterLimit
         self.summaryWordTarget = summaryWordTarget
+        self.strategy = strategy
+        self.keepRecentTokens = keepRecentTokens
+        self.messageTextByteLimit = messageTextByteLimit
+        self.thinkingByteLimit = thinkingByteLimit
+        self.toolArgumentByteLimit = toolArgumentByteLimit
+        self.toolDetailsByteLimit = toolDetailsByteLimit
+        self.summaryMaxTokens = summaryMaxTokens
+        self.recoveryRatio = recoveryRatio
+        self.maxSummaryAttempts = maxSummaryAttempts
     }
 }
 
@@ -42,18 +79,13 @@ public enum AgentContextCompactionOutcome: Sendable, Equatable {
 
 public enum AgentContextCompactor {
     public static func currentUsage(messages: [Message], model: Model) -> AgentContextUsage {
-        let usage = messages.reversed().compactMap { message -> Usage? in
-            if case .assistant(let assistant) = message {
-                return assistant.usage
-            }
-            return nil
-        }.first
+        let estimate = ContextTokenEstimator.estimate(messages: messages, model: model)
+        return AgentContextUsage(tokens: estimate.effective, window: model.contextWindow)
+    }
 
-        let tokens = (usage?.input ?? 0)
-            + (usage?.output ?? 0)
-            + (usage?.cacheRead ?? 0)
-            + (usage?.cacheWrite ?? 0)
-        return AgentContextUsage(tokens: tokens, window: model.contextWindow)
+    public static func currentUsage(context: AgentContext, model: Model) -> AgentContextUsage {
+        let estimate = ContextTokenEstimator.estimate(context: context, model: model)
+        return AgentContextUsage(tokens: estimate.effective, window: model.contextWindow)
     }
 
     public static func shouldCompact(
@@ -61,8 +93,19 @@ public enum AgentContextCompactor {
         model: Model,
         threshold: Double?
     ) -> Bool {
-        guard let threshold, threshold > 0 else { return false }
+        guard let threshold, threshold.isFinite, threshold > 0 else { return false }
         let usage = currentUsage(messages: messages, model: model)
+        guard usage.window > 0 else { return false }
+        return usage.ratio >= threshold
+    }
+
+    public static func shouldCompact(
+        context: AgentContext,
+        model: Model,
+        threshold: Double?
+    ) -> Bool {
+        guard let threshold, threshold.isFinite, threshold > 0 else { return false }
+        let usage = currentUsage(context: context, model: model)
         guard usage.window > 0 else { return false }
         return usage.ratio >= threshold
     }
@@ -73,6 +116,9 @@ public enum AgentContextCompactor {
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String?,
         config: AgentContextCompactionConfig = .init(),
+        targetTokens: Int? = nil,
+        additionalMessages: [Message] = [],
+        respectMinimumMessages: Bool = true,
         ignoreStreaming: Bool = false,
         cancellation: CancellationHandle? = nil
     ) async -> AgentContextCompactionOutcome {
@@ -83,13 +129,47 @@ public enum AgentContextCompactor {
             return .refusedAgentBusy
         }
 
-        let snapshot = agent.state.messages
-        let result = await compactMessages(
-            messages: snapshot,
-            model: agent.state.model,
+        let snapshot = agent.state.snapshotModelContext()
+        return await compactAgentContext(
+            agent: agent,
+            context: snapshot.context,
+            model: snapshot.model,
+            summaryModel: agent.compactionModel ?? snapshot.model,
+            expectedContextRevision: snapshot.revision,
             backgroundManager: backgroundManager,
             sessionId: sessionId,
             config: config,
+            targetTokens: targetTokens,
+            additionalMessages: additionalMessages,
+            respectMinimumMessages: respectMinimumMessages,
+            cancellation: cancellation
+        )
+    }
+
+    static func compactAgentContext(
+        agent: Agent,
+        context: AgentContext,
+        model: Model,
+        summaryModel: Model,
+        expectedContextRevision: UInt64,
+        backgroundManager: BackgroundTaskManager? = nil,
+        sessionId: String?,
+        config: AgentContextCompactionConfig = .init(),
+        targetTokens: Int? = nil,
+        additionalMessages: [Message] = [],
+        respectMinimumMessages: Bool = true,
+        cancellation: CancellationHandle? = nil
+    ) async -> AgentContextCompactionOutcome {
+        let result = await compactContext(
+            context: context,
+            model: model,
+            compactionModel: summaryModel,
+            backgroundManager: backgroundManager,
+            sessionId: sessionId,
+            config: config,
+            targetTokens: targetTokens,
+            additionalMessages: additionalMessages,
+            respectMinimumMessages: respectMinimumMessages,
             authResolver: agent.authResolver,
             transformContext: agent.transformContext,
             convertToLlm: agent.convertToLlm,
@@ -111,7 +191,12 @@ public enum AgentContextCompactor {
             if cancellation?.isCancelled == true {
                 return .failed(AgentContextCompactionError.cancelled.localizedDescription)
             }
-            agent.state.messages = replacement.messages
+            guard agent.state.replaceMessages(
+                replacement.messages,
+                ifRevision: expectedContextRevision
+            ) else {
+                return .failed(AgentContextCompactionError.contextChanged.localizedDescription)
+            }
             return .compacted(
                 messagesCompacted: replacement.messagesCompacted,
                 hasRunningTasksLedger: replacement.hasRunningTasksLedger
@@ -128,19 +213,24 @@ public enum AgentContextCompactor {
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String?,
         config: AgentContextCompactionConfig = .init(),
+        targetTokens: Int? = nil,
         cancellation: CancellationHandle? = nil
     ) async -> AgentContext? {
-        guard shouldCompact(messages: context.messages, model: agent.state.model, threshold: threshold) else {
+        let snapshot = agent.state.snapshotModelContext()
+        guard contextsMatchForCompaction(snapshot.context, context) else { return nil }
+        guard shouldCompact(context: context, model: snapshot.model, threshold: threshold) else {
             return nil
         }
-
-        agent.state.messages = context.messages
-        let outcome = await compactAgent(
+        let outcome = await compactAgentContext(
             agent: agent,
+            context: context,
+            model: snapshot.model,
+            summaryModel: agent.compactionModel ?? snapshot.model,
+            expectedContextRevision: snapshot.revision,
             backgroundManager: backgroundManager,
             sessionId: sessionId,
             config: config,
-            ignoreStreaming: true,
+            targetTokens: targetTokens,
             cancellation: cancellation
         )
         guard case .compacted = outcome else {
@@ -152,63 +242,99 @@ public enum AgentContextCompactor {
         return replaced
     }
 
+    static func contextsMatchForCompaction(
+        _ lhs: AgentContext,
+        _ rhs: AgentContext
+    ) -> Bool {
+        lhs.systemPrompt == rhs.systemPrompt
+            && lhs.messages == rhs.messages
+            && toolSchemasMatch(lhs.tools, rhs.tools)
+    }
+
+    private static func toolSchemasMatch(_ lhs: [AgentTool], _ rhs: [AgentTool]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { left, right in
+            left.name == right.name
+                && left.description == right.description
+                && left.parameters == right.parameters
+        }
+    }
+
     public static func compactMessages(
         messages: [Message],
         model: Model,
+        compactionModel: Model? = nil,
         backgroundManager: BackgroundTaskManager? = nil,
         sessionId: String?,
         config: AgentContextCompactionConfig = .init(),
+        targetTokens: Int? = nil,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         transformContext: TransformContextHook? = nil,
         convertToLlm: ConvertToLlmHook? = nil,
         streamFn: StreamFn? = nil,
         cancellation: CancellationHandle? = nil
     ) async -> Result<AgentContextCompactionResult, AgentContextCompactionFailure> {
-        if cancellation?.isCancelled == true {
+        let context = AgentContext(systemPrompt: "", messages: messages, tools: [])
+        return await compactContext(
+            context: context,
+            model: model,
+            compactionModel: compactionModel,
+            backgroundManager: backgroundManager,
+            sessionId: sessionId,
+            config: config,
+            targetTokens: targetTokens,
+            authResolver: authResolver,
+            transformContext: transformContext,
+            convertToLlm: convertToLlm,
+            streamFn: streamFn,
+            cancellation: cancellation
+        )
+    }
+
+    public static func compactContext(
+        context: AgentContext,
+        model: Model,
+        compactionModel: Model? = nil,
+        backgroundManager: BackgroundTaskManager? = nil,
+        sessionId: String?,
+        config: AgentContextCompactionConfig = .init(),
+        targetTokens: Int? = nil,
+        additionalMessages: [Message] = [],
+        respectMinimumMessages: Bool = true,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
+        transformContext: TransformContextHook? = nil,
+        convertToLlm: ConvertToLlmHook? = nil,
+        streamFn: StreamFn? = nil,
+        cancellation: CancellationHandle? = nil
+    ) async -> Result<AgentContextCompactionResult, AgentContextCompactionFailure> {
+        if cancellation?.isCancelled == true || Task.isCancelled {
             return .failure(.failed(AgentContextCompactionError.cancelled.localizedDescription))
         }
-        guard messages.count >= config.minMessages else {
-            return .failure(.tooFewMessages(count: messages.count))
+        if respectMinimumMessages, context.messages.count < config.minMessages {
+            return .failure(.tooFewMessages(count: context.messages.count))
         }
 
-        let runningTasks = await backgroundManager?
-            .runningTasksSummary(sessionId: sessionId)
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
         do {
-            var summaryMessages = messages
-            if let transformContext {
-                summaryMessages = await transformContext(summaryMessages, cancellation)
-            }
-            if let convertToLlm {
-                summaryMessages = await convertToLlm(summaryMessages)
-            }
-            let summary = try await summarizeTranscript(
-                messages: summaryMessages,
-                model: model,
-                sessionId: sessionId,
-                config: config,
-                authResolver: authResolver,
-                streamFn: streamFn,
-                cancellation: cancellation
+            let result = try await ContextCompactionPipeline.run(
+                ContextCompactionPipelineRequest(
+                    context: context,
+                    reservedMessages: additionalMessages,
+                    contextModel: model,
+                    summaryModel: compactionModel ?? model,
+                    backgroundManager: backgroundManager,
+                    sessionId: sessionId,
+                    config: config,
+                    targetTokens: targetTokens,
+                    authResolver: authResolver,
+                    transformContext: transformContext,
+                    convertToLlm: convertToLlm,
+                    stream: streamFn,
+                    cancellation: cancellation
+                )
             )
-            if cancellation?.isCancelled == true {
-                throw AgentContextCompactionError.cancelled
-            }
-            var body = """
-            <previous-session-summary>
-            \(summary)
-            </previous-session-summary>
-            """
-            if !runningTasks.isEmpty {
-                body += "\n\n<running-background-tasks>\n\(runningTasks)\n</running-background-tasks>"
-            }
-            let recap = Message.user(UserMessage(content: [.text(TextContent(text: body))]))
-            return .success(AgentContextCompactionResult(
-                messages: [recap],
-                messagesCompacted: messages.count,
-                hasRunningTasksLedger: !runningTasks.isEmpty
-            ))
+            return .success(result)
+        } catch ContextCompactionPipelineError.noCompressibleMessages {
+            return .failure(.tooFewMessages(count: context.messages.count))
         } catch {
             let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             return .failure(.failed(reason))
@@ -219,42 +345,10 @@ public enum AgentContextCompactor {
         _ messages: [Message],
         toolOutputCharacterLimit: Int = AgentContextCompactionConfig().toolOutputCharacterLimit
     ) -> String {
-        messages.compactMap { message -> String? in
-            switch message {
-            case .user(let user):
-                let text = user.content.compactMap { block -> String? in
-                    switch block {
-                    case .text(let text): return text.text
-                    case .image(let image): return "[image: \(image.mimeType), \(image.data.count) base64 chars]"
-                    }
-                }.joined(separator: "\n")
-                return text.isEmpty ? nil : "User:\n\(text)"
-
-            case .assistant(let assistant):
-                var parts: [String] = []
-                for block in assistant.content {
-                    switch block {
-                    case .text(let text):
-                        if !text.text.isEmpty { parts.append(text.text) }
-                    case .toolCall(let toolCall):
-                        parts.append("<tool-call name=\"\(toolCall.name)\" />")
-                    case .thinking:
-                        continue
-                    }
-                }
-                return parts.isEmpty ? nil : "Assistant:\n\(parts.joined(separator: "\n"))"
-
-            case .toolResult(let result):
-                let text = result.content.compactMap { block -> String? in
-                    switch block {
-                    case .text(let text): return text.text
-                    case .image(let image): return "[image: \(image.mimeType), \(image.data.count) base64 chars]"
-                    }
-                }.joined(separator: "\n")
-                let capped = cappedText(text, limit: toolOutputCharacterLimit)
-                return "Tool(\(result.toolName)):\n\(capped)"
-            }
-        }.joined(separator: "\n\n")
+        CompactionTranscriptSerializer.serialize(
+            messages,
+            limits: .init(toolResultBytes: toolOutputCharacterLimit)
+        )
     }
 
     public static func summarizeTranscript(
@@ -262,95 +356,25 @@ public enum AgentContextCompactor {
         model: Model,
         sessionId: String?,
         config: AgentContextCompactionConfig = .init(),
+        previousSummary: String? = nil,
+        turnPrefix: Bool = false,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
         streamFn: StreamFn? = nil,
         cancellation: CancellationHandle? = nil
     ) async throws -> String {
-        if cancellation?.isCancelled == true {
-            throw AgentContextCompactionError.cancelled
-        }
-        let transcript = renderForSummary(
-            messages,
-            toolOutputCharacterLimit: config.toolOutputCharacterLimit
+        try await CompactionSummaryGenerator.generate(
+            CompactionSummaryRequest(
+                messages: messages,
+                model: model,
+                sessionId: sessionId,
+                config: config,
+                previousSummary: previousSummary,
+                kind: turnPrefix ? .activeTurnPrefix : .history,
+                authResolver: authResolver,
+                stream: streamFn,
+                cancellation: cancellation
+            )
         )
-
-        let systemPrompt = """
-        You are summarizing an agent conversation so it can be resumed with compressed context.
-
-        Preserve:
-        - the user's goal and any decisions already agreed on
-        - concrete file paths, apps, windows, entities, and module names referenced
-        - tool results that changed the plan or revealed important state
-        - in-flight work, failing tests, open questions, and outstanding asks
-
-        Omit:
-        - pleasantries and rhetorical framing
-        - verbose tool output unless a specific line is load-bearing
-        - step-by-step reasoning; keep conclusions and facts
-
-        Write for a future agent resuming the same session. Target under \(config.summaryWordTarget) words.
-        """
-
-        let userPrompt = """
-        Conversation to summarize:
-
-        \(transcript)
-        """
-
-        let context = Context(
-            systemPrompt: systemPrompt,
-            messages: [.user(UserMessage(content: [.text(TextContent(text: userPrompt))]))],
-            tools: []
-        )
-
-        let resolvedAuth = try await authResolver?(model, sessionId)
-        if cancellation?.isCancelled == true {
-            throw AgentContextCompactionError.cancelled
-        }
-        var requestModel = model
-        if let baseURL = resolvedAuth?.baseURL, !baseURL.isEmpty {
-            requestModel.baseURL = baseURL
-        }
-        let metadata: [String: JSONValue]? = {
-            guard let authMetadata = resolvedAuth?.metadata, !authMetadata.isEmpty else { return nil }
-            return authMetadata
-        }()
-        let options = StreamOptions(
-            apiKey: resolvedAuth?.token,
-            sessionId: sessionId,
-            metadata: metadata,
-            resolvedAuth: resolvedAuth,
-            cancellation: cancellation
-        )
-
-        let requestStream = streamFn ?? { model, context, options in
-            try await stream(model: model, context: context, options: options)
-        }
-        let response = try await requestStream(requestModel, context, options)
-        let result = await response.result()
-        if cancellation?.isCancelled == true || result.stopReason == .aborted {
-            throw AgentContextCompactionError.cancelled
-        }
-
-        if result.stopReason == .error {
-            throw AgentContextCompactionError.summarizationFailed(result.errorMessage ?? "unknown")
-        }
-        let texts = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text.text }
-            return nil
-        }
-        let summary = texts.joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        if summary.isEmpty {
-            throw AgentContextCompactionError.emptySummary
-        }
-        return summary
-    }
-
-    private static func cappedText(_ text: String, limit: Int) -> String {
-        guard limit >= 0, text.count > limit else {
-            return text
-        }
-        return String(text.prefix(limit)) + "... [\(text.count - limit) chars elided]"
     }
 
     // MARK: - Shake (non-LLM tool-output trim)
@@ -422,11 +446,24 @@ public struct AgentContextCompactionResult: Sendable, Equatable {
     public let messages: [Message]
     public let messagesCompacted: Int
     public let hasRunningTasksLedger: Bool
+    public let firstKeptMessageIndex: Int?
+    public let tokensBefore: Int?
+    public let tokensAfter: Int?
 
-    public init(messages: [Message], messagesCompacted: Int, hasRunningTasksLedger: Bool) {
+    public init(
+        messages: [Message],
+        messagesCompacted: Int,
+        hasRunningTasksLedger: Bool,
+        firstKeptMessageIndex: Int? = nil,
+        tokensBefore: Int? = nil,
+        tokensAfter: Int? = nil
+    ) {
         self.messages = messages
         self.messagesCompacted = messagesCompacted
         self.hasRunningTasksLedger = hasRunningTasksLedger
+        self.firstKeptMessageIndex = firstKeptMessageIndex
+        self.tokensBefore = tokensBefore
+        self.tokensAfter = tokensAfter
     }
 }
 
@@ -444,14 +481,26 @@ public enum AgentContextCompactionFailure: Error, Sendable, Equatable {
 
 public enum AgentContextCompactionError: Error, LocalizedError {
     case summarizationFailed(String)
+    case summaryTruncated
+    case summaryInputTooLarge
     case emptySummary
     case cancelled
+    case contextChanged
+    case recoveryTargetTooSmall(minimum: Int, target: Int)
+    case insufficientReduction(actual: Int, target: Int)
 
     public var errorDescription: String? {
         switch self {
         case .summarizationFailed(let reason): return "summarization failed: \(reason)"
+        case .summaryTruncated: return "summary exceeded its output budget"
+        case .summaryInputTooLarge: return "summary request does not fit the model context window"
         case .emptySummary: return "LLM returned an empty summary"
         case .cancelled: return "compaction cancelled"
+        case .contextChanged: return "context changed while compaction was running"
+        case .recoveryTargetTooSmall(let minimum, let target):
+            return "recovery target of \(target) tokens is too small for the minimum \(minimum)-token recap"
+        case .insufficientReduction(let actual, let target):
+            return "compaction left \(actual) tokens, above the recovery target of \(target)"
         }
     }
 }

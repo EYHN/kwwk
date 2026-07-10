@@ -15,6 +15,7 @@ import FoundationNetworking
 /// AssistantMessageEvent stream.
 public final class AnthropicProvider: APIProvider, @unchecked Sendable {
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
+    public static let claudeCodeMaximumOutputTokens = 64_000
 
     public let api: String
     public let client: HTTPClient
@@ -33,6 +34,9 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
     /// Code, otherwise the endpoint returns `rate_limit_error` regardless
     /// of remaining subscription quota.
     public let systemPromptPrefix: String?
+    /// Route-level output ceiling (Claude Code OAuth uses 64k). API-key
+    /// providers leave this nil and use the model capability directly.
+    public let maximumOutputTokens: Int?
 
     public init(
         api: String = "anthropic-messages",
@@ -42,7 +46,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         apiVersion: String = "2023-06-01",
         extraHeaders: [String: String] = [:],
         authHeaderBuilder: AuthHeaderBuilder? = nil,
-        systemPromptPrefix: String? = nil
+        systemPromptPrefix: String? = nil,
+        maximumOutputTokens: Int? = nil
     ) {
         self.api = api
         self.client = client
@@ -52,6 +57,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         self.extraHeaders = extraHeaders
         self.authHeaderBuilder = authHeaderBuilder ?? { key in ["x-api-key": key] }
         self.systemPromptPrefix = systemPromptPrefix
+        self.maximumOutputTokens = maximumOutputTokens
     }
 
     public func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
@@ -82,7 +88,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 model: model,
                 context: context,
                 options: options,
-                systemPromptPrefix: systemPromptPrefix
+                systemPromptPrefix: systemPromptPrefix,
+                maximumOutputTokens: maximumOutputTokens
             )
         } catch {
             out.push(.error(reason: .error, error: Self.makeError(
@@ -352,14 +359,24 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         model: Model,
         context: Context,
         options: StreamOptions?,
-        systemPromptPrefix: String? = nil
+        systemPromptPrefix: String? = nil,
+        maximumOutputTokens: Int? = nil
     ) throws -> Data {
         var context = context
         context.messages = TransformMessages.normalize(context.messages, model: model)
+        let modelCeiling = OutputTokenPolicy.maximumAllowedLimit(for: model)
+        let routeCeiling = maximumOutputTokens.map { min(modelCeiling, $0) }
+            ?? modelCeiling
+        var maxTokens = min(
+            OutputTokenPolicy.effectiveLimit(for: model, requested: options?.maxTokens) ?? 0,
+            routeCeiling
+        )
+        guard maxTokens > 0 else {
+            throw AnthropicRequestEncodingError.invalidMaxTokens(maxTokens)
+        }
         var root: [String: Any] = [
             "model": model.id,
             "stream": true,
-            "max_tokens": options?.maxTokens ?? model.maxTokens,
         ]
         // Extended thinking: Claude only returns `thinking` content blocks
         // when the request body opts in via `thinking: {type, budget_tokens}`.
@@ -378,25 +395,46 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 // from the unconstrained `max` effort.
                 root["thinking"] = ["type": "adaptive", "display": "summarized"]
                 root["output_config"] = ["effort": adaptiveEffort(model, reasoning)]
+                thinkingEnabled = true
             } else {
-                let budget = options?.thinkingBudgets?.budget(for: reasoning) ?? defaultThinkingBudget(for: reasoning)
+                var thinkingBudget = options?.thinkingBudgets?.budget(for: reasoning)
+                    ?? defaultThinkingBudget(for: reasoning)
+                guard thinkingBudget >= minimumThinkingBudgetTokens else {
+                    throw AnthropicRequestEncodingError.invalidThinkingBudget(thinkingBudget)
+                }
+
+                // Match OMP's interleaved-thinking policy: maxTokens is raised
+                // when necessary so a low caller cap cannot leave the thinking
+                // budget with no answer space. The model/OAuth ceiling still
+                // wins; if it is too small, shrink thinking rather than emit an
+                // invalid `budget_tokens >= max_tokens` request.
+                let requiredMaxTokens = addingWithoutOverflow(
+                    thinkingBudget,
+                    minimumAnswerHeadroomTokens
+                )
+                maxTokens = min(max(maxTokens, requiredMaxTokens), routeCeiling)
+                if requiredMaxTokens > maxTokens {
+                    thinkingBudget = maxTokens - minimumAnswerHeadroomTokens
+                }
+                guard thinkingBudget >= minimumThinkingBudgetTokens else {
+                    throw AnthropicRequestEncodingError.thinkingBudgetDoesNotFit(
+                        maxTokens: maxTokens,
+                        answerHeadroom: minimumAnswerHeadroomTokens
+                    )
+                }
                 root["thinking"] = [
                     "type": "enabled",
-                    "budget_tokens": budget,
+                    "budget_tokens": thinkingBudget,
                 ]
+                thinkingEnabled = true
             }
-            thinkingEnabled = true
         } else {
             thinkingEnabled = false
             // pi parity (anthropic-messages.ts:981-983): explicitly disable
             // thinking on reasoning-capable models when reasoning is off,
             // unless `thinkingLevelMap` pins `off` to null (meaning the model
             // does not support an explicit off level).
-            let offUnsupported: Bool = {
-                guard let map = model.thinkingLevelMap, map.keys.contains("off") else { return false }
-                return map["off"]! == nil   // present-and-null => unsupported
-            }()
-            if model.reasoning, !offUnsupported {
+            if model.reasoning, supportsExplicitThinkingOff(model) {
                 root["thinking"] = ["type": "disabled"]
             }
         }
@@ -404,6 +442,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         // value != 1) and whenever the model declares it unsupported (Opus 4.7+).
         let temperatureAllowed = model.compat?.supportsTemperature != false
         if !thinkingEnabled, temperatureAllowed, let temp = options?.temperature { root["temperature"] = temp }
+        root["max_tokens"] = maxTokens
 
         // Prompt caching: emit Anthropic-style `cache_control` breakpoints
         // unless the caller opted out (`.none`). Default is short (5-min
@@ -502,6 +541,19 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         case .medium: return "medium"
         case .off, .high, .xhigh, .max: return "high"
         }
+    }
+
+    private static let minimumThinkingBudgetTokens = 1024
+    private static let minimumAnswerHeadroomTokens = 4000
+
+    private static func addingWithoutOverflow(_ lhs: Int, _ rhs: Int) -> Int {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow ? Int.max : sum
+    }
+
+    private static func supportsExplicitThinkingOff(_ model: Model) -> Bool {
+        guard let map = model.thinkingLevelMap, map.keys.contains("off") else { return true }
+        return map["off"]! != nil
     }
 
     /// Fallback thinking budget per reasoning level when the caller didn't
@@ -639,6 +691,27 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             errorMessage: "Request was aborted",
             timestamp: Timestamp.now()
         )
+    }
+}
+
+private enum AnthropicRequestEncodingError: LocalizedError, CustomStringConvertible {
+    case invalidMaxTokens(Int)
+    case invalidThinkingBudget(Int)
+    case thinkingBudgetDoesNotFit(maxTokens: Int, answerHeadroom: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidMaxTokens(let value):
+            return "Anthropic max_tokens must be positive; got \(value)"
+        case .invalidThinkingBudget(let value):
+            return "Anthropic thinking budget must be at least 1024; got \(value)"
+        case .thinkingBudgetDoesNotFit(let maxTokens, let answerHeadroom):
+            return "Anthropic thinking budget requires max_tokens greater than \(answerHeadroom); got \(maxTokens)"
+        }
+    }
+
+    var description: String {
+        errorDescription ?? "Invalid Anthropic request"
     }
 }
 

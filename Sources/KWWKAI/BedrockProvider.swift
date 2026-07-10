@@ -313,6 +313,9 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             case "messageStop":
                 if case .string(let reason) = payload["stopReason"] ?? .null {
                     state.stopReason = Self.mapStopReason(reason)
+                    if reason == "model_context_window_exceeded" {
+                        state.errorMessage = reason
+                    }
                 }
             case "metadata":
                 if case .object(let usage) = payload["usage"] ?? .null {
@@ -359,7 +362,10 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         }
         var inference: [String: Any] = [:]
         if let t = options?.temperature { inference["temperature"] = t }
-        let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil)
+        let maxTokens = OutputTokenPolicy.effectiveLimit(
+            for: model,
+            requested: options?.maxTokens
+        )
         if let m = maxTokens { inference["maxTokens"] = m }
         if !inference.isEmpty { root["inferenceConfig"] = inference }
         if let tools = context.tools, !tools.isEmpty {
@@ -687,7 +693,8 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
     private static func mapStopReason(_ raw: String) -> StopReason {
         switch raw {
         case "end_turn", "stop_sequence": return .stop
-        case "max_tokens", "model_context_window_exceeded": return .length
+        case "max_tokens": return .length
+        case "model_context_window_exceeded": return .error
         case "tool_use": return .toolUse
         default: return .error
         }

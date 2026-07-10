@@ -235,6 +235,52 @@ struct OpenAIResponsesTests {
         #expect(tools?.first?["name"] as? String == "calc")
     }
 
+    @Test("OpenRouter Responses omits the automatic output cap and honors an explicit cap")
+    func openRouterOutputCapPolicy() async throws {
+        var model = Self.model
+        model.provider = "openrouter"
+        model.baseURL = "https://openrouter.ai/api/v1"
+        model.maxTokens = 128_000
+
+        let automaticClient = StubSSEClient(body: Self.textSSE)
+        let automaticProvider = OpenAIResponsesProvider(
+            client: automaticClient,
+            webSocketClient: nil,
+            defaultAPIKey: "k"
+        )
+        let automaticStream = automaticProvider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: nil
+        )
+        _ = await automaticStream.result()
+        let automatic = try #require(
+            JSONSerialization.jsonObject(
+                with: automaticClient.lastRequest?.body ?? Data()
+            ) as? [String: Any]
+        )
+        #expect(automatic["max_output_tokens"] == nil)
+
+        let explicitClient = StubSSEClient(body: Self.textSSE)
+        let explicitProvider = OpenAIResponsesProvider(
+            client: explicitClient,
+            webSocketClient: nil,
+            defaultAPIKey: "k"
+        )
+        let explicitStream = explicitProvider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(maxTokens: 8_192)
+        )
+        _ = await explicitStream.result()
+        let explicit = try #require(
+            JSONSerialization.jsonObject(
+                with: explicitClient.lastRequest?.body ?? Data()
+            ) as? [String: Any]
+        )
+        #expect(explicit["max_output_tokens"] as? Int == 8_192)
+    }
+
     @Test("emits disabled reasoning effort=off when no reasoning requested and off not null")
     func disabledReasoningBranch() async throws {
         let client = StubSSEClient(body: Self.textSSE)

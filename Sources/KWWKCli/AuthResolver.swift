@@ -633,7 +633,16 @@ private func registerAnthropicOAuth(
 
     let modelId = modelOverride ?? "claude-opus-4-8"
     let catalog = ModelsCatalog.model(provider: "anthropic", id: modelId)
-    let defaultContext = context1m ? 1_000_000 : 200_000
+    let catalogContext = catalog?.contextWindow ?? 200_000
+    let contextWindow = context1m ? 1_000_000 : min(catalogContext, 200_000)
+    // Claude Code's OAuth wire requests at most 64k output tokens. Keep the
+    // route-specific model metadata aligned with that cap so context preflight
+    // reserves exactly what the provider request will claim.
+    let catalogMaxTokens = catalog?.maxTokens ?? 128_000
+    let routeMaxTokens = AnthropicProvider.claudeCodeMaximumOutputTokens
+    let maxTokens = catalogMaxTokens > 0
+        ? min(catalogMaxTokens, routeMaxTokens)
+        : routeMaxTokens
     let model = Model(
         id: modelId,
         name: catalog?.name ?? modelId,
@@ -642,8 +651,8 @@ private func registerAnthropicOAuth(
         baseURL: "https://api.anthropic.com",
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
-        contextWindow: context1m ? 1_000_000 : (catalog?.contextWindow ?? defaultContext),
-        maxTokens: catalog?.maxTokens ?? 128_000
+        contextWindow: contextWindow,
+        maxTokens: maxTokens
     )
 
     let suffix = context1m ? " · Anthropic OAuth (1M ctx)" : " · Anthropic OAuth"

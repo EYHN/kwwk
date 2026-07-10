@@ -106,6 +106,9 @@ public actor SessionStore {
         public var firstKeptMessageIndex: Int?
         public var tokensBefore: Int?
         public var contextWindow: Int?
+        /// Persists trust across a rewind that keeps an in-memory compaction
+        /// recap. Older readers ignore this additive field.
+        public var trustedRecap: Bool?
         /// Nil when decoding pre-`CompactionReason` session files.
         public var reason: CompactionReason?
 
@@ -115,6 +118,7 @@ public actor SessionStore {
             firstKeptMessageIndex: Int? = nil,
             tokensBefore: Int? = nil,
             contextWindow: Int? = nil,
+            trustedRecap: Bool? = nil,
             reason: CompactionReason?
         ) {
             self.replacementMessages = replacementMessages
@@ -122,6 +126,7 @@ public actor SessionStore {
             self.firstKeptMessageIndex = firstKeptMessageIndex
             self.tokensBefore = tokensBefore
             self.contextWindow = contextWindow
+            self.trustedRecap = trustedRecap
             self.reason = reason
         }
     }
@@ -136,7 +141,7 @@ public actor SessionStore {
         private enum CodingKeys: String, CodingKey {
             case type, timestamp, message, model, provider, thinkingLevel, title
             case replacementMessages, messagesCompacted, firstKeptMessageIndex
-            case tokensBefore, contextWindow, reason
+            case tokensBefore, contextWindow, trustedRecap, reason
         }
         private enum Kind: String, Codable { case message, meta, compaction }
 
@@ -165,6 +170,7 @@ public actor SessionStore {
                             Int.self, forKey: .firstKeptMessageIndex),
                         tokensBefore: try c.decodeIfPresent(Int.self, forKey: .tokensBefore),
                         contextWindow: try c.decodeIfPresent(Int.self, forKey: .contextWindow),
+                        trustedRecap: try c.decodeIfPresent(Bool.self, forKey: .trustedRecap),
                         reason: try c.decodeIfPresent(
                             CompactionReason.self, forKey: .reason)
                     )
@@ -195,6 +201,7 @@ public actor SessionStore {
                     compaction.firstKeptMessageIndex, forKey: .firstKeptMessageIndex)
                 try c.encodeIfPresent(compaction.tokensBefore, forKey: .tokensBefore)
                 try c.encodeIfPresent(compaction.contextWindow, forKey: .contextWindow)
+                try c.encodeIfPresent(compaction.trustedRecap, forKey: .trustedRecap)
                 try c.encodeIfPresent(compaction.reason, forKey: .reason)
             }
         }
@@ -392,7 +399,13 @@ public actor SessionStore {
         if !FileManager.default.fileExists(atPath: url.path) {
             try create(id: id, cwd: cwd, model: model, provider: provider)
         }
-        try appendEntry(id: id, .message(timestamp: Timestamp.now(), message: message))
+        try appendEntry(
+            id: id,
+            .message(
+                timestamp: Timestamp.now(),
+                message: Self.removingInternalMessageSource(message)
+            )
+        )
     }
 
     /// Append all `messages` in order. Persists each as its own JSONL line.
@@ -455,16 +468,21 @@ public actor SessionStore {
         if !FileManager.default.fileExists(atPath: url.path) {
             try create(id: id, cwd: cwd, model: model, provider: provider)
         }
+        let trustedRecap = replacementMessages.first.flatMap {
+            CompactionPlanner.summaryText(from: $0)
+        } == nil ? nil : true
+        let persistableMessages = replacementMessages.map(Self.removingInternalMessageSource)
         try appendEntry(
             id: id,
             .compaction(
                 timestamp: Timestamp.now(),
                 compaction: Compaction(
-                    replacementMessages: replacementMessages,
+                    replacementMessages: persistableMessages,
                     messagesCompacted: messagesCompacted,
                     firstKeptMessageIndex: firstKeptMessageIndex,
                     tokensBefore: tokensBefore,
                     contextWindow: contextWindow,
+                    trustedRecap: trustedRecap,
                     reason: reason
                 )
             ))
@@ -534,7 +552,11 @@ public actor SessionStore {
                 if let t { thinkingLevel = t }
                 if let ti { title = ti }
             case .compaction(_, let compaction):
-                messages = compaction.replacementMessages
+                messages = Self.upgradingLegacyRecapSource(
+                    in: compaction.replacementMessages,
+                    reason: compaction.reason,
+                    trustedRecap: compaction.trustedRecap
+                )
                 switch compaction.reason {
                 case .compact:
                     // Context compaction shrinks the model-facing context
@@ -566,6 +588,41 @@ public actor SessionStore {
             thinkingLevel: thinkingLevel,
             title: title
         )
+    }
+
+    private static func upgradingLegacyRecapSource(
+        in replacementMessages: [Message],
+        reason: CompactionReason?,
+        trustedRecap: Bool?
+    ) -> [Message] {
+        // Fail closed for pre-reason markers: they may have represented a
+        // rewind of a recap-shaped user prompt. A typed compact marker is
+        // authoritative; a rewind must carry the explicit trust bit.
+        let markerEstablishesTrust = reason == .compact || trustedRecap == true
+        guard markerEstablishesTrust,
+              let first = replacementMessages.first,
+              case .user(var user) = first,
+              user.source == nil,
+              CompactionPlanner.isLegacyRecapEnvelope(first) else {
+            return replacementMessages
+        }
+
+        user.source = .compaction
+        var upgraded = replacementMessages
+        upgraded[0] = .user(user)
+        return upgraded
+    }
+
+    /// `.compaction` is an in-memory trust marker introduced after session
+    /// schema v1 shipped. Persisting the enum case would make that otherwise
+    /// compatible file undecodable by older binaries. The typed compaction
+    /// entry restores the marker on load.
+    private static func removingInternalMessageSource(_ message: Message) -> Message {
+        guard case .user(var user) = message, user.source == .compaction else {
+            return message
+        }
+        user.source = nil
+        return .user(user)
     }
 
     private func parseHeader(_ line: String, path: String) throws -> Header {

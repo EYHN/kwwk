@@ -381,6 +381,29 @@ let agent = Agent(options: options)
 Other hook points: `afterToolCall`, `convertToLlm`, `transformContext`
 (for context pruning / summarization).
 
+### Context compaction
+
+Set `AgentOptions.autoCompact` (or the CLI `autoCompactThreshold`) to keep long
+runs below the model's context limit. Compaction turns older history into a
+structured, incrementally updated recap while keeping recent turns verbatim.
+The budget includes the system prompt and tool schemas, preserves tool-call /
+result boundaries, and retries one provider-reported input overflow after
+rebuilding the request. Manual `/compact` uses the same projection pipeline.
+
+Set `AgentOptions.compactionModel` (or `CodingAgentConfig.compactionModel`) to
+send summary-generation requests to a different model. Context thresholds,
+recovery targets, and post-compaction validation still use the live conversation
+model. Assign `nil` to follow the live model dynamically. In the TUI, use
+`/compact-model` to pick an authenticated model, `/compact-model status` to
+inspect it, or `/compact-model clear` to follow `/model` again. A custom
+`streamFn` must route each request using the `Model` argument it receives.
+`AgentContextCompactionConfig.summaryMaxTokens` defaults to `0`, which leaves
+the summary stream cap automatic; set a positive value only when an explicit
+hard output limit is required.
+
+Set `KWWK_COMPACTION_STRATEGY=legacy` as a temporary rollback switch for the
+previous full-history summary behavior.
+
 ### Steering a running agent
 
 Queue a message that will be injected at the next turn boundary —

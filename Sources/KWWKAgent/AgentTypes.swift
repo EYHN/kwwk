@@ -563,3 +563,17 @@ public typealias TransformContextHook = @Sendable ([Message], CancellationHandle
 /// compacting state, user input queues via `steer`, and when the hook
 /// returns the loop resumes with the new context.
 public typealias BetweenTurnsHook = @Sendable (AgentContext, CancellationHandle?) async -> AgentContext?
+
+public enum AgentContextCompactionTrigger: Sendable, Hashable {
+    case preflight(pendingMessages: [Message])
+    case proactive
+    case providerOverflow
+}
+
+/// Internal control-plane hook used before provider requests and for one-shot
+/// input-overflow recovery. Returning nil leaves the context unchanged.
+public typealias ContextCompactionHook = @Sendable (
+    AgentContext,
+    AgentContextCompactionTrigger,
+    CancellationHandle?
+) async throws -> AgentContext?

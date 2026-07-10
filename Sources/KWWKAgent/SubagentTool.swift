@@ -16,6 +16,7 @@ public func createAgentTool(
     parentBeforeToolCall: BeforeToolCallHook? = nil,
     parentAfterToolCall: AfterToolCallHook? = nil,
     parentAutoCompact: AgentAutoCompactOptions? = nil,
+    parentCompactionModel: Model? = nil,
     projectContextFiles: [(path: String, content: String)] = [],
     availableSkills: [Skill] = [],
     parentFileAccessPolicy: FileAccessPolicy = .unrestricted,
@@ -41,6 +42,7 @@ public func createAgentTool(
         beforeToolCall: parentBeforeToolCall,
         afterToolCall: parentAfterToolCall,
         autoCompact: parentAutoCompact,
+        compactionModel: parentCompactionModel,
         authResolver: authResolver,
         projectContextFiles: projectContextFiles,
         availableSkills: availableSkills,
@@ -93,6 +95,7 @@ public func createAgentTool(
         fallbackBeforeToolCall: parentAgent.beforeToolCall,
         fallbackAfterToolCall: parentAgent.afterToolCall,
         fallbackAutoCompact: parentAgent.autoCompact,
+        fallbackCompactionModel: parentAgent.compactionModel,
         fallbackAuthResolver: parentAgent.authResolver ?? fallbackAuthResolver,
         projectContextFiles: projectContextFiles,
         availableSkills: availableSkills,
@@ -125,6 +128,7 @@ internal struct SubagentParentSnapshot: Sendable {
     var beforeToolCall: BeforeToolCallHook?
     var afterToolCall: AfterToolCallHook?
     var autoCompact: AgentAutoCompactOptions?
+    var compactionModel: Model?
     var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     var projectContextFiles: [(path: String, content: String)]
     var availableSkills: [Skill]
@@ -145,6 +149,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
     private let fallbackBeforeToolCall: BeforeToolCallHook?
     private let fallbackAfterToolCall: AfterToolCallHook?
     private let fallbackAutoCompact: AgentAutoCompactOptions?
+    private let fallbackCompactionModel: Model?
     private let fallbackAuthResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     private let projectContextFiles: [(path: String, content: String)]
     private let availableSkills: [Skill]
@@ -162,6 +167,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
         fallbackBeforeToolCall: BeforeToolCallHook?,
         fallbackAfterToolCall: AfterToolCallHook?,
         fallbackAutoCompact: AgentAutoCompactOptions?,
+        fallbackCompactionModel: Model?,
         fallbackAuthResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         projectContextFiles: [(path: String, content: String)],
         availableSkills: [Skill],
@@ -178,6 +184,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
         self.fallbackBeforeToolCall = fallbackBeforeToolCall
         self.fallbackAfterToolCall = fallbackAfterToolCall
         self.fallbackAutoCompact = fallbackAutoCompact
+        self.fallbackCompactionModel = fallbackCompactionModel
         self.fallbackAuthResolver = fallbackAuthResolver
         self.projectContextFiles = projectContextFiles
         self.availableSkills = availableSkills
@@ -202,6 +209,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     beforeToolCall: fallbackBeforeToolCall,
                     afterToolCall: fallbackAfterToolCall,
                     autoCompact: fallbackAutoCompact,
+                    compactionModel: fallbackCompactionModel,
                     authResolver: fallbackAuthResolver,
                     projectContextFiles: projectContextFiles,
                     availableSkills: availableSkills,
@@ -223,6 +231,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
                 beforeToolCall: agent.beforeToolCall ?? fallbackBeforeToolCall,
                 afterToolCall: agent.afterToolCall ?? fallbackAfterToolCall,
                 autoCompact: agent.autoCompact,
+                compactionModel: agent.compactionModel,
                 authResolver: agent.authResolver ?? fallbackAuthResolver,
                 projectContextFiles: projectContextFiles,
                 availableSkills: availableSkills,
@@ -926,6 +935,7 @@ public struct SubagentRunner: Sendable {
         parentBeforeToolCall: BeforeToolCallHook? = nil,
         parentAfterToolCall: AfterToolCallHook? = nil,
         parentAutoCompact: AgentAutoCompactOptions? = nil,
+        parentCompactionModel: Model? = nil,
         projectContextFiles: [(path: String, content: String)] = [],
         availableSkills: [Skill] = [],
         parentFileAccessPolicy: FileAccessPolicy = .unrestricted,
@@ -950,6 +960,7 @@ public struct SubagentRunner: Sendable {
             beforeToolCall: parentBeforeToolCall,
             afterToolCall: parentAfterToolCall,
             autoCompact: parentAutoCompact,
+            compactionModel: parentCompactionModel,
             authResolver: authResolver,
             projectContextFiles: projectContextFiles,
             availableSkills: availableSkills,
@@ -1000,6 +1011,7 @@ public struct SubagentRunner: Sendable {
             fallbackBeforeToolCall: parentAgent.beforeToolCall,
             fallbackAfterToolCall: parentAgent.afterToolCall,
             fallbackAutoCompact: parentAgent.autoCompact,
+            fallbackCompactionModel: parentAgent.compactionModel,
             fallbackAuthResolver: parentAgent.authResolver ?? fallbackAuthResolver,
             projectContextFiles: projectContextFiles,
             availableSkills: availableSkills,
@@ -1488,6 +1500,7 @@ private struct SubagentInvocationRunner: Sendable {
                 parent.autoCompact,
                 backgroundManager: backgroundManager
             ),
+            compactionModel: parent.compactionModel,
             authResolver: parent.authResolver
         )
         // Keep the configured cap, but spend its last turn synthesizing a

@@ -58,6 +58,64 @@ struct AdoptFieldsMaxTokensTests {
         let result = adoptFields(from: current, into: picked)
         #expect(result.maxTokens == 4096, "picked model's cap should win — otherwise a haiku request could claim 8192 or vice versa")
     }
+
+    @Test("Anthropic OAuth route caps survive a catalog model swap")
+    func anthropicRouteCapsSurviveSwap() {
+        var current = model(
+            id: "opus",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            maxTokens: 32_000
+        )
+        current.contextWindow = 200_000
+        var picked = model(
+            id: "new-opus",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            maxTokens: 128_000
+        )
+        picked.contextWindow = 1_000_000
+
+        let result = adoptFields(
+            from: current,
+            into: picked,
+            clampToSessionLimits: true
+        )
+
+        #expect(result.contextWindow == 200_000)
+        #expect(result.maxTokens == 64_000)
+
+        picked.maxTokens = 0
+        let missingCatalogLimit = adoptFields(
+            from: current,
+            into: picked,
+            clampToSessionLimits: true
+        )
+        #expect(missingCatalogLimit.maxTokens == 64_000)
+    }
+
+    @Test("Anthropic API-key swaps still adopt larger catalog limits")
+    func anthropicAPIKeyCanAdoptLargerLimits() {
+        var current = model(
+            id: "old-model",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            maxTokens: 32_000
+        )
+        current.contextWindow = 200_000
+        var picked = model(
+            id: "new-model",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            maxTokens: 128_000
+        )
+        picked.contextWindow = 1_000_000
+
+        let result = adoptFields(from: current, into: picked)
+
+        #expect(result.contextWindow == 1_000_000)
+        #expect(result.maxTokens == 128_000)
+    }
 }
 
 @Suite("adoptFields session routing")
@@ -341,7 +399,8 @@ struct CompactPreservesRunningTasksTests {
         registerBuiltinSlashCommands(registry)
         await registry.find("compact")?.handler(ctx, "")
 
-        #expect(agent.state.messages.count == 1)
+        #expect(agent.state.messages.count == 3)
+        #expect(agent.state.messages.suffix(2) == messages.suffix(2))
         guard case .user(let recap) = agent.state.messages.first else {
             Issue.record("expected a recap user message")
             return

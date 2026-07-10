@@ -75,7 +75,7 @@ struct CompactCommandTests {
     }
 
     @MainActor
-    @Test("summarizes and replaces the transcript with a single recap message")
+    @Test("summarizes older turns and retains the newest turn verbatim")
     func summarizesAndReplacesTranscript() async {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -116,7 +116,7 @@ struct CompactCommandTests {
         registerBuiltinSlashCommands(registry)
         await registry.find("compact")?.handler(ctx, "")
 
-        #expect(agent.state.messages.count == 1, "transcript should collapse to the recap")
+        #expect(agent.state.messages.count == 3, "transcript should become recap plus the newest turn")
         if case .user(let recap) = agent.state.messages.first {
             let text = recap.content.compactMap { block -> String? in
                 if case .text(let t) = block { return t.text } else { return nil }
@@ -126,17 +126,18 @@ struct CompactCommandTests {
         } else {
             Issue.record("expected recap message to be a .user block")
         }
+        #expect(agent.state.messages.suffix(2) == messages.suffix(2))
         // The durable boundary lives in scrollback now, not in the
         // transient notification area.
         #expect(commits.joined.contains("compacted"))
-        #expect(recordedMessagesCompacted == messages.count)
+        #expect(recordedMessagesCompacted == 4)
         // And it's shaped like a horizontal rule so it stands out when
         // the user scrolls back through history.
         #expect(commits.joined.contains("──"))
     }
 
     @MainActor
-    @Test("compact passes the active session to auth resolution and streaming")
+    @Test("compact resolves auth from the active session and isolates summary streaming")
     func compactUsesSessionBoundAuth() async {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -182,7 +183,10 @@ struct CompactCommandTests {
         }
         #expect(capture.resolverProvider == faux.provider)
         #expect(capture.resolverSessionId == "compact-session")
-        #expect(capture.streamSessionId == "compact-session")
+        #expect(capture.streamSessionId?.hasPrefix(
+            "compact-session::kwwk-compaction-summary::"
+        ) == true)
+        #expect(capture.streamSessionId != "compact-session")
         #expect(capture.streamToken == "session-token")
     }
 
@@ -303,10 +307,12 @@ struct CompactCommandTests {
         await agent.waitForIdle()
 
         let loaded = try await store.load(id: sessionId)
-        #expect(loaded.messages.count == 3)
+        #expect(loaded.messages.count == 5)
         #expect(compactTestText(loaded.messages[0]).contains("durable compact summary"))
-        #expect(compactTestText(loaded.messages[1]) == "queued during compact")
-        #expect(compactTestText(loaded.messages[2]).contains("queued prompt reply"))
+        #expect(compactTestText(loaded.messages[1]) == "three")
+        #expect(compactTestText(loaded.messages[2]) == "four")
+        #expect(compactTestText(loaded.messages[3]) == "queued during compact")
+        #expect(compactTestText(loaded.messages[4]).contains("queued prompt reply"))
 
         let raw = try String(
             contentsOf: dir.appendingPathComponent("\(sessionId).jsonl"),

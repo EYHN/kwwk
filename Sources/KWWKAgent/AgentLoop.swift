@@ -45,6 +45,7 @@ public struct AgentLoopConfig: Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
+    public var contextCompaction: ContextCompactionHook?
 
     public init(
         model: Model,
@@ -69,7 +70,8 @@ public struct AgentLoopConfig: Sendable {
         userPromptSubmit: UserPromptSubmitHook? = nil,
         convertToLlm: ConvertToLlmHook? = nil,
         transformContext: TransformContextHook? = nil,
-        betweenTurns: BetweenTurnsHook? = nil
+        betweenTurns: BetweenTurnsHook? = nil,
+        contextCompaction: ContextCompactionHook? = nil
     ) {
         self.model = model
         self.reasoning = reasoning
@@ -94,6 +96,7 @@ public struct AgentLoopConfig: Sendable {
         self.convertToLlm = convertToLlm
         self.transformContext = transformContext
         self.betweenTurns = betweenTurns
+        self.contextCompaction = contextCompaction
     }
 }
 
@@ -150,6 +153,11 @@ public enum AgentLoop {
         }
         currentContext.messages.append(contentsOf: effectivePrompts)
 
+        // Commit the submitted prompts before the first cancellable provider
+        // operation. In particular, automatic compaction can take seconds and
+        // throw on cancellation; emitting first keeps direct submissions and
+        // messages drained by `Agent.continue()` in Agent.state / session
+        // persistence even when that preflight is aborted.
         await emit(.agentStart)
         await emit(.turnStart)
         for prompt in effectivePrompts {
@@ -232,15 +240,54 @@ public enum AgentLoop {
         // transcript used both for the request body and the agentEnd payload.
         // We snapshot its length here so the delta emitted at agentEnd is
         // exactly the messages appended inside this run (prompts passed to
-        // `run()` were already appended before we got here — they are part of
-        // the "prior" context, not the "new" delta, which matches how the
-        // original parallel-array version behaved).
+        // `run()` were already appended before we got here and were emitted as
+        // ordinary message events). A request-level preflight replacement
+        // resets this to zero below so the public hook's only observable copy
+        // of the replacement is not omitted from `agentEnd`.
         var baseCount = currentContext.messages.count
+        var replacementDeltaPrefix: [Message] = []
         func delta() -> [Message] {
             guard currentContext.messages.count >= baseCount else {
-                return currentContext.messages
+                return replacementDeltaPrefix + currentContext.messages
             }
-            return Array(currentContext.messages[baseCount...])
+            return replacementDeltaPrefix + currentContext.messages[baseCount...]
+        }
+        func unansweredRequestSuffix(in messages: [Message]) -> [Message] {
+            guard let assistantIndex = messages.lastIndex(where: { message in
+                if case .assistant = message { return true }
+                return false
+            }) else {
+                // With no assistant response, every submitted message is still
+                // unanswered and must survive a compaction replacement.
+                return messages
+            }
+            guard case .assistant(let assistant) = messages[assistantIndex] else {
+                return []
+            }
+            let suffixStart = assistant.stopReason == .toolUse
+                ? assistantIndex
+                : messages.index(after: assistantIndex)
+            return Array(messages[suffixStart...])
+        }
+        func applyCompactionReplacement(_ replacement: AgentContext) {
+            let previousMessages = currentContext.messages
+            let protectedSuffix = unansweredRequestSuffix(in: previousMessages)
+            var merged = replacement
+            if !protectedSuffix.isEmpty,
+               Array(merged.messages.suffix(protectedSuffix.count)) != protectedSuffix {
+                merged.messages.append(contentsOf: protectedSuffix)
+            }
+
+            let messagesChanged = merged.messages != previousMessages
+            currentContext = merged
+            guard messagesChanged else { return }
+
+            // Replacement content must be visible in agentEnd, while prompts
+            // already published via messageEnd must not be reported twice.
+            replacementDeltaPrefix = Array(
+                merged.messages.dropLast(protectedSuffix.count)
+            )
+            baseCount = merged.messages.count
         }
 
         // Run-level telemetry accumulated into `AgentRunSummary` and
@@ -340,22 +387,77 @@ public enum AgentLoop {
                     return
                 }
 
+                if let compact = config.contextCompaction {
+                    if let replacement = try await compact(
+                        currentContext,
+                        .preflight(pendingMessages: []),
+                        cancellation
+                    ) {
+                        applyCompactionReplacement(replacement)
+                    }
+                }
+
                 let finalTextOnly = config.finalTextOnlyOnLastTurn
                     && config.maxTurns.map { turnsExecuted == $0 - 1 } == true
                 let terminalToolOnly = finalTextOnly || forceTerminalTool
-                let cursorResults = CursorToolResultBox()
-                let turnToolState = TurnToolExecutionState()
-                let assistant = try await streamAssistantResponse(
-                    context: &currentContext,
-                    config: config,
-                    finalTextOnly: finalTextOnly,
-                    terminalToolOnly: terminalToolOnly,
-                    cancellation: cancellation,
-                    emit: emit,
-                    streamFn: streamFn,
-                    cursorResults: cursorResults,
-                    turnToolState: turnToolState
-                )
+                var cursorResults = CursorToolResultBox()
+                var turnToolState = TurnToolExecutionState()
+                var streamedAssistant: AssistantMessage?
+                var overflowRecoveryAttempted = false
+
+                while streamedAssistant == nil {
+                    cursorResults = CursorToolResultBox()
+                    turnToolState = TurnToolExecutionState()
+                    do {
+                        streamedAssistant = try await streamAssistantResponse(
+                            context: &currentContext,
+                            config: config,
+                            finalTextOnly: finalTextOnly,
+                            terminalToolOnly: terminalToolOnly,
+                            cancellation: cancellation,
+                            emit: emit,
+                            streamFn: streamFn,
+                            cursorResults: cursorResults,
+                            turnToolState: turnToolState
+                        )
+                    } catch let overflow as ProviderContextOverflow {
+                        if !overflowRecoveryAttempted,
+                           let compact = config.contextCompaction {
+                            do {
+                                if let replacement = try await compact(
+                                    currentContext,
+                                    .providerOverflow,
+                                    cancellation
+                                ) {
+                                    if overflow.emittedStart {
+                                        await emit(.streamRewind)
+                                    }
+                                    turnToolState.rollbackAllLeases()
+                                    applyCompactionReplacement(replacement)
+                                    overflowRecoveryAttempted = true
+                                    continue
+                                }
+                            } catch is CancellationError {
+                                throw AgentError.aborted
+                            } catch AgentContextCompactionError.cancelled {
+                                throw AgentError.aborted
+                            } catch let error as AgentError where error == .aborted {
+                                throw error
+                            } catch {
+                                if cancellation?.isCancelled == true || Task.isCancelled {
+                                    throw AgentError.aborted
+                                }
+                            }
+                        }
+
+                        if !overflow.emittedStart {
+                            await emit(.messageStart(message: .assistant(overflow.assistant)))
+                        }
+                        await emit(.messageEnd(message: .assistant(overflow.assistant)))
+                        streamedAssistant = overflow.assistant
+                    }
+                }
+                let assistant = streamedAssistant!
                 // Append to the in-loop context BEFORE running tools, so the
                 // next turn's request body carries the assistant turn
                 // (including any tool_use / function_call items) right in
@@ -383,6 +485,37 @@ public enum AgentLoop {
                 if assistant.stopReason == .error || assistant.stopReason == .aborted {
                     await emit(.turnEnd(message: .assistant(assistant), toolResults: inlineResults))
                     await emit(.agentEnd(messages: delta(), summary: finalize(nil)))
+                    return
+                }
+
+                if assistant.stopReason == .length {
+                    var truncatedResults = inlineResults
+                    let unresolvedCalls = assistant.content.compactMap { block -> ToolCall? in
+                        guard case .toolCall(let call) = block,
+                              call.cursorExecResolved != true else {
+                            return nil
+                        }
+                        return call
+                    }
+                    for call in unresolvedCalls {
+                        let result = ToolResultMessage(
+                            toolCallId: call.id,
+                            toolName: call.name,
+                            content: [.text(TextContent(
+                                text: "Tool call was not executed because the assistant response was truncated."
+                            ))],
+                            isError: true
+                        )
+                        await emit(.messageStart(message: .toolResult(result)))
+                        await emit(.messageEnd(message: .toolResult(result)))
+                        currentContext.messages.append(.toolResult(result))
+                        truncatedResults.append(result)
+                    }
+                    await emit(.turnEnd(
+                        message: .assistant(assistant),
+                        toolResults: truncatedResults
+                    ))
+                    await emit(.agentEnd(messages: delta(), summary: finalize(.length)))
                     return
                 }
 
@@ -481,18 +614,15 @@ public enum AgentLoop {
                     return
                 }
 
-                // Between-turn hook: the auto-compact driver injects a
-                // summarized transcript here so the next LLM call
-                // doesn't carry the full pre-compact history. Runs
-                // synchronously — the loop blocks until it returns,
-                // which is exactly what we want for "compact is a
-                // blocking state".
+                // SDK between-turn hooks may replace the context before the
+                // next provider step. Automatic compaction has its own single
+                // provider-boundary hook above, so this path is user policy.
                 if let hook = config.betweenTurns {
-                    let beforeHookCount = currentContext.messages.count
                     if let replacement = await hook(currentContext, cancellation) {
+                        let messagesChanged = replacement.messages != currentContext.messages
                         currentContext = replacement
-                        if currentContext.messages.count < baseCount ||
-                           currentContext.messages.count < beforeHookCount {
+                        if messagesChanged {
+                            replacementDeltaPrefix = []
                             baseCount = 0
                         }
                     }
@@ -547,6 +677,9 @@ public enum AgentLoop {
     /// failure must not retry even if it also mentions "connection"), then
     /// transport/overload patterns.
     static func isRetryableError(_ message: String) -> Bool {
+        if ContextLimitClassifier.isInputOverflow(message) {
+            return false
+        }
         let lower = message.lowercased()
 
         if lower.contains("timeout") || lower.contains("timed out") {
@@ -689,6 +822,7 @@ public enum AgentLoop {
                 }
             )
 
+            var emittedStart = false
             do {
                 let response = try await streamFn(requestModel, llmContext, options)
 
@@ -700,7 +834,6 @@ public enum AgentLoop {
                 // code buffered everything until the stream ended — it
                 // avoided retry-rendered-text ghosts but killed visible
                 // streaming entirely.
-                var emittedStart = false
                 for await event in response {
                     switch event {
                     case .start(let partial):
@@ -733,6 +866,17 @@ public enum AgentLoop {
                     }
                 }
                 let final = await response.result()
+
+                if requestModel.api != "cursor-agent",
+                   final.stopReason == .error,
+                   let message = final.errorMessage,
+                   ContextLimitClassifier.isInputOverflow(message) {
+                    await inlineAttempt.invalidateAndWait(reason: "context-overflow")
+                    throw ProviderContextOverflow(
+                        assistant: final,
+                        emittedStart: emittedStart
+                    )
+                }
 
                 // Retry on stream-level errors that look transient. Ask the
                 // UI to drop the partial render first so the retried stream
@@ -767,8 +911,31 @@ public enum AgentLoop {
 
             } catch {
                 await inlineAttempt.invalidateAndWait(reason: "cursor-attempt-error")
+                if let overflow = error as? ProviderContextOverflow {
+                    let discarded = cursorResults.drain()
+                    turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
+                    throw overflow
+                }
                 lastError = error
                 let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+                if requestModel.api != "cursor-agent",
+                   ContextLimitClassifier.isInputOverflow(reason) {
+                    let discarded = cursorResults.drain()
+                    turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
+                    let assistant = AssistantMessage(
+                        content: [],
+                        api: requestModel.api,
+                        provider: requestModel.provider,
+                        model: requestModel.id,
+                        stopReason: .error,
+                        errorMessage: reason,
+                        timestamp: Timestamp.now()
+                    )
+                    throw ProviderContextOverflow(
+                        assistant: assistant,
+                        emittedStart: emittedStart
+                    )
+                }
                 if isRetryableError(reason), attemptIndex < maxRetries - 1 {
                     let discarded = cursorResults.drain()
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))

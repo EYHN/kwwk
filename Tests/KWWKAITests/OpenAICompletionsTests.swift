@@ -51,6 +51,30 @@ struct OpenAICompletionsTests {
         return (try JSONSerialization.jsonObject(with: body) as? [String: Any]) ?? [:]
     }
 
+    @Test("OpenRouter omits the catalog default output cap but honors an explicit cap")
+    func openRouterOutputCapPolicy() throws {
+        var model = Self.model
+        model.provider = "openrouter"
+        model.baseURL = "https://openrouter.ai/api/v1"
+        model.maxTokens = 131_072
+        let context = Context(messages: [.user(UserMessage(text: "hi"))])
+
+        let automatic = try OpenAICompletionsProvider.encodeBodyDict(
+            model: model,
+            context: context,
+            options: nil
+        )
+        #expect(automatic["max_tokens"] == nil)
+        #expect(automatic["max_completion_tokens"] == nil)
+
+        let explicit = try OpenAICompletionsProvider.encodeBodyDict(
+            model: model,
+            context: context,
+            options: StreamOptions(maxTokens: 8_192)
+        )
+        #expect(explicit["max_completion_tokens"] as? Int == 8_192)
+    }
+
     @Test("streams text content")
     func basicText() async throws {
         let client = StubSSEClient(body: Self.textSSE)

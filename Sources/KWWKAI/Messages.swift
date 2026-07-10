@@ -224,10 +224,9 @@ public struct UserMessage: Codable, Sendable, Hashable {
     public var role: Role
     public var content: [UserBlock]
     public var timestamp: Int64
-    /// Identifies machine-generated context that is delivered through the
-    /// agent's internal aside channel. Providers still receive these as user
-    /// role messages, but UI queue affordances can distinguish them from text
-    /// the user actually submitted.
+    /// Identifies machine-generated context. Providers still receive these as
+    /// user-role messages, while the agent can distinguish them from text the
+    /// user actually submitted.
     public var source: UserMessageSource?
 
     public init(
@@ -256,6 +255,7 @@ public struct UserMessage: Codable, Sendable, Hashable {
 
 public enum UserMessageSource: String, Codable, Sendable, Hashable {
     case runtime
+    case compaction
 }
 
 public struct AssistantMessage: Codable, Sendable, Hashable {

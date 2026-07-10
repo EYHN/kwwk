@@ -309,7 +309,10 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
 
         var generationConfig: [String: Any] = [:]
         if let temp = options?.temperature { generationConfig["temperature"] = temp }
-        if let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : nil) {
+        if let maxTokens = OutputTokenPolicy.effectiveLimit(
+            for: model,
+            requested: options?.maxTokens
+        ) {
             generationConfig["maxOutputTokens"] = maxTokens
         }
         if let reasoning = options?.reasoning {

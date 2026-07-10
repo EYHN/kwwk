@@ -14,6 +14,22 @@ import KWWKAI
 /// messages between events. Compaction is persisted as its own append-only
 /// marker and resets the live-message baseline to the compacted context.
 public final class SessionRecorder: @unchecked Sendable {
+    private struct PendingCompaction: Sendable {
+        let replacementMessages: [Message]
+        let messagesCompacted: Int
+        let firstKeptMessageIndex: Int?
+        let tokensBefore: Int?
+        let contextWindow: Int?
+        let reason: SessionStore.CompactionReason
+    }
+
+    private enum PersistenceOperation: Sendable {
+        case ensureCreated
+        case messages([Message])
+        case compaction(PendingCompaction)
+        case title(String)
+    }
+
     private let store: SessionStore
     private let sessionId: String
     private let cwd: String
@@ -25,9 +41,22 @@ public final class SessionRecorder: @unchecked Sendable {
     private var persistedCount: Int
     /// Usage snapshot from the latest compactStart, consumed by compactEnd.
     private var pendingCompactionUsage: AgentContextUsage?
+    /// Failed operations remain queued so a later recorder event can retry
+    /// them before any newer write reaches disk.
+    private var pendingOperations: [PersistenceOperation] = []
+    /// Protects the first queued operation from snapshot coalescing while its
+    /// async store call is in flight.
+    private var isPersistingFirstOperation = false
+    private var _lastPersistenceError: String?
     /// Tail of the serialized append chain. Each flush enqueues its write after
     /// the previous one so concurrent events can't reorder the on-disk JSONL.
     private var appendChain: Task<Void, Never>?
+
+    /// Most recent persistence failure. The failed operation remains queued;
+    /// this value clears once a later retry succeeds.
+    public var lastPersistenceError: String? {
+        lock.withLock { _lastPersistenceError }
+    }
 
     /// - Parameters:
     ///   - persistedCount: messages already on disk (non-zero when resuming an
@@ -53,7 +82,7 @@ public final class SessionRecorder: @unchecked Sendable {
     /// an existing transcript, so a resumed session's history is preserved even
     /// if a caller forgets the `resumed` guard.
     public func ensureCreated() async {
-        _ = try? await store.createIfMissing(id: sessionId, cwd: cwd, model: model, provider: provider)
+        await enqueue(.ensureCreated)
     }
 
     /// Subscribe to `agent` and persist its transcript as it grows. Returns an
@@ -66,12 +95,18 @@ public final class SessionRecorder: @unchecked Sendable {
             case .messageEnd, .turnEnd, .agentEnd:
                 await self.flush(messages: agent.state.messages)
             case .compactStart(_, let usage):
-                await self.noteCompactionStart(usage)
+                self.noteCompactionStart(usage)
             case .compactEnd(let outcome):
+                // A usage snapshot belongs to exactly one terminal compactEnd,
+                // successful or not. Always consume it so a later manual
+                // compact cannot inherit telemetry from a failed automatic one.
+                let usage = self.takePendingCompactionUsage()
                 if case .compacted(let messagesCompacted, _) = outcome {
                     await self.recordCompaction(
                         messages: agent.state.messages,
                         messagesCompacted: messagesCompacted,
+                        tokensBefore: usage?.tokens,
+                        contextWindow: usage?.window,
                         reason: .compact
                     )
                 }
@@ -83,39 +118,12 @@ public final class SessionRecorder: @unchecked Sendable {
 
     /// Append any transcript messages not yet on disk.
     public func flush(messages: [Message]) async {
-        // Extract the new tail AND enqueue its append under a single lock so the
-        // slice order and the write order are decided together. The append task
-        // awaits the previous one, guaranteeing FIFO on-disk ordering even when
-        // `messageEnd`/`turnEnd` fire concurrently.
-        let work: Task<Void, Never>? = lock.withLock {
-            guard messages.count > persistedCount else { return nil }
-            // Redact hidden goal continuations before writing: replace each with
-            // a marker-only stand-in that keeps goal state (the objective) off
-            // disk while preserving the `user` role, so the persisted transcript
-            // stays valid user→assistant alternation for `/resume`. We map (not
-            // filter) so we never orphan the assistant reply that followed.
-            let tail = messages[persistedCount...].map(redactedForPersistence)
-            persistedCount = messages.count
-            let previous = appendChain
-            let store = self.store
-            let sessionId = self.sessionId
-            let cwd = self.cwd
-            let model = self.model
-            let provider = self.provider
-            let next = Task<Void, Never> {
-                await previous?.value
-                try? await store.append(
-                    id: sessionId,
-                    cwd: cwd,
-                    messages: tail,
-                    model: model,
-                    provider: provider
-                )
-            }
-            appendChain = next
-            return next
-        }
-        await work?.value
+        // Keep a full snapshot for retry. The durable baseline is read only
+        // while this operation reaches the head of the FIFO, after every
+        // earlier append or compaction has settled. Redact only the individual
+        // line that is actually appended; eagerly mapping the full transcript
+        // on every messageEnd/turnEnd/agentEnd makes a session quadratic.
+        await enqueue(.messages(messages))
     }
 
     /// Record that the live context has been replaced by a compacted
@@ -125,47 +133,33 @@ public final class SessionRecorder: @unchecked Sendable {
     public func recordCompaction(
         messages replacementMessages: [Message],
         messagesCompacted: Int,
+        firstKeptMessageIndex: Int? = nil,
         tokensBefore: Int? = nil,
         contextWindow: Int? = nil,
         reason: SessionStore.CompactionReason
     ) async {
-        let work: Task<Void, Never> = lock.withLock {
-            let usage = pendingCompactionUsage
-            pendingCompactionUsage = nil
-            persistedCount = replacementMessages.count
-            // Apply the same redaction to the compacted projection so goal
-            // internals don't leak in through the compaction path either.
-            let redactedReplacement = replacementMessages.map(redactedForPersistence)
-
-            let previous = appendChain
-            let store = self.store
-            let sessionId = self.sessionId
-            let cwd = self.cwd
-            let model = self.model
-            let provider = self.provider
-            let next = Task<Void, Never> {
-                await previous?.value
-                try? await store.appendCompaction(
-                    id: sessionId,
-                    cwd: cwd,
-                    replacementMessages: redactedReplacement,
-                    messagesCompacted: messagesCompacted,
-                    tokensBefore: tokensBefore ?? usage?.tokens,
-                    contextWindow: contextWindow ?? usage?.window,
-                    reason: reason,
-                    model: model,
-                    provider: provider
-                )
-            }
-            appendChain = next
-            return next
-        }
-        await work.value
+        await enqueue(.compaction(PendingCompaction(
+            replacementMessages: replacementMessages.map(redactedForPersistence),
+            messagesCompacted: messagesCompacted,
+            firstKeptMessageIndex: reason == .compact
+                ? (firstKeptMessageIndex ?? messagesCompacted)
+                : firstKeptMessageIndex,
+            tokensBefore: tokensBefore,
+            contextWindow: contextWindow,
+            reason: reason
+        )))
     }
 
-    private func noteCompactionStart(_ usage: AgentContextUsage) async {
+    private func noteCompactionStart(_ usage: AgentContextUsage) {
         lock.withLock {
             pendingCompactionUsage = usage
+        }
+    }
+
+    private func takePendingCompactionUsage() -> AgentContextUsage? {
+        lock.withLock {
+            defer { pendingCompactionUsage = nil }
+            return pendingCompactionUsage
         }
     }
 
@@ -173,18 +167,114 @@ public final class SessionRecorder: @unchecked Sendable {
     /// after any queued message writes so it can't reorder ahead of the
     /// transcript. Backs `/rename`.
     public func recordTitle(_ title: String) async {
+        await enqueue(.title(title))
+    }
+
+    private func enqueue(_ operation: PersistenceOperation) async {
         let work: Task<Void, Never> = lock.withLock {
+            enqueueCoalescingMessageSnapshots(operation)
             let previous = appendChain
-            let store = self.store
-            let sessionId = self.sessionId
-            let cwd = self.cwd
-            let next = Task<Void, Never> {
+            let next = Task<Void, Never> { [weak self] in
                 await previous?.value
-                _ = try? await store.setTitle(id: sessionId, cwd: cwd, title: title)
+                await self?.drainPendingOperations()
             }
             appendChain = next
             return next
         }
         await work.value
+    }
+
+    private func drainPendingOperations() async {
+        while let operation = lock.withLock({ () -> PersistenceOperation? in
+            guard let first = pendingOperations.first else { return nil }
+            isPersistingFirstOperation = true
+            return first
+        }) {
+            do {
+                try await persist(operation)
+                lock.withLock {
+                    pendingOperations.removeFirst()
+                    isPersistingFirstOperation = false
+                    _lastPersistenceError = nil
+                }
+            } catch {
+                lock.withLock {
+                    isPersistingFirstOperation = false
+                    _lastPersistenceError = String(describing: error)
+                }
+                return
+            }
+        }
+    }
+
+    private func enqueueCoalescingMessageSnapshots(_ operation: PersistenceOperation) {
+        guard case .messages = operation,
+              let lastIndex = pendingOperations.indices.last,
+              case .messages = pendingOperations[lastIndex],
+              !isPersistingFirstOperation || lastIndex > pendingOperations.startIndex else {
+            pendingOperations.append(operation)
+            return
+        }
+        // A newer full snapshot subsumes the older one because persistence
+        // resumes from `persistedCount`. Keep at most one waiting snapshot
+        // behind an in-flight write, avoiding O(events × transcript size)
+        // memory growth during a prolonged I/O failure.
+        pendingOperations[lastIndex] = operation
+    }
+
+    private func persist(_ operation: PersistenceOperation) async throws {
+        switch operation {
+        case .ensureCreated:
+            try await store.createIfMissing(
+                id: sessionId,
+                cwd: cwd,
+                model: model,
+                provider: provider
+            )
+
+        case .messages(let messages):
+            try await persist(messages: messages)
+
+        case .compaction(let compaction):
+            try await store.appendCompaction(
+                id: sessionId,
+                cwd: cwd,
+                replacementMessages: compaction.replacementMessages,
+                messagesCompacted: compaction.messagesCompacted,
+                firstKeptMessageIndex: compaction.firstKeptMessageIndex,
+                tokensBefore: compaction.tokensBefore,
+                contextWindow: compaction.contextWindow,
+                reason: compaction.reason,
+                model: model,
+                provider: provider
+            )
+            lock.withLock {
+                persistedCount = compaction.replacementMessages.count
+            }
+
+        case .title(let title):
+            try await store.setTitle(id: sessionId, cwd: cwd, title: title)
+        }
+    }
+
+    private func persist(messages: [Message]) async throws {
+        while true {
+            let nextIndex = lock.withLock { persistedCount }
+            guard nextIndex < messages.count else { return }
+
+            try await store.append(
+                id: sessionId,
+                cwd: cwd,
+                message: redactedForPersistence(messages[nextIndex]),
+                model: model,
+                provider: provider
+            )
+            lock.withLock {
+                // Operations are drained serially, so a successful single-line
+                // append advances the durable baseline exactly once. A later
+                // retry resumes after any lines that already reached disk.
+                persistedCount = nextIndex + 1
+            }
+        }
     }
 }

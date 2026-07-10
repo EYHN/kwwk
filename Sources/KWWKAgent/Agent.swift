@@ -45,6 +45,23 @@ public enum AgentError: Error, Equatable {
     case aborted
 }
 
+enum AgentContextPreflightError: Error, LocalizedError, Sendable {
+    case irreducible(tokens: Int, inputBudget: Int)
+    case compactionFailed(AgentContextCompactionOutcome)
+
+    var errorDescription: String? {
+        switch self {
+        case .irreducible(let tokens, let inputBudget):
+            return "context requires approximately \(tokens) input tokens, exceeding the usable \(inputBudget)-token input budget even after compaction"
+        case .compactionFailed(let outcome):
+            if case .failed(let reason) = outcome {
+                return "context is too large and compaction failed: \(reason)"
+            }
+            return "context is too large and could not be compacted"
+        }
+    }
+}
+
 public struct AgentAutoCompactOptions: Sendable {
     public var threshold: Double?
     public var config: AgentContextCompactionConfig
@@ -91,6 +108,11 @@ public struct AgentOptions: Sendable {
     /// Automatic context compaction. Disabled by default so SDK callers do
     /// not trigger extra model calls or transcript rewrites unless requested.
     public var autoCompact: AgentAutoCompactOptions?
+    /// Optional model used only to generate context-compaction summaries.
+    /// `nil` follows the agent's current `state.model` dynamically. Trigger
+    /// thresholds and recovery targets always use the current model, even
+    /// when summary generation is delegated to this model.
+    public var compactionModel: Model?
     public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
 
     public init(
@@ -113,6 +135,7 @@ public struct AgentOptions: Sendable {
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
         autoCompact: AgentAutoCompactOptions? = nil,
+        compactionModel: Model? = nil,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil
     ) {
         self.initialState = initialState
@@ -134,6 +157,7 @@ public struct AgentOptions: Sendable {
         self.transformContext = transformContext
         self.betweenTurns = betweenTurns
         self.autoCompact = autoCompact
+        self.compactionModel = compactionModel
         self.authResolver = authResolver
     }
 }
@@ -190,6 +214,7 @@ public final class Agent: @unchecked Sendable {
     private var _transformContext: TransformContextHook?
     private var _betweenTurns: BetweenTurnsHook?
     private var _autoCompact: AgentAutoCompactOptions?
+    private var _compactionModel: Model?
     private var _authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     private var _retryBaseDelayMs: UInt64 = 1_000
 
@@ -244,6 +269,12 @@ public final class Agent: @unchecked Sendable {
     public var autoCompact: AgentAutoCompactOptions? {
         get { lock.withLock { _autoCompact } }
         set { lock.withLock { _autoCompact = newValue } }
+    }
+    /// Model used for compaction summaries. Assign `nil` to follow the live
+    /// conversation model again. This never mutates `state.model`.
+    public var compactionModel: Model? {
+        get { lock.withLock { _compactionModel } }
+        set { lock.withLock { _compactionModel = newValue } }
     }
     public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? {
         get { lock.withLock { _authResolver } }
@@ -317,6 +348,7 @@ public final class Agent: @unchecked Sendable {
         self._transformContext = options.transformContext
         self._betweenTurns = options.betweenTurns
         self._autoCompact = options.autoCompact
+        self._compactionModel = options.compactionModel
         self._authResolver = options.authResolver
         self.steeringQueue = PendingMessageQueue(mode: options.steeringMode)
         self.followUpQueue = PendingMessageQueue(mode: options.followUpMode)
@@ -704,7 +736,8 @@ extension Agent {
             userPromptSubmit: userPromptSubmit,
             convertToLlm: convertToLlm,
             transformContext: transformContext,
-            betweenTurns: builtInBetweenTurnsHook()
+            betweenTurns: builtInBetweenTurnsHook(),
+            contextCompaction: builtInContextCompactionHook()
         )
         config.finalTextOnlyOnLastTurn = finalTextOnlyOnLastTurn
         config.terminalToolName = terminalToolName
@@ -800,62 +833,219 @@ extension Agent {
     }
 
     private func builtInBetweenTurnsHook() -> BetweenTurnsHook? {
-        let userHook = betweenTurns
-        let autoCompact = autoCompact
-        guard userHook != nil || autoCompact?.threshold != nil else {
+        // Built-in automatic compaction runs once, immediately before each
+        // provider request, through `contextCompaction`. Keep this hook solely
+        // for SDK callers' custom between-turn behavior; running the built-in
+        // driver here as well retries a failed summary at the same boundary and
+        // emits duplicate compactStart/compactEnd pairs.
+        betweenTurns
+    }
+
+    private func builtInContextCompactionHook() -> ContextCompactionHook? {
+        guard let autoCompact, autoCompact.threshold != nil else { return nil }
+        return { [weak self] context, trigger, cancellation in
+            guard let self else { return nil }
+            return try await self.performAutomaticCompaction(
+                context: context,
+                trigger: trigger,
+                autoCompact: autoCompact,
+                cancellation: cancellation
+            )
+        }
+    }
+
+    private func performAutomaticCompaction(
+        context: AgentContext,
+        trigger: AgentContextCompactionTrigger,
+        autoCompact: AgentAutoCompactOptions,
+        cancellation: CancellationHandle?
+    ) async throws -> AgentContext? {
+        guard let threshold = autoCompact.threshold,
+              threshold.isFinite,
+              threshold > 0 else {
             return nil
         }
 
-        return { [weak self] context, cancellation in
-            guard let self else {
-                return await userHook?(context, cancellation)
-            }
-
-            var current = context
-            var replaced = false
-
-            if let autoCompact,
-               let threshold = autoCompact.threshold,
-               threshold > 0,
-               current.messages.count >= autoCompact.config.minMessages,
-               AgentContextCompactor.shouldCompact(
-                    messages: current.messages,
-                    model: self.state.model,
-                    threshold: threshold
-               ) {
-                let usage = AgentContextCompactor.currentUsage(
-                    messages: current.messages,
-                    model: self.state.model
-                )
-                await self.emitSynthetic(
-                    .compactStart(messagesCount: current.messages.count, usage: usage),
-                    cancellation: cancellation
-                )
-
-                self.state.messages = current.messages
-                let outcome = await AgentContextCompactor.compactAgent(
-                    agent: self,
-                    backgroundManager: autoCompact.backgroundManager,
-                    sessionId: self.sessionId,
-                    config: autoCompact.config,
-                    ignoreStreaming: true,
-                    cancellation: cancellation
-                )
-                await self.emitSynthetic(.compactEnd(outcome: outcome), cancellation: cancellation)
-
-                if case .compacted = outcome {
-                    current.messages = self.state.messages
-                    replaced = true
-                }
-            }
-
-            if let userHook, let replacement = await userHook(current, cancellation) {
-                current = replacement
-                replaced = true
-            }
-
-            return replaced ? current : nil
+        var measuredContext = context
+        let forced: Bool
+        switch trigger {
+        case .preflight(let pendingMessages):
+            measuredContext.messages.append(contentsOf: pendingMessages)
+            forced = false
+        case .proactive:
+            forced = false
+        case .providerOverflow:
+            forced = true
         }
+
+        let stateSnapshot = state.snapshotModelContext()
+        let model = stateSnapshot.model
+        // Freeze the summary model for this compaction attempt. Runtime
+        // changes made while listeners/provider calls suspend apply to the
+        // next attempt, while the live model remains revision-guarded below.
+        let summaryModel = compactionModel ?? model
+        let usage = AgentContextCompactor.currentUsage(
+            context: measuredContext,
+            model: model
+        )
+        let inputBudget = automaticInputBudget(for: model)
+        let isBlockingPreflight: Bool = {
+            guard case .preflight(let pendingMessages) = trigger else { return false }
+            return pendingMessages.isEmpty && usage.tokens >= inputBudget
+        }()
+
+        let pendingMessages: [Message]
+        if case .preflight(let pending) = trigger {
+            pendingMessages = pending
+        } else {
+            pendingMessages = []
+        }
+
+        // If the fixed prompt/tools plus the pending user input already fill
+        // the usable input budget, summarizing old history cannot make this
+        // initial preflight fit. Let the loop append and surface the exact user
+        // prompt first; its blocking preflight will then report irreducibility
+        // without paying for two summaries.
+        if !pendingMessages.isEmpty {
+            var irreducibleContext = context
+            irreducibleContext.messages = pendingMessages
+            let irreducibleUsage = AgentContextCompactor.currentUsage(
+                context: irreducibleContext,
+                model: model
+            )
+            if irreducibleUsage.tokens >= inputBudget {
+                return nil
+            }
+        }
+
+        guard !context.messages.isEmpty else {
+            if isBlockingPreflight {
+                throw AgentContextPreflightError.irreducible(
+                    tokens: usage.tokens,
+                    inputBudget: inputBudget
+                )
+            }
+            return nil
+        }
+
+        guard forced || isBlockingPreflight || AgentContextCompactor.shouldCompact(
+            context: measuredContext,
+            model: model,
+            threshold: threshold
+        ) else {
+            return nil
+        }
+
+        guard AgentContextCompactor.contextsMatchForCompaction(
+            stateSnapshot.context,
+            context
+        ) else {
+            if isBlockingPreflight || forced {
+                throw AgentContextCompactionError.contextChanged
+            }
+            return nil
+        }
+        await emitSynthetic(
+            .compactStart(messagesCount: context.messages.count, usage: usage),
+            cancellation: cancellation
+        )
+
+        // A compactStart listener is allowed to enqueue work, but it must not
+        // mutate the transcript being summarized. Detect that before the LLM
+        // round trip; the final compare-and-swap still protects the commit.
+        guard state.hasContextRevision(stateSnapshot.revision) else {
+            let outcome = AgentContextCompactionOutcome.failed(
+                AgentContextCompactionError.contextChanged.localizedDescription
+            )
+            await emitSynthetic(.compactEnd(outcome: outcome), cancellation: cancellation)
+            if isBlockingPreflight || forced {
+                throw AgentContextCompactionError.contextChanged
+            }
+            return nil
+        }
+
+        let recoveryTarget = automaticRecoveryTarget(
+            model: model,
+            threshold: threshold,
+            recoveryRatio: autoCompact.config.recoveryRatio
+        )
+        let outcome = await AgentContextCompactor.compactAgentContext(
+            agent: self,
+            context: context,
+            model: model,
+            summaryModel: summaryModel,
+            expectedContextRevision: stateSnapshot.revision,
+            backgroundManager: autoCompact.backgroundManager,
+            sessionId: sessionId,
+            config: autoCompact.config,
+            targetTokens: recoveryTarget,
+            additionalMessages: pendingMessages,
+            respectMinimumMessages: false,
+            cancellation: cancellation
+        )
+        await emitSynthetic(.compactEnd(outcome: outcome), cancellation: cancellation)
+
+        guard case .compacted = outcome else {
+            if cancellation?.isCancelled == true || Task.isCancelled {
+                throw AgentContextCompactionError.cancelled
+            }
+            if case .failed(let reason) = outcome,
+               reason == AgentContextCompactionError.cancelled.localizedDescription {
+                throw AgentContextCompactionError.cancelled
+            }
+            if isBlockingPreflight {
+                if case .refusedTooFewMessages = outcome {
+                    throw AgentContextPreflightError.irreducible(
+                        tokens: usage.tokens,
+                        inputBudget: inputBudget
+                    )
+                }
+                throw AgentContextPreflightError.compactionFailed(outcome)
+            }
+            return nil
+        }
+        var replacement = context
+        replacement.messages = state.messages
+        var measuredReplacement = replacement
+        measuredReplacement.messages.append(contentsOf: pendingMessages)
+        let replacementUsage = AgentContextCompactor.currentUsage(
+            context: measuredReplacement,
+            model: model
+        )
+        if isBlockingPreflight || forced {
+            if replacementUsage.tokens >= inputBudget {
+                throw AgentContextPreflightError.irreducible(
+                    tokens: replacementUsage.tokens,
+                    inputBudget: inputBudget
+                )
+            }
+        }
+        return replacement
+    }
+
+    private func automaticRecoveryTarget(
+        model: Model,
+        threshold: Double,
+        recoveryRatio: Double
+    ) -> Int? {
+        // Tiny windows are test doubles rather than usable LLM contexts; keep
+        // their historic trigger behavior without imposing an impossible
+        // structured-recap headroom target.
+        let window = model.contextWindow
+        guard window >= 1_024 else { return nil }
+        let triggerRatio = min(0.95, max(0.05, threshold))
+        let recoveryRatio = min(0.95, max(0.1, recoveryRatio))
+        return max(
+            1,
+            min(
+                Int(Double(window) * triggerRatio * recoveryRatio),
+                automaticInputBudget(for: model)
+            )
+        )
+    }
+
+    private func automaticInputBudget(for model: Model) -> Int {
+        AgentRequestBudget.inputTokens(for: model)
     }
 
     private func emitSynthetic(_ event: AgentEvent, cancellation: CancellationHandle?) async {
