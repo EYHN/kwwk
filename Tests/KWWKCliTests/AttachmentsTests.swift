@@ -81,7 +81,15 @@ struct AttachmentStoreTests {
         #expect(store.pastedTexts.count == 1)
         let entry = store.pastedText(id: 1)
         #expect(entry?.body == "line1\nline2\nline3")
-        #expect(entry?.lineCount == 3)
+    }
+
+    @MainActor
+    @Test("expandPastedTextPlaceholders substitutes raw bodies, leaves unknown ids alone")
+    func expandPlaceholders() {
+        let store = AttachmentStore()
+        let token = store.addPastedText("one\ntwo")
+        let expanded = store.expandPastedTextPlaceholders(in: "see \(token) and [pasted-text #9]")
+        #expect(expanded == "see one\ntwo and [pasted-text #9]")
     }
 
     @MainActor
@@ -135,7 +143,7 @@ struct BuildPromptTests {
     }
 
     @MainActor
-    @Test("pasted-text placeholder expanded inline, @text-file appended as <attachments>")
+    @Test("pasted-text placeholder expanded to its raw body, @text-file appended as <attachments>")
     func textFileAndPasted() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -151,8 +159,8 @@ struct BuildPromptTests {
             cwd: "/tmp",
             modelSupportsImages: true
         )
-        #expect(built.text.contains("<pasted-text id=\"1\" lines=\"2\">"))
-        #expect(built.text.contains("one\ntwo"))
+        #expect(!built.text.contains("<pasted-text"), "paste expands to raw text, no XML wrapper")
+        #expect(built.text.contains("see one\ntwo and @"))
         #expect(built.text.contains("<attachments>"))
         #expect(built.text.contains("<file path=\"\(filePath)\""))
         #expect(built.text.contains("GREETINGS"))

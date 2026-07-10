@@ -836,8 +836,10 @@ func runCodingTUIInternal(
                 // queued-but-undrained steer).
                 retry.trackedActive = true
                 goalStore.resetAutoContinue()
+                // Recall ring gets the paste bodies expanded (omp semantics):
+                // after clear() the placeholder would be a dead reference.
+                frame.input.addToHistory(attachments.expandPastedTextPlaceholders(in: text))
                 attachments.clear()
-                frame.input.addToHistory(text)
                 frame.input.value = ""
                 // No scrollback notice: the queued prompt now shows live in
                 // the pending list above the input box (updateFrameStatus
@@ -874,9 +876,10 @@ func runCodingTUIInternal(
                     runner.tui.requestRender()
                 }
             case .prompt:
-                // Recall ring: store the raw submission so Up/Down can bring
-                // it back (input was already cleared above).
-                frame.input.addToHistory(text)
+                // Recall ring: store the submission with paste bodies expanded
+                // (omp semantics) so Up/Down brings back the original text —
+                // the `[pasted-text #N]` placeholder dies with attachments.clear().
+                frame.input.addToHistory(attachments.expandPastedTextPlaceholders(in: text))
                 // Rebuild with attachments — the raw `text` may carry
                 // `@path` tokens and `[pasted-text #N]` placeholders
                 // from earlier paste events.

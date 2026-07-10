@@ -15,17 +15,10 @@ import KWWKAI
 final class AttachmentStore {
     /// A large pasted text block that we don't want to shove into a
     /// single-line editor. Shown in the input as `[pasted-text #id]`
-    /// and expanded to a `<pasted-text>` block at submit time.
+    /// and expanded back to the raw body at submit time.
     struct PastedText: Identifiable {
         let id: Int
         let body: String
-        /// Line count of the body, used for the placeholder label so
-        /// the user gets a sense of size without expanding it.
-        var lineCount: Int {
-            // `components(separatedBy:)` counts "a\nb" as 2, matching
-            // what a user would intuitively read off the paste.
-            body.components(separatedBy: "\n").count
-        }
     }
 
     /// A clipboard image captured at paste time. Rendered in the
@@ -61,6 +54,19 @@ final class AttachmentStore {
 
     func pastedText(id: Int) -> PastedText? {
         pastedTexts.first(where: { $0.id == id })
+    }
+
+    /// Expand `[pasted-text #N]` placeholders back to their raw bodies
+    /// (omp's `expandPasteMarkers`). The placeholder exists only while
+    /// composing in the input line; everything downstream of submit —
+    /// the recall history, the transcript echo, the LLM prompt — sees
+    /// the original pasted text.
+    func expandPastedTextPlaceholders(in text: String) -> String {
+        var out = text
+        for pasted in pastedTexts {
+            out = out.replacingOccurrences(of: "[pasted-text #\(pasted.id)]", with: pasted.body)
+        }
+        return out
     }
 
     /// Register a clipboard-sourced image (e.g. macOS ⌘V where
@@ -318,13 +324,9 @@ func buildPromptWithAttachments(
     cwd: String,
     modelSupportsImages: Bool
 ) -> BuiltPrompt {
-    // 1. Expand pasted-text placeholders.
-    var expanded = inputText
-    for pasted in store.pastedTexts {
-        let placeholder = "[pasted-text #\(pasted.id)]"
-        let block = "<pasted-text id=\"\(pasted.id)\" lines=\"\(pasted.lineCount)\">\n\(pasted.body)\n</pasted-text>"
-        expanded = expanded.replacingOccurrences(of: placeholder, with: block)
-    }
+    // 1. Expand pasted-text placeholders to their raw bodies — the
+    //    prompt reads exactly as if the user had typed the paste inline.
+    let expanded = store.expandPastedTextPlaceholders(in: inputText)
 
     var images: [ImageContent] = []
     var attachBlocks: [String] = []
