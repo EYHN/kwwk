@@ -204,7 +204,15 @@ struct CompactionRecoveryTests {
         let router = RecoveryStreamRouter(mode: .overflowThenSucceed)
         let events = RecoveryEventLog()
         let initial = shortHistory(model: model)
-        let agent = makeAgent(model: model, initial: initial, router: router, threshold: 0.9)
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                systemPrompt: "main-system",
+                model: model,
+                messages: initial
+            ),
+            streamFn: recoveryStream(router: router)
+        ))
+        #expect(agent.autoCompact?.threshold == 0.75)
         let unsubscribe = agent.subscribe { event, _ in await events.record(event) }
         defer { unsubscribe() }
 
@@ -223,6 +231,34 @@ struct CompactionRecoveryTests {
         #expect(eventSnapshot.compactSuccesses == 1)
         #expect(agent.state.messages.compactMap(assistantError).isEmpty)
         #expect(agent.state.messages.compactMap(assistantTextValue).contains("provider success"))
+    }
+
+    @Test("explicitly disabling auto compact also disables overflow recovery")
+    func disabledAutoCompactDoesNotRecoverOverflow() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
+            FauxModelDefinition(id: "disabled-overflow-model", contextWindow: 4_000)
+        ]))
+        defer { faux.unregister() }
+        let model = faux.getModel()
+        let router = RecoveryStreamRouter(mode: .overflowThenSucceed)
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                systemPrompt: "main-system",
+                model: model,
+                messages: shortHistory(model: model)
+            ),
+            streamFn: recoveryStream(router: router),
+            autoCompact: nil
+        ))
+
+        try await agent.prompt("surface this overflow")
+
+        let snapshot = await router.snapshot()
+        #expect(snapshot.mainContexts.count == 1)
+        #expect(snapshot.summaryCalls == 0)
+        #expect(agent.state.messages.compactMap(assistantError).contains(where: {
+            $0.contains("context_length_exceeded")
+        }))
     }
 
     @Test("overflow recovery summarizes with the dedicated model and retries with the main model")
@@ -544,18 +580,22 @@ struct CompactionRecoveryTests {
                 model: model,
                 messages: initial
             ),
-            streamFn: { model, context, _ in
-                let message = try await router.response(model: model, context: context)
-                let pair = AssistantMessageStream.makeStream()
-                pair.continuation.end(message)
-                return pair.stream
-            },
+            streamFn: recoveryStream(router: router),
             autoCompact: AgentAutoCompactOptions(
                 threshold: threshold,
                 config: compactionConfig
             ),
             compactionModel: compactionModel
         ))
+    }
+
+    private func recoveryStream(router: RecoveryStreamRouter) -> StreamFn {
+        { model, context, _ in
+            let message = try await router.response(model: model, context: context)
+            let pair = AssistantMessageStream.makeStream()
+            pair.continuation.end(message)
+            return pair.stream
+        }
     }
 
     private func shortHistory(model: Model) -> [Message] {

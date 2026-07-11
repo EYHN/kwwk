@@ -383,12 +383,14 @@ Other hook points: `afterToolCall`, `convertToLlm`, `transformContext`
 
 ### Context compaction
 
-Set `AgentOptions.autoCompact` (or the CLI `autoCompactThreshold`) to keep long
-runs below the model's context limit. Compaction turns older history into a
-structured, incrementally updated recap while keeping recent turns verbatim.
-The budget includes the system prompt and tool schemas, preserves tool-call /
-result boundaries, and retries one provider-reported input overflow after
-rebuilding the request. Manual `/compact` uses the same projection pipeline.
+`AgentOptions.autoCompact` defaults to a 75% threshold, matching
+`CodingAgentConfig.autoCompactThreshold`, standalone subagent SDK entry points,
+and the CLI. Pass `nil` explicitly to disable both proactive compaction and
+provider-overflow recovery. Compaction turns older history into a structured,
+incrementally updated recap while keeping recent turns verbatim. The budget
+includes the system prompt and tool schemas, preserves tool-call / result
+boundaries, and retries one provider-reported input overflow after rebuilding
+the request. Manual `/compact` uses the same projection pipeline.
 
 Set `AgentOptions.compactionModel` (or `CodingAgentConfig.compactionModel`) to
 send summary-generation requests to a different model. Context thresholds,

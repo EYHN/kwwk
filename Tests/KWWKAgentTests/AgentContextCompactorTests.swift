@@ -857,8 +857,8 @@ struct AgentContextCompactorTests {
         #expect(agent.state.messages == original)
     }
 
-    @Test("agent auto compacts before the next provider request and emits compact events")
-    func agentAutoCompactsAndEmitsEvents() async throws {
+    @Test("agent defaults to auto compaction before the next provider request")
+    func agentDefaultsToAutoCompaction() async throws {
         let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
             FauxModelDefinition(id: "auto-window", contextWindow: 2_000)
         ]))
@@ -884,12 +884,9 @@ struct AgentContextCompactorTests {
                 let pair = AssistantMessageStream.makeStream()
                 pair.continuation.end(message)
                 return pair.stream
-            },
-            autoCompact: AgentAutoCompactOptions(
-                threshold: 0.5,
-                config: AgentContextCompactionConfig(minMessages: 1)
-            )
+            }
         ))
+        #expect(agent.autoCompact?.threshold == 0.75)
         let events = CompactEventLog()
         let unsubscribe = agent.subscribe { event, _ in
             await events.record(event)

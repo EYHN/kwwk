@@ -105,8 +105,9 @@ public struct AgentOptions: Sendable {
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
-    /// Automatic context compaction. Disabled by default so SDK callers do
-    /// not trigger extra model calls or transcript rewrites unless requested.
+    /// Automatic context compaction. Enabled by default at 75% of the model's
+    /// context window; pass `nil` to opt out of proactive compaction and
+    /// provider-overflow recovery.
     public var autoCompact: AgentAutoCompactOptions?
     /// Optional model used only to generate context-compaction summaries.
     /// `nil` follows the agent's current `state.model` dynamically. Trigger
@@ -134,7 +135,7 @@ public struct AgentOptions: Sendable {
         convertToLlm: ConvertToLlmHook? = nil,
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
-        autoCompact: AgentAutoCompactOptions? = nil,
+        autoCompact: AgentAutoCompactOptions? = AgentAutoCompactOptions(),
         compactionModel: Model? = nil,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil
     ) {

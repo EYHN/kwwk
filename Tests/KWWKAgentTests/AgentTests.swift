@@ -58,7 +58,7 @@ struct AgentInitTests {
         #expect(agent.state.streamingMessage == nil)
         #expect(agent.state.pendingToolCalls.isEmpty)
         #expect(agent.state.errorMessage == nil)
-        #expect(agent.autoCompact == nil)
+        #expect(agent.autoCompact?.threshold == 0.75)
     }
 
     @Test("honours custom initial state")
@@ -75,8 +75,8 @@ struct AgentInitTests {
         #expect(agent.state.thinkingLevel == .low)
     }
 
-    @Test("auto compact can be explicitly enabled")
-    func autoCompactCanBeEnabled() async throws {
+    @Test("auto compact threshold can be customized")
+    func autoCompactThresholdCanBeCustomized() async throws {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
 
@@ -86,6 +86,19 @@ struct AgentInitTests {
         ))
 
         #expect(agent.autoCompact?.threshold == 0.5)
+    }
+
+    @Test("auto compact can be explicitly disabled")
+    func autoCompactCanBeDisabled() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: registration.getModel()),
+            autoCompact: nil
+        ))
+
+        #expect(agent.autoCompact == nil)
     }
 
     @Test("state setters do not emit events")
@@ -141,6 +154,22 @@ struct AgentInitTests {
         #expect(agent.autoCompact?.threshold == 0.75)
         #expect(agent.compactionModel?.id == compactionModel.id)
         #expect(agent.compactionModel?.provider == compactionModel.provider)
+    }
+
+    @Test("coding agent can explicitly disable auto compact")
+    func codingAgentCanDisableAutoCompact() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let agent = await makeCodingAgent(CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: FileManager.default.temporaryDirectory.path,
+            tools: [],
+            autoCompactThreshold: nil,
+            bashEnvironment: [:]
+        )).agent
+
+        #expect(agent.autoCompact == nil)
     }
 
     @Test("coding agent does not scan skill directories unless configured")
