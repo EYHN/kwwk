@@ -1795,7 +1795,7 @@ private func codingFrameStateLine(
 
     switch mode {
     case .compacting(let count):
-        parts.append(Theme.paint("\(spinner) compacting \(count)", Theme.warn, bold: true))
+        parts.append(Theme.paint("\(spinner) compacting \(count) messages", Theme.warn, bold: true))
         parts.append(Theme.faintText("new prompts queue"))
         parts.append(Theme.faintText("Esc to cancel"))
     case .aborting:
