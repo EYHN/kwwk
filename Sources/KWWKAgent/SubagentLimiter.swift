@@ -73,6 +73,16 @@ final class SubagentLimiter: @unchecked Sendable {
         return reservation
     }
 
+    /// Spawn-time capacity context: 1-based position of `id` in the queue
+    /// (nil once it holds a runner slot), total queued launches, and the
+    /// concurrency limit — enough for the model to estimate expected wait.
+    func queueStatus(of id: UUID) -> (position: Int?, queuedCount: Int, maxConcurrent: Int) {
+        lock.withLock {
+            let index = queued.firstIndex(where: { $0.id == id })
+            return (index.map { $0 + 1 }, queued.count, limits.maxConcurrent)
+        }
+    }
+
     fileprivate func cancelQueued(id: UUID) {
         var cancelled: SubagentCapacityReservation?
         lock.withLock {
@@ -153,6 +163,12 @@ final class SubagentCapacityReservation: @unchecked Sendable {
 
     var isWaitingForCapacity: Bool {
         lock.withLock { outcome == nil }
+    }
+
+    /// Capacity context for spawn-result rendering. Position is nil once the
+    /// launch holds a runner slot.
+    var queueStatus: (position: Int?, queuedCount: Int, maxConcurrent: Int)? {
+        limiter?.queueStatus(of: id)
     }
 
     func wait(cancellation: CancellationHandle) async throws -> SubagentPermit {

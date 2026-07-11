@@ -179,14 +179,31 @@ public struct BackgroundTaskNotification: Sendable {
     public let outputFile: String?
     public let durationMs: Int
     public let stalled: Bool
+    /// Why the stall watchdog fired. Nil for terminal notifications.
+    public var stallReason: StallReason? = nil
+
+    public enum StallReason: String, Sendable {
+        case interactivePrompt = "interactive_prompt"
+        case noOutputGrowth = "no_output_growth"
+    }
 
     /// Renders the notification as an XML block wrapped in a lead-in line.
     /// Callers wrap the returned string in a runtime-sourced `UserMessage` and
     /// inject it at a turn boundary or as a fresh internal prompt while idle.
     public func messageText() -> String {
-        let lead = stalled
-            ? "A background task appears stuck and may need attention:"
-            : "A background task completed:"
+        let lead: String
+        if stalled {
+            lead = "A background task appears stuck and may need attention:"
+        } else {
+            switch status {
+            case .failed:
+                lead = "A background task failed:"
+            case .killed:
+                lead = "A background task was killed:"
+            default:
+                lead = "A background task completed:"
+            }
+        }
         return lead + "\n" + formatXML()
     }
 
@@ -216,6 +233,18 @@ public struct BackgroundTaskNotification: Sendable {
                     if let value = obj["exitCode"],
                        let exitCode = value.asStringForTag() {
                         lines.append("  <exit-code>\(escape(exitCode))</exit-code>")
+                    }
+                    // Subagent follow-up handles get first-class tags so the
+                    // model can call agent_history / route by type without
+                    // parsing the escaped details JSON. Exact known keys only —
+                    // never derive tag structure from arbitrary runner keys.
+                    if let value = obj["child_session_id"],
+                       let childSessionId = value.asStringForTag() {
+                        lines.append("  <child-session-id>\(escape(childSessionId))</child-session-id>")
+                    }
+                    if let value = obj["subagent_type"],
+                       let subagentType = value.asStringForTag() {
+                        lines.append("  <subagent-type>\(escape(subagentType))</subagent-type>")
                     }
                 }
                 // Preserve nested and non-tag-safe details as escaped data.
@@ -251,7 +280,12 @@ public struct BackgroundTaskNotification: Sendable {
             lines.append("  <output-truncated>true</output-truncated>")
         }
         if stalled {
-            lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with task(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
+            switch stallReason {
+            case .noOutputGrowth:
+                lines.append("  <suggestion>The command has produced no output for an extended period and may be hung. If it should have finished by now, cancel it with task(cancel:[task_id]) and retry differently; if silence is expected (linking, large download), keep working — the completion notification will still arrive.</suggestion>")
+            case .interactivePrompt, nil:
+                lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with task(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
+            }
         }
         lines.append("</task-notification>")
         return lines.joined(separator: "\n")

@@ -663,6 +663,56 @@ struct BackgroundTaskManagerTests {
         try? await manager.kill(taskId)
     }
 
+    @Test("a silently hung task gets one no-growth stall heads-up")
+    func silentHangGetsNoGrowthStall() async {
+        let outputDir = makeOutputDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let stallInterval: UInt64 = ProcessInfo.processInfo.environment["CI"] != nil ? 2 : 1
+        await manager.setStallTiming(
+            intervalSeconds: stallInterval,
+            thresholdSeconds: 0.05,
+            silentThresholdSeconds: 0.1
+        )
+
+        // Non-prompt output, then silence: previously this waited blind until
+        // the hard timeout; now it earns exactly one no-growth heads-up.
+        struct SilentHangRunner: BackgroundTaskRunner {
+            let spec = BackgroundTaskSpec(kind: "test", label: "silent hang", description: nil, hardTimeoutSeconds: 60)
+            func run(
+                taskId _: String,
+                outputFile: URL,
+                cancellation: CancellationHandle,
+                onDone: @escaping @Sendable (BackgroundTaskOutcome) -> Void
+            ) {
+                Task.detached {
+                    try? Data("building target kwwk...".utf8).write(to: outputFile)
+                    while !cancellation.isCancelled {
+                        try? await Task.sleep(nanoseconds: 30_000_000)
+                    }
+                    onDone(BackgroundTaskOutcome(success: false, summary: "cancelled"))
+                }
+            }
+        }
+        let (taskId, _) = await manager.spawn(runner: SilentHangRunner(), sessionId: "s-silent")
+
+        let ok = await awaitUntil(5000) {
+            await manager.hasNotifications(sessionId: "s-silent")
+        }
+        guard ok else {
+            Issue.record("timed out waiting for no-growth stall notification")
+            try? await manager.kill(taskId)
+            return
+        }
+        let notifs = await manager.drainNotifications(sessionId: "s-silent")
+        let stall = notifs.first { $0.stalled && $0.taskId == taskId }
+        #expect(stall?.stallReason == .noOutputGrowth)
+        #expect(stall?.messageText().contains("produced no output") == true)
+        #expect(stall?.messageText().contains("interactive prompt") == false)
+
+        try? await manager.kill(taskId)
+    }
+
     @Test("agent tasks do not infer stalls from silent reasoning")
     func agentTasksSkipGenericStallWatchdog() async {
         let outputDir = makeOutputDir()
@@ -1315,10 +1365,60 @@ struct BackgroundTaskManagerTests {
         let text = n.messageText()
         #expect(text.contains("echo &apos;a &amp; b&apos; &lt;raw&gt;") ||
                 text.contains("echo 'a &amp; b' &lt;raw&gt;"))
+        #expect(text.hasPrefix("A background task completed:"))
         // Implementation may choose to leave single quotes alone; the core
         // requirement is that `&` and `<` / `>` are escaped.
         #expect(!text.contains("<raw>"))
         #expect(!text.contains("& b"))
+    }
+
+    @Test("terminal lead-in reflects failed and killed status")
+    func leadInReflectsTerminalStatus() {
+        func note(_ status: BackgroundTaskStatus) -> BackgroundTaskNotification {
+            BackgroundTaskNotification(
+                taskId: "bg_lead",
+                sessionId: nil,
+                kind: "bash",
+                label: "make",
+                description: nil,
+                status: status,
+                outcome: BackgroundTaskOutcome(success: false, summary: "exit 2"),
+                outputTail: "",
+                outputFile: nil,
+                durationMs: 5,
+                stalled: false
+            )
+        }
+        #expect(note(.failed).messageText().hasPrefix("A background task failed:"))
+        #expect(note(.killed).messageText().hasPrefix("A background task was killed:"))
+        #expect(note(.completed).messageText().hasPrefix("A background task completed:"))
+    }
+
+    @Test("subagent correlation ids are first-class notification tags")
+    func subagentIdsGetFirstClassTags() {
+        let n = BackgroundTaskNotification(
+            taskId: "bg_agent",
+            sessionId: nil,
+            kind: "agent",
+            label: "explore",
+            description: nil,
+            status: .completed,
+            outcome: BackgroundTaskOutcome(
+                success: true,
+                summary: "completed",
+                details: .object([
+                    "child_session_id": .string("child-123"),
+                    "subagent_type": .string("explore"),
+                ])
+            ),
+            outputTail: "",
+            outputFile: nil,
+            durationMs: 5,
+            stalled: false
+        )
+        let text = n.messageText()
+        #expect(text.contains("<child-session-id>child-123</child-session-id>"))
+        #expect(text.contains("<subagent-type>explore</subagent-type>"))
     }
 
     @Test("notification never derives XML syntax from outcome detail keys")
@@ -1442,9 +1542,16 @@ struct BackgroundTaskManagerTests {
 /// Expose a timing override so the stall watchdog can be squeezed to run in
 /// under a second during tests.
 extension BackgroundTaskManager {
-    func setStallTiming(intervalSeconds: UInt64, thresholdSeconds: Double) {
+    func setStallTiming(
+        intervalSeconds: UInt64,
+        thresholdSeconds: Double,
+        silentThresholdSeconds: Double? = nil
+    ) {
         self.stallCheckIntervalSeconds = intervalSeconds
         self.stallThresholdSeconds = thresholdSeconds
+        if let silentThresholdSeconds {
+            self.silentStallThresholdSeconds = silentThresholdSeconds
+        }
     }
 
     func setTailBytes(_ value: Int) {

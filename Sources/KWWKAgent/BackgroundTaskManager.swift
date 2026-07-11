@@ -117,6 +117,10 @@ public actor BackgroundTaskManager {
     // Tunables (exposed for tests; clamp reasonable defaults)
     public var stallCheckIntervalSeconds: UInt64 = 5
     public var stallThresholdSeconds: Double = 45
+    /// Quiet-output heads-up fuse for commands that hang without ever
+    /// printing a prompt. Deliberately much longer than the prompt fuse so
+    /// slow-but-silent work is not flagged prematurely.
+    public var silentStallThresholdSeconds: Double = 180
     public var tailBytes: Int = 4096
 
     // MARK: - Init
@@ -792,7 +796,8 @@ public actor BackgroundTaskManager {
         taskId: String,
         status: BackgroundTaskStatus,
         outcome: BackgroundTaskOutcome?,
-        stalled: Bool
+        stalled: Bool,
+        stallReason: BackgroundTaskNotification.StallReason? = nil
     ) {
         guard let entry = tasks[taskId] else { return }
         let notification = makeNotification(
@@ -800,7 +805,8 @@ public actor BackgroundTaskManager {
             entry: entry,
             status: status,
             outcome: outcome,
-            stalled: stalled
+            stalled: stalled,
+            stallReason: stallReason
         )
         for consumer in deliveryConsumers.values where consumer.accepts(notification) {
             consumer.enqueue(notification)
@@ -815,7 +821,8 @@ public actor BackgroundTaskManager {
         entry: Entry,
         status: BackgroundTaskStatus,
         outcome: BackgroundTaskOutcome?,
-        stalled: Bool
+        stalled: Bool,
+        stallReason: BackgroundTaskNotification.StallReason? = nil
     ) -> BackgroundTaskNotification {
         let preview = outputPreview(
             entry.outputFile,
@@ -835,7 +842,8 @@ public actor BackgroundTaskManager {
             outputTruncated: preview.truncated,
             outputFile: entry.outputFile.path,
             durationMs: durationMs,
-            stalled: stalled
+            stalled: stalled,
+            stallReason: stallReason
         )
     }
 
@@ -1008,21 +1016,37 @@ public actor BackgroundTaskManager {
         if age < thresholdSeconds { return false }
 
         let tail = readTail(entry.outputFile, maxBytes: min(1024, tailBytes))
-        if !Self.looksLikePrompt(tail) {
-            // Reset so we don't re-tail every tick.
-            lastGrowth = Date()
-            return false
+        if Self.looksLikePrompt(tail) {
+            enqueueNotification(
+                taskId: taskId,
+                status: .running,
+                outcome: nil,
+                stalled: true,
+                stallReason: .interactivePrompt
+            )
+            // A stall is a heads-up, not a terminal event: deliberately do NOT
+            // set `notified`, so the eventual completion/kill notification
+            // still fires. Returning true ends the watchdog, so exactly one
+            // stall is emitted per task.
+            return true
         }
-        enqueueNotification(
-            taskId: taskId,
-            status: .running,
-            outcome: nil,
-            stalled: true
-        )
-        // A stall is a heads-up, not a terminal event: deliberately do NOT set
-        // `notified`, so the eventual completion/kill notification still fires.
-        // Returning true ends the watchdog, so exactly one stall is emitted.
-        return true
+        // No prompt pattern: a silently hung command still deserves one
+        // heads-up before the (30-minute default) hard timeout, on a longer
+        // fuse so slow-but-quiet work (linking, downloads without progress
+        // output) is not flagged prematurely. lastGrowth is intentionally NOT
+        // reset here — the quiet age must keep accumulating; the extra cost is
+        // one bounded 1KB tail read per tick while the task stays quiet.
+        if age >= max(thresholdSeconds, silentStallThresholdSeconds) {
+            enqueueNotification(
+                taskId: taskId,
+                status: .running,
+                outcome: nil,
+                stalled: true,
+                stallReason: .noOutputGrowth
+            )
+            return true
+        }
+        return false
     }
 
     // MARK: - File helpers

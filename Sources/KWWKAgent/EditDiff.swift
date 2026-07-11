@@ -5,9 +5,11 @@ public enum EditDiff {
     public struct Edit: Sendable, Equatable {
         public var oldText: String
         public var newText: String
-        public init(oldText: String, newText: String) {
+        public var replaceAll: Bool
+        public init(oldText: String, newText: String, replaceAll: Bool = false) {
             self.oldText = oldText
             self.newText = newText
+            self.replaceAll = replaceAll
         }
     }
 
@@ -93,7 +95,11 @@ public enum EditDiff {
         path: String
     ) throws -> (baseContent: String, newContent: String) {
         let normEdits = edits.map {
-            Edit(oldText: normalizeToLF($0.oldText), newText: normalizeToLF($0.newText))
+            Edit(
+                oldText: normalizeToLF($0.oldText),
+                newText: normalizeToLF($0.newText),
+                replaceAll: $0.replaceAll
+            )
         }
 
         for (i, edit) in normEdits.enumerated() {
@@ -121,25 +127,37 @@ public enum EditDiff {
         for (i, edit) in normEdits.enumerated() {
             let matchResult = fuzzyFindText(edit.oldText, in: replacementBase)
             if !matchResult.found {
-                if normEdits.count == 1 {
-                    throw CodingToolError.textNotFound(
-                        "Could not find the exact text in \(path). The old text must match exactly including all whitespace and newlines."
-                    )
+                let label = normEdits.count == 1 ? "the exact text" : "edits[\(i)]"
+                var message = "Could not find \(label) in \(path). The oldText must match exactly including all whitespace and newlines."
+                if let nearMiss = nearMissSnippet(for: edit.oldText, in: normalizedContent) {
+                    message += " Closest candidate in the file (line \(nearMiss.line)):\n\(nearMiss.snippet)"
                 }
-                throw CodingToolError.textNotFound(
-                    "Could not find edits[\(i)] in \(path). The oldText must match exactly including all whitespace and newlines."
-                )
+                throw CodingToolError.textNotFound(message)
             }
             let occurrences = countOccurrences(of: edit.oldText, in: replacementBase)
-            if occurrences > 1 {
+            if occurrences > 1, !edit.replaceAll {
                 throw CodingToolError.multipleMatches(count: occurrences)
             }
-            matches.append(Match(
-                editIndex: i,
-                matchIndex: matchResult.utf8Offset,
-                matchLength: matchResult.matchUTF8Length,
-                newText: edit.newText
-            ))
+            if occurrences > 1 {
+                let needle = matchResult.usedFuzzyMatch
+                    ? normalizeForFuzzyMatch(edit.oldText)
+                    : edit.oldText
+                for occurrence in allOccurrences(of: needle, in: replacementBase) {
+                    matches.append(Match(
+                        editIndex: i,
+                        matchIndex: occurrence.utf8Offset,
+                        matchLength: occurrence.utf8Length,
+                        newText: edit.newText
+                    ))
+                }
+            } else {
+                matches.append(Match(
+                    editIndex: i,
+                    matchIndex: matchResult.utf8Offset,
+                    matchLength: matchResult.matchUTF8Length,
+                    newText: edit.newText
+                ))
+            }
         }
 
         matches.sort { $0.matchIndex < $1.matchIndex }
@@ -324,6 +342,55 @@ public enum EditDiff {
         let fuzzyContent = normalizeForFuzzyMatch(haystack)
         let fuzzyNeedle = normalizeForFuzzyMatch(needle)
         return fuzzyContent.components(separatedBy: fuzzyNeedle).count - 1
+    }
+
+    /// Non-overlapping occurrences of `needle` in `haystack`, as UTF-8 byte
+    /// ranges valid for splicing against `haystack`.
+    private static func allOccurrences(
+        of needle: String,
+        in haystack: String
+    ) -> [(utf8Offset: Int, utf8Length: Int)] {
+        guard !needle.isEmpty else { return [] }
+        var results: [(Int, Int)] = []
+        var searchStart = haystack.startIndex
+        let needleLength = needle.utf8.count
+        while let range = haystack.range(of: needle, range: searchStart..<haystack.endIndex) {
+            let offset = haystack.utf8.distance(
+                from: haystack.utf8.startIndex,
+                to: range.lowerBound.samePosition(in: haystack.utf8) ?? haystack.utf8.startIndex
+            )
+            results.append((offset, needleLength))
+            searchStart = range.upperBound
+        }
+        return results
+    }
+
+    /// Locate the region a failed oldText most likely intended, so the error
+    /// can show what the file actually contains there. Anchors on the first
+    /// non-empty line of the needle in fuzzy space; the snippet is copied from
+    /// the ORIGINAL content (fuzzy normalization preserves line counts), so
+    /// the model sees the real bytes it must reproduce.
+    private static func nearMissSnippet(
+        for needle: String,
+        in normalizedContent: String
+    ) -> (line: Int, snippet: String)? {
+        let anchor = normalizeForFuzzyMatch(needle)
+            .components(separatedBy: "\n")
+            .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })?
+            .trimmingCharacters(in: .whitespaces)
+        guard let anchor, !anchor.isEmpty else { return nil }
+
+        let fuzzyContent = normalizeForFuzzyMatch(normalizedContent)
+        guard let range = fuzzyContent.range(of: anchor) else { return nil }
+        let lineIndex = fuzzyContent[..<range.lowerBound]
+            .components(separatedBy: "\n").count - 1
+
+        let needleLines = needle.components(separatedBy: "\n").count
+        let originalLines = normalizedContent.components(separatedBy: "\n")
+        guard lineIndex < originalLines.count else { return nil }
+        let snippetLines = originalLines[lineIndex..<min(lineIndex + min(needleLines, 5), originalLines.count)]
+            .map { $0.count > 200 ? String($0.prefix(200)) + "…" : $0 }
+        return (line: lineIndex + 1, snippet: snippetLines.joined(separator: "\n"))
     }
 
     // MARK: - Diff output

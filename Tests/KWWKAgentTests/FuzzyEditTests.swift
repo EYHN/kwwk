@@ -71,3 +71,79 @@ struct FuzzyEditTests {
         #expect(lines[1].contains("\"$0.00\""))
     }
 }
+
+@Suite("Edit recovery paths")
+struct EditRecoveryTests {
+    @Test("replaceAll replaces every occurrence")
+    func replaceAllReplacesEveryOccurrence() throws {
+        let content = "let a = foo()\nlet b = foo()\nlet c = bar()\n"
+        let result = try EditDiff.applyEdits(
+            to: content,
+            edits: [EditDiff.Edit(oldText: "foo()", newText: "baz()", replaceAll: true)],
+            path: "test.swift"
+        )
+        #expect(result.newContent == "let a = baz()\nlet b = baz()\nlet c = bar()\n")
+    }
+
+    @Test("multiple matches without replaceAll names both recovery options")
+    func multipleMatchesErrorNamesRecovery() {
+        let content = "foo\nfoo\n"
+        do {
+            _ = try EditDiff.applyEdits(
+                to: content,
+                edits: [EditDiff.Edit(oldText: "foo", newText: "bar")],
+                path: "test.swift"
+            )
+            Issue.record("expected multipleMatches")
+        } catch let error as CodingToolError {
+            let message = error.errorDescription ?? ""
+            #expect(message.contains("replaceAll"))
+            #expect(message.contains("surrounding lines"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test("textNotFound shows the closest candidate lines from the file")
+    func textNotFoundShowsNearMiss() {
+        let content = "func total() -> Int {\n    return items.count\n}\n"
+        do {
+            _ = try EditDiff.applyEdits(
+                to: content,
+                edits: [EditDiff.Edit(
+                    oldText: "func total() -> Int {\n    return items.size\n}",
+                    newText: "func total() -> Int { 0 }"
+                )],
+                path: "test.swift"
+            )
+            Issue.record("expected textNotFound")
+        } catch let error as CodingToolError {
+            let message = error.errorDescription ?? ""
+            #expect(message.contains("Closest candidate"))
+            #expect(message.contains("line 1"))
+            // The snippet must show what the file actually contains at the
+            // near-miss location, so the model can fix oldText in one shot.
+            #expect(message.contains("return items.count"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test("textNotFound with no plausible anchor omits the candidate block")
+    func textNotFoundWithoutAnchorStaysPlain() {
+        let content = "alpha\nbeta\n"
+        do {
+            _ = try EditDiff.applyEdits(
+                to: content,
+                edits: [EditDiff.Edit(oldText: "gamma delta", newText: "x")],
+                path: "test.swift"
+            )
+            Issue.record("expected textNotFound")
+        } catch let error as CodingToolError {
+            let message = error.errorDescription ?? ""
+            #expect(!message.contains("Closest candidate"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+}

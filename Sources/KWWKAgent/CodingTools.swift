@@ -25,7 +25,7 @@ public enum CodingToolError: Error, Equatable, LocalizedError {
         case .textNotFound(let message):
             return message
         case .multipleMatches(let count):
-            return "found \(count) occurrences; text must be unique"
+            return "found \(count) occurrences of oldText; set replaceAll: true on that edit to replace every occurrence, or include more surrounding lines in oldText so the match is unique"
         case .offsetOutOfRange(let offset, let total):
             return "offset \(offset) is beyond end of file (\(total) lines total)"
         case .aborted:

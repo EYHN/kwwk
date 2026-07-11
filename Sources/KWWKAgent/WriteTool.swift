@@ -40,8 +40,8 @@ public func createWriteTool(
     let parameters: JSONValue = [
         "type": "object",
         "properties": [
-            "path": ["type": "string"],
-            "content": ["type": "string"],
+            "path": ["type": "string", "description": "Path (relative or absolute) to the file to write."],
+            "content": ["type": "string", "description": "Complete file content. Replaces any existing content entirely."],
         ],
         "required": ["path", "content"],
     ]
@@ -49,7 +49,7 @@ public func createWriteTool(
     var tool = AgentTool(
         name: "write",
         label: "write",
-        description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+        description: "Write content to a file. Creates the file if it doesn't exist, overwrites it entirely if it does — read a file first if it may already exist and you only intend to change part of it (use edit for partial changes). Automatically creates parent directories.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()

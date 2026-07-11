@@ -634,7 +634,7 @@ private func runBashInBackground(
         runner: runner,
         sessionId: sessionId
     )
-    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. Output is being written to: \(outputFile.path). Use the Read tool on that file to inspect stdout/stderr in the meantime; do NOT poll or sleep."
+    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. Use task(read:{task_id:\"\(taskId)\",offset,limit}) to inspect stdout/stderr in the meantime; do NOT poll or sleep. (Raw output file, outside the workspace: \(outputFile.path).)"
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
@@ -733,7 +733,7 @@ private func runBashForegroundWithFlip(
             await bundle.awaitAdoptedCompletion(cancellation: bgCancel)
         }
     )
-    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. Full output is being written to: \(adoptedFile.path). Use the Read tool on that path to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start."
+    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. Use task(read:{task_id:\"\(taskId)\",offset,limit}) to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start. (Raw output file, outside the workspace: \(adoptedFile.path).)"
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([

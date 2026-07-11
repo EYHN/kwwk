@@ -441,24 +441,38 @@ internal func _createAgentTool(
                 )
                 historyStore.attachTask(taskId, childSessionId: childSessionId)
                 let runnerState = await backgroundManager.get(taskId)?.status ?? .queued
+                var stateLine = "runner_state: \(runnerState.rawValue)"
+                var queueDetails: [String: JSONValue] = [:]
+                if runnerState == .queued,
+                   let queue = runner.capacityReservation?.queueStatus,
+                   let position = queue.position {
+                    stateLine += " (position \(position) of \(queue.queuedCount) waiting; max \(queue.maxConcurrent) concurrent; queue time does not consume the runtime timeout)"
+                    queueDetails = [
+                        "queue_position": .int(position),
+                        "queued_count": .int(queue.queuedCount),
+                        "max_concurrent": .int(queue.maxConcurrent),
+                    ]
+                }
                 let body = """
-                Registered subagent \(definition.name) in the background (runner_state: \(runnerState.rawValue)).
+                Registered subagent \(definition.name) in the background (\(stateLine)).
                 task_id: \(taskId)
                 output_file: \(outputFile.path)
                 While parent work remains, inspect live progress with agent_history(task_id: "\(taskId)") instead of blocking in task poll. Use task(list: true) for bounded status; poll only when otherwise blocked.
                 """
                 let display = "agent \(definition.name) background · \(taskId) · \(outputFile.path)"
+                var details: [String: JSONValue] = [
+                    "status": .string("background_started"),
+                    "runner_state": .string(runnerState.rawValue),
+                    "task_id": .string(taskId),
+                    "output_file": .string(outputFile.path),
+                    "subagent_type": .string(definition.name),
+                    "child_session_id": .string(childSessionId),
+                    "description": .string(input.description),
+                ]
+                details.merge(queueDetails) { current, _ in current }
                 return AgentToolResult(
                     content: [.text(TextContent(text: body))],
-                    details: .object([
-                        "status": .string("background_started"),
-                        "runner_state": .string(runnerState.rawValue),
-                        "task_id": .string(taskId),
-                        "output_file": .string(outputFile.path),
-                        "subagent_type": .string(definition.name),
-                        "child_session_id": .string(childSessionId),
-                        "description": .string(input.description),
-                    ]),
+                    details: .object(details),
                     runtimeEvents: [
                         .subagent(SubagentLifecycleEvent(
                             kind: .backgroundStarted,
