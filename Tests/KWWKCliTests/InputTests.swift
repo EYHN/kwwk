@@ -122,24 +122,27 @@ struct InputComponentTests {
 
 @Suite("Editor history recall")
 struct InputHistoryTests {
-    @Test("addToHistory + Up/Down walk newest-first") func recall() {
+    @Test("Up from empty browses newest-first; Down walks back out") func recall() {
         let input = InputComponent()
         input.addToHistory("first")
         input.addToHistory("second")
-        // Up from empty → most recent.
-        #expect(input.navigateHistory(-1) == true)
+        // Up from an empty buffer begins browsing at the most recent entry,
+        // anchoring the cursor at the *start* so the next Up keeps scrubbing.
+        input.cursorUp()
         #expect(input.value == "second")
-        // Up again → older.
-        #expect(input.navigateHistory(-1) == true)
+        #expect(input.cursor == 0)
+        input.cursorUp()
         #expect(input.value == "first")
-        // No older entry — refuse and keep the buffer.
-        #expect(input.navigateHistory(-1) == false)
+        #expect(input.cursor == 0)
+        // No older entry — hard stop, buffer kept.
+        input.cursorUp()
         #expect(input.value == "first")
-        // Down → newer.
-        #expect(input.navigateHistory(1) == true)
+        // Down → newer, cursor anchored at the end.
+        input.cursorDown()
         #expect(input.value == "second")
-        // Down past newest → back to the empty draft.
-        #expect(input.navigateHistory(1) == true)
+        #expect(input.cursor == 6)
+        // Down past the newest clears the editor (no draft slot in omp).
+        input.cursorDown()
         #expect(input.value == "")
     }
 
@@ -160,82 +163,194 @@ struct InputHistoryTests {
         #expect(input.value == "draft")
     }
 
-    @Test("typing exits history browse mode") func typingExits() {
+    @Test("typing at the Up-anchor appends at the end and exits browsing") func typingExits() {
         let input = InputComponent()
         input.addToHistory("recalled")
-        _ = input.navigateHistory(-1)
+        input.cursorUp()
         #expect(input.value == "recalled")
+        #expect(input.cursor == 0)
+        // omp #exitHistoryForEditing: the cursor sits at the start purely for
+        // scrubbing — typing jumps it to the end first, then inserts.
         input.handleInput("!")
         #expect(input.value == "recalled!")
-        // Back at the live draft: Up recalls from the top again, not "older".
-        #expect(input.navigateHistory(-1) == true)
-        #expect(input.value == "recalled")
+        // Browse mode exited: Up on the first visual row is now "go to line
+        // start", never a destructive recall.
+        input.cursorUp()
+        #expect(input.value == "recalled!")
+        #expect(input.cursor == 0)
     }
 
-    @Test("Up then Down restores an unsent draft") func draftPreserved() {
+    @Test("Up never replaces a non-empty draft with history") func draftNeverReplaced() {
         let input = InputComponent()
-        input.addToHistory("old")
-        // Live, unsent draft with a seeded prior history entry.
-        input.handleInput("d")
-        input.handleInput("r")
-        input.handleInput("f")
-        #expect(input.value == "drf")
-        // Up recalls the prior entry, stashing the draft.
-        #expect(input.navigateHistory(-1) == true)
-        #expect(input.value == "old")
-        // Down past the newest entry restores the draft verbatim.
-        #expect(input.navigateHistory(1) == true)
-        #expect(input.value == "drf")
+        input.addToHistory("prev")
+        input.value = "my unsent draft"
+        input.moveEnd()
+        // First Up on the (single) first visual row → start of line.
+        input.cursorUp()
+        #expect(input.value == "my unsent draft")
+        #expect(input.cursor == 0)
+        // Further Ups stay put — history is only enterable from empty.
+        input.cursorUp()
+        #expect(input.value == "my unsent draft")
+        #expect(input.cursor == 0)
     }
 
-    @Test("multi-step Up/Down preserves the draft") func draftPreservedMultiStep() {
-        let input = InputComponent()
-        input.addToHistory("first")
-        input.addToHistory("second")
-        // Live draft over two seeded entries.
-        input.value = "keep me"
-        #expect(input.value == "keep me")
-        // Walk up through both entries, then back down through them.
-        #expect(input.navigateHistory(-1) == true)
-        #expect(input.value == "second")
-        #expect(input.navigateHistory(-1) == true)
-        #expect(input.value == "first")
-        #expect(input.navigateHistory(1) == true)
-        #expect(input.value == "second")
-        // Down past the newest → the original draft, not a blank buffer.
-        #expect(input.navigateHistory(1) == true)
-        #expect(input.value == "keep me")
-    }
-
-    @Test("editing while browsing refreshes the stashed draft") func draftRefreshedAfterEdit() {
-        let input = InputComponent()
-        input.addToHistory("old")
-        input.value = "draft"
-        // Up stashes "draft" and shows the entry; typing exits browse mode.
-        #expect(input.navigateHistory(-1) == true)
-        #expect(input.value == "old")
-        input.handleInput("!")
-        #expect(input.value == "old!")
-        // Up again recaptures the new live buffer as the draft.
-        #expect(input.navigateHistory(-1) == true)
-        #expect(input.value == "old")
-        // Down restores the refreshed draft, never the stale "draft".
-        #expect(input.navigateHistory(1) == true)
-        #expect(input.value == "old!")
-    }
-
-    @Test("Up gated to first hard row, Down to last") func rowGating() {
+    @Test("Up/Down in a multi-line draft move the cursor, boundaries snap to line start/end") func multilineDraft() {
         let input = InputComponent(initial: "line1\nline2")
         input.addToHistory("prev")
-        // Cursor at end → on last hard row → Down is allowed but there's no
-        // newer entry, so it's a no-op; Up is blocked (not first row).
         input.moveEnd()
-        #expect(input.navigateHistoryUp() == false)
+        // Up from row 1 col 5 → row 0 col 5.
+        input.cursorUp()
+        #expect(input.cursor == 5)
         #expect(input.value == "line1\nline2")
-        // Move to the very start → first row → Up recalls.
+        // Up on the first visual row → column 0, not history.
+        input.cursorUp()
+        #expect(input.cursor == 0)
+        input.cursorUp()
+        #expect(input.cursor == 0)
+        // Down from row 0 col 0 → row 1 col 0.
+        input.cursorDown()
+        #expect(input.cursor == 6)
+        // Down on the last visual row → end of line; further Downs no-op.
+        input.cursorDown()
+        #expect(input.cursor == 11)
+        input.cursorDown()
+        #expect(input.cursor == 11)
+        #expect(input.value == "line1\nline2")
+    }
+
+    @Test("browsing a multi-line entry: Down walks rows before advancing") func multilineEntryScrub() {
+        let input = InputComponent()
+        input.addToHistory("a\nb")
+        input.cursorUp()
+        #expect(input.value == "a\nb")
+        #expect(input.cursor == 0)   // Up-anchor: first visual row
+        // Still browsing, but not on the last visual row → cursor moves down.
+        input.cursorDown()
+        #expect(input.value == "a\nb")
+        #expect(input.cursor == 2)
+        // Now on the last visual row → navigate newer, which clears.
+        input.cursorDown()
+        #expect(input.value == "")
+    }
+}
+
+@Suite("Editor vertical movement")
+struct InputVerticalMovementTests {
+    @Test("Up/Down move by visual (soft-wrapped) row, not logical line") func softWrapRows() {
+        let input = InputComponent(initial: "abcdefghij")
+        input.addToHistory("prev")
+        _ = input.render(width: 3)   // rows: abc / def / ghi / j
+        input.moveEnd()
+        input.cursorUp()
+        #expect(input.cursor == 7)   // row "ghi", col 1
+        input.cursorUp()
+        #expect(input.cursor == 4)
+        input.cursorUp()
+        #expect(input.cursor == 1)
+        // First visual row → start of line; the non-empty buffer never
+        // recalls history even though the cursor is on the first row.
+        input.cursorUp()
+        #expect(input.cursor == 0)
+        #expect(input.value == "abcdefghij")
+    }
+
+    @Test("goal column survives a short row and is restored once it fits") func stickyColumn() {
+        let input = InputComponent(initial: "abcde\nxy\nabcde")
+        input.moveEnd()              // row 2, col 5
+        input.cursorUp()
+        #expect(input.cursor == 8)   // clamped to end of "xy" (col 2), goal 5 remembered
+        input.cursorUp()
+        #expect(input.cursor == 5)   // row 0 fits col 5 → goal restored + consumed
+        input.cursorDown()
+        #expect(input.cursor == 8)   // short row again → clamp, goal 5 remembered
+        input.cursorDown()
+        #expect(input.cursor == 14)  // restored on the bottom row
+    }
+
+    @Test("a horizontal move clears the goal column") func horizontalMoveClearsGoal() {
+        let input = InputComponent(initial: "abcde\nxy\nabcde")
+        input.moveEnd()
+        input.cursorUp()             // on "xy" end, goal 5 pending
+        input.handleInput("\u{1B}[D")   // Left → col 1, goal cleared
+        #expect(input.cursor == 7)
+        input.cursorUp()
+        #expect(input.cursor == 1)   // straight up at col 1, no goal restore
+    }
+}
+
+@Suite("Editor viewport")
+struct InputViewportTests {
+    private func stripped(_ rows: [String]) -> [String] {
+        rows.map { $0.replacingOccurrences(of: CURSOR_MARKER, with: "") }
+    }
+
+    @Test("render is capped at maxVisibleRows with the cursor row visible") func heightCap() {
+        let input = InputComponent(initial: (0..<10).map { "l\($0)" }.joined(separator: "\n"))
+        input.maxVisibleRows = 4
+        input.focused = true
+        input.moveEnd()
+        let rows = input.render(width: 40)
+        #expect(stripped(rows) == ["l6", "l7", "l8", "l9"])
+        #expect(rows[3].contains(CURSOR_MARKER))
+    }
+
+    @Test("cursor above the viewport pins it to the top row") func scrollUp() {
+        let input = InputComponent(initial: (0..<10).map { "l\($0)" }.joined(separator: "\n"))
+        input.maxVisibleRows = 4
+        input.focused = true
+        input.moveEnd()
+        _ = input.render(width: 40)  // scrolled to the bottom
         input.moveHome()
-        #expect(input.navigateHistoryUp() == true)
-        #expect(input.value == "prev")
+        let rows = input.render(width: 40)
+        #expect(stripped(rows) == ["l0", "l1", "l2", "l3"])
+        #expect(rows[0].contains(CURSOR_MARKER))
+    }
+
+    @Test("viewport does not chase the cursor while it stays inside") func minimalScroll() {
+        let input = InputComponent(initial: (0..<10).map { "l\($0)" }.joined(separator: "\n"))
+        input.maxVisibleRows = 4
+        input.focused = true
+        input.moveHome()
+        _ = input.render(width: 40)  // offset 0
+        for _ in 0..<3 { input.cursorDown() }
+        var rows = input.render(width: 40)
+        #expect(stripped(rows) == ["l0", "l1", "l2", "l3"])
+        #expect(rows[3].contains(CURSOR_MARKER))
+        // One more row down crosses the bottom edge → scroll by one.
+        input.cursorDown()
+        rows = input.render(width: 40)
+        #expect(stripped(rows) == ["l1", "l2", "l3", "l4"])
+        #expect(rows[3].contains(CURSOR_MARKER))
+    }
+
+    @Test("soft-wrapped rows count 1:1 against the cap") func wrappedRowsCounted() {
+        let input = InputComponent(initial: "abcdefghijkl")
+        input.maxVisibleRows = 2
+        input.moveEnd()
+        let rows = input.render(width: 3)   // 4 visual rows, viewport shows 2
+        #expect(rows == ["ghi", "jkl"])
+    }
+
+    @Test("shrinking content pulls the viewport back to the top") func shrinkClamps() {
+        let input = InputComponent(initial: (0..<10).map { "l\($0)" }.joined(separator: "\n"))
+        input.maxVisibleRows = 4
+        input.moveEnd()
+        _ = input.render(width: 40)  // scrolled to the bottom
+        input.handleInput("\u{15}")  // Ctrl+U → kill to start, buffer empty
+        let rows = input.render(width: 40)
+        #expect(rows == [""])
+    }
+
+    @Test("CodingFrame derives the cap from the terminal height (omp formula)") func frameCap() {
+        // rows 20: clamp(20−12, 6, 18) = 8, min(8, 20−4) = 8 → 6 content rows.
+        #expect(CodingFrame(viewportHeight: 20).input.maxVisibleRows == 6)
+        // rows 40: clamp(28, 6, 18) = 18 → 16 content rows.
+        #expect(CodingFrame(viewportHeight: 40).input.maxVisibleRows == 16)
+        // rows 8: clamp(−4, 6, 18) = 6, min(6, 4) = 4, floor 3... = 4 → 2 rows.
+        #expect(CodingFrame(viewportHeight: 8).input.maxVisibleRows == 2)
+        // rows 5: comfortable 6, rows−4 = 1, floor 3 → 3 → 1 content row.
+        #expect(CodingFrame(viewportHeight: 5).input.maxVisibleRows == 1)
     }
 }
 

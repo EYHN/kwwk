@@ -1073,7 +1073,7 @@ private func handleHotkeysCommand(_ ctx: SlashContext, _ args: String) async {
         ("Enter", "submit prompt / run highlighted slash command"),
         ("Tab", "complete the slash command under the cursor"),
         ("Tab / ← / →", "switch the provider tab in /model"),
-        ("↑ / ↓", "recall prompt history · move in popups"),
+        ("↑ / ↓", "move by line · recall history when empty · move in popups"),
         ("Alt/Option+↑", "pop a queued prompt back into the input to edit"),
         ("Esc", "stop the agent (and close an open popup/modal)"),
         ("Ctrl+L", "repaint the screen"),

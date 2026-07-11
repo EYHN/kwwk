@@ -63,6 +63,7 @@ final class CodingFrame: Component, @unchecked Sendable {
         self.input = InputComponent()
         self.promptRow = PromptRow(prompt: Theme.accentText("❯ ", bold: true), input: input)
         self.viewportHeight = max(1, viewportHeight)
+        syncEditorViewport()
     }
 
     var spinner: String {
@@ -71,6 +72,17 @@ final class CodingFrame: Component, @unchecked Sendable {
 
     func setViewport(height: Int) {
         viewportHeight = max(1, height)
+        syncEditorViewport()
+    }
+
+    /// omp's editor height cap (interactive-mode.ts `computeEditorMaxHeight`):
+    /// clamp(rows − 12, 6, 18), further limited to rows − 4, floored at 3.
+    /// That figure includes the box's two border rows; the editor caps its
+    /// visible *content* rows, so subtract them (never below 1).
+    private func syncEditorViewport() {
+        let comfortable = max(6, min(18, viewportHeight - 12))
+        let maxHeight = max(3, min(comfortable, viewportHeight - 4))
+        input.maxVisibleRows = max(1, maxHeight - 2)
     }
 
     func tick() {

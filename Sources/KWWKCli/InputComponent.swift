@@ -59,16 +59,20 @@ private enum WordNavKind {
 /// rendered output, and anything that would overflow `width` at render
 /// time soft-wraps onto the next visual row. The cursor is tracked as a
 /// linear index into the buffer but placed on the correct visual
-/// (row, col) at render time.
+/// (row, col) at render time. When the host sets `maxVisibleRows`, render
+/// shows a viewport of at most that many visual rows, scrolled so the
+/// cursor row is always visible (omp editor.ts `#updateScrollOffset`).
 ///
 /// Keyboard map mirrors readline/emacs basics (left/right, home/end,
 /// Ctrl-A/E/B/F/U/K, backspace, delete) plus word-wise editing and a
 /// kill-ring: Ctrl+W / Alt+Backspace delete the word before the cursor,
 /// Alt+D the word after, Alt+B/Alt+F move by word, Ctrl+Y yanks the last
 /// kill and Alt+Y cycles older kills. Ctrl+_ / Ctrl+Z undo the last
-/// destructive edit (single-level, with typed-run coalescing), and
-/// Up/Down recall prior submissions (`navigateHistory`). Newline-insert
-/// triggers:
+/// destructive edit (single-level, with typed-run coalescing). Up/Down
+/// follow omp's dispatch exactly (`cursorUp`/`cursorDown`): they move the
+/// cursor by *visual* row with a sticky goal column, and only touch
+/// prompt history from an empty buffer (or while already browsing on the
+/// first/last visual row). Newline-insert triggers:
 ///
 ///   - Shift+Enter (Kitty/Ghostty keyboard protocol)
 ///   - Ctrl+Enter  (terminals that send a modifier-tagged Enter)
@@ -81,6 +85,27 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
     private(set) var cursor: Int  // cursor position in chars (0...count)
     var focused: Bool = false
     var wantsKeyRelease: Bool { false }
+
+    /// Visual rows shown at once (nil = unlimited — the editor grows with
+    /// content). Set by the host from the terminal height; content beyond
+    /// the viewport is silently clipped, no indicators (omp behavior).
+    var maxVisibleRows: Int? {
+        didSet { if maxVisibleRows != oldValue { invalidate() } }
+    }
+    /// Topmost visible visual row. Follows the cursor with minimal moves:
+    /// cursor above the viewport pins it to the top row, below pins it to
+    /// the bottom row, otherwise unchanged (omp `#updateScrollOffset`).
+    private var scrollOffset = 0
+    /// Goal column for a run of vertical moves. Set only when a move lands
+    /// on a row too short for the current visual column; consumed by the
+    /// first row that fits it; cleared by any horizontal move or edit
+    /// (omp `#preferredVisualCol`).
+    private var preferredVisualCol: Int?
+    /// Width of the last painted frame. Vertical navigation and the
+    /// first/last-visual-row checks wrap against it, matching omp's
+    /// `#lastLayoutWidth` (navigation uses the width of the last frame).
+    /// Before the first render only hard newlines break rows.
+    private var lastLayoutWidth = Int.max
 
     /// Invoked with the body of a bracketed-paste sequence (wrapper
     /// stripped, body as-is — may contain newlines). When nil the
@@ -96,15 +121,10 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
 
     // Prompt recall (Up/Down). `history` is newest-first; `historyIndex`
     // is -1 when not browsing, 0 = most recent, growing into older entries.
+    // There is no draft stash: history is only enterable from an empty
+    // buffer (omp semantics), so a typed draft can never be replaced.
     private var history: [String] = []
     private var historyIndex: Int = -1
-
-    // The live draft stashed the moment Up recall first steps off the buffer
-    // (historyIndex -1 → a real entry). Stepping back Down to the newest entry
-    // restores it verbatim instead of blanking an unsent draft. Nil whenever
-    // not browsing; refreshed on each fresh move off the draft, so a stale
-    // draft can never resurrect.
-    private var pendingDraft: [Character]?
 
     // Emacs kill-ring + the last edit category that drives accumulation,
     // yank-pop eligibility, and undo coalescing.
@@ -131,7 +151,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
             // A programmatic replace is a fresh editing context: leave history
             // browse mode, drop the undo stack, and reset the edit category.
             historyIndex = -1
-            pendingDraft = nil
+            preferredVisualCol = nil
             undoStack.removeAll()
             lastAction = nil
             invalidate()
@@ -139,15 +159,50 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
     }
 
     func moveCursor(_ delta: Int) {
+        if delta > 0, cursor == chars.count {
+            // omp quirk (editor.ts:2734-2740): Right at the very end of the
+            // buffer can't move but records the visual column, so a following
+            // Up/Down keeps the end-of-line-ish column.
+            let rows = visualRows(width: lastLayoutWidth)
+            let row = rows[cursorVisualRow(rows)]
+            preferredVisualCol = visualColumn(from: row.start, to: cursor)
+            lastAction = nil
+            return
+        }
         cursor = max(0, min(chars.count, cursor + delta))
+        preferredVisualCol = nil
         lastAction = nil
         invalidate()
     }
 
-    func moveHome() { cursor = 0; lastAction = nil; invalidate() }
-    func moveEnd() { cursor = chars.count; lastAction = nil; invalidate() }
+    /// Buffer-wide jumps for programmatic callers (Tab completion, dequeue).
+    /// The Home/End *keys* are line-relative — `moveToLineStart`/`moveToLineEnd`.
+    func moveHome() { cursor = 0; preferredVisualCol = nil; lastAction = nil; invalidate() }
+    func moveEnd() { cursor = chars.count; preferredVisualCol = nil; lastAction = nil; invalidate() }
+
+    /// Start of the logical (hard-newline-bounded) line under the cursor
+    /// (Home / Ctrl+A — omp `#moveToLineStart`).
+    func moveToLineStart() {
+        var i = cursor
+        while i > 0 && chars[i - 1] != "\n" { i -= 1 }
+        cursor = i
+        preferredVisualCol = nil
+        lastAction = nil
+        invalidate()
+    }
+
+    /// End of the logical line under the cursor (End / Ctrl+E).
+    func moveToLineEnd() {
+        var i = cursor
+        while i < chars.count && chars[i] != "\n" { i += 1 }
+        cursor = i
+        preferredVisualCol = nil
+        lastAction = nil
+        invalidate()
+    }
 
     func insert(_ text: String) {
+        exitHistoryForEditing()
         // Coalesce a run of single typed characters into one undo step; a
         // multi-char insert (paste, token) is its own step.
         let single = text.count == 1 && text.first != "\n"
@@ -155,7 +210,6 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
             recordUndo()
         }
         insertCore(text)
-        historyIndex = -1
         lastAction = single ? .type : nil
     }
 
@@ -166,6 +220,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
             chars.insert(ch, at: cursor)
             cursor += 1
         }
+        preferredVisualCol = nil
         invalidate()
     }
 
@@ -175,6 +230,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         chars.remove(at: cursor - 1)
         cursor -= 1
         historyIndex = -1
+        preferredVisualCol = nil
         lastAction = .delete
         invalidate()
     }
@@ -184,6 +240,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         if lastAction != .delete { recordUndo() }
         chars.remove(at: cursor)
         historyIndex = -1
+        preferredVisualCol = nil
         lastAction = .delete
         invalidate()
     }
@@ -201,6 +258,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         cursor = start
         recordKill(deleted, backward: true)
         historyIndex = -1
+        preferredVisualCol = nil
         invalidate()
     }
 
@@ -214,6 +272,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         chars.removeSubrange(cursor..<end)
         recordKill(deleted, backward: false)
         historyIndex = -1
+        preferredVisualCol = nil
         invalidate()
     }
 
@@ -226,6 +285,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         cursor = 0
         recordKill(deleted, backward: true)
         historyIndex = -1
+        preferredVisualCol = nil
         invalidate()
     }
 
@@ -237,17 +297,20 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         chars.removeLast(chars.count - cursor)
         recordKill(deleted, backward: false)
         historyIndex = -1
+        preferredVisualCol = nil
         invalidate()
     }
 
     func moveWordLeft() {
         cursor = wordBoundaryLeft(from: cursor)
+        preferredVisualCol = nil
         lastAction = nil
         invalidate()
     }
 
     func moveWordRight() {
         cursor = wordBoundaryRight(from: cursor)
+        preferredVisualCol = nil
         lastAction = nil
         invalidate()
     }
@@ -296,6 +359,7 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         chars = snap.chars
         cursor = min(snap.cursor, chars.count)
         historyIndex = -1
+        preferredVisualCol = nil
         lastAction = nil
         invalidate()
     }
@@ -313,59 +377,111 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
     }
 
     /// Step through history. `direction` is -1 for older (Up), +1 for newer
-    /// (Down); stepping past the newest entry returns to the empty draft.
-    /// Returns false when there is nothing to recall. Mirrors editor.ts's
-    /// `navigateHistory`.
+    /// (Down). The buffer is replaced wholesale; going older anchors the
+    /// cursor at the *start* (so the very next Up is again "first visual
+    /// row" and keeps scrubbing), newer at the *end*. Index -1 is "not
+    /// browsing": stepping past the newest entry clears the editor. Returns
+    /// false when there is nothing to recall. Port of editor.ts's
+    /// `#navigateHistory`.
     @discardableResult
     func navigateHistory(_ direction: Int) -> Bool {
         lastAction = nil
         guard !history.isEmpty else { return false }
         let newIndex = historyIndex - direction
         guard newIndex >= -1, newIndex < history.count else { return false }
-        // Leaving the live draft (index -1) for a real entry: stash the draft
-        // (refreshing any prior stash) so a later Down restores it verbatim.
-        if historyIndex == -1, newIndex >= 0 {
-            pendingDraft = chars
-        }
         historyIndex = newIndex
         if historyIndex == -1 {
-            setBufferInternal(String(pendingDraft ?? []))
-            pendingDraft = nil
+            setBufferInternal("", cursorAtStart: false)
         } else {
-            setBufferInternal(history[historyIndex])
+            setBufferInternal(history[historyIndex], cursorAtStart: direction == -1)
         }
         return true
     }
 
-    /// Up-arrow recall, gated to the first hard row so multi-line drafts keep
-    /// their in-text cursor movement once vertical navigation lands.
-    @discardableResult
-    func navigateHistoryUp() -> Bool {
-        guard cursorOnFirstRow else { return false }
-        return navigateHistory(-1)
-    }
-
-    /// Down-arrow recall, gated to the last hard row (see `navigateHistoryUp`).
-    @discardableResult
-    func navigateHistoryDown() -> Bool {
-        guard cursorOnLastRow else { return false }
-        return navigateHistory(1)
-    }
-
     /// Replace the buffer without leaving history-browse mode (unlike `value`).
-    private func setBufferInternal(_ text: String) {
+    private func setBufferInternal(_ text: String, cursorAtStart: Bool) {
         undoStack.removeAll()
         chars = Array(text)
-        cursor = chars.count
+        cursor = cursorAtStart ? 0 : chars.count
+        preferredVisualCol = nil
         invalidate()
     }
 
-    private var cursorOnFirstRow: Bool {
-        !chars[0..<cursor].contains("\n")
+    /// omp `#exitHistoryForEditing`: typing into a just-recalled entry whose
+    /// cursor still sits at the Up-anchor (buffer start) first jumps the
+    /// cursor to the end, then inserts — after Up the cursor is at the start
+    /// purely for scrubbing; typing means "append to this prompt". Only
+    /// insertion relocates; backspace and the kill ops merely leave browse
+    /// mode.
+    private func exitHistoryForEditing() {
+        if historyIndex == -1 { return }
+        if cursor == 0 {
+            cursor = chars.count
+        }
+        historyIndex = -1
     }
 
-    private var cursorOnLastRow: Bool {
-        !chars[cursor..<chars.count].contains("\n")
+    // MARK: - Up/Down dispatch (cursor movement vs history)
+
+    /// Up — omp editor.ts:1391-1401. Empty buffer → begin browsing history
+    /// (the *only* arrow entry point into history; a non-empty draft is never
+    /// replaced). Browsing + first visual row → older entry. First visual row
+    /// → start of line. Otherwise → one visual row up.
+    func cursorUp() {
+        if chars.isEmpty {
+            navigateHistory(-1)
+        } else if historyIndex > -1, isOnFirstVisualRow {
+            navigateHistory(-1)
+        } else if isOnFirstVisualRow {
+            moveToLineStart()
+        } else {
+            moveCursorVertically(-1)
+        }
+    }
+
+    /// Down — omp editor.ts:1403-1412. Browsing + last visual row → newer
+    /// entry (or back past the newest, which clears the editor). Last visual
+    /// row → end of line. Otherwise → one visual row down. Note the
+    /// asymmetry: no empty-buffer branch — Down in an empty editor is a no-op
+    /// line-end jump.
+    func cursorDown() {
+        if historyIndex > -1, isOnLastVisualRow {
+            navigateHistory(1)
+        } else if isOnLastVisualRow {
+            moveToLineEnd()
+        } else {
+            moveCursorVertically(1)
+        }
+    }
+
+    /// PageUp shares Up's history disambiguation with page-scroll as the
+    /// fallback (omp editor.ts:1361-1368).
+    func pageUp() {
+        if chars.isEmpty {
+            navigateHistory(-1)
+        } else if historyIndex > -1, isOnFirstVisualRow {
+            navigateHistory(-1)
+        } else {
+            pageScroll(-1)
+        }
+    }
+
+    /// PageDown — omp editor.ts:1369-1375.
+    func pageDown() {
+        if historyIndex > -1, isOnLastVisualRow {
+            navigateHistory(1)
+        } else {
+            pageScroll(1)
+        }
+    }
+
+    private var isOnFirstVisualRow: Bool {
+        cursorVisualRow(visualRows(width: lastLayoutWidth)) == 0
+    }
+
+    private var isOnLastVisualRow: Bool {
+        let rows = visualRows(width: lastLayoutWidth)
+        return cursorVisualRow(rows) == rows.count - 1
     }
 
     // MARK: - Word boundaries
@@ -458,9 +574,150 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         Self.wordNavJoiners.contains(ch)
     }
 
+    // MARK: - Visual rows (wrap layout shared by render + vertical navigation)
+
+    /// One visual (wrapped) row: `chars[start..<end]`, hard newline excluded.
+    /// `isLastOfLine` marks the final segment of a logical line, where the
+    /// cursor may legally sit *at* `end` (the end-of-line position); on a
+    /// soft-wrap boundary that index belongs to the next row.
+    private struct VisualRow {
+        let start: Int
+        let end: Int
+        let isLastOfLine: Bool
+    }
+
+    /// Wrap pass: `\n` forces a new row; a character whose column width
+    /// would overflow `width` soft-wraps onto the next row. Never empty —
+    /// an empty buffer is one empty row.
+    private func visualRows(width: Int) -> [VisualRow] {
+        let width = max(1, width)
+        var rows: [VisualRow] = []
+        var start = 0
+        var col = 0
+        for i in 0..<chars.count {
+            let ch = chars[i]
+            if ch == "\n" {
+                rows.append(VisualRow(start: start, end: i, isLastOfLine: true))
+                start = i + 1
+                col = 0
+                continue
+            }
+            let w = charColumnWidth(ch)
+            if col + w > width {
+                rows.append(VisualRow(start: start, end: i, isLastOfLine: false))
+                start = i
+                col = 0
+            }
+            col += w
+        }
+        rows.append(VisualRow(start: start, end: chars.count, isLastOfLine: true))
+        return rows
+    }
+
+    /// Index of the visual row owning the cursor. A cursor sitting exactly on
+    /// a soft-wrap boundary belongs to the *next* row (non-last segments
+    /// exclude `cursor == end`), except at the true end of a logical line.
+    private func cursorVisualRow(_ rows: [VisualRow]) -> Int {
+        for (i, row) in rows.enumerated() {
+            if cursor >= row.start, cursor < row.end || (row.isLastOfLine && cursor == row.end) {
+                return i
+            }
+        }
+        return rows.count - 1
+    }
+
+    /// Visible cell count of `chars[start..<end]`.
+    private func visualColumn(from start: Int, to end: Int) -> Int {
+        var col = 0
+        for i in start..<end { col += charColumnWidth(chars[i]) }
+        return col
+    }
+
+    /// Rightmost visual column the cursor may occupy on a row: the full row
+    /// width on the last segment of a logical line, one grapheme short on a
+    /// soft-wrapped segment whose end position belongs to the next row
+    /// (omp `maxSegmentVisualCol`).
+    private func maxVisualColumn(of row: VisualRow) -> Int {
+        let width = visualColumn(from: row.start, to: row.end)
+        if row.isLastOfLine || row.end == row.start { return width }
+        return width - charColumnWidth(chars[row.end - 1])
+    }
+
+    /// Buffer index within `row` for a target visual column, snapped to a
+    /// grapheme start — never splits a cluster (omp `offsetAtVisualCol`).
+    private func index(in row: VisualRow, atVisualColumn target: Int) -> Int {
+        var col = 0
+        var i = row.start
+        while i < row.end {
+            let w = charColumnWidth(chars[i])
+            if col + w > target { return i }
+            col += w
+            i += 1
+        }
+        return i
+    }
+
+    /// Move the cursor one visual row up/down with the sticky goal column.
+    private func moveCursorVertically(_ direction: Int) {
+        let rows = visualRows(width: lastLayoutWidth)
+        let current = cursorVisualRow(rows)
+        let target = current + direction
+        guard target >= 0, target < rows.count else { return }
+        moveToVisualRow(rows, from: current, to: target)
+    }
+
+    private func moveToVisualRow(_ rows: [VisualRow], from: Int, to: Int) {
+        let src = rows[from]
+        let dst = rows[to]
+        let col = verticalMoveColumn(
+            current: visualColumn(from: src.start, to: cursor),
+            sourceMax: maxVisualColumn(of: src),
+            targetMax: maxVisualColumn(of: dst)
+        )
+        cursor = index(in: dst, atVisualColumn: col)
+        lastAction = nil
+        invalidate()
+    }
+
+    /// omp's sticky-column decision table (`#computeVerticalMoveColumn`): the
+    /// goal column is remembered only when a vertical move lands on a row too
+    /// short for the current column, persists through further short rows, and
+    /// is consumed by the first row that fits it. A cursor mid-row ignores
+    /// and resets any pending goal.
+    private func verticalMoveColumn(current: Int, sourceMax: Int, targetMax: Int) -> Int {
+        let cursorInMiddle = current < sourceMax
+        guard let preferred = preferredVisualCol, !cursorInMiddle else {
+            if targetMax < current {
+                preferredVisualCol = current
+                return targetMax
+            }
+            preferredVisualCol = nil
+            return current
+        }
+        if targetMax < current || targetMax < preferred {
+            return targetMax
+        }
+        preferredVisualCol = nil
+        return preferred
+    }
+
+    /// PageUp/PageDown move the cursor a viewportful of visual rows (step =
+    /// visible rows − 1, min 1; 10 when uncapped) with the same sticky-column
+    /// mapping as Up/Down (omp `#pageScroll`).
+    private func pageScroll(_ direction: Int) {
+        lastAction = nil
+        let rows = visualRows(width: lastLayoutWidth)
+        let current = cursorVisualRow(rows)
+        let step = max(1, (maxVisibleRows ?? 10) - 1)
+        let target = max(0, min(rows.count - 1, current + direction * step))
+        guard target != current else { return }
+        moveToVisualRow(rows, from: current, to: target)
+    }
+
     // MARK: - Component
 
     func render(width: Int) -> [String] {
+        lastLayoutWidth = max(1, width)
         if let cachedOutput,
            cachedWidth == width,
            cachedState == chars,
@@ -475,46 +732,44 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         return rows
     }
 
-    /// Core wrap pass: walk the buffer once, laying each character out
-    /// on (row, col) with `\n` forcing a new row and width overflow
-    /// soft-wrapping. Returns the visual rows plus — when focused — a
-    /// zero-width cursor marker inserted at the cursor's visual column.
+    /// Render pass: wrap the buffer into visual rows, follow the cursor with
+    /// the scroll offset, and return only the viewport slice (`maxVisibleRows`
+    /// rows at most; everything when uncapped). The cursor row is always
+    /// inside the slice, carrying — when focused — a zero-width cursor marker
+    /// at the cursor's visual column.
     private func layoutRows(width: Int) -> [String] {
-        var rows: [[Character]] = [[]]
-        var cols: [Int] = [0]     // visible column width of each row so far
-        var cursorRow = 0
-        var cursorCol = 0
-
-        for i in 0..<chars.count {
-            if i == cursor {
-                cursorRow = rows.count - 1
-                cursorCol = cols.last!
+        let rows = visualRows(width: width)
+        let visibleHeight = maxVisibleRows ?? rows.count
+        updateScrollOffset(rows: rows, visibleHeight: visibleHeight)
+        let cursorRow = cursorVisualRow(rows)
+        var out: [String] = []
+        for i in scrollOffset..<min(rows.count, scrollOffset + visibleHeight) {
+            let row = rows[i]
+            var text = String(chars[row.start..<row.end])
+            if focused, i == cursorRow {
+                text = insertCursorMarker(in: text, atCol: visualColumn(from: row.start, to: cursor))
             }
-            let ch = chars[i]
-            if ch == "\n" {
-                rows.append([])
-                cols.append(0)
-                continue
-            }
-            let w = charColumnWidth(ch)
-            // Soft-wrap: this char wouldn't fit on the current row.
-            if cols.last! + w > width {
-                rows.append([])
-                cols.append(0)
-            }
-            rows[rows.count - 1].append(ch)
-            cols[cols.count - 1] += w
-        }
-        if cursor == chars.count {
-            cursorRow = rows.count - 1
-            cursorCol = cols.last!
-        }
-
-        var out: [String] = rows.map { String($0) }
-        if focused {
-            out[cursorRow] = insertCursorMarker(in: out[cursorRow], atCol: cursorCol)
+            out.append(text)
         }
         return out
+    }
+
+    /// omp `#updateScrollOffset`: content fits → pinned to 0; cursor above
+    /// the viewport → cursor becomes the top row; below → the bottom row;
+    /// otherwise unchanged. Always clamped so shrinking content pulls the
+    /// viewport up. No scroll margin, no indicators.
+    private func updateScrollOffset(rows: [VisualRow], visibleHeight: Int) {
+        if rows.count <= visibleHeight {
+            scrollOffset = 0
+            return
+        }
+        let cursorRow = cursorVisualRow(rows)
+        if cursorRow < scrollOffset {
+            scrollOffset = cursorRow
+        } else if cursorRow >= scrollOffset + visibleHeight {
+            scrollOffset = cursorRow - visibleHeight + 1
+        }
+        scrollOffset = min(scrollOffset, rows.count - visibleHeight)
     }
 
     /// Visible column width of a single `Character` (grapheme cluster). Uses
@@ -612,8 +867,8 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         }
         if event.ctrl || event.alt {
             switch (event.name, event.ctrl, event.alt) {
-            case ("a", true, false): moveHome()
-            case ("e", true, false): moveEnd()
+            case ("a", true, false): moveToLineStart()
+            case ("e", true, false): moveToLineEnd()
             case ("b", true, false): moveCursor(-1)
             case ("f", true, false): moveCursor(1)
             case ("u", true, false): deleteToStart()
@@ -651,8 +906,12 @@ final class InputComponent: Component, Focusable, @unchecked Sendable {
         switch event.name {
         case "left": moveCursor(-1)
         case "right": moveCursor(1)
-        case "home": moveHome()
-        case "end": moveEnd()
+        case "up": cursorUp()
+        case "down": cursorDown()
+        case "pageup": pageUp()
+        case "pagedown": pageDown()
+        case "home": moveToLineStart()
+        case "end": moveToLineEnd()
         case "backspace": backspace()
         case "delete": deleteForward()
         case "enter":
