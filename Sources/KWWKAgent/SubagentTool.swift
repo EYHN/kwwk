@@ -445,7 +445,7 @@ internal func _createAgentTool(
                 Registered subagent \(definition.name) in the background (runner_state: \(runnerState.rawValue)).
                 task_id: \(taskId)
                 output_file: \(outputFile.path)
-                While parent work remains, inspect live progress with agent_history(task_id: "\(taskId)") instead of blocking in job poll. Use job(list: true) for bounded status; poll only when otherwise blocked.
+                While parent work remains, inspect live progress with agent_history(task_id: "\(taskId)") instead of blocking in task poll. Use task(list: true) for bounded status; poll only when otherwise blocked.
                 """
                 let display = "agent \(definition.name) background · \(taskId) · \(outputFile.path)"
                 return AgentToolResult(
@@ -705,7 +705,7 @@ private enum SubagentPromptBuilder {
         - Background tasks started by the subagent's own tools are scoped to the subagent and are killed when that subagent ends.
         - Omit `run_in_background` to use the selected subagent's configured default.
         - Pass `run_in_background: false` when you must block for the result before continuing.
-        - Use background mode for independent fan-out. You will be notified when work completes; use `agent_history(task_id: ...)` to inspect a child's live transcript while you still have parent work, `job(list: true)` for bounded task status, and poll only when otherwise blocked.
+        - Use background mode for independent fan-out. You will be notified when work completes; use `agent_history(task_id: ...)` to inspect a child's live transcript while you still have parent work, `task(list: true)` for bounded task status, and poll only when otherwise blocked.
         - Subagents cannot spawn other subagents.
         """
     }
@@ -760,8 +760,7 @@ private func subagentToolsDescription(_ tools: CodingTools?) -> String {
     if tools.contains(.grep) { names.append("grep") }
     if tools.contains(.find) { names.append("find") }
     if tools.contains(.ls) { names.append("ls") }
-    if tools.contains(.taskStatus) { names.append("task_status") }
-    if tools.contains(.job) { names.append("job") }
+    if tools.contains(.task) { names.append("task") }
     return names.isEmpty ? "None" : names.joined(separator: ", ")
 }
 
@@ -1299,7 +1298,7 @@ private struct SubagentInvocationRunner: Sendable {
 
     /// Admit a background child now, but defer runner capacity until a slot is
     /// available. Model/tool validation still happens synchronously so invalid
-    /// launches are never reported as registered jobs.
+    /// launches are never reported as registered tasks.
     func queuingForCapacity() throws -> SubagentInvocationRunner {
         var copy = self
         let parent = parentSnapshot()
@@ -2228,7 +2227,7 @@ private func subagentToolArgumentSummary(toolName: String, args: JSONValue) -> S
         // This is explicitly untrusted telemetry, not an audit-grade secret
         // scrubber; full arguments remain available in agent_history.
         keys = ["command", "description", "timeout", "run_in_background"]
-    case "job":
+    case "task":
         keys = ["poll", "cancel", "list", "timeout_seconds"]
     case "agent":
         // The child prompt can contain arbitrary repository text; description

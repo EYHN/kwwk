@@ -418,7 +418,7 @@ func runCodingTUIInternal(
         pollHandle.task = Task { @MainActor in
             defer { pollHandle.task = nil }
             while !Task.isCancelled {
-                // Counting should not read every retained job's output tail.
+                // Counting should not read every retained task's output tail.
                 // The manager already exposes an active-only metadata path for
                 // this high-frequency status refresh.
                 let running = await bgManager.activeTaskIds(sessionId: sessionId).count
@@ -621,7 +621,7 @@ func runCodingTUIInternal(
 
     /// Replace every session-scoped runtime component as one idle-only
     /// transaction. In particular, tools and the background delivery consumer
-    /// are rebuilt with `newSessionId`; none retain the outgoing job namespace.
+    /// are rebuilt with `newSessionId`; none retain the outgoing task namespace.
     let replaceSessionAgent: @MainActor @Sendable (String, [Message]) async -> Agent = {
         newSessionId, messages in
         frameStatus.isSessionSwitching = true
@@ -1214,8 +1214,8 @@ func runCodingTUIInternal(
                 runner.tui.requestRender()
                 return
             }
-            // Idle fall-through. Background jobs are deliberately left alone:
-            // cancellation is an explicit job action, never a destructive
+            // Idle fall-through. Background tasks are deliberately left alone:
+            // cancellation is an explicit task action, never a destructive
             // side effect of a navigation key. Rewind arms
             // only with an empty editor while no compaction (auto or manual)
             // is mutating the transcript — any other idle Esc resets the arm
@@ -1380,7 +1380,7 @@ final class PollHandle {
 }
 
 /// Owns the complete session-scoped coding runtime. An Agent's session id and
-/// its bash/job/subagent tools are immutable by design, so a hot session switch
+/// its bash/task/subagent tools are immutable by design, so a hot session switch
 /// replaces this whole value rather than mutating transcript state in place.
 @MainActor
 final class AgentSessionBox {

@@ -6,26 +6,21 @@ import KWWKAI
 /// compose an arbitrary subset (`[.read, .grep, .bash]`). Filesystem path
 /// containment is configured separately through `FileAccessPolicy`.
 ///
-/// `.taskStatus` and `.job` are only honored when a `backgroundManager`
-/// is supplied. `.bash` works without a manager (legacy pipe executor) —
-/// it just loses `run_in_background` and the auto-background-on-timeout flip.
+/// `.task` is only honored when a `backgroundManager` is supplied. `.bash`
+/// works without a manager (legacy pipe executor) — it just loses
+/// `run_in_background` and the auto-background-on-timeout flip.
 public struct CodingTools: OptionSet, Sendable {
     public let rawValue: UInt32
     public init(rawValue: UInt32) { self.rawValue = rawValue }
 
-    public static let read       = CodingTools(rawValue: 1 << 0)
-    public static let write      = CodingTools(rawValue: 1 << 1)
-    public static let edit       = CodingTools(rawValue: 1 << 2)
-    public static let bash       = CodingTools(rawValue: 1 << 3)
-    public static let grep       = CodingTools(rawValue: 1 << 4)
-    public static let find       = CodingTools(rawValue: 1 << 5)
-    public static let ls         = CodingTools(rawValue: 1 << 6)
-    public static let taskStatus = CodingTools(rawValue: 1 << 7)
-    public static let job        = CodingTools(rawValue: 1 << 8)
-    /// Source-compatible alias. The default catalog now exposes `job`, not
-    /// the legacy single-id `wait_task` tool.
-    @available(*, deprecated, renamed: "job")
-    public static let waitTask   = job
+    public static let read  = CodingTools(rawValue: 1 << 0)
+    public static let write = CodingTools(rawValue: 1 << 1)
+    public static let edit  = CodingTools(rawValue: 1 << 2)
+    public static let bash  = CodingTools(rawValue: 1 << 3)
+    public static let grep  = CodingTools(rawValue: 1 << 4)
+    public static let find  = CodingTools(rawValue: 1 << 5)
+    public static let ls    = CodingTools(rawValue: 1 << 6)
+    public static let task  = CodingTools(rawValue: 1 << 7)
 
     /// Filesystem-scan tool whitelist — no write, edit, or shell. This does not
     /// constrain readable host paths; pair it with `.workspaceOnly` when needed.
@@ -34,7 +29,7 @@ public struct CodingTools: OptionSet, Sendable {
     /// Common editing tools. Includes shell and mutation capabilities; SDK
     /// callers must opt in explicitly when they want those effects.
     public static let standard: CodingTools = [
-        .read, .write, .edit, .bash, .grep, .find, .ls, .job,
+        .read, .write, .edit, .bash, .grep, .find, .ls, .task,
     ]
 }
 
@@ -326,11 +321,8 @@ internal func buildCodingToolList(
     if selected.contains(.ls) {
         tools.append(createLSTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
     }
-    if selected.contains(.taskStatus), let backgroundManager {
-        tools.append(createTaskStatusTool(manager: backgroundManager, sessionId: sessionId))
-    }
-    if selected.contains(.job), let backgroundManager {
-        tools.append(createJobTool(
+    if selected.contains(.task), let backgroundManager {
+        tools.append(createTaskTool(
             manager: backgroundManager,
             sessionId: sessionId,
             deliveryConsumer: backgroundDeliveryConsumer

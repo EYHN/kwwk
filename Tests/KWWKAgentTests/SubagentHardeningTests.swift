@@ -649,15 +649,15 @@ struct SubagentHardeningTests {
         #expect(secondQueued?.runningAt == nil)
         #expect(await manager.get(cancelledId)?.status == .queued)
 
-        let job = createJobTool(manager: manager, sessionId: "capacity-parent")
-        let listed = try await job.execute(
+        let task = createTaskTool(manager: manager, sessionId: "capacity-parent")
+        let listed = try await task.execute(
             "list-capacity",
             .object(["list": .bool(true)]),
             nil,
             nil
         )
         #expect(hardeningResultText(listed).contains("waiting_for_capacity"))
-        _ = try await job.execute(
+        _ = try await task.execute(
             "cancel-capacity",
             .object(["cancel": .array([.string(cancelledId)])]),
             nil,

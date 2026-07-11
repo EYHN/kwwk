@@ -294,7 +294,7 @@ private func bashToolDescription(hasManager: Bool, cwd: String) -> String {
 
         \(outputGuidance)
 
-        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use job(list:true) for bounded live status and job(read:{task_id,offset,limit}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
+        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task(list:true) for bounded live status and task(read:{task_id,offset,limit}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
 
         Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.
         """

@@ -663,8 +663,8 @@ struct BackgroundTaskManagerTests {
         try? await manager.kill(taskId)
     }
 
-    @Test("agent jobs do not infer stalls from silent reasoning")
-    func agentJobsSkipGenericStallWatchdog() async {
+    @Test("agent tasks do not infer stalls from silent reasoning")
+    func agentTasksSkipGenericStallWatchdog() async {
         let outputDir = makeOutputDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)

@@ -144,7 +144,7 @@ func runHeadlessInternal(
 /// The caller may hand us a reusable config that has a manager attached; copy
 /// it and clear that capability so `kwwk -p` can never report "started in the
 /// background" immediately before its process exits. Without a manager the
-/// bash schema omits background options, job/task-status tools are absent, and
+/// bash schema omits background options, the task tool is absent, and
 /// a subagent request that smuggles `run_in_background=true` is rejected by the
 /// agent tool at runtime.
 func makeHeadlessCodingAgent(_ input: CodingAgentConfig) async -> Agent {

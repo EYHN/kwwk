@@ -85,8 +85,8 @@ public struct BackgroundTaskOutcome: Sendable {
 ///   - If `cancellation.isCancelled` becomes true, the runner should stop
 ///     ASAP and still call `onDone` (with `success: false`,
 ///     `summary: "aborted"`).
-///   - For non-agent jobs, the Manager may poll `outputFile` size for prompt
-///     stall detection. It reads every job's tail on-demand for notifications.
+///   - For non-agent tasks, the Manager may poll `outputFile` size for prompt
+///     stall detection. It reads every task's tail on-demand for notifications.
 ///     No per-chunk callback is required.
 public protocol BackgroundTaskRunner: Sendable {
     var spec: BackgroundTaskSpec { get }
@@ -114,7 +114,7 @@ public struct BackgroundTaskSnapshot: Sendable {
     public let sessionId: String?
     public let spec: BackgroundTaskSpec
     public let status: BackgroundTaskStatus
-    /// Registration time. For queued jobs this precedes `runningAt`.
+    /// Registration time. For queued tasks this precedes `runningAt`.
     public let startedAt: Date
     /// Time the concrete runner acquired capacity. Nil while queued.
     public let runningAt: Date?
@@ -174,7 +174,7 @@ public struct BackgroundTaskNotification: Sendable {
     public let outcome: BackgroundTaskOutcome?   // nil while `stalled == true`
     public let outputTail: String
     /// True when the completion card contains only a bounded preview. Callers
-    /// can retrieve the complete artifact through the `job` output reader.
+    /// can retrieve the complete artifact through the `task` output reader.
     public var outputTruncated: Bool = false
     public let outputFile: String?
     public let durationMs: Int
@@ -232,7 +232,7 @@ public struct BackgroundTaskNotification: Sendable {
         lines.append("  <duration-ms>\(durationMs)</duration-ms>")
         if let outputFile {
             lines.append("  <output-file>\(escape(outputFile))</output-file>")
-            lines.append("  <hint>Use job output reading to inspect the complete stdout/stderr artifact.</hint>")
+            lines.append("  <hint>Use task output reading to inspect the complete stdout/stderr artifact.</hint>")
         }
         if !outputTail.isEmpty {
             let trimmed = outputTail
@@ -251,7 +251,7 @@ public struct BackgroundTaskNotification: Sendable {
             lines.append("  <output-truncated>true</output-truncated>")
         }
         if stalled {
-            lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with job(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
+            lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with task(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
         }
         lines.append("</task-notification>")
         return lines.joined(separator: "\n")

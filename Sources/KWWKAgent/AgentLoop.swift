@@ -102,7 +102,7 @@ public struct AgentLoopConfig: Sendable {
 
 public typealias AgentEventSink = @Sendable (AgentEvent) async -> Void
 
-private let multipleJobPollsCancellationReason = "multiple-job-polls"
+private let multipleTaskPollsCancellationReason = "multiple-task-polls"
 
 /// A snapshot of the agent's context at the start of a run. The loop copies
 /// these arrays before mutating so the caller's state is never aliased.
@@ -1114,7 +1114,7 @@ public enum AgentLoop {
                 var executionCancellation = cancellation
                 var cursorPollCancellation: CancellationHandle?
                 var cursorPollParentRegistration: CancellationRegistration?
-                if isBlockingJobPoll(prepared) {
+                if isBlockingTaskPoll(prepared) {
                     let pollCancellation = CancellationHandle()
                     let parentRegistration = cancellation?.onCancel { reason in
                         pollCancellation.cancel(reason: reason ?? "aborted")
@@ -1128,7 +1128,7 @@ public enum AgentLoop {
                             call: call, assistantMessage: placeholder, args: prepared.args,
                             context: context,
                             outcome: ExecutedOutcome(
-                                result: multipleJobPollsError(), isError: true
+                                result: multipleTaskPollsError(), isError: true
                             ),
                             config: config, cancellation: cancellation,
                             turnToolState: turnToolState, emitMessageEvents: false, emit: emit
@@ -1337,16 +1337,16 @@ public enum AgentLoop {
         // one, reject the entire poll set immediately; running the first could
         // still strand the turn on a slow id that appeared separately from a
         // fast one. Every call still receives a paired tool result.
-        // Prepare actual job tools up front so schema validation and
+        // Prepare actual task tools up front so schema validation and
         // `beforeToolCall` rewrites are part of the classification. Other tools
         // retain their existing just-in-time sequential behavior.
-        var preparedJobCalls: [String: ToolPreparation] = [:]
+        var preparedTaskCalls: [String: ToolPreparation] = [:]
         for call in toolCalls {
             guard !duplicateCallIds.contains(call.id) else { continue }
             guard !rejectedTerminalCallIds.contains(call.id) else { continue }
             guard currentContext.tools.first(where: { $0.name == call.name })?
-                .isBackgroundJobTool == true else { continue }
-            preparedJobCalls[call.id] = await prepareToolCall(
+                .isBackgroundTaskTool == true else { continue }
+            preparedTaskCalls[call.id] = await prepareToolCall(
                 context: currentContext,
                 assistantMessage: assistantMessage,
                 toolCall: call,
@@ -1355,9 +1355,9 @@ public enum AgentLoop {
                 turnToolState: turnToolState
             )
         }
-        let pollCallIds = preparedJobCalls.compactMap { id, preparation -> String? in
+        let pollCallIds = preparedTaskCalls.compactMap { id, preparation -> String? in
             guard case .prepared(let prepared) = preparation,
-                  isBlockingJobPoll(prepared) else { return nil }
+                  isBlockingTaskPoll(prepared) else { return nil }
             return id
         }
         var rejectedPollCallIds = turnToolState.rejectedNormalPollCallIds(pollCallIds)
@@ -1380,7 +1380,7 @@ public enum AgentLoop {
                 toolCalls: toolCalls,
                 config: config,
                 cancellation: cancellation,
-                preparedJobCalls: preparedJobCalls,
+                preparedTaskCalls: preparedTaskCalls,
                 rejectedPollCallIds: rejectedPollCallIds,
                 rejectedTerminalCallIds: rejectedTerminalCallIds,
                 duplicateCallIds: duplicateCallIds,
@@ -1394,7 +1394,7 @@ public enum AgentLoop {
                 toolCalls: toolCalls,
                 config: config,
                 cancellation: cancellation,
-                preparedJobCalls: preparedJobCalls,
+                preparedTaskCalls: preparedTaskCalls,
                 rejectedPollCallIds: rejectedPollCallIds,
                 rejectedTerminalCallIds: rejectedTerminalCallIds,
                 duplicateCallIds: duplicateCallIds,
@@ -1404,13 +1404,13 @@ public enum AgentLoop {
         }
     }
 
-    private static func isBlockingJobPoll(_ prepared: PreparedToolCall) -> Bool {
-        prepared.tool.isBackgroundJobTool && jobRequestWillPoll(prepared.args)
+    private static func isBlockingTaskPoll(_ prepared: PreparedToolCall) -> Bool {
+        prepared.tool.isBackgroundTaskTool && taskRequestWillPoll(prepared.args)
     }
 
-    private static func multipleJobPollsError() -> AgentToolResult {
+    private static func multipleTaskPollsError() -> AgentToolResult {
         errorToolResult(
-            "Multiple job polls, or a blocking job poll batched with another tool call, are rejected. Make one poll containing every task id and issue it alone."
+            "Multiple task polls, or a blocking task poll batched with another tool call, are rejected. Make one poll containing every task id and issue it alone."
         )
     }
 
@@ -1440,7 +1440,7 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
-        preparedJobCalls: [String: ToolPreparation],
+        preparedTaskCalls: [String: ToolPreparation],
         rejectedPollCallIds: Set<String>,
         rejectedTerminalCallIds: Set<String>,
         duplicateCallIds: Set<String>,
@@ -1459,8 +1459,8 @@ public enum AgentLoop {
             } else if duplicateCallIds.contains(call.id) {
                 prep = .immediate(duplicateToolCallIdError(call.id), true)
             } else if rejectedPollCallIds.contains(call.id) {
-                prep = .immediate(multipleJobPollsError(), true)
-            } else if let prepared = preparedJobCalls[call.id] {
+                prep = .immediate(multipleTaskPollsError(), true)
+            } else if let prepared = preparedTaskCalls[call.id] {
                 prep = prepared
             } else {
                 prep = await prepareToolCall(
@@ -1511,7 +1511,7 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
-        preparedJobCalls: [String: ToolPreparation],
+        preparedTaskCalls: [String: ToolPreparation],
         rejectedPollCallIds: Set<String>,
         rejectedTerminalCallIds: Set<String>,
         duplicateCallIds: Set<String>,
@@ -1534,8 +1534,8 @@ public enum AgentLoop {
             } else if duplicateCallIds.contains(call.id) {
                 prep = .immediate(duplicateToolCallIdError(call.id), true)
             } else if rejectedPollCallIds.contains(call.id) {
-                prep = .immediate(multipleJobPollsError(), true)
-            } else if let prepared = preparedJobCalls[call.id] {
+                prep = .immediate(multipleTaskPollsError(), true)
+            } else if let prepared = preparedTaskCalls[call.id] {
                 prep = prepared
             } else {
                 prep = await prepareToolCall(
@@ -1786,8 +1786,8 @@ public enum AgentLoop {
             return ExecutedOutcome(result: result, isError: false)
         } catch {
             await emitBox.waitForPending()
-            if effectiveCancellation?.reason == multipleJobPollsCancellationReason {
-                return ExecutedOutcome(result: multipleJobPollsError(), isError: true)
+            if effectiveCancellation?.reason == multipleTaskPollsCancellationReason {
+                return ExecutedOutcome(result: multipleTaskPollsError(), isError: true)
             }
             let message: String
             if error is CancellationError || (error as? CodingToolError) == .aborted {
@@ -2091,7 +2091,7 @@ private final class TurnToolExecutionState: @unchecked Sendable {
             guard activeCursorPoll?.callId == callId else { return nil }
             return activeCursorPoll?.cancellation
         }
-        cancellation?.cancel(reason: multipleJobPollsCancellationReason)
+        cancellation?.cancel(reason: multipleTaskPollsCancellationReason)
     }
 
     func reserveCursorPoll(callId: String, cancellation: CancellationHandle) -> Bool {
@@ -2112,7 +2112,7 @@ private final class TurnToolExecutionState: @unchecked Sendable {
         // A later Cursor inline poll must not merely fail itself while the
         // first one keeps the provider stream open. Cancel the first outside
         // the lock so cancellation listeners can safely re-enter loop state.
-        pollToCancel?.cancel(reason: multipleJobPollsCancellationReason)
+        pollToCancel?.cancel(reason: multipleTaskPollsCancellationReason)
         return accepted
     }
 

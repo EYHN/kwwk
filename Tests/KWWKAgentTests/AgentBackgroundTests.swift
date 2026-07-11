@@ -265,7 +265,7 @@ struct AgentBackgroundTests {
         let managerB = BackgroundTaskManager(outputDir: root.appendingPathComponent("b"))
         let agent = Agent(initialState: AgentInitialState(
             model: registration.getModel(),
-            tools: [createJobTool(manager: managerA, sessionId: "shared")]
+            tools: [createTaskTool(manager: managerA, sessionId: "shared")]
         ))
         try await agent.prompt("seed")
 

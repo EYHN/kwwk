@@ -211,7 +211,7 @@ public actor BackgroundTaskManager {
         }
         // `BackgroundTaskRunner.run` is a synchronous launch hook supplied by
         // SDK clients. Invoke it outside actor isolation so a buggy runner that
-        // blocks before returning cannot freeze kill/snapshot/timeout/job APIs.
+        // blocks before returning cannot freeze kill/snapshot/timeout/task APIs.
         DispatchQueue.global(qos: .utility).async {
             runner.run(
                 taskId: taskId,
@@ -346,7 +346,7 @@ public actor BackgroundTaskManager {
     }
 
     /// Validate an entire cancellation set, then apply it without actor
-    /// reentrancy. This gives `job cancel` all-or-none mutation semantics with
+    /// reentrancy. This gives `task cancel` all-or-none mutation semantics with
     /// respect to invalid ids and user cancellation observed before this call.
     func killAtomically(
         _ taskIds: [String],
@@ -414,7 +414,7 @@ public actor BackgroundTaskManager {
     }
 
     /// Active ids without output-file reads. Used by poll-all so status checks
-    /// stay cheap even when many jobs have large logs.
+    /// stay cheap even when many tasks have large logs.
     public func activeTaskIds(sessionId: String? = nil) -> [String] {
         tasks.filter { _, entry in
             entry.status.isActive && (sessionId == nil || entry.sessionId == sessionId)
@@ -434,7 +434,7 @@ public actor BackgroundTaskManager {
 
     /// Return a bounded page without eagerly loading every task's output tail.
     /// By default terminal history is limited to recent results while queued
-    /// and running jobs are always retained in the page source.
+    /// and running tasks are always retained in the page source.
     public func listPage(
         sessionId: String? = nil,
         includeAllTerminal: Bool = false,
@@ -1248,7 +1248,7 @@ struct BackgroundTaskCancellationBatch: Sendable {
 /// `BackgroundTaskManager` still broadcasts every notification to its public
 /// listeners. This mailbox only coordinates the choice between two delivery
 /// paths for one Agent: automatic runtime aside, or an explicitly retained
-/// `job` tool result. A poll temporarily watches task ids; terminal notices are
+/// `task` tool result. A poll temporarily watches task ids; terminal notices are
 /// held until the paired tool result is committed, and are restored if that
 /// result is rewound (notably Cursor inline-exec retry/abort).
 public final class BackgroundTaskDeliveryConsumer: @unchecked Sendable {

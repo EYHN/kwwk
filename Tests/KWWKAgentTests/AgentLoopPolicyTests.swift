@@ -333,7 +333,7 @@ struct AgentLoopPolicyTests {
         #expect(toolResultText(newResult).contains("per-turn call limit of 4"))
     }
 
-    @Test("a blocking job poll mixed with another tool rejects the entire batch")
+    @Test("a blocking task poll mixed with another tool rejects the entire batch")
     func mixedBlockingPollBatchIsRejected() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -341,7 +341,7 @@ struct AgentLoopPolicyTests {
             .message(fauxAssistantMessage(
                 blocks: [
                     fauxToolCall(
-                        name: "job",
+                        name: "task",
                         arguments: .object([
                             "poll": .array([.string("bg-does-not-need-to-exist")]),
                             "timeout_seconds": .int(600),
@@ -355,7 +355,7 @@ struct AgentLoopPolicyTests {
             .message(fauxAssistantMessage("batch rejected")),
         ])
         let manager = BackgroundTaskManager()
-        let job = createJobTool(manager: manager, sessionId: "mixed-poll-parent")
+        let task = createTaskTool(manager: manager, sessionId: "mixed-poll-parent")
         let executions = ToolCallRecorder()
         let slow = AgentTool(
             name: "slow",
@@ -371,7 +371,7 @@ struct AgentLoopPolicyTests {
         let agent = Agent(options: AgentOptions(
             initialState: AgentInitialState(
                 model: faux.getModel(),
-                tools: [job, slow]
+                tools: [task, slow]
             ),
             toolExecution: .parallel
         ))

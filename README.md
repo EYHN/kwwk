@@ -204,16 +204,16 @@ notifications are attached to that child session. When the subagent
 finishes or is cancelled, the generic background-task session is closed:
 still-running tasks in that child session are killed and queued
 notifications for that child session are discarded. If the parent starts
-the subagent itself with `run_in_background`, that top-level subagent job
-remains parent-visible so `job poll` and automatic runtime completion
+the subagent itself with `run_in_background`, that top-level subagent task
+remains parent-visible so `task poll` and automatic runtime completion
 notifications still work. Normal completion is delivered automatically;
-`job poll` is only for a parent that is otherwise blocked, and one poll can
+`task poll` is only for a parent that is otherwise blocked, and one poll can
 watch multiple task ids with wait-any semantics.
 
 `makeCodingAgent` also registers a parent-only `agent_history` tool whenever
 subagents are configured. It lists live/terminal children and pages their full
 retained messages by stable child-session or background-task id, rather than
-depending on the job output tail. The registry is process-local, keeps at most
+depending on the task output tail. The registry is process-local, keeps at most
 the newest 32 terminal children (subject to a 16 MiB estimated transcript
 budget), and reports eviction counts; it does not survive application restart.
 Each tool response is capped at 64 KiB and explicitly marks an individual
@@ -236,8 +236,8 @@ usage, cost, turns, duration, status, model, and child session id.
 Background subagents are recorded when the parent-visible background task
 is started; their terminal completion/failure is emitted later as the same
 `SubagentLifecycleEvent`, correlated by background task id and child session
-id, independently of whether a runtime aside or `job poll` consumes the
-model-facing notification. `job` snapshots retain the structured outcome,
+id, independently of whether a runtime aside or `task poll` consumes the
+model-facing notification. `task` snapshots retain the structured outcome,
 including usage and cost. `agent.backgroundSubagentRuns()` exposes the
 terminal cross-run aggregate to SDK hosts.
 
@@ -256,7 +256,7 @@ CLI built-ins default to background execution so independent team fan-out
 does not turn the parent into a wait-all barrier; pass
 `run_in_background: false` when the parent must block for one result.
 `agent_history(task_id: ...)` exposes a child's live transcript while parent
-work remains. `job(list: true)` exposes live status plus a bounded progress/output tail,
+work remains. `task(list: true)` exposes live status plus a bounded progress/output tail,
 and completion is delivered as an internal runtime aside rather than an
 editable user queue item. Use `--no-subagents` to disable them or
 `--subagents read-only` or `--subagents general,test-runner` to enable only a
@@ -268,7 +268,7 @@ path policy still does not constrain Bash/custom tools and is not an OS-level
 sandbox or a defense against hostile concurrent symlink replacement.
 
 One-shot `kwwk -p` deliberately disables background execution: it does not
-expose job/task-status or background bash options, and rejects background
+expose the task tool or background bash options, and rejects background
 subagent requests instead of exiting after reporting a task as started.
 
 When an SDK application is done with an agent session, call
