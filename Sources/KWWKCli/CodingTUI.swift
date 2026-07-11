@@ -1049,21 +1049,22 @@ func runCodingTUIInternal(
     }
 
     // Arrow keys drive whichever overlay is up: a modal selector or the
-    // slash-command popup. With neither open they recall prompt history —
-    // gated to the first/last hard row of the editor so a multi-line draft
-    // keeps in-text navigation once that lands.
+    // slash-command popup. With neither open they go to the editor, which
+    // disambiguates per omp: Up/Down move the cursor by visual row (sticky
+    // goal column) and recall history only from an empty buffer — or, while
+    // already browsing, from the first/last visual row.
     runner.bind(.init("up")) { _ in
         Task { @MainActor in
             if modal.isOpen { modal.routeUp() }
             else if frame.slashMenuActive { frame.menuMove(-1); runner.tui.requestRender() }
-            else if frame.input.navigateHistoryUp() { updateFrameStatus(); runner.tui.requestRender() }
+            else { frame.input.cursorUp(); updateFrameStatus(); runner.tui.requestRender() }
         }
     }
     runner.bind(.init("down")) { _ in
         Task { @MainActor in
             if modal.isOpen { modal.routeDown() }
             else if frame.slashMenuActive { frame.menuMove(1); runner.tui.requestRender() }
-            else if frame.input.navigateHistoryDown() { updateFrameStatus(); runner.tui.requestRender() }
+            else { frame.input.cursorDown(); updateFrameStatus(); runner.tui.requestRender() }
         }
     }
 
