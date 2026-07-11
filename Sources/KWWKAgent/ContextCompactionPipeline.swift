@@ -41,10 +41,18 @@ enum ContextCompactionPipeline {
         let recapTokenBudget = maximumRecapTokenBudget(for: request)
         if let target = request.targetTokens,
            recapTokenBudget < CompactionRecapRenderer.minimumUsefulTokenBudget {
+            // The recap budget is min(configured, target/4, target - fixed -
+            // margin); a sufficient retry target must clear BOTH target-derived
+            // constraints, so report the larger. Using the margin's cap keeps
+            // the reported value sufficient even though the margin itself
+            // grows with the target.
             throw AgentContextCompactionError.recoveryTargetTooSmall(
-                minimum: fixedTokenEstimate(for: request)
-                    + CompactionRecapRenderer.minimumUsefulTokenBudget
-                    + recapSafetyMargin(for: target),
+                minimum: max(
+                    fixedTokenEstimate(for: request)
+                        + CompactionRecapRenderer.minimumUsefulTokenBudget
+                        + maximumRecapSafetyMargin,
+                    4 * CompactionRecapRenderer.minimumUsefulTokenBudget
+                ),
                 target: target
             )
         }
@@ -391,8 +399,10 @@ enum ContextCompactionPipeline {
         ).locallyEstimated
     }
 
+    private static let maximumRecapSafetyMargin = 256
+
     private static func recapSafetyMargin(for target: Int) -> Int {
-        min(256, max(32, target / 100))
+        min(maximumRecapSafetyMargin, max(32, target / 100))
     }
 
     private static func effectiveSummaryConfig(

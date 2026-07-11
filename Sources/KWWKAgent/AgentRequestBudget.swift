@@ -17,8 +17,10 @@ enum AgentRequestBudget {
                 1,
                 (window / 100) * 15 + (window % 100) * 15 / 100
             )
-            let reserve = max(16_384, proportional)
-            return reserve >= window ? proportional : reserve
+            // The 16_384 floor buys generation headroom on big-window models,
+            // but must never swallow a small window: uncapped, a 17k-window
+            // model would be left ~600 input tokens and fail every preflight.
+            return min(max(16_384, proportional), max(proportional, window / 4))
         }
         // Server-driven/first-party routes and zero-metadata custom models do
         // not put a useful automatic limit on the wire. Retain proportional

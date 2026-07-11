@@ -543,14 +543,20 @@ struct BashToolTests {
             options: BashToolOptions(environment: testBashEnvironment)
         )
         let cancel = CancellationHandle()
+        // Cancel only after the child has demonstrably started: a fixed delay
+        // can lose the scheduling race on a loaded runner and fire after the
+        // command already finished, so no error would be thrown.
+        let marker = dir.appendingPathComponent("started").path
         Task { @Sendable in
-            try? await Task.sleep(nanoseconds: 20_000_000)
+            for _ in 0..<6_000 where !FileManager.default.fileExists(atPath: marker) {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+            }
             cancel.cancel()
         }
         await #expect(throws: Error.self) {
             _ = try await tool.execute(
                 "call-3",
-                ["command": .string("sleep 5")],
+                ["command": .string("touch started && sleep 30")],
                 cancel, nil
             )
         }

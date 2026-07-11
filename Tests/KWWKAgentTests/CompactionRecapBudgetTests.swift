@@ -27,7 +27,7 @@ struct CompactionRecapBudgetTests {
     }
 
     @Test("an impossible target fails before paying for a summary")
-    func impossibleTargetSkipsSummaryRequest() async {
+    func impossibleTargetSkipsSummaryRequest() async throws {
         let model = Model(
             id: "impossible-recap",
             api: "faux",
@@ -65,6 +65,14 @@ struct CompactionRecapBudgetTests {
             return
         }
         #expect(reason.contains("is too small for the minimum"))
+        // "recovery target of <target> tokens is too small for the minimum
+        // <minimum>-token recap" — the reported minimum must itself exceed the
+        // target that just failed, or the message is self-contradictory and a
+        // retry at the reported value fails again.
+        let numbers = reason.split(whereSeparator: { !$0.isNumber }).compactMap { Int($0) }
+        let target = try #require(numbers.first)
+        let minimum = try #require(numbers.last)
+        #expect(minimum > target)
         #expect(await calls.value == 0)
     }
 

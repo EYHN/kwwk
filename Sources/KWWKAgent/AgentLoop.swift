@@ -253,21 +253,19 @@ public enum AgentLoop {
             return replacementDeltaPrefix + currentContext.messages[baseCount...]
         }
         func unansweredRequestSuffix(in messages: [Message]) -> [Message] {
-            guard let assistantIndex = messages.lastIndex(where: { message in
-                if case .assistant = message { return true }
-                return false
-            }) else {
-                // With no assistant response, every submitted message is still
-                // unanswered and must survive a compaction replacement.
-                return messages
+            // Mirrors CompactionPlanner's protection rule: only the trailing
+            // run of user messages is unanswered input a replacement must keep
+            // verbatim. An unanswered tool exchange is deliberately excluded —
+            // the planner summarizes an over-budget in-flight turn into the
+            // recap (that is how provider-overflow recovery shrinks a huge
+            // tool result), so re-appending it here would duplicate content
+            // the recap already covers and desync the loop from Agent.state,
+            // which the built-in hook has already committed to.
+            var start = messages.count
+            while start > 0, case .user = messages[start - 1] {
+                start -= 1
             }
-            guard case .assistant(let assistant) = messages[assistantIndex] else {
-                return []
-            }
-            let suffixStart = assistant.stopReason == .toolUse
-                ? assistantIndex
-                : messages.index(after: assistantIndex)
-            return Array(messages[suffixStart...])
+            return Array(messages[start...])
         }
         func applyCompactionReplacement(_ replacement: AgentContext) {
             let previousMessages = currentContext.messages

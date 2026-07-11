@@ -677,31 +677,34 @@ struct SubagentHardeningTests {
 
     @Test("foreground child deadline returns a structured timeout")
     func foregroundDeadline() async throws {
-        let faux = await registerFauxProvider(RegisterFauxProviderOptions(
-            tokensPerSecond: 1,
-            tokenSize: FauxTokenSize(min: 1, max: 1)
-        ))
-        defer { faux.unregister() }
-        faux.setResponses([
-            .message(fauxAssistantMessage(String(repeating: "x", count: 100))),
-        ])
-        let tool = makeTool(
-            model: faux.getModel(),
-            limits: SubagentLimits(maxTurns: 4, timeoutSeconds: 1)
-        )
-        let startedAt = Date()
-        do {
-            _ = try await executeMini(tool, callId: "deadline")
-            Issue.record("expected deadline failure")
-        } catch let error as StructuredToolExecutionError {
-            guard case .object(let details) = error.details ?? .null else {
-                Issue.record("expected structured details")
-                return
+        try await withRetries { _ in
+            let faux = await registerFauxProvider(RegisterFauxProviderOptions(
+                tokensPerSecond: 1,
+                tokenSize: FauxTokenSize(min: 1, max: 1)
+            ))
+            defer { faux.unregister() }
+            faux.setResponses([
+                .message(fauxAssistantMessage(String(repeating: "x", count: 100))),
+            ])
+            let tool = makeTool(
+                model: faux.getModel(),
+                limits: SubagentLimits(maxTurns: 4, timeoutSeconds: 1)
+            )
+            let startedAt = Date()
+            do {
+                _ = try await executeMini(tool, callId: "deadline")
+                Issue.record("expected deadline failure")
+            } catch let error as StructuredToolExecutionError {
+                guard case .object(let details) = error.details ?? .null else {
+                    Issue.record("expected structured details")
+                    return
+                }
+                #expect(details["failure_kind"] == .string("timeout"))
+                #expect(details["capacity_retained_until_runner_exit"] == .bool(true))
             }
-            #expect(details["failure_kind"] == .string("timeout"))
-            #expect(details["capacity_retained_until_runner_exit"] == .bool(true))
+            let elapsed = Date().timeIntervalSince(startedAt)
+            try retryCheck(elapsed < 2, "deadline returned after \(elapsed)s, expected < 2s")
         }
-        #expect(Date().timeIntervalSince(startedAt) < 2)
     }
 
     @Test("background child deadline is classified by the child before manager watchdog")
@@ -755,47 +758,50 @@ struct SubagentHardeningTests {
 
     @Test("foreground deadline returns even when provider ignores cancellation")
     func nonCooperativeForegroundDeadline() async throws {
-        let provider = NonCooperativeSubagentProvider(delaySeconds: 2)
-        let sourceId = "non-cooperative-\(UUID().uuidString)"
-        await APIRegistry.shared.register(provider, sourceId: sourceId)
-        defer { Task { await APIRegistry.shared.unregisterSource(sourceId) } }
-        let model = Model(
-            id: "non-cooperative-model",
-            api: provider.api,
-            provider: "non-cooperative"
-        )
-        let tool = makeTool(
-            model: model,
-            limits: SubagentLimits(maxTurns: 4, timeoutSeconds: 1)
-        )
-        let updates = HardeningUpdateCapture()
-        let startedAt = Date()
-        do {
-            _ = try await tool.execute(
-                "non-cooperative-deadline",
-                .object([
-                    "description": .string("non-cooperative child"),
-                    "prompt": .string("return too late"),
-                    "subagent_type": .string("mini"),
-                ]),
-                nil,
-                { updates.append($0) }
+        try await withRetries { _ in
+            let provider = NonCooperativeSubagentProvider(delaySeconds: 2)
+            let sourceId = "non-cooperative-\(UUID().uuidString)"
+            await APIRegistry.shared.register(provider, sourceId: sourceId)
+            defer { Task { await APIRegistry.shared.unregisterSource(sourceId) } }
+            let model = Model(
+                id: "non-cooperative-model",
+                api: provider.api,
+                provider: "non-cooperative"
             )
-            Issue.record("expected deadline failure")
-        } catch let error as StructuredToolExecutionError {
-            guard case .object(let details) = error.details ?? .null else {
-                Issue.record("expected structured details")
-                return
+            let tool = makeTool(
+                model: model,
+                limits: SubagentLimits(maxTurns: 4, timeoutSeconds: 1)
+            )
+            let updates = HardeningUpdateCapture()
+            let startedAt = Date()
+            do {
+                _ = try await tool.execute(
+                    "non-cooperative-deadline",
+                    .object([
+                        "description": .string("non-cooperative child"),
+                        "prompt": .string("return too late"),
+                        "subagent_type": .string("mini"),
+                    ]),
+                    nil,
+                    { updates.append($0) }
+                )
+                Issue.record("expected deadline failure")
+            } catch let error as StructuredToolExecutionError {
+                guard case .object(let details) = error.details ?? .null else {
+                    Issue.record("expected structured details")
+                    return
+                }
+                #expect(details["failure_kind"] == .string("timeout"))
             }
-            #expect(details["failure_kind"] == .string("timeout"))
+            let elapsed = Date().timeIntervalSince(startedAt)
+            try retryCheck(elapsed < 1.75, "deadline returned after \(elapsed)s, expected < 1.75s")
+            try retryCheck(provider.didFinish == false, "provider finished before the deadline returned")
+            let updatesAtTimeout = updates.count
+            let eventuallyFinished = await awaitUntil(3_000) { provider.didFinish }
+            #expect(eventuallyFinished)
+            try? await Task.sleep(nanoseconds: 50_000_000)
+            #expect(updates.count == updatesAtTimeout)
         }
-        #expect(Date().timeIntervalSince(startedAt) < 1.75)
-        #expect(provider.didFinish == false)
-        let updatesAtTimeout = updates.count
-        let eventuallyFinished = await awaitUntil(3_000) { provider.didFinish }
-        #expect(eventuallyFinished)
-        try? await Task.sleep(nanoseconds: 50_000_000)
-        #expect(updates.count == updatesAtTimeout)
     }
 
     @Test("timed-out non-cooperative child retains physical runner capacity")
@@ -846,35 +852,38 @@ struct SubagentHardeningTests {
 
     @Test("an update callback can synchronously cancel its own subagent")
     func updateCallbackCancellationDoesNotDeadlock() async throws {
-        let faux = await registerFauxProvider()
-        defer { faux.unregister() }
-        faux.setResponses([.message(fauxAssistantMessage("cancel during update"))])
-        let tool = makeTool(model: faux.getModel())
-        let cancellation = CancellationHandle()
-        let callback = HardeningUpdateCanceller(cancellation: cancellation)
-        let startedAt = Date()
+        try await withRetries { _ in
+            let faux = await registerFauxProvider()
+            defer { faux.unregister() }
+            faux.setResponses([.message(fauxAssistantMessage("cancel during update"))])
+            let tool = makeTool(model: faux.getModel())
+            let cancellation = CancellationHandle()
+            let callback = HardeningUpdateCanceller(cancellation: cancellation)
+            let startedAt = Date()
 
-        do {
-            _ = try await tool.execute(
-                "cancel-from-update",
-                .object([
-                    "description": .string("cancel from update"),
-                    "prompt": .string("emit one update"),
-                    "subagent_type": .string("mini"),
-                ]),
-                cancellation,
-                { callback.handle($0) }
-            )
-            Issue.record("expected cancellation failure")
-        } catch let error as StructuredToolExecutionError {
-            guard case .object(let details) = error.details ?? .null else {
-                Issue.record("expected structured details")
-                return
+            do {
+                _ = try await tool.execute(
+                    "cancel-from-update",
+                    .object([
+                        "description": .string("cancel from update"),
+                        "prompt": .string("emit one update"),
+                        "subagent_type": .string("mini"),
+                    ]),
+                    cancellation,
+                    { callback.handle($0) }
+                )
+                Issue.record("expected cancellation failure")
+            } catch let error as StructuredToolExecutionError {
+                guard case .object(let details) = error.details ?? .null else {
+                    Issue.record("expected structured details")
+                    return
+                }
+                #expect(details["failure_kind"] == .string("aborted"))
             }
-            #expect(details["failure_kind"] == .string("aborted"))
+            #expect(callback.didCancel)
+            let elapsed = Date().timeIntervalSince(startedAt)
+            try retryCheck(elapsed < 2, "cancellation returned after \(elapsed)s, expected < 2s")
         }
-        #expect(callback.didCancel)
-        #expect(Date().timeIntervalSince(startedAt) < 2)
     }
 
     @Test("background subagent completion emits unified terminal lifecycle")

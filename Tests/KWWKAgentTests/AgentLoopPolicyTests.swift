@@ -551,6 +551,113 @@ struct AgentLoopPolicyTests {
         #expect(messageText(try #require(continueProviderMessages.last)) == "continue from here")
     }
 
+    @Test("a replacement retaining the trailing steer is adopted without duplication")
+    func compactionReplacementKeepsSteerWithoutDuplication() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let model = faux.getModel()
+        let providerContexts = ProviderContextRecorder()
+        let call = ToolCall(id: "steer-tool", name: "noop", arguments: .object([:]))
+        let steer = Message.user(UserMessage(text: "steer"))
+        let recap = Message.user(UserMessage(text: "recap"))
+        let context = AgentContext(systemPrompt: "", messages: [
+            .user(UserMessage(text: "old prompt")),
+            .assistant(AssistantMessage(
+                content: [.toolCall(call)],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                stopReason: .toolUse
+            )),
+            .toolResult(ToolResultMessage(
+                toolCallId: call.id,
+                toolName: call.name,
+                content: [.text(TextContent(text: "tool output"))]
+            )),
+            steer,
+        ], tools: [])
+
+        try await AgentLoop.run(
+            prompts: [],
+            context: context,
+            config: AgentLoopConfig(
+                model: model,
+                contextCompaction: { context, _, _ in
+                    var replacement = context
+                    replacement.messages = [recap, steer]
+                    return replacement
+                }
+            ),
+            emit: { _ in },
+            cancellation: nil,
+            streamFn: { _, context, _ in
+                await providerContexts.record(context.messages)
+                let pair = AssistantMessageStream.makeStream()
+                pair.continuation.end(fauxAssistantMessage("done"))
+                return pair.stream
+            }
+        )
+
+        // The planner protects the trailing user run, so the replacement
+        // already ends with the steer: the loop must not re-append the
+        // summarized tool exchange or send the steer twice.
+        let request = try #require(await providerContexts.last())
+        #expect(request == [recap, steer])
+    }
+
+    @Test("a replacement summarizing a trailing tool exchange is adopted wholesale")
+    func compactionReplacementDroppingToolExchangeIsAdoptedWholesale() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let model = faux.getModel()
+        let providerContexts = ProviderContextRecorder()
+        let call = ToolCall(id: "huge-tool", name: "noop", arguments: .object([:]))
+        let recap = Message.user(UserMessage(text: "recap covering the tool exchange"))
+        let context = AgentContext(systemPrompt: "", messages: [
+            .user(UserMessage(text: "old prompt")),
+            .assistant(AssistantMessage(
+                content: [.toolCall(call)],
+                api: model.api,
+                provider: model.provider,
+                model: model.id,
+                stopReason: .toolUse
+            )),
+            .toolResult(ToolResultMessage(
+                toolCallId: call.id,
+                toolName: call.name,
+                content: [.text(TextContent(text: String(repeating: "x", count: 4_000)))]
+            )),
+        ], tools: [])
+
+        try await AgentLoop.run(
+            prompts: [],
+            context: context,
+            config: AgentLoopConfig(
+                model: model,
+                contextCompaction: { context, _, _ in
+                    var replacement = context
+                    replacement.messages = [recap]
+                    return replacement
+                }
+            ),
+            emit: { _ in },
+            cancellation: nil,
+            streamFn: { _, context, _ in
+                await providerContexts.record(context.messages)
+                let pair = AssistantMessageStream.makeStream()
+                pair.continuation.end(fauxAssistantMessage("done"))
+                return pair.stream
+            }
+        )
+
+        // Summarizing an over-budget in-flight turn into the recap is how
+        // provider-overflow recovery shrinks a huge tool result. The retried
+        // request must carry the replacement exactly — re-appending the tool
+        // exchange would overflow again and desync the loop from Agent.state.
+        let request = try #require(await providerContexts.last())
+        #expect(request == [recap])
+    }
+
     @Test("tool calls in a length-truncated response are paired but never executed")
     func truncatedToolCallsDoNotExecute() async throws {
         let faux = await registerFauxProvider()
