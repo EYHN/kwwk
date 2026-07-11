@@ -591,14 +591,10 @@ public actor SessionStore {
         ) else {
             throw SessionStoreError.writeFailed(path: url.path)
         }
-        do {
-            _ = try FileManager.default.replaceItemAt(
-                url,
-                withItemAt: temporaryURL,
-                backupItemName: nil,
-                options: .usingNewMetadataOnly
-            )
-        } catch {
+        // POSIX rename(2) atomically replaces the destination on macOS and
+        // Linux alike. FileManager.replaceItemAt is not usable here: on
+        // swift-corelibs-foundation it can leave the destination missing.
+        guard rename(temporaryURL.path, url.path) == 0 else {
             try? FileManager.default.removeItem(at: temporaryURL)
             throw SessionStoreError.writeFailed(path: url.path)
         }
