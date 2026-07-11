@@ -1,11 +1,11 @@
 import Foundation
 import KWWKAI
 
-/// Unified background-job control. Polling accepts many ids in one tool call
-/// and returns as soon as any watched job reaches a terminal state. Background
+/// Unified background-task control. Polling accepts many ids in one tool call
+/// and returns as soon as any watched task reaches a terminal state. Background
 /// results auto-deliver through runtime asides, so polling is only for moments
 /// when the agent is genuinely blocked on a result.
-public func createJobTool(
+public func createTaskTool(
     manager: BackgroundTaskManager,
     sessionId: String? = nil,
     deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
@@ -78,17 +78,17 @@ public func createJobTool(
     ])
 
     var tool = AgentTool(
-        name: "job",
-        label: "job",
+        name: "task",
+        label: "task",
         description: """
-        Manage background jobs. Results are delivered automatically when jobs finish; do not poll merely to retrieve output. When completely blocked, make one call with poll containing every relevant task id. Poll is wait-any across queued and running jobs: it returns on the first terminal result, timeout, or queued user message. Queue time does not consume a job's hard runtime timeout. Never emit multiple job poll calls in one assistant turn. Use list=true for a bounded status page, read={task_id,offset,limit} for manager-authorized log paging, and cancel=[...] to stop queued or running jobs.
+        Manage background tasks. Results are delivered automatically when tasks finish; do not poll merely to retrieve output. When completely blocked, make one call with poll containing every relevant task id. Poll is wait-any across queued and running tasks: it returns on the first terminal result, timeout, or queued user message. Queue time does not consume a task's hard runtime timeout. Never emit multiple task poll calls in one assistant turn. Use list=true for a bounded status page, read={task_id,offset,limit} for manager-authorized log paging, and cancel=[...] to stop queued or running tasks.
         """,
         parameters: parameters,
         interruptible: true,
         execute: { _, args, cancellation, onUpdate in
             try cancellation?.throwIfCancelled()
             guard case .object(let object) = args else {
-                throw CodingToolError.invalidArgument("job: expected an object")
+                throw CodingToolError.invalidArgument("task: expected an object")
             }
 
             let allowedKeys: Set<String> = [
@@ -96,46 +96,46 @@ public func createJobTool(
                 "list_limit", "read", "timeout_seconds",
             ]
             if let unknown = object.keys.filter({ !allowedKeys.contains($0) }).sorted().first {
-                throw CodingToolError.invalidArgument("job: unknown argument `\(unknown)`")
+                throw CodingToolError.invalidArgument("task: unknown argument `\(unknown)`")
             }
 
             var seenCancelIds: Set<String> = []
-            let cancelIds = try jobStringArray(object["cancel"], field: "cancel")
+            let cancelIds = try taskStringArray(object["cancel"], field: "cancel")
                 .filter { seenCancelIds.insert($0).inserted }
-            let requestedPollIds = try jobStringArray(object["poll"], field: "poll")
-            let shouldList = try jobBool(object["list"], field: "list")
-            let includeAll = try jobBool(object["include_all"], field: "include_all")
-            let listOffset = try jobBoundedInteger(
+            let requestedPollIds = try taskStringArray(object["poll"], field: "poll")
+            let shouldList = try taskBool(object["list"], field: "list")
+            let includeAll = try taskBool(object["include_all"], field: "include_all")
+            let listOffset = try taskBoundedInteger(
                 object["list_offset"],
                 field: "list_offset",
                 defaultValue: 0,
                 range: 0...1_000_000_000
             )
-            let listLimit = try jobBoundedInteger(
+            let listLimit = try taskBoundedInteger(
                 object["list_limit"],
                 field: "list_limit",
                 defaultValue: 20,
                 range: 1...50
             )
-            let readRequest = try jobReadRequest(object["read"])
-            let timeoutSeconds = try jobTimeout(object["timeout_seconds"])
+            let readRequest = try taskReadRequest(object["read"])
+            let timeoutSeconds = try taskTimeout(object["timeout_seconds"])
 
             if readRequest != nil,
                shouldList || !cancelIds.isEmpty || !requestedPollIds.isEmpty {
                 throw CodingToolError.invalidArgument(
-                    "job: `read` cannot be combined with poll, cancel, or list"
+                    "task: `read` cannot be combined with poll, cancel, or list"
                 )
             }
             if shouldList, !requestedPollIds.isEmpty {
                 throw CodingToolError.invalidArgument(
-                    "job: `list` cannot be combined with a non-empty poll"
+                    "task: `list` cannot be combined with a non-empty poll"
                 )
             }
             if !shouldList,
                object["include_all"] != nil || object["list_offset"] != nil
                     || object["list_limit"] != nil {
                 throw CodingToolError.invalidArgument(
-                    "job: include_all/list_offset/list_limit require list=true"
+                    "task: include_all/list_offset/list_limit require list=true"
                 )
             }
 
@@ -152,14 +152,14 @@ public func createJobTool(
                 } catch let error as BackgroundTaskError {
                     throw CodingToolError.invalidArgument(error.localizedDescription)
                 }
-                return jobOutputReadResult(chunk)
+                return taskOutputReadResult(chunk)
             }
 
             // Resolve and validate every target before the first mutation. A
             // mixed valid/invalid cancel list must never partially kill work.
             for id in cancelIds {
                 guard let snapshot = await manager.get(id),
-                      jobIsVisible(snapshot, sessionId: sessionId) else {
+                      taskIsVisible(snapshot, sessionId: sessionId) else {
                     throw CodingToolError.invalidArgument("task not found in this session: \(id)")
                 }
             }
@@ -222,11 +222,11 @@ public func createJobTool(
                         terminalTaskIds: terminalIds
                     )
                     watchFinished = true
-                    var result = jobListResult(page: page, cancelledIds: cancelledIds)
+                    var result = taskListResult(page: page, cancelledIds: cancelledIds)
                     result.retentionLease = lease
                     return result
                 }
-                let snapshots = jobOrderedSnapshots(cancellationBatch.snapshots, ids: cancelIds)
+                let snapshots = taskOrderedSnapshots(cancellationBatch.snapshots, ids: cancelIds)
                 let watchedIdSet = Set(watchedIds)
                 let terminalIds = Set(snapshots.filter {
                     watchedIdSet.contains($0.id) && $0.status.isTerminal
@@ -236,7 +236,7 @@ public func createJobTool(
                     terminalTaskIds: terminalIds
                 )
                 watchFinished = true
-                var result = jobActionResult(
+                var result = taskActionResult(
                     snapshots: snapshots,
                     cancelledIds: cancelledIds,
                     requestedCancelIds: Set(cancelIds)
@@ -249,7 +249,7 @@ public func createJobTool(
                 _ = deliveryConsumer.finishWatching(taskIds: watchedIds, terminalTaskIds: [])
                 watchFinished = true
                 return AgentToolResult(
-                    content: [.text(TextContent(text: "No queued or running background jobs."))],
+                    content: [.text(TextContent(text: "No queued or running background tasks."))],
                     details: .object([
                         "reason": .string("empty"),
                         "tasks": .array([]),
@@ -268,7 +268,7 @@ public func createJobTool(
                 throw CodingToolError.invalidArgument(error.localizedDescription)
             }
 
-            var snapshots = jobOrderedSnapshots(watched, ids: pollIds)
+            var snapshots = taskOrderedSnapshots(watched, ids: pollIds)
             var reason = "completed"
             let pollStartedAt = Date()
             let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -279,7 +279,7 @@ public func createJobTool(
                 let now = Date()
                 guard force || now.timeIntervalSince(lastProgressAt) >= 0.75 else { return }
                 lastProgressAt = now
-                onUpdate(jobPollProgressResult(
+                onUpdate(taskPollProgressResult(
                     snapshots: snapshots,
                     elapsedMs: Int(now.timeIntervalSince(pollStartedAt) * 1_000),
                     timeoutSeconds: timeoutSeconds
@@ -303,7 +303,7 @@ public func createJobTool(
                     break
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                snapshots = await jobSnapshots(manager: manager, ids: pollIds)
+                snapshots = await taskSnapshots(manager: manager, ids: pollIds)
                 emitPollProgress()
             }
 
@@ -316,16 +316,16 @@ public func createJobTool(
                 sessionId: sessionId,
                 includeOutputTails: false
             )) ?? []
-            let finalWatched = await jobHydrateTerminalSnapshots(
+            let finalWatched = await taskHydrateTerminalSnapshots(
                 manager: manager,
                 snapshots: finalLightweight
             )
-            let renderedPollSnapshots = jobOrderedSnapshots(finalWatched, ids: pollIds)
+            let renderedPollSnapshots = taskOrderedSnapshots(finalWatched, ids: pollIds)
             if renderedPollSnapshots.contains(where: { $0.status.isTerminal }) {
                 reason = "completed"
             }
             let pollIdSet = Set(pollIds)
-            let renderedCancelSnapshots = jobOrderedSnapshots(
+            let renderedCancelSnapshots = taskOrderedSnapshots(
                 finalWatched,
                 ids: cancelIds.filter { !pollIdSet.contains($0) }
             )
@@ -336,7 +336,7 @@ public func createJobTool(
                 terminalTaskIds: terminalIds
             )
             watchFinished = true
-            var result = jobPollResult(
+            var result = taskPollResult(
                 snapshots: renderedSnapshots,
                 reason: reason,
                 alreadyDeliveredTaskIds: alreadyDelivered,
@@ -346,14 +346,14 @@ public func createJobTool(
             return result
         }
     )
-    tool.isBackgroundJobTool = true
-    tool.codingToolCapabilities = .job
+    tool.isBackgroundTaskTool = true
+    tool.codingToolCapabilities = .task
     tool.backgroundDeliveryConsumer = deliveryConsumer
     tool.backgroundTaskManager = manager
     return tool
 }
 
-private func jobPollProgressResult(
+private func taskPollProgressResult(
     snapshots: [BackgroundTaskSnapshot],
     elapsedMs: Int,
     timeoutSeconds: Int
@@ -363,7 +363,7 @@ private func jobPollProgressResult(
     let terminal = snapshots.count { $0.status.isTerminal }
     let elapsed = Double(max(0, elapsedMs)) / 1_000
     let summary = String(
-        format: "job poll waiting · watched=%d · running=%d · queued=%d · terminal=%d · %.1fs/%ds",
+        format: "task poll waiting · watched=%d · running=%d · queued=%d · terminal=%d · %.1fs/%ds",
         snapshots.count,
         running,
         queued,
@@ -387,16 +387,16 @@ private func jobPollProgressResult(
 }
 
 /// Must be called only after schema validation and the before-tool hook rewrite.
-/// It intentionally mirrors `createJobTool`'s action semantics exactly.
-func jobRequestWillPoll(_ args: JSONValue) -> Bool {
+/// It intentionally mirrors `createTaskTool`'s action semantics exactly.
+func taskRequestWillPoll(_ args: JSONValue) -> Bool {
     guard case .object(let object) = args else { return false }
     let allowedKeys: Set<String> = [
         "poll", "cancel", "list", "include_all", "list_offset",
         "list_limit", "read", "timeout_seconds",
     ]
     guard object.keys.allSatisfy(allowedKeys.contains) else { return false }
-    guard let pollIds = try? jobStringArray(object["poll"], field: "poll"),
-          let cancelIds = try? jobStringArray(object["cancel"], field: "cancel") else {
+    guard let pollIds = try? taskStringArray(object["poll"], field: "poll"),
+          let cancelIds = try? taskStringArray(object["cancel"], field: "cancel") else {
         return false
     }
     let shouldList: Bool = {
@@ -407,34 +407,34 @@ func jobRequestWillPoll(_ args: JSONValue) -> Bool {
         || (!shouldList && cancelIds.isEmpty && object["read"] == nil)
 }
 
-private struct JobReadRequest {
+private struct TaskReadRequest {
     let taskId: String
     let offset: Int
     let limit: Int
 }
 
-private func jobReadRequest(_ value: JSONValue?) throws -> JobReadRequest? {
+private func taskReadRequest(_ value: JSONValue?) throws -> TaskReadRequest? {
     guard let value else { return nil }
     guard case .object(let object) = value else {
-        throw CodingToolError.invalidArgument("job: `read` must be an object")
+        throw CodingToolError.invalidArgument("task: `read` must be an object")
     }
     let allowed: Set<String> = ["task_id", "offset", "limit"]
     if let unknown = object.keys.filter({ !allowed.contains($0) }).sorted().first {
-        throw CodingToolError.invalidArgument("job: unknown read argument `\(unknown)`")
+        throw CodingToolError.invalidArgument("task: unknown read argument `\(unknown)`")
     }
     guard case .string(let taskId) = object["task_id"] ?? .null,
           !taskId.isEmpty else {
-        throw CodingToolError.invalidArgument("job: `read.task_id` is required")
+        throw CodingToolError.invalidArgument("task: `read.task_id` is required")
     }
-    return JobReadRequest(
+    return TaskReadRequest(
         taskId: taskId,
-        offset: try jobBoundedInteger(
+        offset: try taskBoundedInteger(
             object["offset"],
             field: "read.offset",
             defaultValue: 0,
             range: 0...1_000_000_000
         ),
-        limit: try jobBoundedInteger(
+        limit: try taskBoundedInteger(
             object["limit"],
             field: "read.limit",
             defaultValue: 8_192,
@@ -443,28 +443,28 @@ private func jobReadRequest(_ value: JSONValue?) throws -> JobReadRequest? {
     )
 }
 
-private func jobStringArray(_ value: JSONValue?, field: String) throws -> [String] {
+private func taskStringArray(_ value: JSONValue?, field: String) throws -> [String] {
     guard let value else { return [] }
     guard case .array(let values) = value else {
-        throw CodingToolError.invalidArgument("job: `\(field)` must be an array of task ids")
+        throw CodingToolError.invalidArgument("task: `\(field)` must be an array of task ids")
     }
     return try values.map { value in
         guard case .string(let id) = value, !id.isEmpty else {
-            throw CodingToolError.invalidArgument("job: `\(field)` must contain only task ids")
+            throw CodingToolError.invalidArgument("task: `\(field)` must contain only task ids")
         }
         return id
     }
 }
 
-private func jobBool(_ value: JSONValue?, field: String) throws -> Bool {
+private func taskBool(_ value: JSONValue?, field: String) throws -> Bool {
     guard let value else { return false }
     guard case .bool(let bool) = value else {
-        throw CodingToolError.invalidArgument("job: `\(field)` must be a boolean")
+        throw CodingToolError.invalidArgument("task: `\(field)` must be a boolean")
     }
     return bool
 }
 
-private func jobBoundedInteger(
+private func taskBoundedInteger(
     _ value: JSONValue?,
     field: String,
     defaultValue: Int,
@@ -481,24 +481,24 @@ private func jobBoundedInteger(
               double >= Double(range.lowerBound),
               double <= Double(range.upperBound) else {
             throw CodingToolError.invalidArgument(
-                "job: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
+                "task: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
             )
         }
         raw = Int(double)
     default:
         throw CodingToolError.invalidArgument(
-            "job: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
+            "task: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
         )
     }
     guard range.contains(raw) else {
         throw CodingToolError.invalidArgument(
-            "job: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
+            "task: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
         )
     }
     return raw
 }
 
-private func jobTimeout(_ value: JSONValue?) throws -> Int {
+private func taskTimeout(_ value: JSONValue?) throws -> Int {
     guard let value else { return 30 }
     let raw: Int
     switch value {
@@ -510,28 +510,28 @@ private func jobTimeout(_ value: JSONValue?) throws -> Int {
               double >= 1,
               double <= 300 else {
             throw CodingToolError.invalidArgument(
-                "job: `timeout_seconds` must be a finite integer from 1 through 300"
+                "task: `timeout_seconds` must be a finite integer from 1 through 300"
             )
         }
         raw = Int(double)
     default:
         throw CodingToolError.invalidArgument(
-            "job: `timeout_seconds` must be a finite integer from 1 through 300"
+            "task: `timeout_seconds` must be a finite integer from 1 through 300"
         )
     }
     guard (1...300).contains(raw) else {
         throw CodingToolError.invalidArgument(
-            "job: `timeout_seconds` must be a finite integer from 1 through 300"
+            "task: `timeout_seconds` must be a finite integer from 1 through 300"
         )
     }
     return raw
 }
 
-private func jobIsVisible(_ snapshot: BackgroundTaskSnapshot, sessionId: String?) -> Bool {
+private func taskIsVisible(_ snapshot: BackgroundTaskSnapshot, sessionId: String?) -> Bool {
     sessionId == nil || snapshot.sessionId == sessionId
 }
 
-private func jobOrderedSnapshots(
+private func taskOrderedSnapshots(
     _ snapshots: [BackgroundTaskSnapshot],
     ids: [String]
 ) -> [BackgroundTaskSnapshot] {
@@ -539,7 +539,7 @@ private func jobOrderedSnapshots(
     return ids.compactMap { byId[$0] }
 }
 
-private func jobSnapshots(
+private func taskSnapshots(
     manager: BackgroundTaskManager,
     ids: [String]
 ) async -> [BackgroundTaskSnapshot] {
@@ -552,7 +552,7 @@ private func jobSnapshots(
     return snapshots
 }
 
-private func jobHydrateTerminalSnapshots(
+private func taskHydrateTerminalSnapshots(
     manager: BackgroundTaskManager,
     snapshots: [BackgroundTaskSnapshot]
 ) async -> [BackgroundTaskSnapshot] {
@@ -569,7 +569,7 @@ private func jobHydrateTerminalSnapshots(
     return hydrated
 }
 
-private func jobListResult(
+private func taskListResult(
     page: BackgroundTaskListPage,
     cancelledIds: [String]
 ) -> AgentToolResult {
@@ -578,10 +578,10 @@ private func jobListResult(
         lines.append("Cancelled: \(cancelledIds.joined(separator: ", "))")
     }
     if page.tasks.isEmpty {
-        lines.append("No queued, running, or recent background jobs.")
+        lines.append("No queued, running, or recent background tasks.")
     } else {
         for snapshot in page.tasks {
-            var line = "\(snapshot.id): \(jobSemanticStatus(snapshot))"
+            var line = "\(snapshot.id): \(taskSemanticStatus(snapshot))"
             if snapshot.status == .queued {
                 line += " · waiting_for_capacity"
             } else if snapshot.status == .running {
@@ -591,27 +591,27 @@ private func jobListResult(
                 line += " · output_bytes=\(snapshot.outputSizeBytes)"
             }
             lines.append(line)
-            var metadata = ["label: \(jobEscapeUntrustedOutput(snapshot.spec.label))"]
+            var metadata = ["label: \(taskEscapeUntrustedOutput(snapshot.spec.label))"]
             if let description = snapshot.spec.description {
-                metadata.append("description: \(jobEscapeUntrustedOutput(description))")
+                metadata.append("description: \(taskEscapeUntrustedOutput(description))")
             }
             if let outcome = snapshot.outcome {
-                metadata.append("summary: \(jobEscapeUntrustedOutput(outcome.summary))")
+                metadata.append("summary: \(taskEscapeUntrustedOutput(outcome.summary))")
                 if let error = outcome.errorMessage {
-                    metadata.append("error: \(jobEscapeUntrustedOutput(error))")
+                    metadata.append("error: \(taskEscapeUntrustedOutput(error))")
                 }
             }
-            lines.append("  <untrusted-job-metadata>\n  \(metadata.joined(separator: "\n  "))\n  </untrusted-job-metadata>")
+            lines.append("  <untrusted-task-metadata>\n  \(metadata.joined(separator: "\n  "))\n  </untrusted-task-metadata>")
             if !snapshot.outputTail.isEmpty {
-                lines.append("  output_tail:\n  <untrusted-output>\n\(jobEscapeUntrustedOutput(snapshot.outputTail.trimmingCharacters(in: .newlines)))\n  </untrusted-output>")
+                lines.append("  output_tail:\n  <untrusted-output>\n\(taskEscapeUntrustedOutput(snapshot.outputTail.trimmingCharacters(in: .newlines)))\n  </untrusted-output>")
             }
             if snapshot.outputTailTruncated {
-                lines.append("  output_truncated: true · use job read for the complete artifact")
+                lines.append("  output_truncated: true · use task read for the complete artifact")
             }
         }
     }
     if let next = page.nextOffset {
-        lines.append("More jobs available: call job(list:true, list_offset:\(next)).")
+        lines.append("More tasks available: call task(list:true, list_offset:\(next)).")
     }
     return AgentToolResult(
         content: [.text(TextContent(text: lines.joined(separator: "\n")))],
@@ -621,13 +621,13 @@ private func jobListResult(
             "total": .int(page.total),
             "offset": .int(page.offset),
             "next_offset": page.nextOffset.map(JSONValue.int) ?? .null,
-            "tasks": .array(page.tasks.map(jobListSnapshotJSON)),
+            "tasks": .array(page.tasks.map(taskListSnapshotJSON)),
         ])
     )
 }
 
-private func jobOutputReadResult(_ chunk: BackgroundTaskOutputChunk) -> AgentToolResult {
-    let escaped = jobEscapeUntrustedOutput(chunk.text)
+private func taskOutputReadResult(_ chunk: BackgroundTaskOutputChunk) -> AgentToolResult {
+    let escaped = taskEscapeUntrustedOutput(chunk.text)
     let encodingHint = chunk.encoding == .utf8
         ? "utf8"
         : "base64 (decode this page to recover invalid or unaligned bytes)"
@@ -653,7 +653,7 @@ private func jobOutputReadResult(_ chunk: BackgroundTaskOutputChunk) -> AgentToo
     )
 }
 
-private func jobActionResult(
+private func taskActionResult(
     snapshots: [BackgroundTaskSnapshot],
     cancelledIds: [String],
     requestedCancelIds: Set<String> = [],
@@ -666,50 +666,50 @@ private func jobActionResult(
     if !snapshots.isEmpty {
         lines.append(contentsOf: snapshots.map { snapshot in
             if includeSnapshotDetails || requestedCancelIds.contains(snapshot.id) {
-                return jobSnapshotText(snapshot)
+                return taskSnapshotText(snapshot)
             }
-                return "\(snapshot.id): \(snapshot.status.rawValue) — <untrusted-job-label>\(jobEscapeUntrustedOutput(snapshot.spec.label))</untrusted-job-label>"
+                return "\(snapshot.id): \(snapshot.status.rawValue) — <untrusted-task-label>\(taskEscapeUntrustedOutput(snapshot.spec.label))</untrusted-task-label>"
         })
     } else if cancelledIds.isEmpty {
-        lines.append("No background jobs.")
+        lines.append("No background tasks.")
     }
     return AgentToolResult(
         content: [.text(TextContent(text: lines.joined(separator: "\n")))],
         details: .object([
             "cancelled": .array(cancelledIds.map(JSONValue.string)),
-            "tasks": .array(snapshots.map(jobSnapshotJSON)),
+            "tasks": .array(snapshots.map(taskSnapshotJSON)),
         ])
     )
 }
 
-private func jobPollResult(
+private func taskPollResult(
     snapshots: [BackgroundTaskSnapshot],
     reason: String,
     alreadyDeliveredTaskIds: Set<String> = [],
     cancelledIds: [String] = []
 ) -> AgentToolResult {
-    var body = "job poll: \(reason)"
+    var body = "task poll: \(reason)"
     if !cancelledIds.isEmpty {
         body += "\n\ncancelled: \(cancelledIds.joined(separator: ", "))"
     }
     for snapshot in snapshots {
         if alreadyDeliveredTaskIds.contains(snapshot.id), snapshot.status.isTerminal {
             body += "\n\ntask \(snapshot.id): completion was already delivered through runtime context"
-            body += "\nstatus: \(jobSemanticStatus(snapshot))"
+            body += "\nstatus: \(taskSemanticStatus(snapshot))"
             if let outcome = snapshot.outcome {
-                body += "\n<untrusted-job-metadata>"
-                body += "\nsummary: \(jobEscapeUntrustedOutput(outcome.summary))"
+                body += "\n<untrusted-task-metadata>"
+                body += "\nsummary: \(taskEscapeUntrustedOutput(outcome.summary))"
                 if let error = outcome.errorMessage {
-                    body += "\nerror: \(jobEscapeUntrustedOutput(error))"
+                    body += "\nerror: \(taskEscapeUntrustedOutput(error))"
                 }
-                body += "\n</untrusted-job-metadata>"
+                body += "\n</untrusted-task-metadata>"
             }
             if snapshot.outputSizeBytes > 0 {
                 body += "\noutput_bytes: \(snapshot.outputSizeBytes)"
-                body += "\nhint: use job read with this task id to recover the complete output artifact"
+                body += "\nhint: use task read with this task id to recover the complete output artifact"
             }
         } else {
-            body += "\n\n\(jobSnapshotText(snapshot))"
+            body += "\n\n\(taskSnapshotText(snapshot))"
         }
     }
     return AgentToolResult(
@@ -720,57 +720,57 @@ private func jobPollResult(
                 snapshots.filter { $0.status.isTerminal }.map { .string($0.id) }
             ),
             "cancelled": .array(cancelledIds.map(JSONValue.string)),
-            "tasks": .array(snapshots.map(jobSnapshotJSON)),
+            "tasks": .array(snapshots.map(taskSnapshotJSON)),
         ])
     )
 }
 
-private func jobSnapshotText(_ snapshot: BackgroundTaskSnapshot) -> String {
-    var body = "task \(snapshot.id): \(jobSemanticStatus(snapshot))\n"
+private func taskSnapshotText(_ snapshot: BackgroundTaskSnapshot) -> String {
+    var body = "task \(snapshot.id): \(taskSemanticStatus(snapshot))\n"
     body += "\nrunner_state: \(snapshot.status == .queued ? "waiting_for_capacity" : snapshot.status == .running ? "active" : "terminal")"
     if let file = snapshot.outputFile {
-        body += "\noutput_file: \(jobEscapeUntrustedOutput(file))"
+        body += "\noutput_file: \(taskEscapeUntrustedOutput(file))"
     }
-    body += "\n<untrusted-job-metadata>"
-    body += "\nkind: \(jobEscapeUntrustedOutput(snapshot.spec.kind))"
-    body += "\nlabel: \(jobEscapeUntrustedOutput(snapshot.spec.label))"
+    body += "\n<untrusted-task-metadata>"
+    body += "\nkind: \(taskEscapeUntrustedOutput(snapshot.spec.kind))"
+    body += "\nlabel: \(taskEscapeUntrustedOutput(snapshot.spec.label))"
     if let description = snapshot.spec.description {
-        body += "\ndescription: \(jobEscapeUntrustedOutput(description))"
+        body += "\ndescription: \(taskEscapeUntrustedOutput(description))"
     }
     if let outcome = snapshot.outcome {
-        body += "\nsummary: \(jobEscapeUntrustedOutput(outcome.summary))"
+        body += "\nsummary: \(taskEscapeUntrustedOutput(outcome.summary))"
         if let error = outcome.errorMessage {
-            body += "\nerror: \(jobEscapeUntrustedOutput(error))"
+            body += "\nerror: \(taskEscapeUntrustedOutput(error))"
         }
         if let details = outcome.details,
            let data = try? JSONEncoder().encode(details),
            let json = String(data: data, encoding: .utf8) {
-            body += "\noutcome_details: \(jobEscapeUntrustedOutput(json))"
+            body += "\noutcome_details: \(taskEscapeUntrustedOutput(json))"
         }
     }
-    body += "\n</untrusted-job-metadata>"
+    body += "\n</untrusted-task-metadata>"
     if !snapshot.outputTail.isEmpty {
         body += "\noutput_tail:\n"
         body += "<untrusted-output>\n"
-        body += jobEscapeUntrustedOutput(
+        body += taskEscapeUntrustedOutput(
             snapshot.outputTail.trimmingCharacters(in: .newlines)
         )
         body += "\n</untrusted-output>"
     }
     if snapshot.outputTailTruncated {
-        body += "\noutput_truncated: true (use job read with byte offsets for the complete artifact)"
+        body += "\noutput_truncated: true (use task read with byte offsets for the complete artifact)"
     }
     return body
 }
 
-private func jobEscapeUntrustedOutput(_ value: String) -> String {
+private func taskEscapeUntrustedOutput(_ value: String) -> String {
     value.replacingOccurrences(of: "&", with: "&amp;")
         .replacingOccurrences(of: "<", with: "&lt;")
         .replacingOccurrences(of: ">", with: "&gt;")
 }
 
-private func jobSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValue {
-    let semanticStatus = jobSemanticStatus(snapshot)
+private func taskSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValue {
+    let semanticStatus = taskSemanticStatus(snapshot)
     var value: [String: JSONValue] = [
         "task_id": .string(snapshot.id),
         "status": .string(semanticStatus),
@@ -797,8 +797,8 @@ private func jobSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValue {
     return .object(value)
 }
 
-private func jobListSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValue {
-    let semanticStatus = jobSemanticStatus(snapshot)
+private func taskListSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValue {
+    let semanticStatus = taskSemanticStatus(snapshot)
     var value: [String: JSONValue] = [
         "task_id": .string(snapshot.id),
         "status": .string(semanticStatus),
@@ -828,7 +828,7 @@ private func jobListSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValu
     return .object(value)
 }
 
-private func jobSemanticStatus(_ snapshot: BackgroundTaskSnapshot) -> String {
+private func taskSemanticStatus(_ snapshot: BackgroundTaskSnapshot) -> String {
     if snapshot.outcome?.summary == "incomplete" { return "incomplete" }
     return snapshot.status.rawValue
 }

@@ -223,8 +223,8 @@ struct SubagentToolTests {
         #expect(done)
         guard done else { return }
 
-        let jobTool = createJobTool(manager: manager, sessionId: "sdk-parent")
-        let waitResult = try await jobTool.execute(
+        let taskTool = createTaskTool(manager: manager, sessionId: "sdk-parent")
+        let waitResult = try await taskTool.execute(
             "wait",
             .object([
                 "poll": .array([.string(started.taskId)]),
@@ -576,7 +576,7 @@ struct SubagentToolTests {
         #expect(detailString(result, "model") == "live-parent")
     }
 
-    @Test("background subagent writes output and can be read with job poll")
+    @Test("background subagent writes output and can be read with task poll")
     func backgroundSubagent() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -623,8 +623,8 @@ struct SubagentToolTests {
         let contents = snap?.outputFile.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
         #expect(contents.contains("background subagent answer"))
 
-        let jobTool = createJobTool(manager: manager, sessionId: "s1")
-        let waitResult = try await jobTool.execute(
+        let taskTool = createTaskTool(manager: manager, sessionId: "s1")
+        let waitResult = try await taskTool.execute(
             "wait-1",
             .object([
                 "poll": .array([.string(taskId)]),
@@ -636,7 +636,7 @@ struct SubagentToolTests {
         #expect(resultText(waitResult).contains("background subagent answer"))
     }
 
-    @Test("background progress is visible through job list before completion")
+    @Test("background progress is visible through task list before completion")
     func backgroundProgressIsVisibleWhileRunning() async throws {
         let faux = await registerFauxProvider(RegisterFauxProviderOptions(
             tokensPerSecond: 50,
@@ -697,8 +697,8 @@ struct SubagentToolTests {
         }
         #expect(progressVisible)
 
-        let jobTool = createJobTool(manager: manager, sessionId: "progress-parent")
-        let listed = try await jobTool.execute(
+        let taskTool = createTaskTool(manager: manager, sessionId: "progress-parent")
+        let listed = try await taskTool.execute(
             "list-progress",
             .object(["list": .bool(true)]),
             nil,
@@ -711,7 +711,7 @@ struct SubagentToolTests {
               case .array(let tasks) = details["tasks"] ?? .null,
               case .object(let task) = tasks.first ?? .null,
               case .string(let outputTail) = task["output_tail"] ?? .null else {
-            Issue.record("expected structured output_tail in job list")
+            Issue.record("expected structured output_tail in task list")
             return
         }
         #expect(outputTail.contains("[progress]"))
@@ -749,7 +749,7 @@ struct SubagentToolTests {
         defer { faux.unregister() }
         let cwd = makeTempDir()
         defer { try? FileManager.default.removeItem(at: cwd) }
-        let manager = BackgroundTaskManager(outputDir: cwd.appendingPathComponent("jobs"))
+        let manager = BackgroundTaskManager(outputDir: cwd.appendingPathComponent("tasks"))
         let thinkingSecret = "THINKING_SECRET_MUST_NOT_APPEAR"
         let writeSecret = "WRITE_CONTENT_SECRET_MUST_NOT_APPEAR"
         faux.setResponses([

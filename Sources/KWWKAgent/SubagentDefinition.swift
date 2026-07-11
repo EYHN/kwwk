@@ -283,8 +283,7 @@ public extension SubagentDefinition {
     ) -> SubagentDefinition {
         var safeTools = tools.intersection(.readOnly)
         if tools.contains(.bash) { safeTools.insert(.bash) }
-        if tools.contains(.taskStatus) { safeTools.insert(.taskStatus) }
-        if tools.contains(.job) { safeTools.insert(.job) }
+        if tools.contains(.task) { safeTools.insert(.task) }
         return SubagentDefinition(
             name: "test-runner",
             description: "Use for running tests and analyzing test or build failures.",

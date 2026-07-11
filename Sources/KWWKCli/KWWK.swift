@@ -19,8 +19,7 @@ public enum KWWK {
     /// no restart needed.
     ///
     /// `tools` controls which coding tools the agent is given. Default is
-    /// `.standard` — read/write/edit/bash/grep/find/ls/job. The legacy
-    /// `task_status` surface remains available through explicit selection.
+    /// `.standard` — read/write/edit/bash/grep/find/ls/task.
     /// Pass `.readOnly` for a reviewer-style tool whitelist. It does not by
     /// itself create an operating-system filesystem sandbox.
     ///

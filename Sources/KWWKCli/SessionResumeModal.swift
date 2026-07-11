@@ -49,7 +49,7 @@ final class SessionResumeModal: Modal {
         guard !core.isEmpty, sessions.indices.contains(core.selectedIndex) else { return }
         let selected = sessions[core.selectedIndex]
         // Reloading the live session is destructive rather than useful: the
-        // replacement path retires its Agent and closes every active job in the
+        // replacement path retires its Agent and closes every active task in the
         // session namespace. Treat the explicitly-labelled current row as a
         // close/no-op so an accidental Enter cannot kill ongoing work.
         guard selected.id != currentSessionId else {

@@ -168,7 +168,7 @@ struct BgNotificationSummaryTests {
 
         #expect(summary?.outputTruncated == true)
         #expect(summary?.outputTail.first == "[final]")
-        #expect(summary?.render().joined(separator: "\n").contains("full output is available through job read") == true)
+        #expect(summary?.render().joined(separator: "\n").contains("full output is available through task read") == true)
     }
 
     @Test("escaped untrusted output decodes exactly once for display")

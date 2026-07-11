@@ -89,6 +89,10 @@ public func createEditTool(
                     "properties": [
                         "oldText": ["type": "string"],
                         "newText": ["type": "string"],
+                        "replaceAll": [
+                            "type": "boolean",
+                            "description": "Replace every occurrence of oldText instead of requiring a unique match.",
+                        ],
                     ],
                     "required": ["oldText", "newText"],
                 ],
@@ -100,7 +104,7 @@ public func createEditTool(
     var tool = AgentTool(
         name: "edit",
         label: "edit",
-        description: "Edit a file using exact text replacement. Each oldText must match a unique, non-overlapping region.",
+        description: "Edit a file using exact text replacement. Each oldText must match a unique, non-overlapping region, or set replaceAll: true on an edit to replace every occurrence.",
         parameters: parameters,
         execute: { _, args, cancellation, onUpdate in
             try cancellation?.throwIfCancelled()
@@ -116,9 +120,16 @@ public func createEditTool(
                 guard case .object(let e) = item,
                       case .string(let old) = e["oldText"] ?? .null,
                       case .string(let new) = e["newText"] ?? .null else {
-                    throw CodingToolError.invalidArgument("edit: each item must be {oldText, newText}")
+                    throw CodingToolError.invalidArgument("edit: each item must be {oldText, newText, replaceAll?}")
                 }
-                collected.append(EditDiff.Edit(oldText: old, newText: new))
+                let replaceAll: Bool
+                switch e["replaceAll"] ?? .null {
+                case .bool(let flag): replaceAll = flag
+                case .null: replaceAll = false
+                default:
+                    throw CodingToolError.invalidArgument("edit: `replaceAll` must be a boolean")
+                }
+                collected.append(EditDiff.Edit(oldText: old, newText: new, replaceAll: replaceAll))
             }
             let edits = collected
 

@@ -208,8 +208,8 @@ public struct AgentTool: Sendable {
     public var interruptible: Bool
     /// Internal semantic marker used after schema validation and hook rewrites
     /// to apply the turn-scoped blocking-poll gate. A name match is not enough:
-    /// SDK users may register an unrelated custom tool called `job`.
-    var isBackgroundJobTool: Bool
+    /// SDK users may register an unrelated custom tool called `task`.
+    var isBackgroundTaskTool: Bool
     /// Optional semantic quota shared by every execution path for one
     /// assistant turn. Tools with the same key consume the same allowance;
     /// nil `maxCallsPerTurn` means unlimited. Internal so tool factories can
@@ -224,7 +224,7 @@ public struct AgentTool: Sendable {
     /// Unforgeable-by-name marker set only by kwwk's built-in coding-tool
     /// factories. Security decisions must use this marker, never `name`.
     var codingToolCapabilities: CodingTools
-    /// Shared with the Agent's background attachment so explicit job results
+    /// Shared with the Agent's background attachment so explicit task results
     /// and automatic runtime asides coordinate in the same consumer mailbox.
     var backgroundDeliveryConsumer: BackgroundTaskDeliveryConsumer?
     /// Manager identity paired with `backgroundDeliveryConsumer`. An Agent may
@@ -256,7 +256,7 @@ public struct AgentTool: Sendable {
         self.description = description
         self.parameters = parameters
         self.interruptible = interruptible
-        self.isBackgroundJobTool = false
+        self.isBackgroundTaskTool = false
         self.turnLimitKey = nil
         self.maxCallsPerTurn = nil
         self.fileAccessPolicy = nil

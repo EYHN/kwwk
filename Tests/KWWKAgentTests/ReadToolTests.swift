@@ -155,6 +155,29 @@ struct ReadToolTests {
         }
         #expect(hasImage)
     }
+
+    @Test("unreadable file reports a permission error, not file-not-found")
+    func unreadableFileIsNotNotFound() async throws {
+        // Root bypasses mode bits, so the EACCES path is untestable there
+        // (Linux CI containers run as root).
+        guard getuid() != 0 else { return }
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("locked.txt")
+        try "secret".write(to: file, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+
+        let tool = createReadTool(cwd: dir.path)
+        do {
+            _ = try await tool.execute("call-perm", ["path": .string(file.path)], nil, nil)
+            Issue.record("expected a permission error")
+        } catch let error as CodingToolError {
+            let message = error.errorDescription ?? ""
+            #expect(message.contains("not readable"))
+            #expect(!message.contains("file not found"))
+        }
+    }
 }
 
 @Suite("Write tool")

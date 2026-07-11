@@ -28,8 +28,13 @@ public struct LocalReadOperations: ReadOperations {
         if !FileManager.default.fileExists(atPath: absolutePath) {
             throw CodingToolError.fileNotFound(absolutePath)
         }
+        // A file that exists but cannot be read is a permissions problem, not
+        // a wrong path — reporting it as "not found" sends the model into
+        // path-variation retries instead of recognizing EACCES.
         if !FileManager.default.isReadableFile(atPath: absolutePath) {
-            throw CodingToolError.fileNotFound(absolutePath)
+            throw CodingToolError.runtime(
+                "file exists but is not readable (permission denied, EACCES): \(absolutePath)"
+            )
         }
     }
 
@@ -64,7 +69,7 @@ public func createReadTool(
     var tool = AgentTool(
         name: "read",
         label: "read",
-        description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files.",
+        description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files. Images are inlined at full size with no downscaling, so a large image spends its full encoded byte count.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()

@@ -85,8 +85,8 @@ public struct BackgroundTaskOutcome: Sendable {
 ///   - If `cancellation.isCancelled` becomes true, the runner should stop
 ///     ASAP and still call `onDone` (with `success: false`,
 ///     `summary: "aborted"`).
-///   - For non-agent jobs, the Manager may poll `outputFile` size for prompt
-///     stall detection. It reads every job's tail on-demand for notifications.
+///   - For non-agent tasks, the Manager may poll `outputFile` size for prompt
+///     stall detection. It reads every task's tail on-demand for notifications.
 ///     No per-chunk callback is required.
 public protocol BackgroundTaskRunner: Sendable {
     var spec: BackgroundTaskSpec { get }
@@ -114,7 +114,7 @@ public struct BackgroundTaskSnapshot: Sendable {
     public let sessionId: String?
     public let spec: BackgroundTaskSpec
     public let status: BackgroundTaskStatus
-    /// Registration time. For queued jobs this precedes `runningAt`.
+    /// Registration time. For queued tasks this precedes `runningAt`.
     public let startedAt: Date
     /// Time the concrete runner acquired capacity. Nil while queued.
     public let runningAt: Date?
@@ -174,19 +174,36 @@ public struct BackgroundTaskNotification: Sendable {
     public let outcome: BackgroundTaskOutcome?   // nil while `stalled == true`
     public let outputTail: String
     /// True when the completion card contains only a bounded preview. Callers
-    /// can retrieve the complete artifact through the `job` output reader.
+    /// can retrieve the complete artifact through the `task` output reader.
     public var outputTruncated: Bool = false
     public let outputFile: String?
     public let durationMs: Int
     public let stalled: Bool
+    /// Why the stall watchdog fired. Nil for terminal notifications.
+    public var stallReason: StallReason? = nil
+
+    public enum StallReason: String, Sendable {
+        case interactivePrompt = "interactive_prompt"
+        case noOutputGrowth = "no_output_growth"
+    }
 
     /// Renders the notification as an XML block wrapped in a lead-in line.
     /// Callers wrap the returned string in a runtime-sourced `UserMessage` and
     /// inject it at a turn boundary or as a fresh internal prompt while idle.
     public func messageText() -> String {
-        let lead = stalled
-            ? "A background task appears stuck and may need attention:"
-            : "A background task completed:"
+        let lead: String
+        if stalled {
+            lead = "A background task appears stuck and may need attention:"
+        } else {
+            switch status {
+            case .failed:
+                lead = "A background task failed:"
+            case .killed:
+                lead = "A background task was killed:"
+            default:
+                lead = "A background task completed:"
+            }
+        }
         return lead + "\n" + formatXML()
     }
 
@@ -217,6 +234,18 @@ public struct BackgroundTaskNotification: Sendable {
                        let exitCode = value.asStringForTag() {
                         lines.append("  <exit-code>\(escape(exitCode))</exit-code>")
                     }
+                    // Subagent follow-up handles get first-class tags so the
+                    // model can call agent_history / route by type without
+                    // parsing the escaped details JSON. Exact known keys only —
+                    // never derive tag structure from arbitrary runner keys.
+                    if let value = obj["child_session_id"],
+                       let childSessionId = value.asStringForTag() {
+                        lines.append("  <child-session-id>\(escape(childSessionId))</child-session-id>")
+                    }
+                    if let value = obj["subagent_type"],
+                       let subagentType = value.asStringForTag() {
+                        lines.append("  <subagent-type>\(escape(subagentType))</subagent-type>")
+                    }
                 }
                 // Preserve nested and non-tag-safe details as escaped data.
                 // Never derive XML syntax from an arbitrary runner key.
@@ -232,7 +261,7 @@ public struct BackgroundTaskNotification: Sendable {
         lines.append("  <duration-ms>\(durationMs)</duration-ms>")
         if let outputFile {
             lines.append("  <output-file>\(escape(outputFile))</output-file>")
-            lines.append("  <hint>Use job output reading to inspect the complete stdout/stderr artifact.</hint>")
+            lines.append("  <hint>Use task output reading to inspect the complete stdout/stderr artifact.</hint>")
         }
         if !outputTail.isEmpty {
             let trimmed = outputTail
@@ -251,7 +280,12 @@ public struct BackgroundTaskNotification: Sendable {
             lines.append("  <output-truncated>true</output-truncated>")
         }
         if stalled {
-            lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with job(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
+            switch stallReason {
+            case .noOutputGrowth:
+                lines.append("  <suggestion>The command has produced no output for an extended period and may be hung. If it should have finished by now, cancel it with task(cancel:[task_id]) and retry differently; if silence is expected (linking, large download), keep working — the completion notification will still arrive.</suggestion>")
+            case .interactivePrompt, nil:
+                lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with task(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
+            }
         }
         lines.append("</task-notification>")
         return lines.joined(separator: "\n")

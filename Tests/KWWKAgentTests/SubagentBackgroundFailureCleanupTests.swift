@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Subagent background failure cleanup")
 struct SubagentBackgroundFailureCleanupTests {
-    @Test("explicit incomplete background yield keeps warning semantics across job output")
+    @Test("explicit incomplete background yield keeps warning semantics across task output")
     func incompleteBackgroundYieldKeepsSemanticStatus() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -58,11 +58,11 @@ struct SubagentBackgroundFailureCleanupTests {
         #expect(snapshot.outputTail.hasPrefix("[incomplete]"))
         #expect(!snapshot.outputTail.hasPrefix("[error]"))
 
-        let job = createJobTool(
+        let task = createTaskTool(
             manager: manager,
             sessionId: "background-incomplete-parent"
         )
-        let polled = try await job.execute(
+        let polled = try await task.execute(
             "poll-incomplete-subagent",
             .object(["poll": .array([.string(started.taskId)])]),
             nil,
@@ -74,7 +74,7 @@ struct SubagentBackgroundFailureCleanupTests {
         guard case .object(let pollDetails) = polled.details ?? .null,
               case .array(let tasks) = pollDetails["tasks"] ?? .null,
               case .object(let task) = tasks.first ?? .null else {
-            Issue.record("missing incomplete job details")
+            Issue.record("missing incomplete task details")
             return
         }
         #expect(task["status"] == .string("incomplete"))
@@ -146,8 +146,8 @@ struct SubagentBackgroundFailureCleanupTests {
         #expect(failedOutput.contains(FailingThenSuccessfulLifecycleProvider.failureMessage))
         #expect(provider.closedSessions.contains(failed.childSessionId))
 
-        let job = createJobTool(manager: manager, sessionId: parentSessionId)
-        let polledFailure = try await job.execute(
+        let task = createTaskTool(manager: manager, sessionId: parentSessionId)
+        let polledFailure = try await task.execute(
             "poll-failed-subagent",
             .object([
                 "poll": .array([.string(failed.taskId)]),

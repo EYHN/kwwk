@@ -23,7 +23,7 @@ struct BuiltinSubagentDefinitionTests {
         #expect(plan.prompt.contains("read-only implementation planner"))
 
         let testRunner = SubagentDefinition.testRunner(tools: .standard)
-        #expect(testRunner.tools == [.read, .grep, .find, .ls, .bash, .job])
+        #expect(testRunner.tools == [.read, .grep, .find, .ls, .bash, .task])
         #expect(testRunner.bashCommandPolicy == .buildAndTestOnly)
     }
 

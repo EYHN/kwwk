@@ -110,7 +110,7 @@ struct BgNotificationSummary {
             out.append(styler("  ⎿ … \(hidden) more output lines"))
         }
         if outputTruncated {
-            out.append(styler("  ⎿ … preview truncated; full output is available through job read"))
+            out.append(styler("  ⎿ … preview truncated; full output is available through task read"))
         }
         return out
     }
