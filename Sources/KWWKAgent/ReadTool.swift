@@ -69,7 +69,7 @@ public func createReadTool(
     var tool = AgentTool(
         name: "read",
         label: "read",
-        description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files. Images are inlined at full size with no downscaling, so a large image spends its full encoded byte count.",
+        description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files. Images are resized and recompressed before they enter the conversation.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
@@ -96,17 +96,18 @@ public func createReadTool(
             )
             try await ops.access(absolutePath)
 
-            // Image path. The image is base64-inlined as-is: there is no
-            // resizing or downscaling, so a large image contributes its full
-            // encoded byte count to the request.
-            if let mimeType = try await ops.detectImageMimeType(absolutePath) {
+            // Image path.
+            if try await ops.detectImageMimeType(absolutePath) != nil {
                 let buffer = try await ops.readFile(absolutePath)
-                let base64 = buffer.base64EncodedString()
-                let note = "Read image file [\(mimeType)]"
+                let normalized = try ImageNormalizer.normalize(buffer)
+                var note = "Read image file [\(normalized.content.mimeType), \(normalized.width)x\(normalized.height), \(normalized.byteCount) bytes]"
+                if let coordinateMappingNote = normalized.coordinateMappingNote {
+                    note += "\n\(coordinateMappingNote)"
+                }
                 return AgentToolResult(
                     content: [
                         .text(TextContent(text: note)),
-                        .image(ImageContent(data: base64, mimeType: mimeType)),
+                        .image(normalized.content),
                     ]
                 )
             }

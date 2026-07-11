@@ -30,6 +30,8 @@ let package = Package(
         // keeps writing heartbeats / exec results while the server streams).
         .package(url: "https://github.com/apple/swift-nio-http2.git", from: "1.44.0"),
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.0"),
+        .package(url: "https://github.com/troughton/Cstb.git", from: "1.0.6"),
+        .package(url: "https://github.com/the-swift-collective/libwebp.git", from: "1.4.1"),
     ],
     targets: [
         .target(
@@ -40,6 +42,11 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOHTTP2", package: "swift-nio-http2"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
+                .product(name: "stb_image", package: "Cstb"),
+                .product(name: "stb_image_resize", package: "Cstb"),
+                .product(name: "stb_image_write", package: "Cstb"),
+                .product(name: "WebP", package: "libwebp"),
+                .product(name: "libwebp", package: "libwebp"),
             ],
             path: "Sources/KWWKAI",
             resources: [.process("Resources")]

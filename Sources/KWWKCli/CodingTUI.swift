@@ -219,6 +219,7 @@ func runCodingTUIInternal(
     let frameStatus = FrameStatusState()
 
     let updateFrameStatus: @MainActor @Sendable () -> Void = {
+        frameStatus.reconcileMode(messageCount: agent.state.messages.count)
         let capacityHint = formatCapacityHint(
             usage: AgentContextCompactor.currentUsage(
                 messages: agent.state.messages,
@@ -250,6 +251,8 @@ func runCodingTUIInternal(
         frame.isBusy = agent.state.isStreaming
             || frameStatus.isAutoCompacting
             || frameStatus.isManualCompacting
+            || frameStatus.isShaking
+            || frameStatus.isPreparingAttachments
             || frameStatus.isRewinding
             || frameStatus.isSessionSwitching
         // Keep the re-renderable welcome header in sync with live login/model
@@ -619,19 +622,17 @@ func runCodingTUIInternal(
     }
     agentBox.eventUnsubscribe = subscribeToAgentEvents(agent)
 
+    let setSessionSwitching: @MainActor @Sendable (Bool) -> Void = { active in
+        frameStatus.isSessionSwitching = active
+        updateFrameStatus()
+        runner.tui.requestRender()
+    }
+
     /// Replace every session-scoped runtime component as one idle-only
     /// transaction. In particular, tools and the background delivery consumer
     /// are rebuilt with `newSessionId`; none retain the outgoing task namespace.
     let replaceSessionAgent: @MainActor @Sendable (String, [Message]) async -> Agent = {
         newSessionId, messages in
-        frameStatus.isSessionSwitching = true
-        updateFrameStatus()
-        runner.tui.requestRender()
-        defer {
-            frameStatus.isSessionSwitching = false
-            updateFrameStatus()
-            runner.tui.requestRender()
-        }
         let outgoingCodingAgent = agentBox.codingAgent
         let outgoing = outgoingCodingAgent.agent
         let outgoingSessionId = outgoing.sessionId
@@ -770,6 +771,7 @@ func runCodingTUIInternal(
     registerSessionSlashCommands(slashRegistry, ctx: SessionCommandContext(
         agentProvider: { agent },
         replaceSessionAgent: replaceSessionAgent,
+        setSessionSwitching: setSessionSwitching,
         modal: modal,
         frame: frame,
         cwd: cwd,
@@ -838,6 +840,14 @@ func runCodingTUIInternal(
                 reason: .compact
             )
         },
+        persistShake: { mode in
+            switch mode {
+            case .elide:
+                return await recorderBox.recorder.rewriteShakenToolOutputs()
+            case .images:
+                return await recorderBox.recorder.rewriteRemovingImages()
+            }
+        },
         setSessionTitle: { title in
             await recorderBox.recorder.recordTitle(title)
         },
@@ -865,6 +875,12 @@ func runCodingTUIInternal(
             frameStatus.mode = active ? .compacting(messageCount: agent.state.messages.count) : .idle
             updateFrameStatus()
             runner.tui.requestRender()
+        },
+        setShaking: { active in
+            frameStatus.isShaking = active
+            frameStatus.mode = active ? .shaking : .idle
+            updateFrameStatus()
+            runner.tui.requestRender()
         }
     )
 
@@ -874,12 +890,8 @@ func runCodingTUIInternal(
     //   1. modal open → forward to modal's confirm handler.
     //   2. input starts with `/` → slash command dispatch.
     //   3. LLM prompt while the agent is idle → submit.
-    //   4. LLM prompt while the agent is streaming → steer as a user
-    //      message so it runs at the next turn boundary. We do NOT
-    //      drop the typed text: starting a second agent.prompt while
-    //      the first is streaming would throw `alreadyRunning` and
-    //      blow the input away. Steering lets the user queue a
-    //      follow-up without racing the current turn.
+    //   4. LLM prompt while the agent is streaming → prepare its
+    //      attachments off-main, then steer it at the next turn boundary.
     runner.bind(.init("enter", shift: false)) { _ in
         Task { @MainActor in
             if modal.isOpen {
@@ -895,9 +907,15 @@ func runCodingTUIInternal(
             guard !text.isEmpty else { return }
 
             let parsed = SlashInput.parse(text)
+            guard !frameStatus.isPreparingAttachments else { return }
+            if case .prompt = parsed,
+               frameStatus.isSessionSwitching || frameStatus.isRewinding {
+                return
+            }
             let busy = agent.state.isStreaming
                 || frameStatus.isAutoCompacting
                 || frameStatus.isManualCompacting
+                || frameStatus.isShaking
                 || frameStatus.isRewinding
                 || frameStatus.isSessionSwitching
                 || retry.trackedActive
@@ -917,72 +935,23 @@ func runCodingTUIInternal(
                 return
             }
 
-            // Slash commands are idle-only. If the agent is mid-turn
-            // we can't reliably run them (some mutate agent state, all
-            // would need to interleave output with streaming). Keeping
-            // the gate simple means we never need a floating
-            // "notification block" to surface their output — they
-            // always append to history on a quiet moment.
-            if case .command = parsed, busy {
-                runner.tui.commit([
-                    "",
-                    Style.error("  slash commands run only when the agent is idle — stop it first (Esc) or wait"),
-                    "",
-                ])
-                updateFrameStatus()
-                runner.tui.requestRender()
-                return
-            }
-
-            // LLM prompt while the agent is busy: steer as a queued
-            // user message so it runs at the next turn boundary. We
-            // do NOT drop the typed text — starting a second
-            // agent.prompt while the first is streaming would throw
-            // `alreadyRunning`.
-            if case .prompt = parsed, busy {
-                let built = buildPromptWithAttachments(
-                    text: text,
-                    store: attachments,
-                    cwd: cwd,
-                    modelSupportsImages: agent.state.model.input.contains(.image)
-                )
-                var blocks: [UserBlock] = [.text(TextContent(text: built.text))]
-                for img in built.images { blocks.append(.image(img)) }
-                agent.steer(.user(UserMessage(content: blocks)))
-                // A steered follow-up is still a user-initiated turn eligible for
-                // /retry. Mark it tracked, but do NOT record a retry target here —
-                // it's derived at arm time from the message actually executing, so
-                // an Esc-abort resubmits the real in-flight prompt (never the
-                // queued-but-undrained steer).
-                retry.trackedActive = true
-                goalStore.resetAutoContinue()
-                // Recall ring gets the paste bodies expanded (omp semantics):
-                // after clear() the placeholder would be a dead reference.
-                frame.input.addToHistory(attachments.expandPastedTextPlaceholders(in: text))
-                attachments.clear()
-                frame.input.value = ""
-                // No scrollback notice: the queued prompt now shows live in
-                // the pending list above the input box (updateFrameStatus
-                // syncs frame.queuedPrompts), where it can be edited (Alt+↑)
-                // or dropped (/queue clear) until the agent drains it.
-                // Surface only attach problems.
-                if let issues = built.issues {
-                    runner.tui.commit([
-                        "",
-                        Style.error("  attach: " + issues),
-                    ])
-                }
-                updateFrameStatus()
-                runner.tui.requestRender()
-                return
-            }
-
-            frame.input.value = ""
-            updateFrameStatus()
-            runner.tui.requestRender()
-
             switch parsed {
             case .command(let name, let args):
+                // Commands mutate shared session state and therefore remain
+                // idle-only.
+                guard !busy else {
+                    runner.tui.commit([
+                        "",
+                        Style.error("  slash commands run only when the agent is idle — stop it first (Esc) or wait"),
+                        "",
+                    ])
+                    updateFrameStatus()
+                    runner.tui.requestRender()
+                    return
+                }
+                frame.input.value = ""
+                updateFrameStatus()
+                runner.tui.requestRender()
                 if let cmd = slashRegistry.find(name) {
                     await cmd.handler(slashContext, args)
                     runner.tui.requestRender()
@@ -996,20 +965,57 @@ func runCodingTUIInternal(
                     runner.tui.requestRender()
                 }
             case .prompt:
-                // Recall ring: store the submission with paste bodies expanded
-                // (omp semantics) so Up/Down brings back the original text —
-                // the `[pasted-text #N]` placeholder dies with attachments.clear().
-                frame.input.addToHistory(attachments.expandPastedTextPlaceholders(in: text))
-                // Rebuild with attachments — the raw `text` may carry
-                // `@path` tokens and `[pasted-text #N]` placeholders
-                // from earlier paste events.
-                let built = buildPromptWithAttachments(
-                    text: text,
-                    store: attachments,
-                    cwd: cwd,
-                    modelSupportsImages: agent.state.model.input.contains(.image)
-                )
-                attachments.clear()
+                // Release the editor immediately so the user can start the
+                // next draft while image decoding and encoding run off-main.
+                let submittedAgent = agent
+                let submittedGeneration = agentBox.generation
+                let attachmentSnapshot = attachments.promptSnapshot(for: text)
+                frame.input.value = ""
+                frameStatus.isPreparingAttachments = true
+                frameStatus.mode = .preparingAttachments
+                updateFrameStatus()
+                runner.tui.requestRender()
+
+                let built: BuiltPrompt
+                do {
+                    built = try await buildPromptWithAttachments(
+                        snapshot: attachmentSnapshot,
+                        cwd: cwd,
+                        modelSupportsImages: submittedAgent.state.model.input.contains(.image)
+                    )
+                } catch {
+                    frameStatus.isPreparingAttachments = false
+                    if case .preparingAttachments = frameStatus.mode {
+                        frameStatus.mode = .idle
+                    }
+                    guard agentBox.isCurrent(
+                        agent: submittedAgent,
+                        generation: submittedGeneration
+                    ) else { return }
+                    let nextDraft = frame.input.value
+                    frame.input.value = nextDraft.isEmpty
+                        ? text
+                        : text + "\n" + nextDraft
+                    frame.input.moveEnd()
+                    runner.tui.commit([
+                        "",
+                        Style.error("  attach: \(error.localizedDescription)"),
+                        "",
+                    ])
+                    updateFrameStatus()
+                    runner.tui.requestRender()
+                    return
+                }
+                frameStatus.isPreparingAttachments = false
+                if case .preparingAttachments = frameStatus.mode {
+                    frameStatus.mode = .idle
+                }
+                guard agentBox.isCurrent(
+                    agent: submittedAgent,
+                    generation: submittedGeneration
+                ) else { return }
+                attachments.consume(attachmentSnapshot)
+                frame.input.addToHistory(built.recallText)
                 if let issues = built.issues {
                     runner.tui.commit([
                         "",
@@ -1019,7 +1025,26 @@ func runCodingTUIInternal(
                     updateFrameStatus()
                     runner.tui.requestRender()
                 }
-                submitBuiltPrompt(built.text, built.images)
+
+                let shouldSteer = submittedAgent.state.isStreaming
+                    || frameStatus.isAutoCompacting
+                    || frameStatus.isManualCompacting
+                    || frameStatus.isShaking
+                    || frameStatus.isRewinding
+                    || frameStatus.isSessionSwitching
+                    || retry.trackedActive
+                if shouldSteer {
+                    var blocks: [UserBlock] = [.text(TextContent(text: built.text))]
+                    blocks.append(contentsOf: built.images.map(UserBlock.image))
+                    submittedAgent.steer(.user(UserMessage(content: blocks)))
+                    submittedAgent.resumeQueuedWork()
+                    retry.trackedActive = true
+                    goalStore.resetAutoContinue()
+                    updateFrameStatus()
+                    runner.tui.requestRender()
+                } else {
+                    submitBuiltPrompt(built.text, built.images)
+                }
             }
         }
     }
@@ -1225,6 +1250,8 @@ func runCodingTUIInternal(
                   !agent.state.isStreaming,
                   !frameStatus.isAutoCompacting,
                   !frameStatus.isManualCompacting,
+                  !frameStatus.isShaking,
+                  !frameStatus.isPreparingAttachments,
                   !frameStatus.isRewinding,
                   !frameStatus.isSessionSwitching
             else {
@@ -1357,8 +1384,29 @@ private final class FrameStatusState {
     var runningBackgroundTasks = 0
     var isAutoCompacting = false
     var isManualCompacting = false
+    var isShaking = false
+    var isPreparingAttachments = false
     var isRewinding = false
     var isSessionSwitching = false
+
+    func reconcileMode(messageCount: Int) {
+        switch mode {
+        case .aborting, .retrying:
+            return
+        default:
+            break
+        }
+
+        if isPreparingAttachments {
+            mode = .preparingAttachments
+        } else if isShaking {
+            mode = .shaking
+        } else if isAutoCompacting || isManualCompacting {
+            mode = .compacting(messageCount: messageCount)
+        } else {
+            mode = .idle
+        }
+    }
 }
 
 /// Tracks the last idle no-op Esc press so a second press within `window`
@@ -1476,6 +1524,13 @@ final class TurnRetryState {
     /// can't arm `/retry` with a stale internal prompt. Consumed (reset to
     /// false) at every `.agentEnd` and on Esc-abort.
     var trackedActive = false
+
+    func clear() {
+        lastText = nil
+        lastImages.removeAll(keepingCapacity: false)
+        failed = false
+        trackedActive = false
+    }
 }
 
 /// Concatenated text of a queued user message's text blocks (image blocks
@@ -1506,6 +1561,8 @@ private enum CodingFrameMode {
     case idle
     case aborting
     case compacting(messageCount: Int)
+    case shaking
+    case preparingAttachments
     case retrying(attempt: Int, until: Date, reason: String)
 
     /// True whenever the state line is showing a spinner (anything but plain
@@ -1610,7 +1667,7 @@ func promptPreservingContention(
 
 /// Reset the per-session transient state that must not survive a session swap
 /// (`/new` or `/resume`): drain the steering queue, clear the `/retry` record,
-/// drop pending attachments, and forget the Alt+↑ dequeue cursor. Shared by both
+/// drop outgoing attachments, and forget the Alt+↑ dequeue cursor. Shared by both
 /// session-swap paths so neither leaks stale state into the incoming session
 /// (e.g. a `failed`/`lastText` record that `/retry` would resubmit into the
 /// wrong transcript). Does NOT touch `agent.state.messages` or the input
@@ -1620,21 +1677,25 @@ func resetSessionTransientState(
     agent: Agent,
     retry: TurnRetryState,
     attachments: AttachmentStore,
-    dequeueCycle: DequeueCycleState
+    dequeueCycle: DequeueCycleState,
+    discardingAttachments snapshot: AttachmentPromptSnapshot? = nil
 ) {
     agent.clearSteeringQueue()
-    retry.failed = false
-    retry.lastText = nil
-    retry.lastImages = []
-    retry.trackedActive = false
-    attachments.clear()
+    retry.clear()
+    if let snapshot {
+        attachments.consume(snapshot)
+    } else {
+        attachments.clear()
+    }
     dequeueCycle.last = nil
 }
 
 /// Start a fresh, empty session in place: repoint persistence at a brand-new
 /// session file, clear the live agent context + steering queue, reset retry and
-/// attachment state, and commit a labeled separator to scrollback. Extracted
-/// from the `/new` handler so the reset is unit-testable.
+/// attachment state, and commit a labeled separator to scrollback. A draft
+/// composed while the async handoff is running belongs to the new session and
+/// is preserved. This helper is extracted from the `/new` handler so the reset
+/// is unit-testable.
 @MainActor
 func performNewSession(
     newId: String = UUID().uuidString,
@@ -1653,6 +1714,9 @@ func performNewSession(
     updateStatus: () -> Void,
     requestRender: () -> Void
 ) async {
+    let inputBeforeSwitch = frame.input.value
+    let attachmentsBeforeSwitch = attachments.promptSnapshot(for: inputBeforeSwitch)
+
     // Stop the outgoing recorder before the runtime replacement so a late
     // callback cannot append to the new session file.
     recorderBox.unsubscribe()
@@ -1685,9 +1749,12 @@ func performNewSession(
         agent: sessionAgent,
         retry: retry,
         attachments: attachments,
-        dequeueCycle: dequeueCycle
+        dequeueCycle: dequeueCycle,
+        discardingAttachments: attachmentsBeforeSwitch
     )
-    frame.input.value = ""
+    if frame.input.value == inputBeforeSwitch {
+        frame.input.value = ""
+    }
 
     commit([
         "",
@@ -1798,6 +1865,10 @@ private func codingFrameStateLine(
         parts.append(Theme.paint("\(spinner) compacting \(count)", Theme.warn, bold: true))
         parts.append(Theme.faintText("new prompts queue"))
         parts.append(Theme.faintText("Esc to cancel"))
+    case .shaking:
+        parts.append(Theme.paint("\(spinner) shaking context", Theme.warn, bold: true))
+    case .preparingAttachments:
+        parts.append(Theme.paint("\(spinner) preparing attachments", Theme.accent, bold: true))
     case .aborting:
         parts.append(Theme.paint("\(spinner) aborting", Theme.warn, bold: true))
         parts.append(Theme.faintText("Ctrl-C to force quit"))

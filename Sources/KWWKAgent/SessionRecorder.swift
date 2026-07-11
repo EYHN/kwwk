@@ -6,13 +6,15 @@ import KWWKAI
 /// session's JSONL log as they land, so a crashed or aborted run still
 /// leaves a resumable transcript on disk.
 ///
-/// The recorder is *additive* and non-invasive — attach it to any agent and
-/// detach when done. It persists on every message-bearing event
+/// Event recording is additive — attach the recorder to any agent and detach
+/// when done. It persists on every message-bearing event
 /// (`messageEnd`, `turnEnd`, `agentEnd`) by diffing the agent's current
 /// transcript against the count already written, then appending only the new
-/// tail. That keeps writes append-only even when the loop produces several
-/// messages between events. Compaction is persisted as its own append-only
-/// marker and resets the live-message baseline to the compacted context.
+/// tail. That keeps ordinary writes append-only even when the loop produces
+/// several messages between events. Compaction is persisted as its own marker
+/// and resets the live-message baseline to the compacted context. Explicit
+/// `/shake` rewrites share the same serialized persistence queue, so a rewrite
+/// can never overtake a pending message or compaction write.
 public final class SessionRecorder: @unchecked Sendable {
     private struct PendingCompaction: Sendable {
         let replacementMessages: [Message]
@@ -23,10 +25,67 @@ public final class SessionRecorder: @unchecked Sendable {
         let reason: SessionStore.CompactionReason
     }
 
+    private enum TranscriptRewrite: Sendable {
+        case shakeToolOutputs(keepingUnder: Int)
+        case removeImages
+
+        func apply(to messages: [Message]) -> SessionStore.MessageRewrite {
+            switch self {
+            case .shakeToolOutputs(let limit):
+                let rewrite = AgentContextCompactor.shakeToolOutputs(
+                    messages,
+                    keepingUnder: limit
+                )
+                return SessionStore.MessageRewrite(
+                    messages: rewrite.messages,
+                    changedCount: rewrite.elidedCount
+                )
+            case .removeImages:
+                let rewrite = AgentContextCompactor.removingImages(from: messages)
+                return SessionStore.MessageRewrite(
+                    messages: rewrite.messages,
+                    changedCount: rewrite.removedCount
+                )
+            }
+        }
+    }
+
+    private final class RewriteResult: @unchecked Sendable {
+        private enum State {
+            case pending
+            case succeeded(Int)
+            case failed
+        }
+
+        private let lock = NSLock()
+        private var state = State.pending
+
+        var value: Int? {
+            lock.withLock {
+                guard case .succeeded(let value) = state else { return nil }
+                return value
+            }
+        }
+
+        func resolve(_ value: Int) {
+            lock.withLock { state = .succeeded(value) }
+        }
+
+        func fail() {
+            lock.withLock { state = .failed }
+        }
+    }
+
+    private struct PendingRewrite: Sendable {
+        let rewrite: TranscriptRewrite
+        let result: RewriteResult
+    }
+
     private enum PersistenceOperation: Sendable {
         case ensureCreated
         case messages([Message])
         case compaction(PendingCompaction)
+        case rewrite(PendingRewrite)
         case title(String)
     }
 
@@ -41,19 +100,22 @@ public final class SessionRecorder: @unchecked Sendable {
     private var persistedCount: Int
     /// Usage snapshot from the latest compactStart, consumed by compactEnd.
     private var pendingCompactionUsage: AgentContextUsage?
-    /// Failed operations remain queued so a later recorder event can retry
-    /// them before any newer write reaches disk.
+    /// Failed append/compaction/meta operations remain queued so a later
+    /// recorder event can retry them before any newer write reaches disk.
+    /// Explicit rewrites queued behind a failure are cancelled as one-shot
+    /// transactions because their callers keep the live transcript unchanged.
     private var pendingOperations: [PersistenceOperation] = []
     /// Protects the first queued operation from snapshot coalescing while its
     /// async store call is in flight.
     private var isPersistingFirstOperation = false
     private var _lastPersistenceError: String?
-    /// Tail of the serialized append chain. Each flush enqueues its write after
-    /// the previous one so concurrent events can't reorder the on-disk JSONL.
-    private var appendChain: Task<Void, Never>?
+    /// Tail of the serialized persistence chain. Each operation waits for the
+    /// previous one so appends, compactions, metadata, and rewrites stay ordered.
+    private var persistenceChain: Task<Void, Never>?
 
-    /// Most recent persistence failure. The failed operation remains queued;
-    /// this value clears once a later retry succeeds.
+    /// Most recent persistence failure. Failed append-style operations remain
+    /// queued; explicit rewrites are cancelled so they cannot run after their
+    /// callers kept the live transcript unchanged.
     public var lastPersistenceError: String? {
         lock.withLock { _lastPersistenceError }
     }
@@ -170,15 +232,35 @@ public final class SessionRecorder: @unchecked Sendable {
         await enqueue(.title(title))
     }
 
+    /// Permanently elide oversized tool output in every persisted transcript
+    /// entry. The rewrite is ordered with ordinary recorder writes.
+    public func rewriteShakenToolOutputs(
+        keepingUnder limit: Int = AgentContextCompactor.shakeToolOutputCharacterLimit
+    ) async -> Int? {
+        await rewriteTranscript(.shakeToolOutputs(keepingUnder: limit))
+    }
+
+    /// Permanently remove image blocks from every persisted transcript entry.
+    /// The rewrite is ordered with ordinary recorder writes.
+    public func rewriteRemovingImages() async -> Int? {
+        await rewriteTranscript(.removeImages)
+    }
+
+    private func rewriteTranscript(_ rewrite: TranscriptRewrite) async -> Int? {
+        let result = RewriteResult()
+        await enqueue(.rewrite(PendingRewrite(rewrite: rewrite, result: result)))
+        return result.value
+    }
+
     private func enqueue(_ operation: PersistenceOperation) async {
         let work: Task<Void, Never> = lock.withLock {
             enqueueCoalescingMessageSnapshots(operation)
-            let previous = appendChain
+            let previous = persistenceChain
             let next = Task<Void, Never> { [weak self] in
                 await previous?.value
                 await self?.drainPendingOperations()
             }
-            appendChain = next
+            persistenceChain = next
             return next
         }
         await work.value
@@ -198,10 +280,20 @@ public final class SessionRecorder: @unchecked Sendable {
                     _lastPersistenceError = nil
                 }
             } catch {
-                lock.withLock {
+                let cancelledRewrites = lock.withLock { () -> [RewriteResult] in
+                    var results: [RewriteResult] = []
+                    pendingOperations.removeAll { pendingOperation in
+                        guard case .rewrite(let pending) = pendingOperation else {
+                            return false
+                        }
+                        results.append(pending.result)
+                        return true
+                    }
                     isPersistingFirstOperation = false
                     _lastPersistenceError = String(describing: error)
+                    return results
                 }
+                cancelledRewrites.forEach { $0.fail() }
                 return
             }
         }
@@ -251,6 +343,13 @@ public final class SessionRecorder: @unchecked Sendable {
             lock.withLock {
                 persistedCount = compaction.replacementMessages.count
             }
+
+        case .rewrite(let pending):
+            let rewrite = pending.rewrite
+            let changedCount = try await store.rewriteMessages(id: sessionId) { messages in
+                rewrite.apply(to: messages)
+            }
+            pending.result.resolve(changedCount)
 
         case .title(let title):
             try await store.setTitle(id: sessionId, cwd: cwd, title: title)

@@ -16,7 +16,7 @@ final class AttachmentStore {
     /// A large pasted text block that we don't want to shove into a
     /// single-line editor. Shown in the input as `[pasted-text #id]`
     /// and expanded back to the raw body at submit time.
-    struct PastedText: Identifiable {
+    struct PastedText: Identifiable, Sendable {
         let id: Int
         let body: String
     }
@@ -24,7 +24,7 @@ final class AttachmentStore {
     /// A clipboard image captured at paste time. Rendered in the
     /// input as `[image #id]` and expanded to an `ImageContent` block
     /// on submit.
-    struct ClipboardImage: Identifiable {
+    struct ClipboardImage: Identifiable, Sendable {
         let id: Int
         let data: Data
         let mimeType: String
@@ -69,6 +69,21 @@ final class AttachmentStore {
         return out
     }
 
+    func promptSnapshot(for text: String) -> AttachmentPromptSnapshot {
+        AttachmentPromptSnapshot(
+            expandedText: expandPastedTextPlaceholders(in: text),
+            pastedTextIDs: Set(pastedTexts.map(\.id)),
+            clipboardImages: clipboardImages
+        )
+    }
+
+    func consume(_ snapshot: AttachmentPromptSnapshot) {
+        pastedTexts.removeAll { snapshot.pastedTextIDs.contains($0.id) }
+        clipboardImages.removeAll { snapshot.clipboardImageIDs.contains($0.id) }
+        if pastedTexts.isEmpty { nextPastedTextId = 1 }
+        if clipboardImages.isEmpty { nextClipboardImageId = 1 }
+    }
+
     /// Register a clipboard-sourced image (e.g. macOS ⌘V where
     /// NSPasteboard holds a screenshot). Returns the placeholder token.
     func addClipboardImage(data: Data, mimeType: String) -> String {
@@ -76,6 +91,16 @@ final class AttachmentStore {
         nextClipboardImageId += 1
         clipboardImages.append(ClipboardImage(id: id, data: data, mimeType: mimeType))
         return "[image #\(id)]"
+    }
+}
+
+struct AttachmentPromptSnapshot: Sendable {
+    let expandedText: String
+    let pastedTextIDs: Set<Int>
+    let clipboardImages: [AttachmentStore.ClipboardImage]
+
+    var clipboardImageIDs: Set<Int> {
+        Set(clipboardImages.map(\.id))
     }
 }
 
@@ -227,7 +252,7 @@ private func resolveSinglePath(_ raw: String, cwd: String) -> ResolvedAttachment
         return .folder(path: path, listing: renderFolderListing(path))
     }
     let size = (try? fm.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-    if let (data, mime) = loadImageIfSupported(path: path, maxBytes: 10 * 1024 * 1024) {
+    if let (data, mime) = loadImageIfSupported(path: path) {
         return .image(path: path, data: data, mimeType: mime)
     }
     if size > textFileMaxBytes {
@@ -240,15 +265,11 @@ private func resolveSinglePath(_ raw: String, cwd: String) -> ResolvedAttachment
     return .binaryFile(path: path, byteSize: size)
 }
 
-private func loadImageIfSupported(path: String, maxBytes: Int) -> (Data, String)? {
+private func loadImageIfSupported(path: String) -> (Data, String)? {
     let mime = imageMimeType(forPath: path)
     guard let mime else { return nil }
     let url = URL(fileURLWithPath: path)
-    guard let data = try? Data(contentsOf: url) else { return nil }
-    if data.count > maxBytes {
-        return nil  // drops through to binaryFile which surfaces as metadata
-    }
-    return (data, mime)
+    return (try? Data(contentsOf: url)).map { ($0, mime) }
 }
 
 private func imageMimeType(forPath path: String) -> String? {
@@ -301,8 +322,9 @@ private func renderFolderListing(_ path: String) -> String {
 /// substring replacement; `@path` references are kept in the text
 /// verbatim (so the LLM can see that the user pointed at something) and
 /// the resolved content is appended in a single `<attachments>` block.
-struct BuiltPrompt {
+struct BuiltPrompt: Sendable {
     let text: String
+    let recallText: String
     let images: [ImageContent]
     /// Short human-readable summary ("attached: 1 image, 2 files") of
     /// everything that got attached, including the happy-path items.
@@ -323,10 +345,35 @@ func buildPromptWithAttachments(
     store: AttachmentStore,
     cwd: String,
     modelSupportsImages: Bool
-) -> BuiltPrompt {
-    // 1. Expand pasted-text placeholders to their raw bodies — the
-    //    prompt reads exactly as if the user had typed the paste inline.
-    let expanded = store.expandPastedTextPlaceholders(in: inputText)
+) async throws -> BuiltPrompt {
+    let snapshot = store.promptSnapshot(for: inputText)
+    return try await buildPromptWithAttachments(
+        snapshot: snapshot,
+        cwd: cwd,
+        modelSupportsImages: modelSupportsImages
+    )
+}
+
+func buildPromptWithAttachments(
+    snapshot: AttachmentPromptSnapshot,
+    cwd: String,
+    modelSupportsImages: Bool
+) async throws -> BuiltPrompt {
+    try await Task.detached(priority: .userInitiated) {
+        try buildPrompt(
+            snapshot: snapshot,
+            cwd: cwd,
+            modelSupportsImages: modelSupportsImages
+        )
+    }.value
+}
+
+private func buildPrompt(
+    snapshot: AttachmentPromptSnapshot,
+    cwd: String,
+    modelSupportsImages: Bool
+) throws -> BuiltPrompt {
+    let expanded = snapshot.expandedText
 
     var images: [ImageContent] = []
     var attachBlocks: [String] = []
@@ -342,13 +389,17 @@ func buildPromptWithAttachments(
     //    they typed in the input box; the LLM maps it back to the
     //    attachment via the matching `id="N"` in the `<attachments>`
     //    block below.
-    for clip in store.clipboardImages {
+    for clip in snapshot.clipboardImages {
         if modelSupportsImages {
-            images.append(ImageContent(
-                data: clip.data.base64EncodedString(),
-                mimeType: clip.mimeType
+            let normalized = try ImageNormalizer.normalize(clip.data)
+            images.append(normalized.content)
+            attachBlocks.append(imageAttachmentBlock(
+                attributes: [
+                    "source=\"clipboard\"",
+                    "id=\"\(clip.id)\"",
+                ],
+                normalized: normalized
             ))
-            attachBlocks.append("<image source=\"clipboard\" id=\"\(clip.id)\" mime=\"\(clip.mimeType)\" bytes=\"\(clip.data.count)\" />")
             counts.image += 1
         } else {
             attachBlocks.append("<image source=\"clipboard\" id=\"\(clip.id)\" mime=\"\(clip.mimeType)\" note=\"skipped: this model does not accept image input\" />")
@@ -363,11 +414,12 @@ func buildPromptWithAttachments(
         switch r {
         case .image(let path, let data, let mime):
             if modelSupportsImages {
-                images.append(ImageContent(
-                    data: data.base64EncodedString(),
-                    mimeType: mime
+                let normalized = try ImageNormalizer.normalize(data)
+                images.append(normalized.content)
+                attachBlocks.append(imageAttachmentBlock(
+                    attributes: ["path=\"\(xmlEscape(path))\""],
+                    normalized: normalized
                 ))
-                attachBlocks.append("<image path=\"\(xmlEscape(path))\" mime=\"\(mime)\" />")
                 counts.image += 1
             } else {
                 // Model can't see images. Preserve the reference + size
@@ -414,8 +466,9 @@ func buildPromptWithAttachments(
     if counts.folder > 0 { parts.append("\(counts.folder) folder\(counts.folder == 1 ? "" : "s")") }
     if counts.missing > 0 { parts.append("\(counts.missing) missing") }
     if counts.skippedImage > 0 { parts.append("\(counts.skippedImage) image skipped (text-only model)") }
-    if store.pastedTexts.count > 0 {
-        parts.append("\(store.pastedTexts.count) pasted text\(store.pastedTexts.count == 1 ? "" : "s")")
+    if !snapshot.pastedTextIDs.isEmpty {
+        let count = snapshot.pastedTextIDs.count
+        parts.append("\(count) pasted text\(count == 1 ? "" : "s")")
     }
     let summary = parts.isEmpty ? nil : "attached: " + parts.joined(separator: ", ")
 
@@ -433,7 +486,30 @@ func buildPromptWithAttachments(
     }
     let issues = issueParts.isEmpty ? nil : issueParts.joined(separator: ", ")
 
-    return BuiltPrompt(text: out, images: images, summary: summary, issues: issues)
+    return BuiltPrompt(
+        text: out,
+        recallText: expanded,
+        images: images,
+        summary: summary,
+        issues: issues
+    )
+}
+
+private func imageAttachmentBlock(
+    attributes: [String],
+    normalized: NormalizedImage
+) -> String {
+    let imageAttributes = attributes + [
+        "mime=\"\(normalized.content.mimeType)\"",
+        "bytes=\"\(normalized.byteCount)\"",
+        "original_dimensions=\"\(normalized.originalWidth)x\(normalized.originalHeight)\"",
+        "displayed_dimensions=\"\(normalized.width)x\(normalized.height)\"",
+    ]
+    let openingTag = "<image \(imageAttributes.joined(separator: " "))"
+    guard let note = normalized.coordinateMappingNote else {
+        return openingTag + " />"
+    }
+    return "\(openingTag)>\n\(note)\n</image>"
 }
 
 private func xmlEscape(_ s: String) -> String {

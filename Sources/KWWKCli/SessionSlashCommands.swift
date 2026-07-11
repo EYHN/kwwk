@@ -13,6 +13,9 @@ struct SessionCommandContext {
     let agentProvider: @MainActor @Sendable () -> Agent
     /// Replace the complete session-scoped runtime and return the new Agent.
     let replaceSessionAgent: @MainActor @Sendable (String, [Message]) async -> Agent
+    /// Hold the TUI's session-switch busy gate for an entire `/new` or
+    /// `/resume` transaction, including persistence rewiring after Agent swap.
+    let setSessionSwitching: @MainActor @Sendable (Bool) -> Void
     var agent: Agent { agentProvider() }
     let modal: ModalHost
     let frame: CodingFrame
@@ -75,6 +78,7 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
     let kickGoalContinuation = ctx.kickGoalContinuation
     let submitBuiltPrompt = ctx.submitBuiltPrompt
     let openRewindSelector = ctx.openRewindSelector
+    let setSessionSwitching = ctx.setSessionSwitching
 
     // `/resume` — restore a previous session into the running TUI. Opens an
     // arrow-key picker; on confirm it repoints persistence at the chosen
@@ -84,12 +88,15 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
         name: "resume",
         description: "Restore a previous session",
         handler: { _, _ in
+            setSessionSwitching(true)
+            let outgoingAttachments = attachments.promptSnapshot(for: frame.input.value)
             let sessions = await sessionStore.list()
             let picker = SessionResumeModal(
                 sessions: sessions,
                 currentSessionId: recorderBox.sessionId,
                 onSelect: { info in
                     Task { @MainActor in
+                        defer { setSessionSwitching(false) }
                         // `info.id` comes from the on-disk listing, so its
                         // format is always valid; `try?` only guards the
                         // (unreachable here) invalid-id throw.
@@ -127,7 +134,8 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
                             agent: restoredAgent,
                             retry: retry,
                             attachments: attachments,
-                            dequeueCycle: dequeueCycle
+                            dequeueCycle: dequeueCycle,
+                            discardingAttachments: outgoingAttachments
                         )
                         // Close first: the modal's restore hook drains any
                         // commits queued behind it, and the replace below must
@@ -151,7 +159,10 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
                         requestRender()
                     }
                 },
-                onCancel: { modal.close() }
+                onCancel: {
+                    modal.close()
+                    setSessionSwitching(false)
+                }
             )
             modal.open(picker)
         }
@@ -165,6 +176,8 @@ func registerSessionSlashCommands(_ registry: SlashCommandRegistry, ctx: Session
         description: "Start a fresh session",
         aliases: ["clear"],
         handler: { _, _ in
+            setSessionSwitching(true)
+            defer { setSessionSwitching(false) }
             // A fresh session starts with no goal — drop any active one (and its
             // <goal_context>) before minting the new id so it can't carry over.
             goalStore.stop()

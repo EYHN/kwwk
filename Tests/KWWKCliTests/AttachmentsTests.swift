@@ -120,6 +120,25 @@ struct AttachmentStoreTests {
         store.clear()
         #expect(store.clipboardImages.isEmpty)
     }
+
+    @MainActor
+    @Test("consuming a prompt snapshot preserves attachments added for the next draft")
+    func snapshotConsumptionPreservesNextDraft() {
+        let store = AttachmentStore()
+        let firstText = store.addPastedText("first")
+        let firstImage = store.addClipboardImage(data: Data([1]), mimeType: "image/png")
+        let snapshot = store.promptSnapshot(for: "\(firstText) \(firstImage)")
+
+        let nextText = store.addPastedText("next")
+        let nextImage = store.addClipboardImage(data: Data([2]), mimeType: "image/png")
+        store.consume(snapshot)
+
+        #expect(snapshot.expandedText == "first [image #1]")
+        #expect(store.pastedTexts.map(\.id) == [2])
+        #expect(store.clipboardImages.map(\.id) == [2])
+        #expect(store.expandPastedTextPlaceholders(in: nextText) == "next")
+        #expect(nextImage == "[image #2]")
+    }
 }
 
 // MARK: - buildPromptWithAttachments
@@ -129,9 +148,9 @@ struct BuildPromptTests {
 
     @MainActor
     @Test("no attachments → text unchanged, no summary")
-    func passthrough() {
+    func passthrough() async throws {
         let store = AttachmentStore()
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "hello world",
             store: store,
             cwd: "/tmp",
@@ -144,7 +163,7 @@ struct BuildPromptTests {
 
     @MainActor
     @Test("pasted-text placeholder expanded to its raw body, @text-file appended as <attachments>")
-    func textFileAndPasted() throws {
+    func textFileAndPasted() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let filePath = dir.appendingPathComponent("hello.txt").path
@@ -153,7 +172,7 @@ struct BuildPromptTests {
         let store = AttachmentStore()
         let placeholder = store.addPastedText("one\ntwo")
 
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "see \(placeholder) and @\(filePath).",
             store: store,
             cwd: "/tmp",
@@ -171,9 +190,9 @@ struct BuildPromptTests {
 
     @MainActor
     @Test("missing path surfaces as a <missing> tag + 'missing' summary entry")
-    func missingPath() {
+    func missingPath() async throws {
         let store = AttachmentStore()
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "look at @/definitely/not/here.png",
             store: store,
             cwd: "/tmp",
@@ -186,7 +205,7 @@ struct BuildPromptTests {
 
     @MainActor
     @Test("folder renders a truncated listing")
-    func folderListing() throws {
+    func folderListing() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         for name in ["a.txt", "b.md", "sub"] {
@@ -197,7 +216,7 @@ struct BuildPromptTests {
             }
         }
         let store = AttachmentStore()
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "inspect @\(dir.path)",
             store: store,
             cwd: "/tmp",
@@ -212,31 +231,35 @@ struct BuildPromptTests {
 
     @MainActor
     @Test("image bytes attached when model supports images")
-    func imageAttached() throws {
+    func imageAttached() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let pngHeader: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
         let imagePath = dir.appendingPathComponent("shot.png")
-        try Data(pngHeader).write(to: imagePath)
+        try attachmentTestPNG.write(to: imagePath)
         let store = AttachmentStore()
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "@\(imagePath.path) what is this?",
             store: store,
             cwd: "/tmp",
             modelSupportsImages: true
         )
         #expect(built.images.count == 1)
-        #expect(built.images.first?.mimeType == "image/png")
+        let mimeType = try #require(built.images.first?.mimeType)
+        #expect(["image/png", "image/jpeg", "image/webp"].contains(mimeType))
+        #expect(built.text.contains("mime=\"\(mimeType)\""))
+        #expect(built.text.contains("original_dimensions=\"1x1\""))
+        #expect(built.text.contains("displayed_dimensions=\"200x200\""))
+        #expect(built.text.contains("Multiply coordinates by 0.01"))
         #expect(built.summary?.contains("1 image") == true)
     }
 
     @MainActor
     @Test("clipboard-image keeps its [image #N] token in the prose and attaches bytes")
-    func clipboardImageExpands() {
+    func clipboardImageExpands() async throws {
         let store = AttachmentStore()
-        let bytes = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
+        let bytes = attachmentTestPNG
         let token = store.addClipboardImage(data: bytes, mimeType: "image/png")
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "what is this: \(token) any ideas?",
             store: store,
             cwd: "/tmp",
@@ -252,16 +275,19 @@ struct BuildPromptTests {
         #expect(built.text.contains("source=\"clipboard\""))
         #expect(built.text.contains("id=\"1\""))
         #expect(built.images.count == 1)
-        #expect(built.images.first?.mimeType == "image/png")
+        let mimeType = try #require(built.images.first?.mimeType)
+        #expect(["image/png", "image/jpeg", "image/webp"].contains(mimeType))
+        #expect(built.text.contains("mime=\"\(mimeType)\""))
+        #expect(built.text.contains("original_dimensions=\"1x1\""))
         #expect(built.summary?.contains("1 image") == true)
     }
 
     @MainActor
     @Test("clipboard-image on a text-only model is skipped with a note")
-    func clipboardImageSkippedOnTextOnly() {
+    func clipboardImageSkippedOnTextOnly() async throws {
         let store = AttachmentStore()
         let token = store.addClipboardImage(data: Data([1, 2, 3]), mimeType: "image/png")
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "\(token)",
             store: store,
             cwd: "/tmp",
@@ -274,13 +300,13 @@ struct BuildPromptTests {
 
     @MainActor
     @Test("image is dropped + noted when model can't accept images")
-    func imageSkippedOnTextOnlyModel() throws {
+    func imageSkippedOnTextOnlyModel() async throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let imagePath = dir.appendingPathComponent("shot.png")
         try Data([0x89, 0x50, 0x4E, 0x47]).write(to: imagePath)
         let store = AttachmentStore()
-        let built = buildPromptWithAttachments(
+        let built = try await buildPromptWithAttachments(
             text: "@\(imagePath.path)",
             store: store,
             cwd: "/tmp",
@@ -298,3 +324,7 @@ private func makeTempDir() throws -> URL {
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
+
+private let attachmentTestPNG = Data(base64Encoded:
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)!

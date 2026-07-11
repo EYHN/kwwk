@@ -32,6 +32,11 @@ enum SlashInput: Equatable {
     }
 }
 
+enum ShakeMode: Sendable, Equatable {
+    case elide
+    case images
+}
+
 /// Ambient context a slash-command handler receives: the live Agent (for
 /// reading/updating model, messages, etc.), the modal host (to open
 /// selectors), the background-task manager + sessionId (so commands like
@@ -69,6 +74,9 @@ final class SlashContext {
     /// Persist a successful manual compaction. Automatic compaction uses
     /// AgentEvent subscriptions; slash commands need an explicit hook.
     let recordCompaction: @MainActor (_ messagesCompacted: Int) async -> Void
+    /// Persist a `/shake` transcript rewrite through the live recorder's
+    /// serialized operation queue. Nil means the rewrite failed.
+    let persistShake: @MainActor (_ mode: ShakeMode) async -> Int?
     /// Persist a user-set session title to the live session file. Backed by
     /// the SessionRecorder in the TUI; a no-op in headless/test contexts.
     let setSessionTitle: @MainActor (_ title: String) async -> Void
@@ -95,6 +103,8 @@ final class SlashContext {
     /// starting a competing turn before the revision-checked projection is
     /// committed. A no-op in headless / test contexts.
     let setCompacting: @MainActor (_ active: Bool) -> Void
+    /// Mark the TUI busy while `/shake` owns and rewrites the session.
+    let setShaking: @MainActor (_ active: Bool) -> Void
 
     init(
         agent: Agent,
@@ -105,12 +115,14 @@ final class SlashContext {
         commitScrollback: @MainActor @escaping ((Int) -> [String]) -> Void,
         refreshTranscript: @MainActor @escaping () -> Void,
         recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in },
+        persistShake: @MainActor @escaping (_ mode: ShakeMode) async -> Int? = { _ in nil },
         setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in },
         sessionProviders: SessionProviders = SessionProviders(),
         authResolvers: SessionAuthResolvers? = nil,
         context1m: Bool = false,
         withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() },
-        setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
+        setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in },
+        setShaking: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
     ) {
         self.agentProvider = { agent }
         self.modal = modal
@@ -120,12 +132,14 @@ final class SlashContext {
         self.commitScrollback = commitScrollback
         self.refreshTranscript = refreshTranscript
         self.recordCompaction = recordCompaction
+        self.persistShake = persistShake
         self.setSessionTitle = setSessionTitle
         self.sessionProviders = sessionProviders
         self.authResolvers = authResolvers
         self.context1m = context1m
         self.withSuspendedTUI = withSuspendedTUI
         self.setCompacting = setCompacting
+        self.setShaking = setShaking
     }
 
     /// Runtime-backed variant used by the interactive TUI, whose `/new` and
@@ -139,12 +153,14 @@ final class SlashContext {
         commitScrollback: @MainActor @escaping ((Int) -> [String]) -> Void,
         refreshTranscript: @MainActor @escaping () -> Void,
         recordCompaction: @MainActor @escaping (_ messagesCompacted: Int) async -> Void = { _ in },
+        persistShake: @MainActor @escaping (_ mode: ShakeMode) async -> Int? = { _ in nil },
         setSessionTitle: @MainActor @escaping (_ title: String) async -> Void = { _ in },
         sessionProviders: SessionProviders = SessionProviders(),
         authResolvers: SessionAuthResolvers? = nil,
         context1m: Bool = false,
         withSuspendedTUI: @MainActor @escaping (_ body: @escaping @MainActor () async -> Void) async -> Void = { body in await body() },
-        setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
+        setCompacting: @MainActor @escaping (_ active: Bool) -> Void = { _ in },
+        setShaking: @MainActor @escaping (_ active: Bool) -> Void = { _ in }
     ) {
         self.agentProvider = agentProvider
         self.modal = modal
@@ -154,12 +170,14 @@ final class SlashContext {
         self.commitScrollback = commitScrollback
         self.refreshTranscript = refreshTranscript
         self.recordCompaction = recordCompaction
+        self.persistShake = persistShake
         self.setSessionTitle = setSessionTitle
         self.sessionProviders = sessionProviders
         self.authResolvers = authResolvers
         self.context1m = context1m
         self.withSuspendedTUI = withSuspendedTUI
         self.setCompacting = setCompacting
+        self.setShaking = setShaking
     }
 
     /// Single-line convenience: one-off status messages (`/model switched
