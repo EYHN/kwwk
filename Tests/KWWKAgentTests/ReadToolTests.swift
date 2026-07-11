@@ -139,7 +139,7 @@ struct ReadToolTests {
         #expect(trunc["outputLines"] == .int(2000))
     }
 
-    @Test("detects PNG images by magic bytes and returns an image block")
+    @Test("normalizes detected images and includes coordinate mapping")
     func pngDetection() async throws {
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -150,10 +150,31 @@ struct ReadToolTests {
         let tool = createReadTool(cwd: dir.path)
         let result = try await tool.execute("call-7", ["path": .string(file.path)], nil, nil)
 
-        let hasImage = result.content.contains { block in
-            if case .image(let img) = block { return img.mimeType == "image/png" } else { return false }
+        let image = try #require(result.content.compactMap { block -> ImageContent? in
+            if case .image(let image) = block { return image }
+            return nil
+        }.first)
+        #expect(["image/png", "image/jpeg", "image/webp"].contains(image.mimeType))
+        #expect(Data(base64Encoded: image.data) != nil)
+
+        let note = textOutput(result)
+        #expect(note.contains(image.mimeType))
+        #expect(note.contains("200x200"))
+        #expect(note.contains("original 1x1, displayed at 200x200"))
+        #expect(note.contains("Multiply coordinates by 0.01"))
+    }
+
+    @Test("surfaces image decode failure")
+    func invalidImageThrows() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("invalid.png")
+        try Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).write(to: file)
+
+        let tool = createReadTool(cwd: dir.path)
+        await #expect(throws: ImageNormalizationError.decodeFailed) {
+            _ = try await tool.execute("call-invalid-image", ["path": .string(file.path)], nil, nil)
         }
-        #expect(hasImage)
     }
 
     @Test("unreadable file reports a permission error, not file-not-found")

@@ -207,6 +207,159 @@ struct ShakeCommandTests {
         #expect(shake?.description.contains("no LLM") == true)
         #expect(registry.all.contains { $0.name == "shake" })
     }
+
+    @MainActor
+    @Test("images mode persists, replaces live messages, and closes provider session state")
+    func imagesModeRewritesSessionAndLiveState() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let lifecycle = ShakeLifecycleProvider(api: "shake-lifecycle-\(UUID().uuidString)")
+        let sourceId = "shake-lifecycle-source-\(UUID().uuidString)"
+        await APIRegistry.shared.register(lifecycle, sourceId: sourceId)
+
+        let sessionId = "shake-images-session"
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: faux.getModel(),
+                messages: [
+                    .user(UserMessage(content: [
+                        .image(ImageContent(data: "user-image", mimeType: "image/png")),
+                    ])),
+                    .toolResult(ToolResultMessage(
+                        toolCallId: "image-tool",
+                        toolName: "read",
+                        content: [
+                            .text(TextContent(text: "keep")),
+                            .image(ImageContent(data: "tool-image", mimeType: "image/jpeg")),
+                        ]
+                    )),
+                ]
+            ),
+            sessionId: sessionId
+        ))
+        let notifier = SlashNotifyRecorder()
+        let persistence = ShakePersistenceRecorder(result: 4)
+        let refresh = ShakeRefreshRecorder()
+        let activity = ShakeActivityRecorder()
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-shake-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let ctx = SlashContext(
+            agent: agent,
+            modal: makeShakeModalHost(),
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            sessionId: sessionId,
+            notifyBlock: { lines in for line in lines { notifier.append(line) } },
+            commitScrollback: { _ in },
+            refreshTranscript: { refresh.count += 1 },
+            persistShake: { mode in persistence.record(mode) },
+            setShaking: { active in activity.record(active) }
+        )
+        let registry = SlashCommandRegistry()
+        registerBuiltinSlashCommands(registry)
+
+        await registry.find("shake")?.handler(ctx, "images")
+
+        #expect(persistence.modes == [.images])
+        #expect(refresh.count == 1)
+        #expect(activity.states == [true, false])
+        #expect(notifier.joined.contains("dropped 2 images"))
+        guard case .user(let user) = agent.state.messages[0] else {
+            Issue.record("expected user message")
+            await APIRegistry.shared.unregisterSource(sourceId)
+            return
+        }
+        #expect(user.content == [.text(TextContent(text: "[image removed]"))])
+        guard case .toolResult(let tool) = agent.state.messages[1] else {
+            Issue.record("expected tool result")
+            await APIRegistry.shared.unregisterSource(sourceId)
+            return
+        }
+        #expect(tool.content == [.text(TextContent(text: "keep"))])
+        #expect(lifecycle.closedSessions.contains(sessionId))
+        await APIRegistry.shared.unregisterSource(sourceId)
+    }
+
+    @MainActor
+    @Test("bare mode persists the existing tool-output elision")
+    func bareModePersistsElision() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(
+            model: faux.getModel(),
+            messages: [.toolResult(ToolResultMessage(
+                toolCallId: "heavy",
+                toolName: "bash",
+                content: [.text(TextContent(text: String(repeating: "x", count: 2_000)))]
+            ))]
+        ))
+        let notifier = SlashNotifyRecorder()
+        let persistence = ShakePersistenceRecorder(result: 1)
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-shake-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let ctx = SlashContext(
+            agent: agent,
+            modal: makeShakeModalHost(),
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            sessionId: "shake-elide-session",
+            notifyBlock: { lines in for line in lines { notifier.append(line) } },
+            commitScrollback: { _ in },
+            refreshTranscript: {},
+            persistShake: { mode in persistence.record(mode) }
+        )
+        let registry = SlashCommandRegistry()
+        registerBuiltinSlashCommands(registry)
+
+        await registry.find("shake")?.handler(ctx, "")
+
+        #expect(persistence.modes == [.elide])
+        guard case .toolResult(let result) = agent.state.messages[0],
+              case .text(let text)? = result.content.first else {
+            Issue.record("expected rewritten tool result")
+            return
+        }
+        #expect(text.text.hasPrefix("[tool result elided to reclaim context"))
+        #expect(notifier.joined.contains("elided 1 heavy tool result"))
+        #expect(!notifier.joined.contains("in-memory only"))
+    }
+
+    @MainActor
+    @Test("unknown mode prints usage without rewriting")
+    func unknownModePrintsUsage() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let original = Message.user(UserMessage(content: [
+            .image(ImageContent(data: "unchanged", mimeType: "image/png")),
+        ]))
+        let agent = Agent(initialState: AgentInitialState(
+            model: faux.getModel(),
+            messages: [original]
+        ))
+        let notifier = SlashNotifyRecorder()
+        let persistence = ShakePersistenceRecorder(result: 1)
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-shake-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let ctx = SlashContext(
+            agent: agent,
+            modal: makeShakeModalHost(),
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            sessionId: "shake-usage-session",
+            notifyBlock: { lines in for line in lines { notifier.append(line) } },
+            commitScrollback: { _ in },
+            refreshTranscript: {},
+            persistShake: { mode in persistence.record(mode) }
+        )
+        let registry = SlashCommandRegistry()
+        registerBuiltinSlashCommands(registry)
+
+        await registry.find("shake")?.handler(ctx, "bogus")
+
+        #expect(agent.state.messages == [original])
+        #expect(persistence.modes.isEmpty)
+        #expect(notifier.joined.contains("usage: /shake [elide|images]"))
+    }
 }
 
 @Suite("SlashCommandRegistry alias resolution")
@@ -295,4 +448,68 @@ private final class SlashNotifyRecorder {
     func append(_ s: String) { lines.append(s) }
     func clear() { lines.removeAll() }
     var joined: String { lines.joined(separator: "\n") }
+}
+
+@MainActor
+private final class ShakePersistenceRecorder {
+    private let result: Int?
+    private(set) var modes: [ShakeMode] = []
+
+    init(result: Int?) {
+        self.result = result
+    }
+
+    func record(_ mode: ShakeMode) -> Int? {
+        modes.append(mode)
+        return result
+    }
+}
+
+@MainActor
+private final class ShakeRefreshRecorder {
+    var count = 0
+}
+
+@MainActor
+private final class ShakeActivityRecorder {
+    private(set) var states: [Bool] = []
+
+    func record(_ active: Bool) {
+        states.append(active)
+    }
+}
+
+@MainActor
+private func makeShakeModalHost() -> ModalHost {
+    ModalHost(
+        renderModalLines: { _ in },
+        restoreTranscript: {},
+        requestRender: {}
+    )
+}
+
+private final class ShakeLifecycleProvider:
+    APIProvider,
+    APIProviderSessionLifecycle,
+    @unchecked Sendable
+{
+    let api: String
+    private let lock = NSLock()
+    private var sessions: [String] = []
+
+    init(api: String) {
+        self.api = api
+    }
+
+    var closedSessions: [String] {
+        lock.withLock { sessions }
+    }
+
+    func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
+        AssistantMessageStream()
+    }
+
+    func closeSession(sessionId: String) async {
+        lock.withLock { sessions.append(sessionId) }
+    }
 }

@@ -6,16 +6,17 @@ import KWWKAI
 /// `defaultDirectory()`.
 ///
 /// Mirrors pi's `packages/agent/src/harness/session` storage in spirit but
-/// keeps a flat append-only log instead of pi's branching entry tree: each
+/// keeps a flat append-oriented log instead of pi's branching entry tree: each
 /// session file is a versioned header line followed by one JSON entry per
 /// line. Entries are transcript messages (`user` / `assistant` /
 /// `toolResult`), sparse metadata updates (model / thinking-level changes),
 /// or compaction markers that describe the projected resumable context.
 ///
-/// The store never rewrites the file — every `append(...)` is an `O(1)` write
-/// to the end of the file, so persisting on every message is cheap. Loading
-/// replays the log to reconstruct the projected context plus the latest
-/// metadata.
+/// Ordinary persistence is append-only, so recording each message is cheap.
+/// Explicit transcript maintenance such as `/shake` atomically rewrites the
+/// existing entries so removed payloads do not remain buried in older JSONL
+/// lines. Loading replays the log to reconstruct the projected context plus
+/// the latest metadata.
 ///
 /// File layout (one JSON object per line):
 /// ```
@@ -340,6 +341,11 @@ public actor SessionStore {
     }()
     private static let decoder = JSONDecoder()
 
+    struct MessageRewrite: Sendable {
+        let messages: [Message]
+        let changedCount: Int
+    }
+
     // MARK: - Create / append
 
     /// Create a new session file with a versioned header. Overwrites any
@@ -499,6 +505,99 @@ public actor SessionStore {
         defer { try? handle.close() }
         try handle.seekToEnd()
         handle.write(line)
+    }
+
+    /// Atomically rewrite every persisted transcript-bearing entry with one
+    /// canonical message transformation. Both ordinary message lines and the
+    /// replacement context inside compaction markers are rewritten; headers,
+    /// metadata, timestamps, and compaction bookkeeping remain unchanged.
+    ///
+    /// Returns the number of transformed payloads across the physical JSONL
+    /// entries. A zero result leaves the file untouched.
+    func rewriteMessages(
+        id: String,
+        using transform: @Sendable ([Message]) -> MessageRewrite
+    ) throws -> Int {
+        let url = try path(for: id)
+        guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
+            throw SessionStoreError.notFound(id)
+        }
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: true)
+        guard let first = lines.first else {
+            throw SessionStoreError.missingHeader(url.path)
+        }
+        _ = try parseHeader(String(first), path: url.path)
+
+        var rewrittenEntries: [Entry] = []
+        rewrittenEntries.reserveCapacity(max(0, lines.count - 1))
+        var changedCount = 0
+
+        for (offset, line) in lines.dropFirst().enumerated() {
+            let lineNumber = offset + 2
+            guard let data = String(line).data(using: .utf8) else {
+                throw SessionStoreError.undecodableEntry(path: url.path, line: lineNumber)
+            }
+            let entry: Entry
+            do {
+                entry = try Self.decoder.decode(Entry.self, from: data)
+            } catch {
+                throw SessionStoreError.undecodableEntry(path: url.path, line: lineNumber)
+            }
+
+            switch entry {
+            case .message(let timestamp, let message):
+                let rewrite = transform([message])
+                changedCount += rewrite.changedCount
+                rewrittenEntries.append(.message(
+                    timestamp: timestamp,
+                    message: rewrite.messages[0]
+                ))
+
+            case .compaction(let timestamp, var compaction):
+                let rewrite = transform(compaction.replacementMessages)
+                changedCount += rewrite.changedCount
+                compaction.replacementMessages = rewrite.messages
+                rewrittenEntries.append(.compaction(
+                    timestamp: timestamp,
+                    compaction: compaction
+                ))
+
+            case .meta:
+                rewrittenEntries.append(entry)
+            }
+        }
+
+        guard changedCount > 0 else { return 0 }
+
+        var data = Data()
+        data.append(contentsOf: first.utf8)
+        data.append(0x0A)
+        for entry in rewrittenEntries {
+            data.append(try Self.encoder.encode(entry))
+            data.append(0x0A)
+        }
+        try replaceAtomically(url: url, data: data)
+        return changedCount
+    }
+
+    private func replaceAtomically(url: URL, data: Data) throws {
+        let temporaryURL = directory.appendingPathComponent(
+            ".\(url.lastPathComponent).\(UUID().uuidString).tmp"
+        )
+        guard FileManager.default.createFile(
+            atPath: temporaryURL.path,
+            contents: data,
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw SessionStoreError.writeFailed(path: url.path)
+        }
+        // POSIX rename(2) atomically replaces the destination on macOS and
+        // Linux alike. FileManager.replaceItemAt is not usable here: on
+        // swift-corelibs-foundation it can leave the destination missing.
+        guard rename(temporaryURL.path, url.path) == 0 else {
+            try? FileManager.default.removeItem(at: temporaryURL)
+            throw SessionStoreError.writeFailed(path: url.path)
+        }
     }
 
     // MARK: - Load

@@ -70,7 +70,7 @@ struct NewSessionResetTests {
     }
 
     @MainActor
-    @Test("production replacement path records only the new Agent identity")
+    @Test("production replacement uses the new Agent and preserves a draft composed during handoff")
     func replacementUsesFreshAgentIdentity() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -106,6 +106,10 @@ struct NewSessionResetTests {
             sessionId: "old-session"
         )
         defer { recorderBox.unsubscribe() }
+        let attachments = AttachmentStore()
+        _ = attachments.addPastedText("outgoing paste")
+        _ = attachments.addClipboardImage(data: Data([1]), mimeType: "image/png")
+        let frame = CodingFrame()
 
         await performNewSession(
             newId: "new-session",
@@ -115,13 +119,19 @@ struct NewSessionResetTests {
             replaceSessionAgent: { id, messages in
                 #expect(id == "new-session")
                 replacement.state.messages = messages
+                let text = attachments.addPastedText("new-session paste")
+                let image = attachments.addClipboardImage(
+                    data: Data([2]),
+                    mimeType: "image/png"
+                )
+                frame.input.value = "\(text) \(image)"
                 return replacement
             },
             cwd: dir.path,
-            attachments: AttachmentStore(),
+            attachments: attachments,
             retry: TurnRetryState(),
             dequeueCycle: DequeueCycleState(),
-            frame: CodingFrame(),
+            frame: frame,
             width: 60,
             commit: { _ in },
             recompute: {},
@@ -134,6 +144,9 @@ struct NewSessionResetTests {
         #expect(replacement.sessionId == "new-session")
         #expect(replacement.state.messages.isEmpty)
         #expect(recorderBox.sessionId == "new-session")
+        #expect(frame.input.value == "[pasted-text #2] [image #2]")
+        #expect(attachments.pastedTexts.map(\.body) == ["new-session paste"])
+        #expect(attachments.clipboardImages.map(\.data) == [Data([2])])
 
         try await replacement.prompt("belongs to new session")
         let loaded = try await store.resolveResume(.id("new-session"), cwd: dir.path)

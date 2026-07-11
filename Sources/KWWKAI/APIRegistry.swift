@@ -168,7 +168,8 @@ public func stream(
     guard let provider = await registry.provider(scope: model.provider, api: model.api) else {
         throw ProviderNotFoundError.api(model.api)
     }
-    return provider.stream(model: model, context: context, options: options)
+    let outboundContext = ProviderImageBudget.clamp(context, for: model)
+    return provider.stream(model: model, context: outboundContext, options: options)
 }
 
 /// Convenience: run a stream to completion and return the final message.

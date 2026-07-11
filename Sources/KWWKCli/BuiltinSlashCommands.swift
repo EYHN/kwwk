@@ -36,7 +36,7 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
     ))
     registry.register(SlashCommand(
         name: "shake",
-        description: "Trim heavy tool output from context (no LLM)",
+        description: "Trim heavy tool output or remove images from the session (no LLM)",
         handler: handleShakeCommand
     ))
     registry.register(SlashCommand(
@@ -920,55 +920,100 @@ private func handleContextCommand(_ ctx: SlashContext, _ args: String) async {
 
 // MARK: - /shake
 
-/// `/shake` — a non-LLM context trim. Unlike `/compact` (which spends a
-/// model round-trip to summarize the transcript), `/shake` just walks the
-/// live conversation and collapses oversized tool-result output into a short
-/// placeholder, reclaiming context window with no LLM call. Idempotent:
-/// re-running skips results already collapsed.
-///
-/// LIMITATION: this trims the IN-MEMORY transcript only — it is not
-/// re-persisted to the session file, so a later `/resume` reloads the
-/// original tool output. That's acceptable for a "reclaim live context"
-/// tool; the saving lands on the next request's prompt, not on disk.
-///
-/// The before→after token figures come from `currentUsage`, which reflects
-/// the most recent *recorded* request, so the window number only moves on the
-/// next turn after the trimmed messages are actually sent. The reclaimed-chars
-/// line is the immediate, concrete win.
+/// `/shake` mechanically trims context without an LLM call. Bare `/shake`
+/// (or `/shake elide`) collapses oversized tool results; `/shake images`
+/// permanently removes image blocks. Both modes rewrite the persisted JSONL,
+/// replace the live agent context with the same pure transformation, and close
+/// provider-side session chains so the next request replays the new history.
 @MainActor
 private func handleShakeCommand(_ ctx: SlashContext, _ args: String) async {
-    let before = AgentContextCompactor.currentUsage(
-        messages: ctx.agent.state.messages,
-        model: ctx.agent.state.model
-    )
-    let beforeChars = toolResultTextChars(ctx.agent.state.messages)
-
-    let result = AgentContextCompactor.shakeToolOutputs(ctx.agent.state.messages)
-    if result.elidedCount == 0 {
-        ctx.notify(Style.dimmed("  /shake: nothing to trim"))
+    let mode: ShakeMode
+    switch args.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+    case "", "elide":
+        mode = .elide
+    case "images":
+        mode = .images
+    default:
+        ctx.notify(Style.dimmed("  usage: /shake [elide|images]"))
         return
     }
 
-    ctx.agent.state.messages = result.messages
-    ctx.refreshTranscript()
+    let shakeAgent = ctx.agent
+    ctx.setShaking(true)
+    defer { ctx.setShaking(false) }
+    do {
+        try await shakeAgent.withMaintenance { @MainActor in
+            let originalMessages = shakeAgent.state.messages
+            let rewrittenMessages: [Message]
+            let liveChangedCount: Int
 
-    let after = AgentContextCompactor.currentUsage(
-        messages: ctx.agent.state.messages,
-        model: ctx.agent.state.model
-    )
-    let afterChars = toolResultTextChars(result.messages)
-    let reclaimed = max(0, beforeChars - afterChars)
+            switch mode {
+            case .elide:
+                let rewrite = AgentContextCompactor.shakeToolOutputs(originalMessages)
+                rewrittenMessages = rewrite.messages
+                liveChangedCount = rewrite.elidedCount
+            case .images:
+                let rewrite = AgentContextCompactor.removingImages(from: originalMessages)
+                rewrittenMessages = rewrite.messages
+                liveChangedCount = rewrite.removedCount
+            }
 
-    let n = result.elidedCount
-    var lines = [
-        Style.dimmed("  /shake: elided \(n) heavy tool \(n == 1 ? "result" : "results") (no LLM)"),
-        Style.dimmed("    reclaimed ~\(reclaimed) chars of tool output"),
-    ]
-    if before.window > 0 {
-        lines.append(Style.dimmed("    context: \(before.tokens) → \(after.tokens) tokens of \(before.window) (refreshes next turn)"))
+            guard let persistedChangedCount = await ctx.persistShake(mode) else {
+                ctx.notify(Style.error("  /shake: failed to rewrite the session"))
+                return
+            }
+            let changedCount = liveChangedCount > 0
+                ? liveChangedCount
+                : persistedChangedCount
+            guard changedCount > 0 else {
+                let message = mode == .images
+                    ? "  /shake images: no images found"
+                    : "  /shake: nothing to trim"
+                ctx.notify(Style.dimmed(message))
+                return
+            }
+
+            shakeAgent.state.messages = rewrittenMessages
+            await shakeAgent.closeSession()
+            ctx.refreshTranscript()
+
+            switch mode {
+            case .images:
+                ctx.notify(Style.dimmed(
+                    "  /shake images: dropped \(changedCount) image\(changedCount == 1 ? "" : "s") from this session"
+                ))
+            case .elide:
+                let before = AgentContextCompactor.currentUsage(
+                    messages: originalMessages,
+                    model: shakeAgent.state.model
+                )
+                let after = AgentContextCompactor.currentUsage(
+                    messages: rewrittenMessages,
+                    model: shakeAgent.state.model
+                )
+                let reclaimed = max(
+                    0,
+                    toolResultTextChars(originalMessages)
+                        - toolResultTextChars(rewrittenMessages)
+                )
+                var lines = [
+                    Style.dimmed("  /shake: elided \(changedCount) heavy tool \(changedCount == 1 ? "result" : "results") (no LLM)"),
+                    Style.dimmed("    reclaimed ~\(reclaimed) chars of tool output"),
+                ]
+                if before.window > 0 {
+                    lines.append(Style.dimmed(
+                        "    context: \(before.tokens) → \(after.tokens) tokens of \(before.window)"
+                    ))
+                }
+                ctx.notifyBlock(lines)
+            }
+        }
+    } catch AgentError.alreadyRunning {
+        ctx.notify(Style.error("  /shake: agent is busy; stop it first (Esc)"))
+    } catch {
+        ctx.notify(Style.error("  /shake: \(error)"))
     }
-    lines.append(Style.dimmed("    (in-memory only — /resume reloads the original output)"))
-    ctx.notifyBlock(lines)
+    shakeAgent.resumeQueuedWork()
 }
 
 /// Total character count of every `.text` block across all tool-result

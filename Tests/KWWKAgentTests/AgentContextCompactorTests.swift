@@ -124,6 +124,67 @@ struct AgentContextCompactorTests {
         #expect(hasImage)
     }
 
+    @Test("removingImages strips user and tool-result images with non-empty placeholders")
+    func removingImagesStripsSupportedMessageBlocks() {
+        let userTimestamp: Int64 = 101
+        let toolTimestamp: Int64 = 202
+        let messages: [Message] = [
+            .user(UserMessage(
+                content: [
+                    .image(ImageContent(data: "user-a", mimeType: "image/png")),
+                    .text(TextContent(text: "keep me")),
+                    .image(ImageContent(data: "user-b", mimeType: "image/jpeg")),
+                ],
+                timestamp: userTimestamp
+            )),
+            .user(UserMessage(
+                content: [.image(ImageContent(data: "user-only", mimeType: "image/webp"))]
+            )),
+            .toolResult(ToolResultMessage(
+                toolCallId: "shot",
+                toolName: "read",
+                content: [.image(ImageContent(data: "tool", mimeType: "image/png"))],
+                details: .object(["path": .string("screenshot.png")]),
+                timestamp: toolTimestamp
+            )),
+            .assistant(AssistantMessage(
+                content: [.text(TextContent(text: "unchanged"))],
+                api: "faux",
+                provider: "faux",
+                model: "faux"
+            )),
+        ]
+
+        let rewrite = AgentContextCompactor.removingImages(from: messages)
+
+        #expect(rewrite.removedCount == 4)
+        guard case .user(let user) = rewrite.messages[0] else {
+            Issue.record("expected user message")
+            return
+        }
+        #expect(user.content == [.text(TextContent(text: "keep me"))])
+        #expect(user.timestamp == userTimestamp)
+
+        guard case .user(let imageOnlyUser) = rewrite.messages[1] else {
+            Issue.record("expected image-only user message")
+            return
+        }
+        #expect(imageOnlyUser.content == [.text(TextContent(text: "[image removed]"))])
+
+        guard case .toolResult(let tool) = rewrite.messages[2] else {
+            Issue.record("expected tool result")
+            return
+        }
+        #expect(tool.content == [.text(TextContent(text: "[image removed]"))])
+        #expect(tool.details == .object(["path": .string("screenshot.png")]))
+        #expect(tool.timestamp == toolTimestamp)
+        #expect(rewrite.messages[3] == messages[3])
+
+        let repeated = AgentContextCompactor.removingImages(from: rewrite.messages)
+        #expect(repeated.removedCount == 0)
+        #expect(repeated.messages == rewrite.messages)
+    }
+
     private func toolResultChars(_ messages: [Message]) -> Int {
         messages.reduce(0) { total, message in
             guard case .toolResult(let result) = message else { return total }

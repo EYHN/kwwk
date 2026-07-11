@@ -39,6 +39,25 @@ struct SessionStoreTests {
         ))
     }
 
+    private func imageCount(in messages: [Message]) -> Int {
+        messages.reduce(0) { count, message in
+            switch message {
+            case .user(let user):
+                return count + user.content.count { block in
+                    if case .image = block { return true }
+                    return false
+                }
+            case .toolResult(let result):
+                return count + result.content.count { block in
+                    if case .image = block { return true }
+                    return false
+                }
+            case .assistant:
+                return count
+            }
+        }
+    }
+
     @Test("default store is disabled and does not touch disk")
     func defaultStoreDisabled() async throws {
         let store = SessionStore()
@@ -600,6 +619,106 @@ struct SessionStoreTests {
         #expect(loaded.messages.count == 2)
     }
 
+    @Test("SessionRecorder atomically removes images from messages and compaction projections")
+    func recorderRewritesImagesPermanently() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-rec-remove-images"
+        let cwd = "/w"
+        let user = Message.user(UserMessage(content: [
+            .text(TextContent(text: "look")),
+            .image(ImageContent(data: "USER_BASE64_SENTINEL", mimeType: "image/png")),
+        ]))
+        let tool = Message.toolResult(ToolResultMessage(
+            toolCallId: "image-read",
+            toolName: "read",
+            content: [
+                .image(ImageContent(data: "TOOL_BASE64_SENTINEL", mimeType: "image/jpeg")),
+            ]
+        ))
+        try await store.append(id: id, cwd: cwd, messages: [user, tool])
+        try await store.appendCompaction(
+            id: id,
+            cwd: cwd,
+            replacementMessages: [user, tool],
+            messagesCompacted: 0,
+            reason: .compact
+        )
+        try await store.setTitle(id: id, cwd: cwd, title: "Images")
+
+        let file = dir.appendingPathComponent("\(id).jsonl")
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: file.path
+        )
+
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: id,
+            cwd: cwd,
+            persistedCount: 2
+        )
+        let removed = await recorder.rewriteRemovingImages()
+
+        #expect(removed == 4, "raw messages and compaction replacements are both rewritten")
+        let loaded = try await store.load(id: id)
+        #expect(imageCount(in: loaded.messages) == 0)
+        #expect(imageCount(in: loaded.displayMessages) == 0)
+        #expect(loaded.title == "Images")
+        guard case .toolResult(let rewrittenTool) = loaded.messages[1] else {
+            Issue.record("expected tool result")
+            return
+        }
+        #expect(rewrittenTool.content == [.text(TextContent(text: "[image removed]"))])
+
+        let raw = try String(contentsOf: file, encoding: .utf8)
+        #expect(!raw.contains("USER_BASE64_SENTINEL"))
+        #expect(!raw.contains("TOOL_BASE64_SENTINEL"))
+        #expect(raw.contains(#""type":"compaction""#))
+        #expect(raw.contains(#""title":"Images""#))
+
+        let after = assistantMsg("after rewrite")
+        await recorder.flush(messages: loaded.messages + [after])
+        let appended = try await store.load(id: id)
+        #expect(appended.messages == loaded.messages + [after])
+
+        let mode = try #require(
+            (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions]) as? Int
+        )
+        #expect(mode == 0o600)
+    }
+
+    @Test("SessionRecorder persists tool-output shake rewrites")
+    func recorderRewritesShakenToolOutput() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-rec-shake-output"
+        let heavy = "HEAVY_OUTPUT_SENTINEL" + String(repeating: "x", count: 2_000)
+        let message = toolResultMsg(heavy)
+        try await store.append(id: id, cwd: "/w", message: message)
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: id,
+            cwd: "/w",
+            persistedCount: 1
+        )
+
+        let changed = await recorder.rewriteShakenToolOutputs(keepingUnder: 100)
+
+        #expect(changed == 1)
+        let loaded = try await store.load(id: id)
+        #expect(text(from: loaded.messages.first).hasPrefix(
+            "[tool result elided to reclaim context"
+        ))
+        let raw = try String(
+            contentsOf: dir.appendingPathComponent("\(id).jsonl"),
+            encoding: .utf8
+        )
+        #expect(!raw.contains("HEAVY_OUTPUT_SENTINEL"))
+    }
+
     @Test("SessionRecorder retries a failed append without skipping a message")
     func recorderRetriesFailedAppend() async throws {
         let (store, dir) = tempStore()
@@ -631,6 +750,44 @@ struct SessionStoreTests {
         #expect(recorder.lastPersistenceError == nil)
         let loaded = try await store.load(id: id)
         #expect(loaded.messages == [first, second])
+    }
+
+    @Test("SessionRecorder cancels a rewrite queued behind a failed append")
+    func recorderCancelsRewriteBehindFailedAppend() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let id = "sess-rec-cancel-rewrite"
+        let image = Message.user(UserMessage(content: [
+            .image(ImageContent(data: "KEEP_IMAGE", mimeType: "image/png")),
+        ]))
+        try await store.append(id: id, cwd: "/w", message: image)
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: id,
+            cwd: "/w",
+            persistedCount: 1
+        )
+
+        let after = assistantMsg("after")
+        let file = dir.appendingPathComponent("\(id).jsonl")
+        let backup = dir.appendingPathComponent("\(id).backup")
+        try FileManager.default.moveItem(at: file, to: backup)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
+
+        await recorder.flush(messages: [image, after])
+        #expect(recorder.lastPersistenceError != nil)
+        let removed = await recorder.rewriteRemovingImages()
+        #expect(removed == nil)
+
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.moveItem(at: backup, to: file)
+        await recorder.flush(messages: [image, after])
+
+        #expect(recorder.lastPersistenceError == nil)
+        let loaded = try await store.load(id: id)
+        #expect(loaded.messages == [image, after])
+        #expect(imageCount(in: loaded.messages) == 1)
     }
 
     @Test("SessionRecorder redacts a hidden goal message when a failed append retries")

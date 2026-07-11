@@ -388,7 +388,9 @@ public enum AgentContextCompactor {
     /// is left alone so repeated `/shake` calls don't recount or re-elide.
     static let shakePlaceholderPrefix = "[tool result elided to reclaim context"
 
-    /// Strip heavy tool-result output from a live transcript without any LLM
+    private static let removedImagePlaceholder = "[image removed]"
+
+    /// Strip heavy tool-result output from a transcript without any LLM
     /// call (unlike `compactMessages`, which summarizes via the model). Walks
     /// `messages`; for each `.toolResult` whose joined `.text` blocks exceed
     /// `limit`, the text is replaced by a single short placeholder. Every
@@ -418,7 +420,7 @@ public enum AgentContextCompactor {
             guard joined.count > limit else { return message }
 
             // Collapse the bulky text into one placeholder block; carry any
-            // images through unchanged (they don't hold the bulk).
+            // images through unchanged for the explicit `/shake images` mode.
             var rebuilt: [ToolResultBlock] = [
                 .text(TextContent(text: "\(shakePlaceholderPrefix) — was \(joined.count) chars]"))
             ]
@@ -430,6 +432,54 @@ public enum AgentContextCompactor {
             return .toolResult(result)
         }
         return (rewritten, elidedCount)
+    }
+
+    /// Remove every image block from user and tool-result messages. Messages
+    /// that contained only images receive a text placeholder so providers
+    /// never see an empty content array. All message metadata and surviving
+    /// text blocks retain their original order.
+    ///
+    /// Pure and idempotent: callers use this same transformation for the live
+    /// agent context and every persisted session projection.
+    public static func removingImages(
+        from messages: [Message]
+    ) -> (messages: [Message], removedCount: Int) {
+        var removedCount = 0
+        let rewritten = messages.map { message -> Message in
+            switch message {
+            case .user(var user):
+                let originalCount = user.content.count
+                user.content.removeAll { block in
+                    if case .image = block { return true }
+                    return false
+                }
+                let removed = originalCount - user.content.count
+                guard removed > 0 else { return message }
+                if user.content.isEmpty {
+                    user.content = [.text(TextContent(text: removedImagePlaceholder))]
+                }
+                removedCount += removed
+                return .user(user)
+
+            case .toolResult(var result):
+                let originalCount = result.content.count
+                result.content.removeAll { block in
+                    if case .image = block { return true }
+                    return false
+                }
+                let removed = originalCount - result.content.count
+                guard removed > 0 else { return message }
+                if result.content.isEmpty {
+                    result.content = [.text(TextContent(text: removedImagePlaceholder))]
+                }
+                removedCount += removed
+                return .toolResult(result)
+
+            case .assistant:
+                return message
+            }
+        }
+        return (rewritten, removedCount)
     }
 
     private static func isShakePlaceholder(_ content: [ToolResultBlock]) -> Bool {
