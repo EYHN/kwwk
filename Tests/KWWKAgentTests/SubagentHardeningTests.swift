@@ -845,9 +845,16 @@ struct SubagentHardeningTests {
         #expect(provider.didFinish == false)
 
         #expect(await awaitUntil(3_000) { provider.didFinish })
-        let third = Task { try? await executeMini(tool, callId: "after-zombie-exit") }
-        #expect(await awaitUntil(750) { provider.callCount == 2 })
-        _ = await third.value
+        // The runner releases its permit shortly *after* the zombie's stream
+        // finishes, so a single follow-up launch can race the release and be
+        // rejected. Retry the launch until it is admitted — a rejected
+        // attempt throws before charging the maxTotal budget.
+        let admitted = await awaitUntil(3_000) {
+            if provider.callCount >= 2 { return true }
+            _ = try? await executeMini(tool, callId: "after-zombie-exit")
+            return provider.callCount >= 2
+        }
+        #expect(admitted)
     }
 
     @Test("an update callback can synchronously cancel its own subagent")

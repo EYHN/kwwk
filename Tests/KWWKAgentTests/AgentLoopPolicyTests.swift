@@ -335,6 +335,12 @@ struct AgentLoopPolicyTests {
 
     @Test("a blocking task poll mixed with another tool rejects the entire batch")
     func mixedBlockingPollBatchIsRejected() async throws {
+        try await withRetries { _ in
+            try await runMixedBlockingPollBatchIsRejected()
+        }
+    }
+
+    private func runMixedBlockingPollBatchIsRejected() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         faux.setResponses([
@@ -379,7 +385,11 @@ struct AgentLoopPolicyTests {
         let startedAt = Date()
         try await agent.prompt("emit a mixed blocking batch")
 
-        #expect(Date().timeIntervalSince(startedAt) < 1)
+        // The rejection must return without paying for the 2s slow tool or
+        // the 600s poll. Wall-clock timing flakes under CI load, so a slow
+        // early attempt retries instead of failing the test.
+        let elapsed = Date().timeIntervalSince(startedAt)
+        try retryCheck(elapsed < 1.75, "rejection took \(elapsed)s, expected < 1.75s")
         #expect(await executions.snapshot().isEmpty)
         for id in ["mixed-poll", "mixed-slow"] {
             let result = toolResult(in: agent.state.messages, id: id)

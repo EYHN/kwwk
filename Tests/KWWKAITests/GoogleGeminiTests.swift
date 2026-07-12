@@ -224,9 +224,11 @@ struct GoogleGeminiTests {
     static func encodedBody(model: Model, context: Context, options: StreamOptions?) async throws -> [String: Any] {
         let client = StubSSEClient(body: Self.textSSE)
         let provider = GoogleGeminiProvider(client: client, defaultAPIKey: "k")
-        _ = provider.stream(model: model, context: context, options: options)
-        try? await Task.sleep(nanoseconds: 30_000_000)
-        return try JSONSerialization.jsonObject(with: client.lastRequest!.body!) as! [String: Any]
+        // Awaiting the settled result is deterministic: the stub records the
+        // request before it starts streaming, so no fixed sleep is needed.
+        _ = await provider.stream(model: model, context: context, options: options).result()
+        let body = try #require(client.lastRequest?.body)
+        return try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
     }
 
     // MARK: - Feature 1: default thinking budgets
