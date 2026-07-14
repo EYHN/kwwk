@@ -407,9 +407,6 @@ inspect it, or `/compact-model clear` to follow `/model` again. A custom
 the summary stream cap automatic; set a positive value only when an explicit
 hard output limit is required.
 
-Set `KWWK_COMPACTION_STRATEGY=legacy` as a temporary rollback switch for the
-previous full-history summary behavior.
-
 ### Steering a running agent
 
 Queue a message that will be injected at the next turn boundary —

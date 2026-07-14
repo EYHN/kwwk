@@ -494,7 +494,7 @@ struct CompactionSerializationTests {
             config: AgentContextCompactionConfig(
                 minMessages: 1,
                 summaryWordTarget: 250,
-                strategy: .legacyFullSummary
+                keepRecentTokens: 1
             ),
             streamFn: { model, context, _ in
                 await requests.append(contextText(context))
@@ -517,7 +517,7 @@ struct CompactionSerializationTests {
         #expect(snapshot.count > 1)
         #expect(snapshot.allSatisfy { !$0.contains("transcriptElision") })
         let transcript = snapshot.joined(separator: "\n")
-        for marker in markers {
+        for marker in markers.dropLast() {
             #expect(transcript.contains("\(marker)-USER"))
             #expect(transcript.contains("\(marker)-ASSISTANT"))
         }
