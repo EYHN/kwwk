@@ -44,6 +44,38 @@ struct SlashInputParseTests {
         #expect(SlashInput.parse("a/b") == .prompt(text: "a/b"))
     }
 
+    @MainActor
+    @Test("submission recognizes only exact registered commands and aliases")
+    func registryAwareSubmission() {
+        let registry = SlashCommandRegistry()
+        registry.register(SlashCommand(
+            name: "new",
+            description: "start a new session",
+            aliases: ["clear"],
+            handler: { _, _ in }
+        ))
+
+        #expect(SlashInput.parse("/new", recognizing: registry) == .command(name: "new", args: ""))
+        #expect(SlashInput.parse("/clear", recognizing: registry) == .command(name: "clear", args: ""))
+        #expect(SlashInput.parse("/new title", recognizing: registry) == .command(name: "new", args: "title"))
+    }
+
+    @MainActor
+    @Test("unmatched slash text remains a prompt on submission")
+    func unmatchedSlashIsPrompt() {
+        let registry = SlashCommandRegistry()
+        registry.register(SlashCommand(
+            name: "model",
+            description: "switch model",
+            handler: { _, _ in }
+        ))
+
+        let absolutePath = "/Users/eyhn/Downloads/345796292\\"
+        #expect(SlashInput.parse(absolutePath, recognizing: registry) == .prompt(text: absolutePath))
+        #expect(SlashInput.parse("/mod", recognizing: registry) == .prompt(text: "/mod"))
+        #expect(SlashInput.parse("/unknown with args", recognizing: registry) == .prompt(text: "/unknown with args"))
+    }
+
     @Test("slash command completion returns ghost suffix and completed input")
     func completion() {
         let names = ["model", "compact", "queue"]
