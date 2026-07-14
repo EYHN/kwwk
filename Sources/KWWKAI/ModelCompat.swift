@@ -33,10 +33,13 @@ public struct ModelCompat: Codable, Sendable, Hashable {
 
     // MARK: shared (cache / session affinity)
     public var sendSessionAffinityHeaders: Bool?
+    /// Session-affinity header format: "openai" sends `session_id`,
+    /// `x-client-request-id`, and `x-session-affinity`; "openai-nosession"
+    /// sends `x-client-request-id` and `x-session-affinity`; "openrouter"
+    /// sends `x-session-id`. Does not affect the `prompt_cache_key` body
+    /// param, which is governed by cache retention. Default: auto-detected.
+    public var sessionAffinityFormat: String?
     public var supportsLongCacheRetention: Bool?
-
-    // MARK: openai-responses
-    public var sendSessionIdHeader: Bool?
 
     // MARK: anthropic-messages
     public var supportsEagerToolInputStreaming: Bool?

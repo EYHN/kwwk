@@ -292,6 +292,49 @@ struct OpenAICompletionsTests {
         #expect(noneHeaders["x-session-affinity"] == nil)
     }
 
+    @Test("OpenRouter session affinity uses the x-session-id header (pi #6496)")
+    func openRouterSessionAffinityHeader() async throws {
+        var model = Self.model
+        model.provider = "openrouter"
+        model.baseURL = "https://openrouter.ai/api"
+        var compat = ModelCompat()
+        compat.sendSessionAffinityHeaders = true
+        model.compat = compat
+
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
+        _ = provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(cacheRetention: .short, sessionId: "session-or")
+        )
+        await Self.waitForRequest(client)
+        let headers = client.lastRequest?.headers ?? [:]
+        #expect(headers["x-session-id"] == "session-or")
+        #expect(headers["session_id"] == nil)
+        #expect(headers["x-client-request-id"] == nil)
+        #expect(headers["x-session-affinity"] == nil)
+
+        // An explicit compat format overrides the URL-based detection.
+        var pinned = model
+        var pinnedCompat = ModelCompat()
+        pinnedCompat.sendSessionAffinityHeaders = true
+        pinnedCompat.sessionAffinityFormat = "openai-nosession"
+        pinned.compat = pinnedCompat
+        let pinnedClient = StubSSEClient(body: Self.textSSE)
+        let pinnedProvider = OpenAICompletionsProvider(client: pinnedClient, defaultAPIKey: "k")
+        _ = pinnedProvider.stream(
+            model: pinned,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(cacheRetention: .short, sessionId: "session-or")
+        )
+        await Self.waitForRequest(pinnedClient)
+        let pinnedHeaders = pinnedClient.lastRequest?.headers ?? [:]
+        #expect(pinnedHeaders["session_id"] == nil)
+        #expect(pinnedHeaders["x-client-request-id"] == "session-or")
+        #expect(pinnedHeaders["x-session-affinity"] == "session-or")
+    }
+
     @Test("compat chat-template kwargs and routing fields are encoded")
     func compatChatTemplateAndRouting() async throws {
         var model = Self.model
