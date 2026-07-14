@@ -312,9 +312,10 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 state.finishBlock(at: blockIndex) { event in out.push(event) }
             case "messageStop":
                 if case .string(let reason) = payload["stopReason"] ?? .null {
-                    state.stopReason = Self.mapStopReason(reason)
-                    if reason == "model_context_window_exceeded" {
-                        state.errorMessage = reason
+                    let mapped = Self.mapStopReason(reason)
+                    state.stopReason = mapped.stopReason
+                    if let errorMessage = mapped.errorMessage {
+                        state.errorMessage = errorMessage
                     }
                 }
             case "metadata":
@@ -690,13 +691,16 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         }
     }
 
-    private static func mapStopReason(_ raw: String) -> StopReason {
+    /// Unhandled stop reasons (e.g. `guardrail_intervened`, `content_filtered`)
+    /// map to `.error` and carry the raw reason as the error message so the
+    /// failure is diagnosable instead of "an unknown error occurred".
+    private static func mapStopReason(_ raw: String) -> (stopReason: StopReason, errorMessage: String?) {
         switch raw {
-        case "end_turn", "stop_sequence": return .stop
-        case "max_tokens": return .length
-        case "model_context_window_exceeded": return .error
-        case "tool_use": return .toolUse
-        default: return .error
+        case "end_turn", "stop_sequence": return (.stop, nil)
+        case "max_tokens": return (.length, nil)
+        case "model_context_window_exceeded": return (.error, raw)
+        case "tool_use": return (.toolUse, nil)
+        default: return (.error, raw.isEmpty ? nil : raw)
         }
     }
 

@@ -600,14 +600,15 @@ struct BedrockCacheAndAuthTests {
         return final
     }
 
-    @Test("unknown stopReason maps to .error")
+    @Test("unknown stopReason maps to .error and surfaces the raw reason")
     func stopReasonUnknownIsError() async throws {
         let body = Self.frames([
             ("messageStart", "{\"role\":\"assistant\"}"),
-            ("messageStop", "{\"stopReason\":\"banana\"}"),
+            ("messageStop", "{\"stopReason\":\"guardrail_intervened\"}"),
         ])
         let final = await Self.drive(frames: body)
         #expect(final?.stopReason == .error)
+        #expect(final?.errorMessage == "guardrail_intervened")
     }
 
     @Test("model_context_window_exceeded remains a classifiable input error")
