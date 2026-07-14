@@ -97,7 +97,6 @@ struct CompactionRecapBudgetTests {
             config: AgentContextCompactionConfig(
                 minMessages: 1,
                 summaryWordTarget: 900,
-                strategy: .legacyFullSummary,
                 keepRecentTokens: 300,
                 maxSummaryAttempts: 2
             ),
@@ -122,7 +121,7 @@ struct CompactionRecapBudgetTests {
         #expect(try #require(compacted.tokensAfter) <= 1_200)
         let recap = try #require(compacted.messages.first)
         #expect(ContextTokenEstimator.estimate(message: recap) <= 306)
-        #expect(await calls.value == 1)
+        #expect(await calls.value == 2)
     }
 
     @Test("a recovery target does not silently lower an explicit generation cap")
@@ -145,7 +144,6 @@ struct CompactionRecapBudgetTests {
             sessionId: "explicit-summary-cap",
             config: AgentContextCompactionConfig(
                 minMessages: 1,
-                strategy: .legacyFullSummary,
                 summaryMaxTokens: 4_096
             ),
             targetTokens: 1_200,

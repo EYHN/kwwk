@@ -3,11 +3,6 @@ import KWWKAI
 
 public let agentCompactMinMessages = 4
 
-public enum AgentContextCompactionStrategy: String, Sendable, Equatable {
-    case legacyFullSummary = "legacy"
-    case retainedTailV1 = "retained-tail-v1"
-}
-
 public struct AgentContextUsage: Equatable, Sendable {
     public let tokens: Int
     public let window: Int
@@ -26,7 +21,6 @@ public struct AgentContextCompactionConfig: Sendable {
     public var minMessages: Int
     public var toolOutputCharacterLimit: Int
     public var summaryWordTarget: Int
-    public var strategy: AgentContextCompactionStrategy
     public var keepRecentTokens: Int
     public var messageTextByteLimit: Int
     public var thinkingByteLimit: Int
@@ -45,7 +39,6 @@ public struct AgentContextCompactionConfig: Sendable {
         minMessages: Int = agentCompactMinMessages,
         toolOutputCharacterLimit: Int = 4_000,
         summaryWordTarget: Int = 900,
-        strategy: AgentContextCompactionStrategy = .retainedTailV1,
         keepRecentTokens: Int = 20_000,
         messageTextByteLimit: Int = 12_000,
         thinkingByteLimit: Int = 8_000,
@@ -58,7 +51,6 @@ public struct AgentContextCompactionConfig: Sendable {
         self.minMessages = minMessages
         self.toolOutputCharacterLimit = toolOutputCharacterLimit
         self.summaryWordTarget = summaryWordTarget
-        self.strategy = strategy
         self.keepRecentTokens = keepRecentTokens
         self.messageTextByteLimit = messageTextByteLimit
         self.thinkingByteLimit = thinkingByteLimit

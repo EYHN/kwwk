@@ -37,7 +37,6 @@ enum ContextCompactionPipeline {
             )
         }
 
-        let strategy = effectiveStrategy(request.config.strategy)
         let recapTokenBudget = maximumRecapTokenBudget(for: request)
         if let target = request.targetTokens,
            recapTokenBudget < CompactionRecapRenderer.minimumUsefulTokenBudget {
@@ -60,16 +59,15 @@ enum ContextCompactionPipeline {
             for: request,
             recapTokenBudget: recapTokenBudget
         )
-        let attemptLimit = request.targetTokens == nil || strategy == .legacyFullSummary
+        let attemptLimit = request.targetTokens == nil
             ? 1
             : max(1, request.config.maxSummaryAttempts)
         var previousCut: Int?
         var lastTokensAfter: Int?
 
         for attemptIndex in 0..<attemptLimit {
-            guard let plan = makePlan(
+            guard let plan = CompactionPlanner.plan(
                 messages: request.context.messages,
-                strategy: strategy,
                 keepRecentTokens: keepRecentTokens
             ) else {
                 throw ContextCompactionPipelineError.noCompressibleMessages
@@ -133,22 +131,6 @@ enum ContextCompactionPipeline {
             ),
             target: request.targetTokens ?? 0
         )
-    }
-
-    private static func makePlan(
-        messages: [Message],
-        strategy: AgentContextCompactionStrategy,
-        keepRecentTokens: Int
-    ) -> CompactionPlan? {
-        switch strategy {
-        case .legacyFullSummary:
-            return CompactionPlanner.legacyPlan(messages: messages)
-        case .retainedTailV1:
-            return CompactionPlanner.plan(
-                messages: messages,
-                keepRecentTokens: keepRecentTokens
-            )
-        }
     }
 
     private static func summarizeHistory(
@@ -428,16 +410,6 @@ enum ContextCompactionPipeline {
             max(50, summarySizingTokens * 3 / 4)
         )
         return config
-    }
-
-    private static func effectiveStrategy(
-        _ configured: AgentContextCompactionStrategy
-    ) -> AgentContextCompactionStrategy {
-        guard let override = ProcessInfo.processInfo.environment["KWWK_COMPACTION_STRATEGY"],
-              !override.isEmpty else {
-            return configured
-        }
-        return AgentContextCompactionStrategy(rawValue: override) ?? configured
     }
 
     private static func checkCancellation(_ cancellation: CancellationHandle?) throws {

@@ -297,7 +297,6 @@ struct CompactionPlannerTests {
         ]
 
         #expect(CompactionPlanner.plan(messages: messages, keepRecentTokens: 20) == nil)
-        #expect(CompactionPlanner.legacyPlan(messages: messages) == nil)
     }
 
     private func conversation() -> [Message] {

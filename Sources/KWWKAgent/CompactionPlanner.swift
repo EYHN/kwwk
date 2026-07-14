@@ -159,30 +159,6 @@ enum CompactionPlanner {
         )
     }
 
-    static func legacyPlan(messages: [Message]) -> CompactionPlan? {
-        guard !messages.isEmpty else { return nil }
-        let previous = leadingRecap(in: messages)
-        let historyStart = previous.map { $0.index + 1 } ?? 0
-        guard historyStart < messages.count else { return nil }
-        let protectedUserStart = trailingUnansweredUserStart(
-            in: messages,
-            lowerBound: historyStart
-        ) ?? messages.count
-        guard protectedUserStart > historyStart else { return nil }
-        return CompactionPlan(
-            previousSummary: previous?.history,
-            previousTurnPrefixSummary: previous?.turnPrefix,
-            previousRecapForFacts: previous?.factsSource,
-            messagesToSummarize: Array(messages[historyStart..<protectedUserStart]),
-            turnPrefixToSummarize: [],
-            recentTail: Array(messages[protectedUserStart...]),
-            firstKeptMessageIndex: protectedUserStart,
-            estimatedRecentTokens: estimatedTokens(
-                in: Array(messages[protectedUserStart...])
-            )
-        )
-    }
-
     static func summaryText(from message: Message) -> String? {
         guard case .user(let user) = message,
               user.source == .compaction else {
