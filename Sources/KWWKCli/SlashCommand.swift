@@ -30,6 +30,18 @@ enum SlashInput: Equatable {
         let args = parts.count > 1 ? String(parts[1]) : ""
         return .command(name: name, args: args)
     }
+
+    /// Parse input for submission, treating slash-looking text as a command
+    /// only when its name (or alias) exists in the live registry. Fuzzy
+    /// matching belongs to the popup/completion path; an unmatched absolute
+    /// path such as `/Users/me/file` must remain an ordinary prompt.
+    @MainActor
+    static func parse(_ raw: String, recognizing registry: SlashCommandRegistry) -> SlashInput {
+        let parsed = parse(raw)
+        guard case .command(let name, _) = parsed else { return parsed }
+        guard registry.find(name) != nil else { return .prompt(text: raw) }
+        return parsed
+    }
 }
 
 enum ShakeMode: Sendable, Equatable {

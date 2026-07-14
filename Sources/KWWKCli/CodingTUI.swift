@@ -906,7 +906,11 @@ func runCodingTUIInternal(
             }
             guard !text.isEmpty else { return }
 
-            let parsed = SlashInput.parse(text)
+            // Submission only dispatches exact registered names/aliases.
+            // Fuzzy matching is an explicit popup/completion affordance; if
+            // nothing was selected, slash-looking text (notably absolute
+            // paths) continues through the normal prompt path.
+            let parsed = SlashInput.parse(text, recognizing: slashRegistry)
             guard !frameStatus.isPreparingAttachments else { return }
             if case .prompt = parsed,
                frameStatus.isSessionSwitching || frameStatus.isRewinding {
