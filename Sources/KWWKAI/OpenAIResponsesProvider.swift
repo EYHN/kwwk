@@ -660,6 +660,9 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     if state.hasToolCalls() {
                         state.stopReason = .toolUse
                     }
+                    if case .array(let outputItems) = response["output"] ?? .null {
+                        Self.backfillReasoningSignatures(outputItems, state: state)
+                    }
                 }
                 let final = state.finalize()
                 out.push(.done(reason: final.stopReason, message: final))
@@ -959,6 +962,30 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
               let data = try? JSONSerialization.data(withJSONObject: any, options: [.sortedKeys]),
               let s = String(data: data, encoding: .utf8) else { return nil }
         return s
+    }
+
+    /// Azure OpenAI can omit `reasoning.encrypted_content` from
+    /// `response.output_item.done` and provide it only in
+    /// `response.completed`'s `response.output`. Backfill the persisted
+    /// reasoning signature from the terminal response so `store: false`
+    /// multi-turn replay stays stateless. Output array positions correspond
+    /// to `output_index`. Ports pi #6608.
+    private static func backfillReasoningSignatures(
+        _ outputItems: [JSONValue], state: OpenAIResponsesState
+    ) {
+        for (outputIndex, entry) in outputItems.enumerated() {
+            guard case .object(let item) = entry,
+                  case .string("reasoning")? = item["type"],
+                  case .string = item["encrypted_content"] ?? .null,
+                  let index = state.reasoningIndex(for: outputIndex) else { continue }
+            // Preserve a signature that already carries encrypted content.
+            if let existing = state.thinkingSignature(at: index),
+               let parsed = parseReasoningItem(existing),
+               case .string = parsed["encrypted_content"] ?? .null { continue }
+            if let serialized = serializeReasoningItem(item) {
+                state.setThinkingSignature(at: index, signature: serialized)
+            }
+        }
     }
 
     /// Parse a stored reasoning-item signature back into its object form,
@@ -1435,6 +1462,13 @@ final class OpenAIResponsesState: @unchecked Sendable {
                 th.thinkingSignature = signature
                 blocks[index] = .thinking(th)
             }
+        }
+    }
+
+    func thinkingSignature(at index: Int) -> String? {
+        lock.withLock {
+            if case .thinking(let th) = blocks[index] { return th.thinkingSignature }
+            return nil
         }
     }
 
