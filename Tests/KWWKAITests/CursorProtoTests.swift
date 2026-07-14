@@ -100,7 +100,8 @@ struct CursorProtoTests {
         }
         let models = CursorModelCatalog.normalize(
             [model("claude-9-sonnet"), model("gemini-9-pro"), model("gpt-9"),
-             model("codex-9"), model("composer-9"), model("grok-code-fast-9")],
+             model("codex-9"), model("cursor-grok-4.5-high"), model("composer-9"),
+             model("grok-code-fast-9")],
             host: "api2.cursor.sh"
         )
         let byId = Dictionary(uniqueKeysWithValues: models.map { ($0.id, $0) })
@@ -108,6 +109,7 @@ struct CursorProtoTests {
         #expect(byId["gemini-9-pro"]?.input == [.text, .image])
         #expect(byId["gpt-9"]?.input == [.text, .image])
         #expect(byId["codex-9"]?.input == [.text, .image])
+        #expect(byId["cursor-grok-4.5-high"]?.input == [.text, .image])
         #expect(byId["composer-9"]?.input == [.text])
         #expect(byId["grok-code-fast-9"]?.input == [.text])
     }

@@ -211,13 +211,13 @@ public enum CursorModelCatalog {
     ///
     /// `GetUsableModels` carries no per-model modality metadata, so
     /// classification falls back to the model family: families that are
-    /// multimodal in their native catalogs (claude/gemini/gpt/codex) accept
-    /// images, everything else (composer-*, grok-code-*, kimi-*) stays
-    /// text-only. Curated entries above remain authoritative. Ports oh-my-pi's
-    /// `inferInputFromCursorId` (6e209d3ec).
+    /// multimodal in their native catalogs (claude/gemini/gpt/codex/grok-4.5)
+    /// accept images, while text-only families such as composer-*, grok-code-*,
+    /// and kimi-* do not. Curated entries above remain authoritative. Ports
+    /// oh-my-pi's `inferInputFromCursorId` (6e209d3ec).
     static func inferInput(fromCursorId id: String) -> [InputModality] {
         let lowered = id.lowercased()
-        let multimodalFamilies = ["claude", "gemini", "gpt-", "codex"]
+        let multimodalFamilies = ["claude", "gemini", "gpt-", "codex", "grok-4.5"]
         if multimodalFamilies.contains(where: lowered.contains) {
             return [.text, .image]
         }

@@ -1420,6 +1420,126 @@
   {
     "api" : "cursor-agent",
     "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "cursor-grok-4.5-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "cursor-grok-4.5-high-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "cursor-grok-4.5-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "cursor-grok-4.5-low-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "cursor-grok-4.5-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Medium",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "cursor-grok-4.5-medium-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Cursor Grok 4.5 Medium Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
     "contextWindow" : 1048576,
     "cost" : {
       "cacheRead" : 0,
@@ -3530,120 +3650,6 @@
     ],
     "maxTokens" : 64000,
     "name" : "GPT-5.6 Terra Extra High Fast",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 200000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "grok-4.5-fast-high",
-    "input" : [
-      "text"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Medium Fast",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 200000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "grok-4.5-fast-medium",
-    "input" : [
-      "text"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Low Fast",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 200000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "grok-4.5-fast-xhigh",
-    "input" : [
-      "text"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Fast",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 200000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "grok-4.5-high",
-    "input" : [
-      "text"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Medium",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 200000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "grok-4.5-medium",
-    "input" : [
-      "text"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Low",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 200000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "grok-4.5-xhigh",
-    "input" : [
-      "text"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5",
     "provider" : "cursor",
     "reasoning" : false
   },
