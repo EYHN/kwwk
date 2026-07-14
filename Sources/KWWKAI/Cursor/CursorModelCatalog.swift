@@ -176,7 +176,7 @@ public enum CursorModelCatalog {
                 provider: "cursor",
                 baseURL: "https://\(host)",
                 reasoning: m.hasThinking || thinkingVariant != nil || id.hasSuffix("-thinking"),
-                input: [.text],
+                input: inferInput(fromCursorId: id),
                 cost: ModelCost(),
                 contextWindow: 200_000,
                 maxTokens: 64_000,
@@ -205,6 +205,23 @@ public enum CursorModelCatalog {
         let msgLen = lenBytes.reduce(0) { ($0 << 8) | Int($1) }
         guard msgLen == data.count - 5 else { return data }
         return data.subdata(in: data.startIndex + 5 ..< data.endIndex)
+    }
+
+    /// Infers input modalities for Cursor models without a curated entry.
+    ///
+    /// `GetUsableModels` carries no per-model modality metadata, so
+    /// classification falls back to the model family: families that are
+    /// multimodal in their native catalogs (claude/gemini/gpt/codex) accept
+    /// images, everything else (composer-*, grok-code-*, kimi-*) stays
+    /// text-only. Curated entries above remain authoritative. Ports oh-my-pi's
+    /// `inferInputFromCursorId` (6e209d3ec).
+    static func inferInput(fromCursorId id: String) -> [InputModality] {
+        let lowered = id.lowercased()
+        let multimodalFamilies = ["claude", "gemini", "gpt-", "codex"]
+        if multimodalFamilies.contains(where: lowered.contains) {
+            return [.text, .image]
+        }
+        return [.text]
     }
 
     private static func pickDisplayName(_ m: CursorProto.UsableModel, fallbackId: String) -> String {

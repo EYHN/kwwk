@@ -87,6 +87,29 @@ struct CursorProtoTests {
         #expect(models[0].provider == "cursor")
         #expect(models[0].reasoning == true)
         #expect(models[0].baseURL == "https://api2.cursor.sh")
+        #expect(models[0].input == [.text, .image])
+    }
+
+    @Test("normalize infers image input from the model family for uncurated ids")
+    func inferredInputModalities() {
+        func model(_ id: String) -> CursorProto.UsableModel {
+            CursorProto.UsableModel(
+                modelId: id, displayName: id, displayNameShort: "",
+                displayModelId: "", aliases: [], hasThinking: false
+            )
+        }
+        let models = CursorModelCatalog.normalize(
+            [model("claude-9-sonnet"), model("gemini-9-pro"), model("gpt-9"),
+             model("codex-9"), model("composer-9"), model("grok-code-fast-9")],
+            host: "api2.cursor.sh"
+        )
+        let byId = Dictionary(uniqueKeysWithValues: models.map { ($0.id, $0) })
+        #expect(byId["claude-9-sonnet"]?.input == [.text, .image])
+        #expect(byId["gemini-9-pro"]?.input == [.text, .image])
+        #expect(byId["gpt-9"]?.input == [.text, .image])
+        #expect(byId["codex-9"]?.input == [.text, .image])
+        #expect(byId["composer-9"]?.input == [.text])
+        #expect(byId["grok-code-fast-9"]?.input == [.text])
     }
 
     @Test("bundled cursor-models.json loads into the catalog")
