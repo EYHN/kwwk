@@ -704,6 +704,9 @@ public enum AgentLoop {
             "econnreset", "enotconn", "epipe", "broken pipe", "reset by peer",
             "socket closed", "socket error", "closed before", "closed unexpectedly",
             "rate limit", "too many requests", "overloaded",
+            // gRPC-based providers (e.g. NVIDIA NIM) report quota pressure
+            // as a ResourceExhausted / RESOURCE_EXHAUSTED status.
+            "resourceexhausted", "resource_exhausted", "resource exhausted",
             "internal error", "server error", "service unavailable", "bad gateway",
             "temporarily", "stream stall", "fetch failed",
         ] where lower.contains(transient) {

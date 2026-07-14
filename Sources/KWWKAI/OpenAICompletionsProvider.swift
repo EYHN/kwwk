@@ -118,9 +118,19 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         if retention != .none,
            let sid = options?.sessionId, !sid.isEmpty,
            compat.sendSessionAffinityHeaders {
-            headers["session_id"] = sid
-            headers["x-client-request-id"] = sid
-            headers["x-session-affinity"] = sid
+            // pi #6496: OpenRouter uses a single `x-session-id` header;
+            // OpenAI-style providers take the session_id/affinity trio.
+            switch compat.sessionAffinityFormat {
+            case "openrouter":
+                headers["x-session-id"] = sid
+            case "openai-nosession":
+                headers["x-client-request-id"] = sid
+                headers["x-session-affinity"] = sid
+            default:
+                headers["session_id"] = sid
+                headers["x-client-request-id"] = sid
+                headers["x-session-affinity"] = sid
+            }
         }
         headersDecorator?(&headers, model, context, options)
         for (k, v) in options?.headers ?? [:] { headers[k] = v }
@@ -439,6 +449,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         var supportsStrictMode: Bool
         var cacheControlFormat: String?
         var sendSessionAffinityHeaders: Bool
+        var sessionAffinityFormat: String
         var supportsLongCacheRetention: Bool
     }
 
@@ -492,6 +503,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             supportsStrictMode: c?.supportsStrictMode ?? (!isMoonshot && !isTogether && !isCfGateway && !isNvidia),
             cacheControlFormat: c?.cacheControlFormat ?? ((provider == "openrouter" && model.id.hasPrefix("anthropic/")) ? "anthropic" : nil),
             sendSessionAffinityHeaders: c?.sendSessionAffinityHeaders ?? false,
+            sessionAffinityFormat: c?.sessionAffinityFormat ?? (isOpenRouter ? "openrouter" : "openai"),
             supportsLongCacheRetention: c?.supportsLongCacheRetention ?? !(isTogether || isCloudflareWorkers || isCfGateway || isNvidia || isAntLing)
         )
     }

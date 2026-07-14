@@ -457,6 +457,45 @@ struct AnthropicProviderTests {
         #expect(json["temperature"] == nil)
     }
 
+    @Test("signed thinking block is replayed even when its text is empty")
+    func emptyThinkingWithSignaturePreserved() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [
+                .thinking(ThinkingContent(thinking: "", thinkingSignature: "signed-thinking")),
+                .thinking(ThinkingContent(thinking: "  ")),
+                .text(TextContent(text: "answer")),
+            ],
+            api: Self.sampleModel.api,
+            provider: Self.sampleModel.provider,
+            model: Self.sampleModel.id,
+            usage: Usage(),
+            stopReason: .stop,
+            timestamp: Timestamp.now()
+        )
+        _ = provider.stream(
+            model: Self.sampleModel,
+            context: Context(messages: [
+                .user(UserMessage(text: "hi")),
+                .assistant(assistant),
+                .user(UserMessage(text: "go on")),
+            ]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        let json = Self.decodeBody(client)
+        let messages = json["messages"] as? [[String: Any]]
+        let content = messages?[1]["content"] as? [[String: Any]]
+        // The signed empty block survives; the unsigned empty block is dropped.
+        #expect(content?.count == 2)
+        #expect(content?[0]["type"] as? String == "thinking")
+        #expect(content?[0]["thinking"] as? String == "")
+        #expect(content?[0]["signature"] as? String == "signed-thinking")
+        #expect(content?[1]["type"] as? String == "text")
+    }
+
     @Test("thinking is omitted when reasoning level is nil, temperature passes through")
     func thinkingOmittedWithoutReasoning() async throws {
         let client = StubSSEClient(body: Self.textSSE)

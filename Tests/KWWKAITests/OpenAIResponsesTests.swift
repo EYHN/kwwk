@@ -171,6 +171,82 @@ struct OpenAIResponsesTests {
         } else { Issue.record("expected text last") }
     }
 
+    /// Azure can omit `encrypted_content` from `response.output_item.done`
+    /// and only include it in `response.completed`'s output array.
+    static let reasoningBackfillSSE = """
+    data: {"type":"response.created","response":{"id":"resp_5","status":"in_progress"}}
+
+    data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"r_1"}}
+
+    data: {"type":"response.reasoning_text.delta","output_index":0,"delta":"think…"}
+
+    data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"r_1"}}
+
+    data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","role":"assistant","content":[]}}
+
+    data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"answer"}
+
+    data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message"}}
+
+    data: {"type":"response.completed","response":{"id":"resp_5","status":"completed","usage":{"input_tokens":20,"output_tokens":10},"output":[{"type":"reasoning","id":"r_1","encrypted_content":"enc-blob","summary":[]},{"type":"message"}]}}
+
+    """
+
+    @Test("backfills reasoning signature from response.completed output")
+    func reasoningSignatureBackfill() async throws {
+        let client = StubSSEClient(body: Self.reasoningBackfillSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "think"))]),
+            options: StreamOptions(reasoning: .high)
+        )
+        for await _ in s {}
+        let result = await s.result()
+        guard case .thinking(let th) = result.content.first else {
+            Issue.record("expected thinking first")
+            return
+        }
+        let signature = try #require(th.thinkingSignature)
+        let item = try JSONSerialization.jsonObject(
+            with: Data(signature.utf8)
+        ) as? [String: Any]
+        #expect(item?["type"] as? String == "reasoning")
+        #expect(item?["encrypted_content"] as? String == "enc-blob")
+        #expect(item?["id"] as? String == "r_1")
+    }
+
+    @Test("a signature that already has encrypted content is not overwritten")
+    func reasoningSignatureNotOverwritten() async throws {
+        // output_item.done carries encrypted content; response.completed
+        // carries a different blob that must not clobber the original.
+        let sse = """
+        data: {"type":"response.created","response":{"id":"resp_6","status":"in_progress"}}
+
+        data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"r_1"}}
+
+        data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"r_1","encrypted_content":"original"}}
+
+        data: {"type":"response.completed","response":{"id":"resp_6","status":"completed","usage":{"input_tokens":1,"output_tokens":1},"output":[{"type":"reasoning","id":"r_1","encrypted_content":"stale"}]}}
+
+        """
+        let client = StubSSEClient(body: sse)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let s = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "think"))]),
+            options: StreamOptions(reasoning: .high)
+        )
+        for await _ in s {}
+        let result = await s.result()
+        guard case .thinking(let th) = result.content.first else {
+            Issue.record("expected thinking first")
+            return
+        }
+        #expect(th.thinkingSignature?.contains("original") == true)
+        #expect(th.thinkingSignature?.contains("stale") != true)
+    }
+
     @Test("resolved auth can select custom API key header")
     func resolvedAuthCustomAPIKeyHeader() async throws {
         let client = StubSSEClient(body: Self.textSSE)

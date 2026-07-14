@@ -617,9 +617,15 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                         blocks.append(["type": "redacted_thinking", "data": th.thinkingSignature ?? ""])
                         break
                     }
-                    if th.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { break }
                     let sig = th.thinkingSignature
-                    if sig == nil || sig!.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    let hasSignature = !(sig ?? "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    // A signed thinking block must be replayed even when its
+                    // visible text is empty (interleaved thinking can emit
+                    // signature-only blocks); dropping it invalidates the turn.
+                    if th.thinking.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                       !hasSignature { break }
+                    if !hasSignature {
                         if allowEmptySignature {
                             blocks.append(["type": "thinking", "thinking": th.thinking, "signature": ""])
                         } else {

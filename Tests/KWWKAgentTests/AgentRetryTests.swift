@@ -172,6 +172,10 @@ struct RetryClassificationTests {
         #expect(AgentLoop.isRetryableError("HTTP 429: rate limit exceeded"))
         #expect(AgentLoop.isRetryableError("HTTP 503: service unavailable"))
         #expect(AgentLoop.isRetryableError("HTTP 529: overloaded"))
+        // gRPC-based providers (e.g. NVIDIA NIM) report quota pressure as
+        // ResourceExhausted (pi #6449).
+        #expect(AgentLoop.isRetryableError("ResourceExhausted: quota exceeded"))
+        #expect(AgentLoop.isRetryableError("gRPC status RESOURCE_EXHAUSTED"))
     }
 
     @Test("validation and auth failures are not retryable")
