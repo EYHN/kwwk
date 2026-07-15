@@ -7,3 +7,4 @@ DerivedData/
 *.xcodeproj
 .vscode/
 .claude/
+site.tar
