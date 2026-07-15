@@ -175,7 +175,8 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
 
         do {
             let (response, stream) = try await client.stream(
-                url: url, method: "POST", headers: headers, body: try request.data()
+                url: url, method: "POST", headers: headers, body: try request.data(),
+                cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
                 // Collect whatever the server wrote (usually a small JSON

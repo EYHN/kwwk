@@ -107,7 +107,8 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
 
         do {
             let (response, stream) = try await client.stream(
-                url: url, method: "POST", headers: headers, body: body
+                url: url, method: "POST", headers: headers, body: body,
+                cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
                 // Surface the JSON error body like the other providers.

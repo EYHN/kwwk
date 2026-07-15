@@ -2,6 +2,7 @@ import Foundation
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
+import NIO
 import Testing
 @testable import KWWKAI
 
@@ -32,7 +33,8 @@ private final class ChunkStubClient: HTTPClient, @unchecked Sendable {
     }
 
     func stream(
-        url: URL, method: String, headers: [String: String], body: Data?
+        url: URL, method: String, headers: [String: String], body: Data?,
+        cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         let response = HTTPURLResponse(
             url: url, statusCode: statusCode, httpVersion: "HTTP/1.1",
@@ -279,5 +281,47 @@ struct BedrockSignatureTests {
         } else {
             Issue.record("expected a thinking block with a captured signature")
         }
+    }
+}
+
+@Suite("URLSessionHTTPClient cancellation")
+struct URLSessionHTTPClientCancellationTests {
+    // Regression: an abort while the request is still awaiting response
+    // headers must tear down the URLSession task immediately. Before the
+    // `cancellation` bridge, nothing reached the transport in that window and
+    // the caller sat in `awaitHeader` until URLSession's 60s request timeout —
+    // the TUI showed "aborting" the whole time.
+    @Test("cancel during the await-headers window fails the request promptly")
+    func cancelDuringHeaderWait() async throws {
+        // A TCP listener with no handlers: accepts the connection, reads
+        // nothing, never writes a response — headers never arrive.
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let server = try await ServerBootstrap(group: group)
+            .bind(host: "127.0.0.1", port: 0)
+            .get()
+        defer { group.shutdownGracefully { _ in } }
+        let port = server.localAddress!.port!
+
+        let client = URLSessionHTTPClient()
+        let cancellation = CancellationHandle()
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            cancellation.cancel(reason: "user abort")
+        }
+        let start = DispatchTime.now()
+        do {
+            _ = try await client.stream(
+                url: URL(string: "http://127.0.0.1:\(port)/hang")!,
+                method: "POST",
+                headers: [:],
+                body: Data(),
+                cancellation: cancellation
+            )
+            Issue.record("expected the cancelled request to throw")
+        } catch {
+            // Expected: URLSession surfaces the task cancellation as an error.
+        }
+        let elapsedSeconds = Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000
+        #expect(elapsedSeconds < 10)
     }
 }

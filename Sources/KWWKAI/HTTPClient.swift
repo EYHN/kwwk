@@ -14,12 +14,15 @@ public protocol HTTPClient: Sendable {
     ///
     /// The stream is single-consumer and finishes (optionally throwing) when the
     /// request completes or errors. Cancelling the consuming task tears the
-    /// stream down, which aborts the underlying transport.
+    /// stream down, which aborts the underlying transport. `cancellation`
+    /// covers the window that consumer-task cancellation cannot reach: the
+    /// await for response headers, before any stream exists to tear down.
     func stream(
         url: URL,
         method: String,
         headers: [String: String],
-        body: Data?
+        body: Data?,
+        cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>)
 }
 
@@ -50,7 +53,8 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
         url: URL,
         method: String,
         headers: [String: String],
-        body: Data?
+        body: Data?,
+        cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         var request = URLRequest(url: url)
         request.httpMethod = method
@@ -59,10 +63,19 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
 
         let task = session.dataTask(with: request)
         let id = task.taskIdentifier
+        // Bridge external cancellation for the request's whole lifetime.
+        // `awaitHeader` below is resumed only by delegate callbacks, so a
+        // cancelled consumer task cannot interrupt it — only cancelling the
+        // URLSession task (which fires `didCompleteWithError`) can.
+        let cancelRegistration = cancellation?.onCancel { [weak task] _ in task?.cancel() }
         // Register the body stream before `resume()` so early `didReceive`
         // callbacks find a continuation to feed. The stream aborts the request
-        // when the consumer stops iterating (or its task is cancelled).
-        let stream = delegate.makeBodyStream(for: id, onCancel: { [weak task] in task?.cancel() })
+        // when the consumer stops iterating (or its task is cancelled); either
+        // termination also retires the cancellation listener.
+        let stream = delegate.makeBodyStream(for: id, onCancel: { [weak task] in
+            task?.cancel()
+            cancelRegistration?.cancel()
+        })
         task.resume()
 
         do {
@@ -70,6 +83,7 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
             return (http, stream)
         } catch {
             task.cancel()
+            cancelRegistration?.cancel()
             throw error
         }
     }
@@ -286,10 +300,11 @@ public extension HTTPClient {
         url: URL,
         method: String,
         headers: [String: String],
-        body: Data?
+        body: Data?,
+        cancellation: CancellationHandle? = nil
     ) async throws -> (HTTPURLResponse, Data) {
         let (response, stream) = try await self.stream(
-            url: url, method: method, headers: headers, body: body
+            url: url, method: method, headers: headers, body: body, cancellation: cancellation
         )
         var buffer = Data()
         for try await chunk in stream { buffer.append(chunk) }

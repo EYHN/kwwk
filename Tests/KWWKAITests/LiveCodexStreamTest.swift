@@ -61,7 +61,8 @@ struct LiveCodexStreamTests {
             url: URL(string: "https://chatgpt.com/backend-api/codex/responses")!,
             method: "POST",
             headers: headers,
-            body: bodyData
+            body: bodyData,
+            cancellation: nil
         )
         print("status=\(response.statusCode)")
         var buffer = Data()

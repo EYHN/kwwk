@@ -19,7 +19,8 @@ final class StubResponseClient: HTTPClient, @unchecked Sendable {
     }
 
     func stream(
-        url: URL, method: String, headers: [String: String], body: Data?
+        url: URL, method: String, headers: [String: String], body: Data?,
+        cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         lock.withLock { lastRequest = (url, method, headers, body) }
         let response = HTTPURLResponse(

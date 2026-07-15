@@ -219,7 +219,10 @@ func runCodingTUIInternal(
     let frameStatus = FrameStatusState()
 
     let updateFrameStatus: @MainActor @Sendable () -> Void = {
-        frameStatus.reconcileMode(messageCount: agent.state.messages.count)
+        frameStatus.reconcileMode(
+            messageCount: agent.state.messages.count,
+            isStreaming: agent.state.isStreaming
+        )
         let capacityHint = formatCapacityHint(
             usage: AgentContextCompactor.currentUsage(
                 messages: agent.state.messages,
@@ -1393,10 +1396,19 @@ private final class FrameStatusState {
     var isRewinding = false
     var isSessionSwitching = false
 
-    func reconcileMode(messageCount: Int) {
+    func reconcileMode(messageCount: Int, isStreaming: Bool) {
         switch mode {
-        case .aborting, .retrying:
-            return
+        case .aborting:
+            // Hold only while the aborted owner (run or manual compaction) is
+            // still winding down. An Esc can race the natural end of a turn:
+            // it lands after .agentEnd already reconciled the mode, sees a
+            // still-true isStreaming, and re-enters .aborting with no further
+            // event coming to clear it. Falling through here once the owner is
+            // gone lets the next reconcile (spinner tick) self-heal instead of
+            // spinning on "aborting" forever.
+            if isStreaming || isManualCompacting { return }
+        case .retrying:
+            if isStreaming { return }
         default:
             break
         }

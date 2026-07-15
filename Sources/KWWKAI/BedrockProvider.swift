@@ -156,7 +156,8 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
 
         do {
             let (response, stream) = try await client.stream(
-                url: url, method: "POST", headers: headers, body: body
+                url: url, method: "POST", headers: headers, body: body,
+                cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
                 // Surface the error body (a JSON `{message}` on 4xx/5xx) like the

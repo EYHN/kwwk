@@ -147,7 +147,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
 
         do {
             let (response, stream) = try await client.stream(
-                url: url, method: "POST", headers: headers, body: body
+                url: url, method: "POST", headers: headers, body: body,
+                cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
                 // Drain the stream to surface the real error body — without

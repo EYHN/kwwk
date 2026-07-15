@@ -139,7 +139,8 @@ struct BedrockProviderTests {
             self.statusCode = statusCode
         }
         func stream(
-            url: URL, method: String, headers: [String: String], body requestBody: Data?
+            url: URL, method: String, headers: [String: String], body requestBody: Data?,
+            cancellation: CancellationHandle?
         ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
             lastRequest = (url, method, headers, requestBody)
             let response = HTTPURLResponse(

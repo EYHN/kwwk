@@ -125,7 +125,8 @@ final class SequentialStubClient: HTTPClient, @unchecked Sendable {
     var recorded: [(url: URL, method: String, headers: [String: String], body: Data?)] = []
 
     func stream(
-        url: URL, method: String, headers: [String: String], body: Data?
+        url: URL, method: String, headers: [String: String], body: Data?,
+        cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         recorded.append((url, method, headers, body))
         let next = queue.removeFirst()

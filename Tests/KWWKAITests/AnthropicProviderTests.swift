@@ -22,7 +22,8 @@ final class StubSSEClient: HTTPClient, @unchecked Sendable {
         url: URL,
         method: String,
         headers: [String: String],
-        body requestBody: Data?
+        body requestBody: Data?,
+        cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         lock.withLock { lastRequest = (url, method, headers, requestBody) }
 

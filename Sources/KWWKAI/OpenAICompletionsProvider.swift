@@ -137,7 +137,8 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
 
         do {
             let (response, stream) = try await client.stream(
-                url: url, method: "POST", headers: headers, body: body
+                url: url, method: "POST", headers: headers, body: body,
+                cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
                 let bodyText = await Self.errorBodyPreview(from: stream)
