@@ -507,6 +507,44 @@ struct SubagentToolTests {
         #expect(detailString(toolOverrideResult, "model") == "tool-model")
     }
 
+    @Test("empty tool-call model override is treated as omitted")
+    func emptyModelOverrideIsOmitted() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(
+            models: [
+                FauxModelDefinition(id: "parent-model"),
+                FauxModelDefinition(id: "definition-model"),
+            ]
+        ))
+        defer { faux.unregister() }
+        let definitionModel = faux.getModel(id: "definition-model")!
+        faux.setResponses([
+            .message(subagentYieldMessage("empty model result")),
+            .message(subagentYieldMessage("whitespace model result")),
+        ])
+        let tool = createAgentTool(
+            cwd: FileManager.default.currentDirectoryPath,
+            subagents: [minimalSubagent(model: .override(definitionModel))],
+            parentModel: faux.getModel(id: "parent-model")!,
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
+        )
+
+        for (index, model) in ["", "  \n\t"].enumerated() {
+            let result = try await tool.execute(
+                "call-\(index)",
+                .object([
+                    "description": .string("empty model override"),
+                    "prompt": .string("use definition model"),
+                    "subagent_type": .string("mini"),
+                    "model": .string(model),
+                ]),
+                nil,
+                nil
+            )
+            #expect(detailString(result, "model") == "definition-model")
+        }
+    }
+
     @Test("tool-call model override cannot switch provider through the global catalog")
     func modelOverrideStaysOnParentProvider() async throws {
         guard let foreign = ModelsCatalog.models(for: "openai").first else {

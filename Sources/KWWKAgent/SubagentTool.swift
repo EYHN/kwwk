@@ -663,21 +663,22 @@ private func parseAgentToolInput(_ args: JSONValue) throws -> AgentToolInput {
           !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
         throw CodingToolError.invalidArgument("agent: `prompt` is required")
     }
-    func optionalNonEmptyString(_ key: String) throws -> String? {
+    func optionalTrimmedString(_ key: String) throws -> String? {
         guard let value = obj[key] else { return nil }
         guard case .string(let raw) = value else {
             throw CodingToolError.invalidArgument("agent: `\(key)` must be a string when provided")
         }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            throw CodingToolError.invalidArgument("agent: `\(key)` must not be empty when provided")
-        }
-        return trimmed
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    guard let subagentType = try optionalNonEmptyString("subagent_type") else {
+    guard let subagentType = try optionalTrimmedString("subagent_type") else {
         throw CodingToolError.invalidArgument("agent: `subagent_type` is required")
     }
-    let modelOverride = try optionalNonEmptyString("model")
+    guard !subagentType.isEmpty else {
+        throw CodingToolError.invalidArgument("agent: `subagent_type` must not be empty when provided")
+    }
+    let modelOverride = try optionalTrimmedString("model").flatMap { model in
+        model.isEmpty ? nil : model
+    }
     let runInBackground: Bool?
     if let value = obj["run_in_background"] {
         guard case .bool(let parsed) = value else {
