@@ -8,3 +8,4 @@ DerivedData/
 .vscode/
 .claude/
 site.tar
+site/*.mp4

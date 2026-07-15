@@ -286,6 +286,45 @@
       border-radius: 50%;
       background: #22c55e;
     }
+
+    .video-section {
+      margin-bottom: 2.5rem;
+    }
+
+    .video-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      box-shadow: 0 12px 40px #00000055;
+    }
+
+    .video-wrap video {
+      display: block;
+      width: 100%;
+      max-height: 70vh;
+      border-radius: calc(var(--radius) - 4px);
+      background: #000;
+    }
+
+    .video-meta {
+      margin-top: 0.75rem;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem 1.25rem;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.88rem;
+      color: var(--muted);
+    }
+
+    .video-meta a {
+      color: var(--accent);
+      text-decoration: none;
+      font-family: var(--mono);
+    }
+
+    .video-meta a:hover { text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -307,6 +346,20 @@
         <span>.eyhn.page/</span>
       </div>
     </header>
+
+    <section class="video-section">
+      <h2>5月15日</h2>
+      <div class="video-wrap">
+        <video controls playsinline preload="metadata" poster="">
+          <source src="5%E6%9C%8815%E6%97%A5.mp4" type="video/mp4">
+          你的浏览器不支持视频播放。
+        </video>
+        <div class="video-meta">
+          <span>5月15日.mp4</span>
+          <a href="5%E6%9C%8815%E6%97%A5.mp4" download>下载原文件</a>
+        </div>
+      </div>
+    </section>
 
     <div class="cards">
       <article class="card">
