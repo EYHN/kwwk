@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eyhn.page — 静态站点，一键发布</title>
+  <meta name="description" content="把 .tar 丢上去，立刻拥有一个 {prefix}.eyhn.page 子域名。">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --surface: #121a24;
+      --border: #243044;
+      --text: #e8eef7;
+      --muted: #8fa3bf;
+      --accent: #5eead4;
+      --accent-dim: #2dd4bf33;
+      --warn: #fbbf24;
+      --radius: 14px;
+      --mono: "IBM Plex Mono", ui-monospace, monospace;
+      --sans: "Noto Sans SC", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .grid-bg {
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black, transparent);
+      opacity: 0.35;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .glow {
+      position: fixed;
+      width: 520px;
+      height: 520px;
+      border-radius: 50%;
+      filter: blur(100px);
+      opacity: 0.22;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .glow-a { top: -120px; left: -80px; background: #14b8a6; }
+    .glow-b { bottom: -160px; right: -100px; background: #6366f1; }
+
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 3.5rem 1.5rem 4rem;
+    }
+
+    header {
+      margin-bottom: 3rem;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: var(--mono);
+      font-size: 0.78rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent);
+      background: var(--accent-dim);
+      border: 1px solid #2dd4bf55;
+      padding: 0.35rem 0.75rem;
+      border-radius: 999px;
+      margin-bottom: 1.25rem;
+    }
+
+    .badge::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.5; transform: scale(0.85); }
+    }
+
+    h1 {
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+      margin-bottom: 1rem;
+    }
+
+    h1 span {
+      background: linear-gradient(120deg, var(--accent), #818cf8);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .lead {
+      font-size: 1.125rem;
+      color: var(--muted);
+      max-width: 36em;
+    }
+
+    .url-demo {
+      margin-top: 1.75rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 0.85rem 1.1rem;
+      font-family: var(--mono);
+      font-size: 0.95rem;
+      box-shadow: 0 12px 40px #00000055;
+    }
+
+    .url-demo a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    .url-demo a:hover { text-decoration: underline; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1rem;
+      margin: 2.5rem 0;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.35rem;
+      transition: border-color 0.2s, transform 0.2s;
+    }
+
+    .card:hover {
+      border-color: #2dd4bf66;
+      transform: translateY(-2px);
+    }
+
+    .card h3 {
+      font-size: 0.95rem;
+      margin-bottom: 0.45rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .card p {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .icon {
+      width: 1.4rem;
+      height: 1.4rem;
+      display: inline-grid;
+      place-items: center;
+      background: var(--accent-dim);
+      border-radius: 8px;
+      font-size: 0.85rem;
+    }
+
+    section { margin-bottom: 2.5rem; }
+
+    h2 {
+      font-size: 1.1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: var(--text);
+    }
+
+    pre {
+      background: #070a0f;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.2rem;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: #c5d4e8;
+    }
+
+    code { font-family: var(--mono); }
+
+    .comment { color: #5c7a99; }
+    .cmd { color: var(--accent); }
+    .flag { color: #a5b4fc; }
+    .str { color: #fbbf24; }
+
+    .steps {
+      list-style: none;
+      counter-reset: step;
+      display: grid;
+      gap: 0.85rem;
+    }
+
+    .steps li {
+      counter-increment: step;
+      display: grid;
+      grid-template-columns: 2.2rem 1fr;
+      gap: 1rem;
+      align-items: start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.1rem;
+    }
+
+    .steps li::before {
+      content: counter(step);
+      width: 2.2rem;
+      height: 2.2rem;
+      display: grid;
+      place-items: center;
+      background: var(--accent-dim);
+      color: var(--accent);
+      border-radius: 10px;
+      font-family: var(--mono);
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+
+    .steps strong { display: block; margin-bottom: 0.2rem; }
+    .steps span { color: var(--muted); font-size: 0.92rem; }
+
+    footer {
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1rem;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover { text-decoration: underline; }
+
+    .live-dot {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .live-dot::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #22c55e;
+    }
+  </style>
+</head>
+<body>
+  <div class="grid-bg" aria-hidden="true"></div>
+  <div class="glow glow-a" aria-hidden="true"></div>
+  <div class="glow glow-b" aria-hidden="true"></div>
+
+  <main>
+    <header>
+      <div class="badge">Static hosting for agents & humans</div>
+      <h1>把网页打包成 <span>.tar</span>，<br>立刻上线。</h1>
+      <p class="lead">
+        eyhn.page 让你在子域名上托管静态站点。选一个前缀，带上自己的 site key，
+        用一条 curl 就能发布——不需要构建流水线，也不需要信用卡。
+      </p>
+      <div class="url-demo">
+        <span>https://</span>
+        <strong id="prefix">your-name</strong>
+        <span>.eyhn.page/</span>
+      </div>
+    </header>
+
+    <div class="cards">
+      <article class="card">
+        <h3><span class="icon">⚡</span> 秒级发布</h3>
+        <p>上传未压缩的 tar 快照，整站替换，立刻可访问。</p>
+      </article>
+      <article class="card">
+        <h3><span class="icon">🔑</span> 自带密钥</h3>
+        <p>Site key 由你保管，至少 16 字节。丢了就无法更新或删除。</p>
+      </article>
+      <article class="card">
+        <h3><span class="icon">🧹</span> 自动清理</h3>
+        <p>可设置 expiresAt，到期后前缀释放，别人可以重新认领。</p>
+      </article>
+    </div>
+
+    <section>
+      <h2>三步上线</h2>
+      <ol class="steps">
+        <li>
+          <div>
+            <strong>构建静态文件</strong>
+            <span>把 dist/ 或任意目录打成纯 .tar（不要 .tar.gz）。</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>认领前缀</strong>
+            <span>前缀只能是 a-z、0-9、连字符，且不能以连字符开头或结尾。</span>
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>PUT 发布</strong>
+            <span>带上 X-Site-Key，整个站点快照一次性替换。</span>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>发布命令</h2>
+      <pre><span class="comment"># package</span>
+<span class="cmd">COPYFILE_DISABLE</span>=1 tar --no-xattrs --no-mac-metadata -cf site.tar -C dist .
+
+<span class="comment"># publish</span>
+<span class="cmd">curl</span> -X PUT <span class="str">"https://eyhn.page/api/sites/demo/publish"</span> \
+  -H <span class="flag">"X-Site-Key: your-site-key-here"</span> \
+  -H <span class="flag">"Content-Type: application/x-tar"</span> \
+  --data-binary @site.tar</pre>
+    </section>
+
+    <section>
+      <h2>小规则，大省心</h2>
+      <div class="cards">
+        <article class="card">
+          <h3><span class="icon">📄</span> index.html</h3>
+          <p>目录请求会找 index.html；/about 也能直接映射 about.html。</p>
+        </article>
+        <article class="card">
+          <h3><span class="icon">🚫</span> 404.html</h3>
+          <p>存在时，缺失路径返回该文件，HTTP 状态码仍是 404。</p>
+        </article>
+        <article class="card">
+          <h3><span class="icon">📦</span> 1 GB 上限</h3>
+          <p>默认最大 tar 体积 1024 MB，足够大多数演示站点。</p>
+        </article>
+      </div>
+    </section>
+
+    <footer>
+      <span class="live-dot">本页由 Cursor Agent 随手生成</span>
+      <span>
+        <a href="https://eyhn.page">eyhn.page</a>
+        ·
+        <a href="https://eyhn.page/llm.txt">llm.txt</a>
+      </span>
+    </footer>
+  </main>
+
+  <script>
+    const prefixes = ["cursor-demo", "hello-world", "my-side-project", "agent-playground"];
+    const el = document.getElementById("prefix");
+    let i = 0;
+    setInterval(() => {
+      el.style.opacity = "0";
+      setTimeout(() => {
+        el.textContent = prefixes[i % prefixes.length];
+        el.style.opacity = "1";
+        i++;
+      }, 180);
+    }, 2400);
+    el.style.transition = "opacity 0.18s ease";
+  </script>
+</body>
+</html>
