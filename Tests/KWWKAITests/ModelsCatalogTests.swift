@@ -46,7 +46,7 @@ struct ModelsCatalogTests {
 
     @Test("decodes per-model compat blocks")
     func compatDecoded() {
-        // pi ships `compat.forceAdaptiveThinking` on the Opus 4.6 family.
+        // The generator derives this from OMP's anthropic-adaptive mode.
         let opus = ModelsCatalog.models(for: "anthropic").first { $0.id.contains("opus-4-6") }
         #expect(opus?.compat?.forceAdaptiveThinking == true)
 
@@ -96,14 +96,11 @@ struct ModelsCatalogTests {
             #expect(m.cost.output < 1000)
         }
 
-        let tiered = ModelsCatalog.all.filter { !($0.cost.tiers ?? []).isEmpty }
-        #expect(!tiered.isEmpty)
+        // OMP currently publishes GPT-5.4's long-context price directly and
+        // exposes the full supported context window in the bundled spec.
         #expect(
             ModelsCatalog.model(provider: "openai", id: "gpt-5.4")?
-                .cost.tiers?.first?.inputTokensAbove == 272_000
+                .contextWindow == 1_050_000
         )
-        #expect(tiered.allSatisfy { model in
-            model.cost.tiers?.allSatisfy { $0.inputTokensAbove > 0 } == true
-        })
     }
 }

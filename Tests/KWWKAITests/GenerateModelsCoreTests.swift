@@ -93,12 +93,15 @@ struct GenerateModelsCoreTests {
         #expect(model["contextWindow"] as? Int == 400_000)
     }
 
-    @Test("preserves providers from the source catalog")
-    func preservesSourceProviders() throws {
+    @Test("preserves supported providers and excludes separately managed groups")
+    func filtersSourceProviders() throws {
         let raw = """
         export const MODELS = {
           "google": {},
           "google-vertex": {},
+          "google-gemini-cli": {},
+          "google-antigravity": {},
+          "cursor": {},
         } as const;
         """
 
@@ -107,5 +110,39 @@ struct GenerateModelsCoreTests {
         #expect(result.root.keys.contains("google"))
         #expect(result.root.keys.contains("google-vertex"))
         #expect(result.root.count == 2)
+    }
+
+    @Test("normalizes OMP thinking metadata for KWWK")
+    func normalizesOMPThinkingMetadata() throws {
+        let raw = """
+        {
+          "anthropic": {
+            "claude-opus-4-6": {
+              "id": "claude-opus-4-6",
+              "name": "Claude Opus 4.6",
+              "api": "anthropic-messages",
+              "provider": "anthropic",
+              "reasoning": true,
+              "thinking": {
+                "mode": "anthropic-adaptive",
+                "efforts": ["low", "medium", "high", "max"],
+                "effortMap": {"low": "adaptive"}
+              }
+            }
+          }
+        }
+        """
+
+        let result = try GenerateModelsCore.generate(from: raw)
+        let anthropic = try #require(result.root["anthropic"] as? [String: Any])
+        let model = try #require(anthropic["claude-opus-4-6"] as? [String: Any])
+        let compat = try #require(model["compat"] as? [String: Any])
+        let levelMap = try #require(model["thinkingLevelMap"] as? [String: Any])
+
+        #expect(compat["forceAdaptiveThinking"] as? Bool == true)
+        #expect(levelMap["low"] as? String == "adaptive")
+        #expect(levelMap["max"] as? String == "max")
+        #expect(levelMap["xhigh"] is NSNull)
+        #expect(model["thinking"] == nil)
     }
 }

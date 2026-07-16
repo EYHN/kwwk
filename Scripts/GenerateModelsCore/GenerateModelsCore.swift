@@ -27,9 +27,10 @@ public enum GenerateModelsCore {
             let snippet = String(json.prefix(500))
             throw GenerateModelsCoreError.conversion("JSON parse failed: \(error)\nsnippet:\n\(snippet)")
         }
-        guard let root = parsed as? [String: Any] else {
+        guard let parsedRoot = parsed as? [String: Any] else {
             throw GenerateModelsCoreError.conversion("top-level catalog is not an object")
         }
+        let root = normalizeCatalog(parsedRoot)
 
         let outputData = try JSONSerialization.data(
             withJSONObject: root,
@@ -37,6 +38,47 @@ public enum GenerateModelsCore {
         )
 
         return ModelGenerationResult(outputData: outputData, root: root)
+    }
+
+    /// OMP's catalog is now stored as sparse JSON model specs. Translate the
+    /// pieces whose runtime representation differs from KWWK's bundled schema.
+    private static func normalizeCatalog(_ root: [String: Any]) -> [String: Any] {
+        let excludedProviders = ["cursor", "google-antigravity", "google-gemini-cli"]
+        var normalized = root.filter { !excludedProviders.contains($0.key) }
+
+        for (provider, value) in normalized {
+            guard let models = value as? [String: Any] else { continue }
+            normalized[provider] = models.mapValues { value in
+                guard var model = value as? [String: Any],
+                      let thinking = model.removeValue(forKey: "thinking") as? [String: Any]
+                else { return value }
+
+                if model["thinkingLevelMap"] == nil,
+                   let efforts = thinking["efforts"] as? [String],
+                   !efforts.isEmpty {
+                    let effortMap = thinking["effortMap"] as? [String: String] ?? [:]
+                    let supported = Set(efforts)
+                    let levels = ["minimal", "low", "medium", "high", "xhigh", "max"]
+                    var levelMap: [String: Any] = [:]
+                    for level in levels {
+                        levelMap[level] = supported.contains(level)
+                            ? (effortMap[level] ?? level)
+                            : NSNull()
+                    }
+                    if let off = effortMap["off"] { levelMap["off"] = off }
+                    model["thinkingLevelMap"] = levelMap
+                }
+
+                if thinking["mode"] as? String == "anthropic-adaptive" {
+                    var compat = model["compat"] as? [String: Any] ?? [:]
+                    compat["forceAdaptiveThinking"] = true
+                    model["compat"] = compat
+                }
+
+                return model
+            }
+        }
+        return normalized
     }
 
     public static func convert(_ raw: String) throws -> String {

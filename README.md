@@ -442,14 +442,14 @@ There are two bundled catalogs, and a sync should regenerate BOTH —
 don't update one without the other:
 
 1. `Sources/KWWKAI/Resources/models.json` — every regular provider,
-   generated from pi-mono's `packages/ai/src/models.generated.ts`.
+   generated from oh-my-pi's `packages/catalog/src/models.json`.
 2. `Sources/KWWKAI/Resources/cursor-models.json` — the Cursor
    subscription models, pulled live from Cursor's `GetUsableModels` RPC
    (there is no runtime model sync; this file is the authoritative
    Cursor catalog).
 
 ```sh
-swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts
+swift run kwwk-generate-models /path/to/oh-my-pi/packages/catalog/src/models.json
 swift run kwwk-generate-cursor-models
 swift test
 ```
