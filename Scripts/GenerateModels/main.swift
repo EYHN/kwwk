@@ -1,13 +1,13 @@
 import Foundation
 import KWWKGenerateModelsCore
 
-/// Regenerates KWWK's bundled model catalog from oh-my-pi's canonical JSON
-/// catalog (legacy generated TypeScript catalogs remain supported).
+/// Regenerates KWWK's bundled model catalog from pi-mono's generated
+/// TypeScript catalog.
 ///
 /// Usage:
 ///
 ///   swift run kwwk-generate-models \
-///       /path/to/oh-my-pi/packages/catalog/src/models.json
+///       /path/to/pi-mono/packages/ai/src/models.generated.ts
 ///
 /// By default the output is written to:
 ///
@@ -75,11 +75,10 @@ struct GenerateModels {
     }
 
     static let usage = """
-    usage: kwwk-generate-models <models.json|models.generated.ts> [output.json]
+    usage: kwwk-generate-models <models.generated.ts> [output.json]
 
     arguments:
-      models.json              oh-my-pi packages/catalog/src/models.json
-                               (legacy models.generated.ts also supported)
+      models.generated.ts      pi-mono packages/ai/src/models.generated.ts
       output.json              optional output path; defaults to \(GenerateModelsCore.defaultOutputPath)
 
     options:

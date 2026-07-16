@@ -93,15 +93,12 @@ struct GenerateModelsCoreTests {
         #expect(model["contextWindow"] as? Int == 400_000)
     }
 
-    @Test("preserves supported providers and excludes separately managed groups")
-    func filtersSourceProviders() throws {
+    @Test("preserves providers from the source catalog")
+    func preservesSourceProviders() throws {
         let raw = """
         export const MODELS = {
           "google": {},
           "google-vertex": {},
-          "google-gemini-cli": {},
-          "google-antigravity": {},
-          "cursor": {},
         } as const;
         """
 
@@ -112,37 +109,26 @@ struct GenerateModelsCoreTests {
         #expect(result.root.count == 2)
     }
 
-    @Test("normalizes OMP thinking metadata for KWWK")
-    func normalizesOMPThinkingMetadata() throws {
+    @Test("writes concise decimal prices")
+    func writesConciseDecimalPrices() throws {
         let raw = """
-        {
-          "anthropic": {
-            "claude-opus-4-6": {
-              "id": "claude-opus-4-6",
-              "name": "Claude Opus 4.6",
-              "api": "anthropic-messages",
-              "provider": "anthropic",
-              "reasoning": true,
-              "thinking": {
-                "mode": "anthropic-adaptive",
-                "efforts": ["low", "medium", "high", "max"],
-                "effortMap": {"low": "adaptive"}
-              }
-            }
-          }
-        }
+        export const MODELS = {
+          "openai": {
+            "example": {
+              id: "example",
+              name: "Example",
+              api: "openai-responses",
+              provider: "openai",
+              cost: { "input": 0.33, "output": 2.75 },
+            },
+          },
+        } as const;
         """
 
         let result = try GenerateModelsCore.generate(from: raw)
-        let anthropic = try #require(result.root["anthropic"] as? [String: Any])
-        let model = try #require(anthropic["claude-opus-4-6"] as? [String: Any])
-        let compat = try #require(model["compat"] as? [String: Any])
-        let levelMap = try #require(model["thinkingLevelMap"] as? [String: Any])
+        let output = try #require(String(data: result.outputData, encoding: .utf8))
 
-        #expect(compat["forceAdaptiveThinking"] as? Bool == true)
-        #expect(levelMap["low"] as? String == "adaptive")
-        #expect(levelMap["max"] as? String == "max")
-        #expect(levelMap["xhigh"] is NSNull)
-        #expect(model["thinking"] == nil)
+        #expect(output.contains(#""input" : 0.33"#))
+        #expect(!output.contains("0.33000000000000002"))
     }
 }
