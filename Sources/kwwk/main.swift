@@ -4,6 +4,7 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
+import KWWKAI
 import KWWKAgent
 import KWWKCli
 
@@ -12,6 +13,7 @@ import KWWKCli
 ///   kwwk                    → interactive coding TUI (sign in via `/login`)
 ///   kwwk -p <prompt>        → one-shot, non-interactive run (stdout = reply)
 ///   kwwk --help             → usage
+///   kwwk --self-test        → verify bundled model resources without network access
 ///
 /// Global flags (apply to both TUI and headless `-p`):
 ///   `--thinking <off|minimal|low|medium|high|xhigh|max>` — reasoning effort,
@@ -66,6 +68,8 @@ struct KwwkCLI {
             )
         case "-h", "--help":
             printUsage()
+        case "--self-test":
+            runSelfTest()
         default:
             FileHandle.standardError.write(Data("kwwk: unknown subcommand '\(subcommand!)'\n\n".utf8))
             printUsage()
@@ -82,6 +86,7 @@ struct KwwkCLI {
           kwwk -p <prompt>            run a one-shot prompt and print the reply
           kwwk -p                     read the prompt from stdin
           kwwk --help                 show this message
+          kwwk --self-test            verify bundled installation resources
 
         global options:
           --thinking <level>          reasoning effort: off, minimal, low,
@@ -108,6 +113,27 @@ struct KwwkCLI {
         neither configured, launch kwwk and run /login to sign in to a
         provider (OAuth subscription or API key).
         """)
+    }
+
+    /// Exercise both SwiftPM resource catalogs through `Bundle.module` without
+    /// resolving credentials or constructing a provider. Homebrew runs this
+    /// against the installed executable so a bottle missing its sidecar
+    /// `kwwk_KWWKAI.bundle` fails before publication.
+    static func runSelfTest() -> Never {
+        guard !ModelsCatalog.models(for: "anthropic").isEmpty else {
+            FileHandle.standardError.write(Data(
+                "kwwk: self-test failed: primary model catalog is empty\n".utf8
+            ))
+            Foundation.exit(1)
+        }
+        guard ModelsCatalog.model(provider: "cursor", id: "default") != nil else {
+            FileHandle.standardError.write(Data(
+                "kwwk: self-test failed: Cursor model catalog is missing\n".utf8
+            ))
+            Foundation.exit(1)
+        }
+        print("resources: ok")
+        Foundation.exit(0)
     }
 
     /// Pull `--thinking <level>` out of argv and return the remaining args

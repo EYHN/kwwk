@@ -6,28 +6,35 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  # Verify the tag builds on BOTH toolchain extremes before anything is
-  # published: macos-26 tracks the newest Swift (what `brew install` users
-  # compile with — strictest concurrency checking), macos-15 guards the old
-  # floor. The release job below only runs if both pass, so a tag that fails
-  # either never reaches the tap.
+  # Verify the tag across both macOS architectures and both toolchain extremes
+  # before publishing: macos-15 covers Apple Silicon and Intel at the old floor,
+  # while macos-26 supplies the newest Swift concurrency checking. Homebrew
+  # normally installs a prebuilt package, but source/HEAD installs and SwiftPM
+  # consumers still need every tagged release to compile across this range.
   verify:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        os: [macos-15, macos-15-intel, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - name: Select Swift 6.1 toolchain
+        if: startsWith(matrix.os, 'macos-15')
+        run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
       - name: Verify release build
         run: swift build -c release --product kwwk
+      - name: Verify bundled resources
+        run: .build/release/kwwk --self-test
 
   release:
     needs: verify
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -50,26 +57,113 @@ jobs:
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
             || gh release create "${GITHUB_REF_NAME}" --generate-notes
 
-      - name: Update homebrew-tap formula
+      - name: Open or update homebrew-tap bump PR
         env:
-          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          TAG:    ${{ steps.hash.outputs.tag }}
-          URL:    ${{ steps.hash.outputs.url }}
-          SHA256: ${{ steps.hash.outputs.sha256 }}
+          GH_TOKEN:       ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP_REPOSITORY: EYHN/homebrew-tap
+          TAG:            ${{ steps.hash.outputs.tag }}
+          URL:            ${{ steps.hash.outputs.url }}
+          SHA256:         ${{ steps.hash.outputs.sha256 }}
         run: |
           set -euo pipefail
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/EYHN/homebrew-tap.git" tap
+          branch="automation/kwwk-${TAG}"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${TAP_REPOSITORY}.git" tap
           cd tap
-          # Stable anchors: `url "<...>"` and `sha256 "<...>"` — one occurrence each.
-          sed -i '' -E \
-            -e "s|(url \")[^\"]*(\")|\\1${URL}\\2|" \
-            -e "s|(sha256 \")[^\"]*(\")|\\1${SHA256}\\2|" \
-            Formula/kwwk.rb
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
-            echo "formula already matches ${TAG} — nothing to push"
+
+          remote_branch=""
+          if git show-ref --verify --quiet "refs/remotes/origin/${branch}"; then
+            remote_branch="$(git rev-parse "origin/${branch}")"
+          fi
+          git switch --create "${branch}" origin/main
+
+          # Only replace the formula's top-level source archive fields. A new
+          # source version must drop the previous version's bottle block;
+          # `brew pr-pull` writes the new checksums after all builders pass.
+          ruby <<'RUBY'
+          require "rubygems"
+
+          path = "Formula/kwwk.rb"
+          formula = File.read(path)
+          url_pattern = /^  url "[^"]*"$/
+          sha_pattern = /^  sha256 "[^"]*"$/
+          bottle_pattern = /\n  bottle do\n.*?^  end\n/m
+
+          abort "expected exactly one top-level source url" unless formula.scan(url_pattern).one?
+          abort "expected exactly one top-level source sha256" unless formula.scan(sha_pattern).one?
+
+          target_url = %(  url "#{ENV.fetch("URL")}")
+          target_sha = %(  sha256 "#{ENV.fetch("SHA256")}")
+          current_url = formula.match(url_pattern)&.to_s
+          current_sha = formula.match(sha_pattern)&.to_s
+          source_changed = current_url != target_url || current_sha != target_sha
+
+          current_tag = current_url&.match(%r{/archive/refs/tags/([^/]+)\.tar\.gz"$})&.[](1)
+          target_tag = ENV.fetch("TAG")
+          abort "cannot determine the current formula tag" unless current_tag
+
+          begin
+            current_version = Gem::Version.new(current_tag.delete_prefix("v"))
+            target_version = Gem::Version.new(target_tag.delete_prefix("v"))
+          rescue ArgumentError => error
+            abort "cannot compare formula versions: #{error.message}"
+          end
+          if target_version < current_version
+            abort "refusing to downgrade kwwk from #{current_tag} to #{target_tag}"
+          end
+
+          if source_changed
+            formula.sub!(url_pattern, target_url)
+            formula.sub!(sha_pattern, target_sha)
+            bottle_blocks = formula.scan(bottle_pattern)
+            abort "expected at most one bottle block" if bottle_blocks.length > 1
+            formula.sub!(bottle_pattern, "") if bottle_blocks.one?
+          end
+          File.write(path, formula)
+          RUBY
+
+          if git diff --quiet -- Formula/kwwk.rb; then
+            echo "tap main already matches ${TAG} — no PR needed"
+            exit 0
+          fi
+
+          if [[ -n "${remote_branch}" ]] && git diff --quiet "origin/${branch}" -- .; then
+            echo "remote bump branch already matches ${TAG}"
           else
-            git commit -am "kwwk: bump to ${TAG}"
-            git push origin main
+            git add Formula/kwwk.rb
+            git commit -m "kwwk: bump to ${TAG}"
+            if [[ -n "${remote_branch}" ]]; then
+              git push \
+                --force-with-lease="refs/heads/${branch}:${remote_branch}" \
+                origin "HEAD:refs/heads/${branch}"
+            else
+              git push --set-upstream origin "${branch}"
+            fi
+          fi
+
+          title="kwwk: bump to ${TAG}"
+          body="$(printf 'Automated source release bump for %s.\n\nSource: %s\nSHA-256: %s\n' \
+            "${TAG}" "${URL}" "${SHA256}")"
+          pr_number="$(gh pr list \
+            --repo "${TAP_REPOSITORY}" \
+            --head "${branch}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+
+          if [[ -n "${pr_number}" ]]; then
+            gh api \
+              --method PATCH \
+              "repos/${TAP_REPOSITORY}/pulls/${pr_number}" \
+              -f title="${title}" \
+              -f body="${body}" >/dev/null
+            echo "updated tap PR #${pr_number}"
+          else
+            gh pr create \
+              --repo "${TAP_REPOSITORY}" \
+              --base main \
+              --head "${branch}" \
+              --title "${title}" \
+              --body "${body}"
           fi
