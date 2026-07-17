@@ -625,6 +625,71 @@ func runCodingTUIInternal(
     }
     agentBox.eventUnsubscribe = subscribeToAgentEvents(agent)
 
+    // --- ask tool (UI-only) ----------------------------------------------
+    // `ask` suspends its tool call mid-turn until the user answers in a
+    // selector modal, so it needs the ModalHost and is appended post-build
+    // like `goal` (the loop reads state.tools fresh each turn). Esc in the
+    // modal cancels the whole call and aborts the run, mirroring omp — the
+    // modal consumed the Esc that would otherwise have hit the streaming
+    // abort binding, so the abort is re-issued explicitly below.
+    let presentAsk: AskPresenter = { prompt, cancellation in
+        await withCheckedContinuation { continuation in
+            Task { @MainActor in
+                let presentation = AskPresentation(continuation)
+                let askModal = AskModal(prompt: prompt) { outcome in
+                    modal.close()
+                    presentation.resume(outcome)
+                }
+                modal.open(askModal)
+                // A run abort landing while the modal is still up (Ctrl-C
+                // force-quit teardown, provider failure in a parallel branch)
+                // must not strand the suspended tool call behind a dead run.
+                cancellation?.onCancel { _ in
+                    Task { @MainActor in
+                        guard !presentation.finished else { return }
+                        modal.close()
+                        presentation.resume(.cancelled)
+                    }
+                }
+            }
+        }
+    }
+    let askAbortRun: @Sendable () -> Void = {
+        Task { @MainActor in
+            let wasStreaming = agent.state.isStreaming
+            guard abortInteractiveAgentWork(
+                agent: agent,
+                isManualCompacting: frameStatus.isManualCompacting
+            ) else { return }
+            frameStatus.mode = .aborting
+            if wasStreaming {
+                // Same bookkeeping as the Esc abort path: drop queued steers
+                // so they can't double-drain, and arm /retry from the message
+                // actually in flight.
+                agent.clearSteeringQueue()
+                if let t = retryArmTarget(
+                    summary: nil,
+                    aborted: true,
+                    trackedActive: retry.trackedActive,
+                    messages: agent.state.messages
+                ) {
+                    retry.lastText = t.text
+                    retry.lastImages = t.images
+                    retry.failed = true
+                }
+                retry.trackedActive = false
+            }
+            updateFrameStatus()
+            runner.tui.requestRender()
+        }
+    }
+    let askTool = createAskTool(present: presentAsk, abortRun: askAbortRun)
+    do {
+        var withAsk = agent.state.tools
+        withAsk.append(askTool)
+        agent.state.tools = withAsk
+    }
+
     let setSessionSwitching: @MainActor @Sendable (Bool) -> Void = { active in
         frameStatus.isSessionSwitching = active
         updateFrameStatus()
@@ -679,6 +744,7 @@ func runCodingTUIInternal(
         replacement.state.messages = messages
         var replacementTools = replacement.state.tools
         replacementTools.append(createGoalTool(store: goalStore))
+        replacementTools.append(askTool)
         replacement.state.tools = replacementTools
 
         agentBox.replace(with: replacementCodingAgent)

@@ -359,7 +359,7 @@ final class TranscriptRenderer {
             if !isError, let summary = foldedSummary(name: slot.name, args: slot.args, result: result) {
                 toolSlots[idx].foldEntry = FoldEntry(name: slot.name, summary: summary)
             } else {
-                let header = Style.tool("● \(slot.name)(\(formatArgs(slot.args)))")
+                let header = toolHeader(name: slot.name, args: slot.args)
                 // Leading blank, no trailing — uniform "every scrollback block
                 // opens with a separator row, never closes with one" rule.
                 var finalLines = ["", header]
@@ -659,8 +659,7 @@ final class TranscriptRenderer {
             // scrollback convention so live view and scrollback look
             // identical as blocks roll out.
             out.append("")
-            let header = Style.tool("● \(slot.name)(\(formatArgs(slot.args)))")
-            out.append(header)
+            out.append(toolHeader(name: slot.name, args: slot.args))
             if let resolved = slot.resolution {
                 // Committed form is `["", header, body...]`; we've
                 // already emitted our own blank + header, so strip those
@@ -949,6 +948,26 @@ final class TranscriptRenderer {
         let m = Int(seconds) / 60
         let s = Int(seconds) % 60
         return "\(m)m \(s)s"
+    }
+
+    /// `● name(args…)` header line for a tool block. `ask` gets its first
+    /// question inline — the generic form would render the questions array as
+    /// an opaque `questions: [2 items]`.
+    private func toolHeader(name: String, args: JSONValue) -> String {
+        if name == "ask", let summary = askHeaderSummary(args) {
+            return Style.tool("● ask(\(summary))")
+        }
+        return Style.tool("● \(name)(\(formatArgs(args)))")
+    }
+
+    private func askHeaderSummary(_ args: JSONValue) -> String? {
+        guard case .object(let obj) = args,
+              case .array(let questions) = obj["questions"] ?? .null,
+              case .object(let first) = questions.first ?? .null,
+              case .string(let text) = first["question"] ?? .null else { return nil }
+        var summary = "\"\(truncate(text, to: 60))\""
+        if questions.count > 1 { summary += " +\(questions.count - 1) more" }
+        return summary
     }
 
     private func formatArgs(_ args: JSONValue) -> String {
