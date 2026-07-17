@@ -59,6 +59,14 @@ final class TUI: @unchecked Sendable {
     /// erased live zone left the cursor exactly where the next output should
     /// start. Reset whenever a render draws a fresh frame.
     private var frameCleared = false
+    /// Estimated blank rows between the live zone's bottom edge and the
+    /// bottom of the screen. Each render consumes them as committed + live
+    /// output grows (once at 0 the zone is pinned to the screen bottom and
+    /// further growth scrolls history up); a shrink while pinned means the
+    /// inline redraw would strand the frame high on the screen — see
+    /// `render()`. Initialized to 0 (assume pinned): the pessimistic guess
+    /// only costs a redundant repaint, which redraws the same layout.
+    private var rowsBelowLiveZone = 0
 
     private static let disableAutowrap = "\u{1B}[?7l"
     private static let enableAutowrap = "\u{1B}[?7h"
@@ -202,6 +210,9 @@ final class TUI: @unchecked Sendable {
             lastFrameHeight = 0
             lastCursorUpBy = 0
             lastRenderedLines = []
+            // Unknown geometry after the sub-flow's output — assume pinned
+            // (the conservative guess only risks a redundant repaint).
+            rowsBelowLiveZone = 0
         }
     }
 
@@ -225,6 +236,7 @@ final class TUI: @unchecked Sendable {
             lastFrameHeight = 0
             lastCursorUpBy = 0
             lastRenderedLines = []
+            rowsBelowLiveZone = 0
             frameCleared = true
             return s
         }
@@ -356,11 +368,20 @@ final class TUI: @unchecked Sendable {
         out += live
         out += "\u{1B}[?2026l"   // end synchronized output
 
+        // Rows the replayed header + history occupy once the terminal wraps
+        // them to the current width — the live zone's bottom edge lands that
+        // far down (or at the last row once the replay overflows the screen).
+        var historyPhysical = 0
+        for line in header + history {
+            historyPhysical += line.isEmpty ? 1 : ANSI.wrap(line, width: max(1, width)).count
+        }
+
         lock.withLock {
             lastRenderedLines = rendered
             lastFrameHeight = rendered.count
             lastCursorUpBy = upBy
             frameCleared = false
+            rowsBelowLiveZone = max(0, termHeight - historyPhysical - rendered.count)
             _fullRedraws += 1
         }
         terminal.write(out)
@@ -432,6 +453,9 @@ final class TUI: @unchecked Sendable {
             lastFrameHeight = rendered.count
             lastCursorUpBy = upBy
             frameCleared = false
+            // The snapped window bottom-fills with history; whatever the tail
+            // didn't cover stays blank below the live zone.
+            rowsBelowLiveZone = max(0, available - onScreen.count)
             _fullRedraws += 1
         }
         terminal.write(out)
@@ -521,6 +545,36 @@ final class TUI: @unchecked Sendable {
             return
         }
 
+        // Update the estimate of how many blank rows remain between the live
+        // zone's bottom and the screen bottom: the inline redraw below reuses
+        // the old zone's rows and pushes the bottom edge down by however much
+        // (committed + new live) output exceeds the old height — clamped at 0,
+        // where the terminal starts scrolling instead. Committed lines are
+        // written raw at full terminal width (autowrap on), so measure their
+        // physical rows with the same wrap the terminal will apply.
+        let prevSlack = lock.withLock { rowsBelowLiveZone }
+        var committedPhysical = 0
+        for line in committed {
+            committedPhysical += line.isEmpty ? 1 : ANSI.wrap(line, width: max(1, width)).count
+        }
+        let newSlack = max(0, prevSlack + oldHeight - committedPhysical - rendered.count)
+
+        // A live zone pinned to the screen bottom (a grown frame — e.g. the
+        // /model selector — scrolled history up until its bottom hit the last
+        // row) that now shrinks by more rows than the committed lines refill:
+        // the inline redraw below would strand the new (smaller) frame where
+        // the old zone's TOP was — after a tall modal closes that's (near)
+        // the very top of the screen, with nothing but blank rows underneath,
+        // and every subsequent keystroke would keep redrawing it up there.
+        // Fall back to the authoritative repaint instead, which re-lays the
+        // committed tail and parks the live zone back against the viewport
+        // bottom. The drained commits are already retained in
+        // `committedLines`, so the repaint replays them without loss.
+        if oldHeight > 0, prevSlack == 0, newSlack > 0 {
+            repaintForResize()
+            return
+        }
+
         let shrinking = rendered.count < oldHeight && clearOnShrinkEnabled
 
         let (frame, newCursorUpBy) = renderInline(
@@ -535,6 +589,7 @@ final class TUI: @unchecked Sendable {
             lastFrameHeight = rendered.count
             lastCursorUpBy = newCursorUpBy
             frameCleared = false
+            rowsBelowLiveZone = newSlack
             if shrinking { _fullRedraws += 1 }
         }
 

@@ -166,6 +166,40 @@ struct TUIShrinkageTests {
         #expect(viewport[1].trimmingCharacters(in: .whitespaces) == "")
         tui.stop()
     }
+
+    @Test("shrinking from a full-height live zone repaints instead of stranding the frame at the top")
+    func fullHeightShrinkRepaints() async throws {
+        let terminal = VirtualTerminal(width: 40, height: 10)
+        let tui = TUI(terminal: terminal)
+        let comp = TestLinesComponent(["input", "footer"])
+        tui.addChild(comp)
+        tui.start()
+        tui.commit((0..<12).map { "h\($0)" })
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        // A full-height modal takes over the live zone (top pinned to row 0).
+        comp.lines = (0..<10).map { "modal row \($0)" }
+        tui.requestRender()
+        await terminal.waitForRender()
+        // (VirtualTerminal doesn't scroll, so the overflowing modal rows pile
+        // up on the bottom row — the retained frame height is what matters.)
+        #expect(terminal.getViewport()[9].contains("modal row 9"))
+
+        // Closing the modal shrinks the zone back to the prompt frame. The
+        // inline redraw would leave it at the very top of the screen with
+        // blank rows below; the fix repaints so the committed tail comes back
+        // and the frame sits below it, against the viewport bottom.
+        comp.lines = ["input", "footer"]
+        tui.requestRender()
+        await terminal.waitForRender()
+
+        let viewport = terminal.getViewport()
+        #expect(!viewport[0].contains("input"))
+        #expect(viewport[0].hasPrefix("h"))
+        #expect(viewport[9].contains("footer"))
+        tui.stop()
+    }
 }
 
 @Suite("TUI suspend/resume geometry")
