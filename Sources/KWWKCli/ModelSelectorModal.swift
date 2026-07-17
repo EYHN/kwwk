@@ -243,8 +243,11 @@ final class ModelSelectorModal: Modal {
     /// hidden neighbors on either side.
     private func tabBarLine(width: Int) -> String? {
         guard tabs.count > 1 else { return nil }
+        // Active tab as a white-on-dark chip so the current provider filter
+        // pops; the chip pads one space each side (+2 columns, mirrored in
+        // `cols` below).
         func paint(_ i: Int) -> String {
-            i == activeTab ? Theme.accentText(tabs[i], bold: true) : Style.dimmed(tabs[i])
+            i == activeTab ? Theme.chipText(tabs[i]) : Style.dimmed(tabs[i])
         }
         let fullBar = "  " + tabs.indices.map(paint).joined(separator: Style.dimmed(" · "))
         let withHint = fullBar + "   " + Style.dimmed("tab / ←→: filter provider")
@@ -258,7 +261,7 @@ final class ModelSelectorModal: Modal {
             var w = 2 // leading indent
             for i in range {
                 if i > range.lowerBound { w += sep.count }
-                w += ANSI.visibleWidth(tabs[i])
+                w += ANSI.visibleWidth(tabs[i]) + (i == activeTab ? 2 : 0)
             }
             // A hidden-neighbor "…" joins like a tab: 1 col + the separator.
             if range.lowerBound > 0 { w += 1 + sep.count }
