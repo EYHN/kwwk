@@ -144,7 +144,7 @@ final class FormModal: Modal {
         return true
     }
 
-    func render(maxRows: Int) -> [String] {
+    func render(maxRows: Int, width: Int) -> [String] {
         // Per-field blank spacers are cosmetic; drop them (with the outer
         // spacer) when the terminal is too short so the render fits maxRows.
         // Chrome: title + footer (+ error block when set — itself dropped on
@@ -153,7 +153,7 @@ final class FormModal: Modal {
         let errorRows = showError ? 2 : 0
         let roomy = maxRows >= 2 + fields.count * 3 + errorRows + 2
         var out: [String] = []
-        out.append(Style.header("  \(title)"))
+        out.append(ANSI.fit(Style.header("  \(title)"), to: width))
         if roomy { out.append("") }
 
         // Window whole field blocks when even the compact layout overflows,
@@ -174,26 +174,35 @@ final class FormModal: Modal {
             if let hint = field.hint, !hint.isEmpty {
                 labelLine += "  " + Style.dimmed(hint)
             }
-            out.append(labelLine)
+            out.append(ANSI.fit(labelLine, to: width))
             let buf = buffers[i]
+            // Input row: `  ❯ ` vs `    ` swaps on focus change; both are 4
+            // visible cols. The value never soft-wraps: a value too wide for
+            // the row shows its TAIL when focused (that's where typing lands;
+            // the caret must stay visible) and is tail-truncated when not.
+            // The focused row carries the zero-width CURSOR_MARKER at the
+            // caret so the hardware cursor blinks in the form, not in the
+            // prompt box below the modal.
+            let prefix = active ? Style.prompt("  ❯ ") : "    "
+            let avail = max(4, width - 4)
             let display: String
             if buf.isEmpty {
                 let placeholder = field.placeholder ?? ""
-                display = Style.dimmed(placeholder.isEmpty ? "(empty)" : placeholder)
+                let dim = Style.dimmed(placeholder.isEmpty ? "(empty)" : placeholder)
+                display = (active ? CURSOR_MARKER : "") + ANSI.fit(dim, to: avail)
+            } else if active {
+                display = Style.prompt(ANSI.fitTail(buf, to: avail)) + CURSOR_MARKER
             } else {
-                display = active ? Style.prompt(buf) : buf
+                display = ANSI.fit(buf, to: avail)
             }
-            // Input row: `  ❯ ` vs `    ` swaps on focus change. Both are
-            // 4 visible cols, so soft-wrap behavior matches across focus.
-            let prefix = active ? Style.prompt("  ❯ ") : "    "
             out.append(prefix + display)
             if roomy { out.append("") }
         }
         if showError, let errorLine {
-            out.append(Style.error(errorLine))
+            out.append(ANSI.fit(Style.error(errorLine), to: width))
             out.append("")
         }
-        out.append(Style.dimmed("  Tab/↑/↓: next field   Enter: submit   Esc: cancel"))
+        out.append(ANSI.fit(Style.dimmed("  Tab/↑/↓: next field   Enter: submit   Esc: cancel"), to: width))
         return out
     }
 

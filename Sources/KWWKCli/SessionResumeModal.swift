@@ -61,7 +61,7 @@ final class SessionResumeModal: Modal {
 
     func cancel() { onCancel() }
 
-    func render(maxRows: Int) -> [String] {
-        core.render(title: "Resume a session", maxRows: maxRows)
+    func render(maxRows: Int, width: Int) -> [String] {
+        core.render(title: "Resume a session", maxRows: maxRows, width: width)
     }
 }

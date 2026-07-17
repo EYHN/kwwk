@@ -66,10 +66,10 @@ struct FormModalTests {
         let modal = makeModal(onSubmit: { submitted.value = $0 })
         modal.confirm()
         #expect(submitted.value == nil)
-        #expect(modal.render(maxRows: 24).contains(where: { $0.contains("API key is required") }))
+        #expect(modal.render(maxRows: 24, width: 80).contains(where: { $0.contains("API key is required") }))
         // Typing clears the inline error.
         _ = modal.handleText("s")
-        #expect(!modal.render(maxRows: 24).contains(where: { $0.contains("is required") }))
+        #expect(!modal.render(maxRows: 24, width: 80).contains(where: { $0.contains("is required") }))
     }
 
     @MainActor
@@ -103,7 +103,7 @@ struct FormModalTests {
     func focusMovement() {
         let modal = makeModal()
         func focusedRows() -> Int {
-            modal.render(maxRows: 24).filter { $0.contains("❯") }.count
+            modal.render(maxRows: 24, width: 80).filter { $0.contains("❯") }.count
         }
         #expect(focusedRows() == 1)
         modal.down()
@@ -127,7 +127,7 @@ struct FormModalTests {
         let modal = FormModal(title: "t", fields: fields, onSubmit: { _ in }, onCancel: {})
         for maxRows in [4, 6, 9, 12, 40] {
             for _ in 0..<8 {
-                let lines = modal.render(maxRows: maxRows)
+                let lines = modal.render(maxRows: maxRows, width: 80)
                 #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows)")
                 #expect(lines.contains(where: { $0.contains("❯") }),
                         "focused field must stay visible at maxRows \(maxRows)")
@@ -162,7 +162,7 @@ struct ModalHostRoutingTests {
             texts.append(data)
             return true
         }
-        func render(maxRows: Int) -> [String] { ["stub"] }
+        func render(maxRows: Int, width: Int) -> [String] { ["stub"] }
     }
 
     @MainActor
@@ -267,7 +267,7 @@ struct ModalHostRoutingTests {
         func down() {}
         func confirm() { host?.close() }
         func cancel() {}
-        func render(maxRows: Int) -> [String] { ["closing"] }
+        func render(maxRows: Int, width: Int) -> [String] { ["closing"] }
     }
 
     @MainActor

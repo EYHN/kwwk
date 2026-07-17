@@ -38,9 +38,9 @@ struct APIKeyFormLayoutTests {
     @Test("line count is stable across focus changes")
     func stableLineCount() {
         let f = form()
-        let before = f.render(maxRows: 24).count
+        let before = f.render(maxRows: 24, width: 80).count
         f.down()
-        let after = f.render(maxRows: 24).count
+        let after = f.render(maxRows: 24, width: 80).count
         #expect(before == after, "moving focus must not grow/shrink the frame")
     }
 
@@ -50,9 +50,9 @@ struct APIKeyFormLayoutTests {
         // The "exactly one focused row" invariant is owned by
         // FormModalTests.focusMovement; this test pins layout stability only.
         let f = form()
-        let first = f.render(maxRows: 24)
+        let first = f.render(maxRows: 24, width: 80)
         f.down()
-        let second = f.render(maxRows: 24)
+        let second = f.render(maxRows: 24, width: 80)
         #expect(first.count == second.count, "focus swap must not change the row count")
         let focusedA = first.filter { $0.contains("❯") }
         let focusedB = second.filter { $0.contains("❯") }
@@ -63,9 +63,9 @@ struct APIKeyFormLayoutTests {
     @Test("input rows are width-parallel on focus toggle")
     func widthParallelInputs() {
         let f = form()
-        let a = f.render(maxRows: 24)
+        let a = f.render(maxRows: 24, width: 80)
         f.down()
-        let b = f.render(maxRows: 24)
+        let b = f.render(maxRows: 24, width: 80)
         // Same count — check per-index visible width matches where layout
         // matters most (label + blank rows are text-stable; input rows
         // swap prefixes of equal visible length).

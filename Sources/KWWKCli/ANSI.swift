@@ -207,6 +207,35 @@ enum ANSI {
         return out
     }
 
+    /// Truncate to at most `width` visible columns like `truncate`, but mark
+    /// a cut with a trailing `…` so the user can tell content was dropped.
+    /// Strings that already fit come back unchanged.
+    static func fit(_ s: String, to width: Int) -> String {
+        if visibleWidth(s) <= width { return s }
+        guard width > 1 else { return truncate(s, to: width) }
+        return truncate(s, to: width - 1) + "…"
+    }
+
+    /// Keep the TAIL of a plain (escape-free) string within `width` columns,
+    /// prefixing `…` when the head was cut — the scrolled-input idiom for a
+    /// caret pinned at the end of a buffer (form fields, filter queries).
+    /// Plain text only: a single backward grapheme walk, so embedded escape
+    /// sequences would be miscounted (and could be split mid-sequence).
+    static func fitTail(_ s: String, to width: Int) -> String {
+        guard width > 0 else { return "" }
+        if visibleWidth(s) <= width { return s }
+        var cols = 0
+        var cut = s.endIndex
+        while cut > s.startIndex {
+            let prev = s.index(before: cut)
+            let w = graphemeWidth(s[prev])
+            if cols + w > width - 1 { break }
+            cols += w
+            cut = prev
+        }
+        return "…" + s[cut...]
+    }
+
     /// Soft-wrap a styled string into rows that fit `width` visible columns.
     /// ANSI SGR sequences are treated as zero-width metadata and are carried
     /// across wrapped rows so foreground/background styling does not leak or

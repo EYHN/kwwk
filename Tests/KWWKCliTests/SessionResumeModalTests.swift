@@ -96,7 +96,7 @@ struct SessionResumeModalTests {
             onSelect: { _ in },
             onCancel: {}
         )
-        let lines = modal.render(maxRows: 40).map(strip)
+        let lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("Resume a session") }))
         let first = lines.first(where: { $0.contains("myproj") })
         #expect(first?.contains("1 msg") == true)
@@ -120,7 +120,7 @@ struct SessionResumeModalTests {
         // confirm on an empty list must not fire the callback.
         modal.confirm()
         for maxRows in 4...40 {
-            let lines = modal.render(maxRows: maxRows)
+            let lines = modal.render(maxRows: maxRows, width: 80)
             #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows)")
             #expect(lines.contains(where: { strip($0).contains("no saved sessions") }))
         }
@@ -141,7 +141,7 @@ struct SessionResumeModalTests {
         // visible — the pre-ModalListCore implementation overflowed by one.
         for maxRows in 4...40 {
             for step in 0..<50 {
-                let lines = modal.render(maxRows: maxRows).map(strip)
+                let lines = modal.render(maxRows: maxRows, width: 80).map(strip)
                 #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows), selection \(step)")
                 #expect(lines.contains(where: { $0.contains("❯ s\(step)  ") }),
                         "selected row s\(step) must be within the window at maxRows \(maxRows)")

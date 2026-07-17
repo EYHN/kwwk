@@ -292,7 +292,11 @@ func runCodingTUIInternal(
         requestRender: { runner.tui.requestRender() },
         // Rows available for the modal above the prompt box. Reserve ~4 for
         // the prompt box + a margin; queried per redraw so it tracks resizes.
-        availableRows: { max(4, runner.terminal.height - 4) }
+        availableRows: { max(4, runner.terminal.height - 4) },
+        // The live zone draws at width − 1 (last column left free so autowrap
+        // never fires); modals must fit the same drawable width — no floor,
+        // or lines would outgrow the frame on very narrow terminals.
+        availableWidth: { runner.terminal.width - 1 }
     )
 
     // Focus target: a thin router in front of the prompt row. While a modal
@@ -636,14 +640,7 @@ func runCodingTUIInternal(
         await withCheckedContinuation { continuation in
             Task { @MainActor in
                 let presentation = AskPresentation(continuation)
-                let askModal = AskModal(
-                    prompt: prompt,
-                    // The live zone renders children one column narrow
-                    // (TUI reserves the last column against pending-wrap);
-                    // wrapping at the full width would get every exactly-full
-                    // row re-wrapped by the frame into a spilled orphan cell.
-                    displayWidth: { max(0, runner.terminal.width - 1) }
-                ) { outcome in
+                let askModal = AskModal(prompt: prompt) { outcome in
                     modal.close()
                     // The cancel teardown below reaches this actor on a Task
                     // hop, so a user confirm can race in after the run was

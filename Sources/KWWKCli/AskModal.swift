@@ -43,14 +43,6 @@ final class AskModal: Modal {
     }
 
     private let prompt: AskPrompt
-    /// Live display width, queried per render (a resize reflow must re-fit).
-    /// Every emitted line is pre-wrapped to it: the frame wraps overlong
-    /// modal lines into extra physical rows and then keeps only the bottom
-    /// of an overflowing modal, so one emitted line MUST be one terminal row
-    /// for the `maxRows` windowing contract to hold. Content is never
-    /// truncated — long labels and descriptions wrap with a hanging indent
-    /// and the window scrolls over physical rows.
-    private let displayWidth: () -> Int
     private let onComplete: @MainActor (AskOutcome) -> Void
     private var completed = false
 
@@ -66,11 +58,9 @@ final class AskModal: Modal {
 
     init(
         prompt: AskPrompt,
-        displayWidth: @escaping () -> Int,
         onComplete: @MainActor @escaping (AskOutcome) -> Void
     ) {
         self.prompt = prompt
-        self.displayWidth = displayWidth
         self.onComplete = onComplete
 
         var entries: [Entry] = prompt.question.options.indices.map { .option($0) }
@@ -235,8 +225,16 @@ final class AskModal: Modal {
         return max(0, min(scroll, max(0, count - windowSize)))
     }
 
-    func render(maxRows: Int) -> [String] {
-        let width = max(24, displayWidth())
+    /// Every emitted line is pre-wrapped to `width`: the frame wraps overlong
+    /// modal lines into extra physical rows and then keeps only the bottom
+    /// of an overflowing modal, so one emitted line MUST be one terminal row
+    /// for the `maxRows` windowing contract to hold. Content is never
+    /// truncated — long labels and descriptions wrap with a hanging indent
+    /// and the window scrolls over physical rows.
+    func render(maxRows: Int, width: Int) -> [String] {
+        // No local floor: lines wider than the host's width would soft-wrap
+        // in the frame and break the one-line-one-row windowing contract.
+        let width = max(1, width)
         // The question is content — wrap it (charged against `maxRows` as
         // chrome) rather than cutting it off.
         var title = "  ? \(prompt.question.question)"
@@ -248,9 +246,12 @@ final class AskModal: Modal {
         if mode == .otherInput {
             let footer = Style.dimmed("  Enter: submit   Esc: back to options")
             let footerLines = ANSI.wrap(footer, width: width)
+            // The zero-width CURSOR_MARKER rides at the caret (end of the
+            // typed text, or before the placeholder) so the hardware cursor
+            // blinks here instead of in the prompt box below the modal.
             let display = buffer.isEmpty
-                ? Style.dimmed("(type your answer)")
-                : Style.prompt(buffer)
+                ? CURSOR_MARKER + Style.dimmed("(type your answer)")
+                : Style.prompt(buffer) + CURSOR_MARKER
             var inputLines = wrapHanging(first: Style.prompt("  ❯ "), content: display, width: width)
             let roomy = maxRows >= titleLines.count + inputLines.count + footerLines.count + 3
             // A very long pasted answer overflows the viewport: keep the
