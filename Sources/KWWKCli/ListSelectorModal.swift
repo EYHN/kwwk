@@ -88,7 +88,17 @@ final class ModalListCore {
     /// chrome lines between the title and the list (e.g. a provider tab bar
     /// or a filter line) and are charged against the `maxRows` budget so
     /// windowing never overflows.
-    func render(title: String, headerLines: [String] = [], maxRows: Int) -> [String] {
+    ///
+    /// Every emitted line is fitted to `width` (tail-truncated with `…`) so
+    /// one row is always one terminal row: list entries deliberately never
+    /// soft-wrap — a wrapped row would break the `maxRows` height contract
+    /// and let the terminal push the title/header chrome off-screen.
+    func render(title: String, headerLines: [String] = [], maxRows: Int, width: Int) -> [String] {
+        renderUnfitted(title: title, headerLines: headerLines, maxRows: maxRows)
+            .map { ANSI.fit($0, to: width) }
+    }
+
+    private func renderUnfitted(title: String, headerLines: [String], maxRows: Int) -> [String] {
         // Cosmetic blank spacers (above the list and above the footer) are
         // dropped on short terminals so the render stays within `maxRows` —
         // title + headers + body + footer is the irreducible minimum.
@@ -215,7 +225,7 @@ final class ListSelectorModal: Modal {
 
     func cancel() { onCancel() }
 
-    func render(maxRows: Int) -> [String] {
-        core.render(title: title, maxRows: maxRows)
+    func render(maxRows: Int, width: Int) -> [String] {
+        core.render(title: title, maxRows: maxRows, width: width)
     }
 }

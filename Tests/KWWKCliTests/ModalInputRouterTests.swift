@@ -26,7 +26,7 @@ private final class RecordingModal: Modal {
         texts.append(data)
         return consumesText
     }
-    func render(maxRows: Int) -> [String] { ["stub modal"] }
+    func render(maxRows: Int, width: Int) -> [String] { ["stub modal"] }
 }
 
 /// Direct coverage of the router the coding TUI installs in front of the

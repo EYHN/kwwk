@@ -96,10 +96,9 @@ private final class OutcomeLog {
 @MainActor
 private func makeModal(
     _ prompt: AskPrompt,
-    width: Int = 80,
     onComplete: @MainActor @escaping (AskOutcome) -> Void
 ) -> AskModal {
-    AskModal(prompt: prompt, displayWidth: { width }, onComplete: onComplete)
+    AskModal(prompt: prompt, onComplete: onComplete)
 }
 
 // MARK: - Argument parsing
@@ -491,7 +490,7 @@ struct AskModalTests {
             multi: false, recommended: 0
         )
         let modal = makeModal(prompt(question), onComplete: log.callback)
-        let lines = modal.render(maxRows: 20)
+        let lines = modal.render(maxRows: 20, width: 80)
         #expect(lines.contains(where: { $0.contains("Which auth?") }))
         #expect(lines.contains(where: { $0.contains("JWT") && $0.contains("(Recommended)") }))
         #expect(lines.contains(where: { $0.contains("↳ Bearer tokens") }))
@@ -514,10 +513,10 @@ struct AskModalTests {
         )
         let width = 60
         let maxRows = 20
-        let modal = makeModal(prompt(question), width: width, onComplete: log.callback)
+        let modal = makeModal(prompt(question), onComplete: log.callback)
 
         for step in 0..<40 {
-            let lines = modal.render(maxRows: maxRows)
+            let lines = modal.render(maxRows: maxRows, width: width)
             #expect(lines.count <= maxRows)
             #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= width })
             // The cursor row must be inside the window at every position.
@@ -536,7 +535,7 @@ struct AskModalTests {
         // a windowed position indicator is shown.
         for _ in 0..<25 { modal.down() } // wrap around and land mid-list again
         modal.down()
-        let deep = modal.render(maxRows: maxRows)
+        let deep = modal.render(maxRows: maxRows, width: width)
         #expect(!deep.contains(where: { $0.contains("选项 01") }))
         #expect(deep.contains(where: { $0.contains("/\(options.count + 2)") }))
     }
@@ -554,10 +553,10 @@ struct AskModalTests {
         )
         let width = 40
         let maxRows = 12
-        let modal = makeModal(prompt(question), width: width, onComplete: log.callback)
+        let modal = makeModal(prompt(question), onComplete: log.callback)
 
         modal.down() // onto Huge
-        let lines = modal.render(maxRows: maxRows)
+        let lines = modal.render(maxRows: maxRows, width: width)
         #expect(lines.count <= maxRows)
         #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= width })
         #expect(lines.contains(where: { $0.contains("Huge") }))
@@ -565,13 +564,13 @@ struct AskModalTests {
 
         // The rest of the list stays reachable past the clamped monster.
         modal.down() // Other row
-        let after = modal.render(maxRows: maxRows)
+        let after = modal.render(maxRows: maxRows, width: width)
         #expect(after.contains(where: { $0.contains(Ask.otherOptionLabel) && $0.contains("❯") }))
 
         // A normal multi-row entry below the window threshold is NOT clamped.
         modal.up() // Huge
         modal.up() // Small
-        let back = modal.render(maxRows: maxRows)
+        let back = modal.render(maxRows: maxRows, width: width)
         let plain = back.map { ANSI.stripEscapes($0) }.joined()
         #expect(plain.contains("short"))
     }
@@ -579,11 +578,11 @@ struct AskModalTests {
     @Test("other-input wraps an overlong buffer and keeps the tail visible")
     func otherInputLongBuffer() {
         let log = OutcomeLog()
-        let modal = makeModal(prompt(singleQuestion()), width: 40, onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion()), onComplete: log.callback)
         modal.up()
         modal.confirm()
         _ = modal.handleText(String(repeating: "a", count: 60) + "TAIL")
-        let lines = modal.render(maxRows: 10)
+        let lines = modal.render(maxRows: 10, width: 40)
         #expect(lines.count <= 10)
         #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= 40 })
         // Wrapped, not truncated: the full buffer reassembles from the rows.
@@ -598,7 +597,7 @@ struct AskModalTests {
         modal.up()
         modal.confirm()
         _ = modal.handleText("custom")
-        let lines = modal.render(maxRows: 10)
+        let lines = modal.render(maxRows: 10, width: 80)
         #expect(lines.contains(where: { $0.contains("custom") }))
         #expect(lines.contains(where: { $0.contains("Enter: submit") }))
     }

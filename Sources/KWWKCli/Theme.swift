@@ -57,6 +57,15 @@ enum Theme {
         }
     }
 
+    /// Selected-chip style: bold near-white text on a dark forest background,
+    /// padded one space each side so the label reads as a solid block (the
+    /// /model provider tab bar's active tab). Adds 2 visible columns.
+    static func chipText(_ s: String) -> String {
+        bg(chipBg) + "\u{1B}[1m" + fg(chipFg) + " " + s + " " + reset
+    }
+    static let chipBg = (r: 34, g: 72, b: 52)     // dark green selected-chip fill
+    static let chipFg = (r: 245, g: 250, b: 246)  // near-white chip label
+
     static func accentText(_ s: String, bold: Bool = true) -> String { paint(s, accent, bold: bold) }
     static func mutedText(_ s: String) -> String { paint(s, muted) }
     static func faintText(_ s: String) -> String { paint(s, faint) }

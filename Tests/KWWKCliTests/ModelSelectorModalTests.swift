@@ -95,7 +95,7 @@ struct ModelSelectorModalTests {
             onSelect: { _ in },
             onCancel: {}
         )
-        let lines = modal.render(maxRows: 40).map(strip)
+        let lines = modal.render(maxRows: 40, width: 80).map(strip)
         // Current (`b`) should get the pre-selection + "· current" tag.
         // Match the row body ("b  b" = id + name detail) so chrome lines
         // that merely contain the letter b (e.g. the filter hint) don't win.
@@ -126,7 +126,7 @@ struct ModelSelectorModalTests {
             // 50 downs on a 50-item list wraps back to selection 0, so each
             // outer iteration starts from the top.
             for step in 0..<50 {
-                let lines = modal.render(maxRows: maxRows).map(strip)
+                let lines = modal.render(maxRows: maxRows, width: 80).map(strip)
                 #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows), selection \(step)")
                 #expect(lines.contains(where: { $0.contains("❯ m\(step)  ") }),
                         "selected row m\(step) must be within the window at maxRows \(maxRows)")
@@ -134,7 +134,7 @@ struct ModelSelectorModalTests {
             }
         }
         // Position indicator shows while windowed.
-        #expect(modal.render(maxRows: 12).contains(where: { $0.contains("/50") }))
+        #expect(modal.render(maxRows: 12, width: 80).contains(where: { $0.contains("/50") }))
     }
 
     // MARK: - Provider tab bar
@@ -169,7 +169,7 @@ struct ModelSelectorModalTests {
             onSelect: { _ in },
             onCancel: {}
         )
-        func body() -> [String] { modal.render(maxRows: 40).map(strip) }
+        func body() -> [String] { modal.render(maxRows: 40, width: 80).map(strip) }
 
         // "All" tab: every row + the tab bar with the filter hint.
         var lines = body()
@@ -238,12 +238,12 @@ struct ModelSelectorModalTests {
             groupLabels: ["Anthropic", "Anthropic"],
             onSelect: { _ in }, onCancel: {}
         )
-        #expect(!plain.render(maxRows: 40).contains(where: { $0.contains("filter provider") }))
-        #expect(!grouped.render(maxRows: 40).contains(where: { $0.contains("filter provider") }))
+        #expect(!plain.render(maxRows: 40, width: 80).contains(where: { $0.contains("filter provider") }))
+        #expect(!grouped.render(maxRows: 40, width: 80).contains(where: { $0.contains("filter provider") }))
         // A single-label grouping still renders its group header, as today —
         // but tab/left/right are no-ops.
         grouped.tab(); grouped.left(); grouped.right()
-        #expect(grouped.render(maxRows: 40).map(strip)
+        #expect(grouped.render(maxRows: 40, width: 80).map(strip)
             .contains(where: { $0.contains("── Anthropic ──") }))
     }
 
@@ -292,7 +292,7 @@ struct ModelSelectorModalTests {
         )
         for maxRows in [4, 6, 9, 12, 40] {
             for _ in 0..<60 {
-                let lines = modal.render(maxRows: maxRows)
+                let lines = modal.render(maxRows: maxRows, width: 80)
                 #expect(lines.count <= maxRows, "overflow at maxRows \(maxRows)")
                 modal.down()
             }
@@ -314,7 +314,7 @@ struct ModelSelectorModalTests {
             onCancel: {}
         )
         #expect(modal.handleText("SON") == true)
-        let lines = modal.render(maxRows: 40).map(strip)
+        let lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("sonnet-4") }))
         #expect(!lines.contains(where: { $0.contains("opus-4") }))
         #expect(lines.contains(where: { $0.contains("filter: SON") }))
@@ -335,7 +335,7 @@ struct ModelSelectorModalTests {
             onCancel: {}
         )
         _ = modal.handleText("zzz")
-        var lines = modal.render(maxRows: 40).map(strip)
+        var lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("no models match \"zzz\"") }))
         modal.confirm()
         #expect(picked.value == nil)
@@ -344,7 +344,7 @@ struct ModelSelectorModalTests {
         _ = modal.handleText("\u{7F}")
         _ = modal.handleText("\u{7F}")
         _ = modal.handleText("\u{7F}")
-        lines = modal.render(maxRows: 40).map(strip)
+        lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("opus-4") }))
         #expect(lines.contains(where: { $0.contains("sonnet-4") }))
     }
@@ -363,7 +363,7 @@ struct ModelSelectorModalTests {
         _ = modal.handleText("opus")
         modal.cancel()
         #expect(cancelled.value == false)
-        let lines = modal.render(maxRows: 40).map(strip)
+        let lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("sonnet-4") })) // filter cleared
         modal.cancel()
         #expect(cancelled.value == true)
@@ -384,12 +384,12 @@ struct ModelSelectorModalTests {
         )
         _ = modal.handleText("sonnet")
         modal.tab() // → Anthropic
-        var lines = modal.render(maxRows: 40).map(strip)
+        var lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("sonnet-4") }))
         #expect(!lines.contains(where: { $0.contains("opus-4") }))
         #expect(lines.filter { $0.contains("sonnet-4") }.count == 1)
         modal.tab() // → OpenAI: its own sonnet-4 copy
-        lines = modal.render(maxRows: 40).map(strip)
+        lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("sonnet-4") }))
         #expect(!lines.contains(where: { $0.contains("gpt-5") }))
     }
@@ -407,7 +407,7 @@ struct ModelSelectorModalTests {
         )
         #expect(modal.handleText("\u{1B}[200~son\u{1B}[201~") == true)
         #expect(modal.handleText("\u{1B}[1;5C") == true) // swallowed, not typed
-        let lines = modal.render(maxRows: 40).map(strip)
+        let lines = modal.render(maxRows: 40, width: 80).map(strip)
         #expect(lines.contains(where: { $0.contains("filter: son") }))
         #expect(lines.contains(where: { $0.contains("sonnet-4") }))
         #expect(!lines.contains(where: { $0.contains("opus-4") }))
@@ -428,7 +428,7 @@ struct ModelSelectorModalTests {
         // Safe to call navigation/confirm on an empty list.
         modal.up(); modal.down(); modal.confirm()
         #expect(picked.value == nil)
-        let lines = modal.render(maxRows: 40)
+        let lines = modal.render(maxRows: 40, width: 80)
         #expect(lines.contains(where: { $0.contains("no models") }))
     }
 }

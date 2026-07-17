@@ -191,37 +191,93 @@ final class ModelSelectorModal: Modal {
         return true
     }
 
-    func render(maxRows: Int) -> [String] {
-        var headers = [tabBarLine(), filterLine(maxRows: maxRows)].compactMap { $0 }
+    func render(maxRows: Int, width: Int) -> [String] {
+        var headers = [tabBarLine(width: width), filterLine(width: width)].compactMap { $0 }
         // Irreducible chrome is title + footer + one body row; when the
-        // header lines would push the render past maxRows, drop the tab bar
-        // first — an active filter query must stay visible.
+        // header lines would push the render past maxRows, drop one. With a
+        // typed query the filter line must survive (it shows the query and
+        // hosts the cursor), so the tab bar goes; with no query the filter
+        // line is just a placeholder, and the tab bar — the only indicator
+        // of the active provider filter — is the one worth keeping.
         while headers.count > 1, maxRows < 3 + headers.count {
-            headers.removeFirst()
+            if query.isEmpty { headers.removeLast() } else { headers.removeFirst() }
         }
-        return core.render(title: title, headerLines: headers, maxRows: maxRows)
+        return core.render(title: title, headerLines: headers, maxRows: maxRows, width: width)
     }
 
-    /// One-line filter status: a dim typing hint while the query is empty
-    /// (dropped on short terminals — it's cosmetic), the highlighted query
-    /// with a match count once the user has typed.
-    private func filterLine(maxRows: Int) -> String? {
+    /// One-line filter status. Typed input lands here, so the line always
+    /// renders and carries the zero-width `CURSOR_MARKER` right after the
+    /// query — the TUI parks the hardware cursor on the marker, putting the
+    /// blinking cursor where the typing happens instead of the prompt box.
+    /// While the query is empty the marker sits before a dim placeholder
+    /// hint; a query too long for the row shows its tail (the cursor end).
+    private func filterLine(width: Int) -> String {
+        let label = Style.dimmed("filter: ")
         guard !query.isEmpty else {
-            guard maxRows >= 9 else { return nil }
-            return "  " + Style.dimmed("type to filter by model id")
+            return "  " + label + CURSOR_MARKER + Style.dimmed("type a model id")
         }
-        return "  " + Style.dimmed("filter: ") + Theme.accentText(query, bold: true)
-            + Style.dimmed("   \(visible.count) match\(visible.count == 1 ? "" : "es")   Esc: clear")
+        // The query owns the row: the dim match-count suffix renders only
+        // while the query still gets a comfortable share of the width —
+        // otherwise a truncated suffix fragment would crowd out the very
+        // text the user is typing. An overlong query shows its TAIL (where
+        // the cursor is).
+        let suffixText = "   \(visible.count) match\(visible.count == 1 ? "" : "es")   Esc: clear"
+        let labelCols = ANSI.visibleWidth("  ") + ANSI.visibleWidth(label)
+        var suffix = Style.dimmed(suffixText)
+        var budget = width - labelCols - ANSI.visibleWidth(suffixText)
+        if budget < 16 {
+            suffix = ""
+            budget = width - labelCols
+        }
+        // No floor: a floored budget on a sub-14-column terminal would push
+        // the row past `width` and the host's fit backstop would drop the
+        // cursor marker along with the overflow.
+        let shown = ANSI.fitTail(query, to: max(0, budget))
+        return "  " + label + Theme.accentText(shown, bold: true) + CURSOR_MARKER + suffix
     }
 
     /// One-line provider tab bar (nil when a single provider makes it noise).
-    /// Selected tab in bold accent, the rest dim, plus a dim key hint.
-    private func tabBarLine() -> String? {
+    /// Selected tab in bold accent, the rest dim, plus a dim key hint. Fitted
+    /// to `width` in stages: full bar + hint → bar without the hint → a
+    /// window of tabs that always contains the active one, with `…` marking
+    /// hidden neighbors on either side.
+    private func tabBarLine(width: Int) -> String? {
         guard tabs.count > 1 else { return nil }
-        let rendered = tabs.enumerated().map { i, label in
-            i == activeTab ? Theme.accentText(label, bold: true) : Style.dimmed(label)
+        // Active tab as a white-on-dark chip so the current provider filter
+        // pops; the chip pads one space each side (+2 columns, mirrored in
+        // `cols` below).
+        func paint(_ i: Int) -> String {
+            i == activeTab ? Theme.chipText(tabs[i]) : Style.dimmed(tabs[i])
         }
-        return "  " + rendered.joined(separator: Style.dimmed(" · "))
-            + "   " + Style.dimmed("tab / ←→: filter provider")
+        let fullBar = "  " + tabs.indices.map(paint).joined(separator: Style.dimmed(" · "))
+        let withHint = fullBar + "   " + Style.dimmed("tab / ←→: filter provider")
+        if ANSI.visibleWidth(withHint) <= width { return withHint }
+        if ANSI.visibleWidth(fullBar) <= width { return fullBar }
+
+        // Window the tabs around the active one: grow right first (reading
+        // order), then left, stopping when the next tab no longer fits.
+        let sep = " · "
+        func cols(_ range: ClosedRange<Int>) -> Int {
+            var w = 2 // leading indent
+            for i in range {
+                if i > range.lowerBound { w += sep.count }
+                w += ANSI.visibleWidth(tabs[i]) + (i == activeTab ? 2 : 0)
+            }
+            // A hidden-neighbor "…" joins like a tab: 1 col + the separator.
+            if range.lowerBound > 0 { w += 1 + sep.count }
+            if range.upperBound < tabs.count - 1 { w += 1 + sep.count }
+            return w
+        }
+        var lo = activeTab, hi = activeTab
+        while true {
+            if hi + 1 < tabs.count, cols(lo...(hi + 1)) <= width { hi += 1; continue }
+            if lo > 0, cols((lo - 1)...hi) <= width { lo -= 1; continue }
+            break
+        }
+        var parts: [String] = []
+        if lo > 0 { parts.append(Style.dimmed("…")) }
+        parts.append(contentsOf: (lo...hi).map(paint))
+        if hi < tabs.count - 1 { parts.append(Style.dimmed("…")) }
+        return "  " + parts.joined(separator: Style.dimmed(sep))
     }
 }

@@ -25,7 +25,11 @@ protocol Modal: AnyObject {
     /// `maxRows` is the height budget (terminal rows available above the
     /// prompt box); modals with long lists must window their content to fit
     /// and keep the selection visible rather than overflow the viewport.
-    func render(maxRows: Int) -> [String]
+    /// `width` is the display width in visible columns: every emitted line
+    /// MUST fit it (truncate or manually wrap). The frame keeps only the
+    /// BOTTOM of an overflowing modal, so a line the terminal would soft-wrap
+    /// breaks the `maxRows` contract and pushes the title off-screen.
+    func render(maxRows: Int, width: Int) -> [String]
 }
 
 extension Modal {
@@ -52,17 +56,22 @@ final class ModalHost {
     /// Height budget (terminal rows available for the modal above the prompt
     /// box), queried fresh on every redraw so windowing tracks resizes.
     private let availableRows: () -> Int
+    /// Display width in visible columns (the live zone's drawable width),
+    /// queried fresh on every redraw so truncation tracks resizes.
+    private let availableWidth: () -> Int
 
     init(
         renderModalLines: @escaping ([String]?) -> Void,
         restoreTranscript: @escaping () -> Void,
         requestRender: @escaping () -> Void,
-        availableRows: @escaping () -> Int = { 24 }
+        availableRows: @escaping () -> Int = { 24 },
+        availableWidth: @escaping () -> Int = { 80 }
     ) {
         self.renderModalLines = renderModalLines
         self.restoreTranscript = restoreTranscript
         self.requestRender = requestRender
         self.availableRows = availableRows
+        self.availableWidth = availableWidth
     }
 
     func open(_ modal: Modal) {
@@ -121,7 +130,16 @@ final class ModalHost {
 
     private func redraw() {
         guard let active else { return }
-        renderModalLines(active.render(maxRows: max(4, availableRows())))
+        // The width handed to the modal must never exceed the drawable width
+        // (no artificial floor): a floor above the real width would defeat
+        // the modal-side truncation on exactly the narrow terminals the
+        // contract exists for. The trailing `fit` is a backstop that enforces
+        // the contract once at the host — a no-op for compliant modals, and
+        // it keeps a stray overlong line from soft-wrapping and pushing the
+        // modal's title off-screen.
+        let width = max(1, availableWidth())
+        let lines = active.render(maxRows: max(4, availableRows()), width: width)
+        renderModalLines(lines.map { ANSI.fit($0, to: width) })
         requestRender()
     }
 }
