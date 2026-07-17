@@ -203,6 +203,46 @@ struct ModalWidthCursorTests {
         #expect(plain.contains("…"))
     }
 
+    @Test("degenerate widths never compose rows wider than the budget")
+    func degenerateWidthsKeepMarker() {
+        // Input rows are prefix (4 cols) + value; a floored value budget used
+        // to overflow `width` below ~8 columns, and the host's fit backstop
+        // then cut the trailing cursor marker. Rows must fit as long as the
+        // prefix itself fits, keeping the marker alive.
+        let form = FormModal(
+            title: "t",
+            fields: [APIKeyFormField(key: "k", label: "Key")],
+            onSubmit: { _ in },
+            onCancel: {}
+        )
+        _ = form.handleText("supercalifragilistic")
+        let selector = ModelSelectorModal(
+            title: "t",
+            models: [model("alpha"), model("beta")],
+            currentModelId: "alpha",
+            onSelect: { _ in },
+            onCancel: {}
+        )
+        _ = selector.handleText("alphabetically-long-query")
+        // Each surface is checked from the width its fixed prefix needs
+        // (4-col form prefix; 10-col "  filter: " label) — below that even
+        // the chrome cannot fit and the host backstop takes over.
+        func assertMarkerRowsFit(_ lines: [String], width: Int) {
+            for line in lines where line.contains(CURSOR_MARKER) {
+                #expect(
+                    ANSI.visibleWidth(line) <= width,
+                    "marker row wider than width \(width): \(ANSI.stripEscapes(line))"
+                )
+            }
+        }
+        for width in 4...14 {
+            assertMarkerRowsFit(form.render(maxRows: 24, width: width), width: width)
+        }
+        for width in 10...14 {
+            assertMarkerRowsFit(selector.render(maxRows: 24, width: width), width: width)
+        }
+    }
+
     @Test("fitTail keeps the tail within the width, wide-char aware")
     func fitTailBasics() {
         #expect(ANSI.fitTail("short", to: 10) == "short")

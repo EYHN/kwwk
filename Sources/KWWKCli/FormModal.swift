@@ -183,8 +183,13 @@ final class FormModal: Modal {
             // The focused row carries the zero-width CURSOR_MARKER at the
             // caret so the hardware cursor blinks in the form, not in the
             // prompt box below the modal.
+            // No floor on the value budget: flooring above the space that
+            // actually remains would compose a row wider than `width`, and
+            // the host's fit backstop would then cut the trailing cursor
+            // marker. On degenerate widths the value shrinks to nothing and
+            // the marker (zero-width, right after the prefix) survives.
             let prefix = active ? Style.prompt("  ❯ ") : "    "
-            let avail = max(4, width - 4)
+            let avail = max(0, width - 4)
             let display: String
             if buf.isEmpty {
                 let placeholder = field.placeholder ?? ""

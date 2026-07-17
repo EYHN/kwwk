@@ -229,7 +229,10 @@ final class ModelSelectorModal: Modal {
             suffix = ""
             budget = width - labelCols
         }
-        let shown = ANSI.fitTail(query, to: max(4, budget))
+        // No floor: a floored budget on a sub-14-column terminal would push
+        // the row past `width` and the host's fit backstop would drop the
+        // cursor marker along with the overflow.
+        let shown = ANSI.fitTail(query, to: max(0, budget))
         return "  " + label + Theme.accentText(shown, bold: true) + CURSOR_MARKER + suffix
     }
 
