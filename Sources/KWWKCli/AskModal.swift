@@ -43,6 +43,12 @@ final class AskModal: Modal {
     }
 
     private let prompt: AskPrompt
+    /// Live display width, queried per render (a resize reflow must re-fit).
+    /// Every emitted line is clamped to it: the frame wraps overlong modal
+    /// lines into extra physical rows and then keeps only the bottom of an
+    /// overflowing modal, so one logical line MUST be one terminal row for
+    /// the `maxRows` windowing contract to hold.
+    private let displayWidth: () -> Int
     private let onComplete: @MainActor (AskOutcome) -> Void
     private var completed = false
 
@@ -56,8 +62,13 @@ final class AskModal: Modal {
     /// `ModalListCore` behavior).
     private var scroll = 0
 
-    init(prompt: AskPrompt, onComplete: @MainActor @escaping (AskOutcome) -> Void) {
+    init(
+        prompt: AskPrompt,
+        displayWidth: @escaping () -> Int,
+        onComplete: @MainActor @escaping (AskOutcome) -> Void
+    ) {
         self.prompt = prompt
+        self.displayWidth = displayWidth
         self.onComplete = onComplete
 
         var entries: [Entry] = prompt.question.options.indices.map { .option($0) }
@@ -198,18 +209,36 @@ final class AskModal: Modal {
     }
 
     func render(maxRows: Int) -> [String] {
+        let width = max(24, displayWidth())
+        // The question is content — wrap it (charged against `maxRows` as
+        // chrome) rather than cutting it off. Everything below is one row
+        // per line by construction: option/description rows are truncated to
+        // the width, so the body window count is exact.
         var title = "  ? \(prompt.question.question)"
         if let progress = prompt.progressText {
             title += " " + Style.dimmed("(\(progress))")
         }
+        let titleLines = ANSI.wrap(Style.header(title), width: width)
 
         if mode == .otherInput {
             var out: [String] = []
-            let roomy = maxRows >= 7
+            let roomy = maxRows >= titleLines.count + 6
             if roomy { out.append("") }
-            out.append(Style.header(title))
+            out.append(contentsOf: titleLines)
             if roomy { out.append("") }
-            let display = buffer.isEmpty ? Style.dimmed("(type your answer)") : Style.prompt(buffer)
+            // Show the tail of an overlong buffer — that's where typing
+            // happens.
+            let inputBudget = width - 6
+            var visibleBuffer = buffer
+            if ANSI.visibleWidth(visibleBuffer) > inputBudget {
+                while ANSI.visibleWidth(visibleBuffer) > inputBudget - 1 {
+                    visibleBuffer.removeFirst()
+                }
+                visibleBuffer = "…" + visibleBuffer
+            }
+            let display = buffer.isEmpty
+                ? Style.dimmed("(type your answer)")
+                : Style.prompt(visibleBuffer)
             out.append(Style.prompt("  ❯ ") + display)
             if roomy { out.append("") }
             out.append(Style.dimmed("  Enter: submit   Esc: back to options"))
@@ -239,42 +268,51 @@ final class AskModal: Modal {
                 if i == prompt.question.recommended {
                     label += Style.dimmed(Ask.recommendedSuffix)
                 }
-                lines.append("\(prefix)\(marker) \(label)")
+                lines.append(ANSI.truncate("\(prefix)\(marker) \(label)", to: width))
                 if let description = option.description {
-                    lines.append(Theme.faintText("        ↳ \(description)"))
+                    lines.append(ANSI.truncate(Theme.faintText("        ↳ \(description)"), to: width))
                 }
             case .done:
                 let count = checked.count
                 let base = isCursor ? Style.prompt("Done") : "Done"
                 let suffix = count > 0 ? Style.dimmed(" (\(count) selected)") : ""
-                lines.append(prefix + "  " + base + suffix)
+                lines.append(ANSI.truncate(prefix + "  " + base + suffix, to: width))
             case .other:
                 let label = Ask.otherOptionLabel
-                lines.append(prefix + "  " + (isCursor ? Style.prompt(label) : Style.dimmed(label)))
+                lines.append(ANSI.truncate(
+                    prefix + "  " + (isCursor ? Style.prompt(label) : Style.dimmed(label)),
+                    to: width
+                ))
             }
         }
 
         var hints = ["↑/↓: move", prompt.question.multi ? "Enter: toggle" : "Enter: select"]
         if prompt.allowBack || prompt.allowForward { hints.append("←/→: question") }
         hints.append("Esc: cancel")
-        let footer = Style.dimmed("  " + hints.joined(separator: "   "))
 
-        let roomy = maxRows >= lines.count + 5
-        var out: [String] = []
-        if roomy { out.append("") }
-        out.append(Style.header(title))
-        if roomy { out.append("") }
-
-        let chrome = (roomy ? 5 : 2)
+        // Cosmetic blank spacers are dropped on short terminals; chrome is
+        // the wrapped title + footer (+ 3 spacers when roomy), everything
+        // else is the windowed body.
+        let roomy = maxRows >= lines.count + titleLines.count + 4
+        let chrome = titleLines.count + 1 + (roomy ? 3 : 0)
         let bodyBudget = max(1, maxRows - chrome)
         scroll = edgeScrollOffset(
             selection: selectedLine, count: lines.count,
             windowSize: bodyBudget, previous: scroll
         )
-        out.append(contentsOf: lines[scroll ..< min(lines.count, scroll + bodyBudget)])
+        let windowed = lines.count > bodyBudget
 
+        var out: [String] = []
         if roomy { out.append("") }
-        out.append(footer)
+        out.append(contentsOf: titleLines)
+        if roomy { out.append("") }
+        out.append(contentsOf: lines[scroll ..< min(lines.count, scroll + bodyBudget)])
+        if roomy { out.append("") }
+        let position = windowed ? "\(selectedIndex + 1)/\(entries.count)   " : ""
+        out.append(ANSI.truncate(
+            Style.dimmed("  " + position + hints.joined(separator: "   ")),
+            to: width
+        ))
         return out
     }
 }

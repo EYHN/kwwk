@@ -636,7 +636,10 @@ func runCodingTUIInternal(
         await withCheckedContinuation { continuation in
             Task { @MainActor in
                 let presentation = AskPresentation(continuation)
-                let askModal = AskModal(prompt: prompt) { outcome in
+                let askModal = AskModal(
+                    prompt: prompt,
+                    displayWidth: { runner.terminal.width }
+                ) { outcome in
                     modal.close()
                     presentation.resume(outcome)
                 }

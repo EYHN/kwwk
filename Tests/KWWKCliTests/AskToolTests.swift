@@ -93,6 +93,15 @@ private final class OutcomeLog {
     func callback(_ outcome: AskOutcome) { outcomes.append(outcome) }
 }
 
+@MainActor
+private func makeModal(
+    _ prompt: AskPrompt,
+    width: Int = 80,
+    onComplete: @MainActor @escaping (AskOutcome) -> Void
+) -> AskModal {
+    AskModal(prompt: prompt, displayWidth: { width }, onComplete: onComplete)
+}
+
 // MARK: - Argument parsing
 
 @Suite("Ask argument parsing")
@@ -272,7 +281,7 @@ struct AskModalTests {
     @Test("enter on an option answers a single-select question")
     func singleSelect() {
         let log = OutcomeLog()
-        let modal = AskModal(prompt: prompt(singleQuestion()), onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion()), onComplete: log.callback)
         modal.down()
         modal.confirm()
         #expect(log.outcomes == [.answered(selected: ["B"], customInput: nil)])
@@ -281,7 +290,7 @@ struct AskModalTests {
     @Test("recommended option is the initial cursor position")
     func recommendedInitial() {
         let log = OutcomeLog()
-        let modal = AskModal(prompt: prompt(singleQuestion(recommended: 1)), onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion(recommended: 1)), onComplete: log.callback)
         modal.confirm()
         #expect(log.outcomes == [.answered(selected: ["B"], customInput: nil)])
     }
@@ -289,7 +298,7 @@ struct AskModalTests {
     @Test("multi: enter toggles, Done submits in option order")
     func multiToggleAndDone() {
         let log = OutcomeLog()
-        let modal = AskModal(prompt: prompt(singleQuestion(multi: true)), onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion(multi: true)), onComplete: log.callback)
         // Toggle B first, then A — submit order must follow option order.
         modal.down()
         modal.confirm()
@@ -307,7 +316,7 @@ struct AskModalTests {
     @Test("other: typed text submits as custom input; esc returns to the list")
     func otherInput() {
         let log = OutcomeLog()
-        let modal = AskModal(prompt: prompt(singleQuestion()), onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion()), onComplete: log.callback)
         modal.up() // wraps to the Other row (last entry)
         modal.confirm()
         #expect(modal.handleText("hi there"))
@@ -319,7 +328,7 @@ struct AskModalTests {
     @Test("esc in other-input backs out; esc in the list cancels")
     func escBehavior() {
         let log = OutcomeLog()
-        let modal = AskModal(prompt: prompt(singleQuestion()), onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion()), onComplete: log.callback)
         modal.up()
         modal.confirm() // into other-input
         modal.cancel() // back to the list
@@ -332,15 +341,15 @@ struct AskModalTests {
     @Test("left/right only navigate when the wizard allows them")
     func wizardNavGating() {
         let single = OutcomeLog()
-        let singleModal = AskModal(prompt: prompt(singleQuestion()), onComplete: single.callback)
+        let singleModal = makeModal(prompt(singleQuestion()), onComplete: single.callback)
         singleModal.left()
         singleModal.right()
         #expect(single.outcomes.isEmpty)
 
         let wizard = OutcomeLog()
-        let wizardModal = AskModal(
-            prompt: prompt(singleQuestion(), allowBack: true, allowForward: true,
-                           previousSelection: ["A"]),
+        let wizardModal = makeModal(
+            prompt(singleQuestion(), allowBack: true, allowForward: true,
+                   previousSelection: ["A"]),
             onComplete: wizard.callback
         )
         wizardModal.left()
@@ -354,8 +363,8 @@ struct AskModalTests {
     @Test("wizard back carries the live multi selections")
     func backCarriesMultiState() {
         let log = OutcomeLog()
-        let modal = AskModal(
-            prompt: prompt(singleQuestion(multi: true), allowBack: true, allowForward: true),
+        let modal = makeModal(
+            prompt(singleQuestion(multi: true), allowBack: true, allowForward: true),
             onComplete: log.callback
         )
         modal.confirm() // toggle A
@@ -366,9 +375,9 @@ struct AskModalTests {
     @Test("forward keeps the previous answer")
     func forwardKeepsPrevious() {
         let log = OutcomeLog()
-        let modal = AskModal(
-            prompt: prompt(singleQuestion(), allowBack: false, allowForward: true,
-                           previousSelection: ["B"]),
+        let modal = makeModal(
+            prompt(singleQuestion(), allowBack: false, allowForward: true,
+                   previousSelection: ["B"]),
             onComplete: log.callback
         )
         modal.right()
@@ -386,7 +395,7 @@ struct AskModalTests {
             ],
             multi: false, recommended: 0
         )
-        let modal = AskModal(prompt: prompt(question), onComplete: log.callback)
+        let modal = makeModal(prompt(question), onComplete: log.callback)
         let lines = modal.render(maxRows: 20)
         #expect(lines.contains(where: { $0.contains("Which auth?") }))
         #expect(lines.contains(where: { $0.contains("JWT") && $0.contains("(Recommended)") }))
@@ -395,10 +404,57 @@ struct AskModalTests {
         #expect(lines.contains(where: { $0.contains("Esc: cancel") }))
     }
 
+    @Test("long lists window within maxRows, clamp to width, and follow the cursor")
+    func longListWindows() {
+        let log = OutcomeLog()
+        let options = (1...30).map { i in
+            AskOption(
+                label: "选项 \(String(format: "%02d", i)): 一个非常非常长的标题用来测试列表较长时是否有滚动体验",
+                description: "这是第 \(i) 个超长选项说明：堆叠大量内容以测试 ask 工具接近极限时的表现。"
+            )
+        }
+        let question = AskQuestion(
+            id: "q", question: "超长压力测试：如果有超级多选项，列表应当在窗口内滚动而不是撑爆终端?",
+            options: options, multi: true, recommended: 7
+        )
+        let width = 60
+        let maxRows = 20
+        let modal = makeModal(prompt(question), width: width, onComplete: log.callback)
+
+        for step in 0..<40 {
+            let lines = modal.render(maxRows: maxRows)
+            #expect(lines.count <= maxRows)
+            #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= width })
+            // The cursor row must be inside the window at every position.
+            #expect(lines.contains(where: { $0.contains("❯") }), "cursor missing at step \(step)")
+            modal.down()
+        }
+        // Deep in the list the window has scrolled: the first option is gone,
+        // a windowed position indicator is shown.
+        for _ in 0..<25 { modal.down() } // wrap around and land mid-list again
+        modal.down()
+        let deep = modal.render(maxRows: maxRows)
+        #expect(!deep.contains(where: { $0.contains("选项 01") }))
+        #expect(deep.contains(where: { $0.contains("/\(options.count + 2)") }))
+    }
+
+    @Test("other-input shows the tail of an overlong buffer")
+    func otherInputLongBuffer() {
+        let log = OutcomeLog()
+        let modal = makeModal(prompt(singleQuestion()), width: 40, onComplete: log.callback)
+        modal.up()
+        modal.confirm()
+        _ = modal.handleText(String(repeating: "a", count: 60) + "TAIL")
+        let lines = modal.render(maxRows: 10)
+        #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= 40 })
+        #expect(lines.contains(where: { $0.contains("TAIL") }))
+        #expect(lines.contains(where: { $0.contains("…") }))
+    }
+
     @Test("other-input render shows the buffer and its own hints")
     func renderOtherInput() {
         let log = OutcomeLog()
-        let modal = AskModal(prompt: prompt(singleQuestion()), onComplete: log.callback)
+        let modal = makeModal(prompt(singleQuestion()), onComplete: log.callback)
         modal.up()
         modal.confirm()
         _ = modal.handleText("custom")
