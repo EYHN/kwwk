@@ -427,6 +427,14 @@ struct AskModalTests {
             #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= width })
             // The cursor row must be inside the window at every position.
             #expect(lines.contains(where: { $0.contains("❯") }), "cursor missing at step \(step)")
+            // The selected entry's label must be FULLY visible (wrapped, not
+            // truncated): its plain text reassembles from the window rows.
+            if case .option(let optIdx) = modal.entries[modal.selectedIndex] {
+                let plain = lines.map { ANSI.stripEscapes($0).replacingOccurrences(of: " ", with: "") }
+                    .joined()
+                let label = options[optIdx].label.replacingOccurrences(of: " ", with: "")
+                #expect(plain.contains(label), "label cut off at step \(step)")
+            }
             modal.down()
         }
         // Deep in the list the window has scrolled: the first option is gone,
@@ -438,7 +446,42 @@ struct AskModalTests {
         #expect(deep.contains(where: { $0.contains("/\(options.count + 2)") }))
     }
 
-    @Test("other-input shows the tail of an overlong buffer")
+    @Test("only an entry taller than the window is clamped, with a marker")
+    func overTallEntryClamps() {
+        let log = OutcomeLog()
+        let question = AskQuestion(
+            id: "q", question: "Q?",
+            options: [
+                AskOption(label: "Small", description: "short"),
+                AskOption(label: "Huge", description: String(repeating: "很长的描述内容", count: 80)),
+            ],
+            multi: false, recommended: nil
+        )
+        let width = 40
+        let maxRows = 12
+        let modal = makeModal(prompt(question), width: width, onComplete: log.callback)
+
+        modal.down() // onto Huge
+        let lines = modal.render(maxRows: maxRows)
+        #expect(lines.count <= maxRows)
+        #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= width })
+        #expect(lines.contains(where: { $0.contains("Huge") }))
+        #expect(lines.contains(where: { $0.contains("more lines") }))
+
+        // The rest of the list stays reachable past the clamped monster.
+        modal.down() // Other row
+        let after = modal.render(maxRows: maxRows)
+        #expect(after.contains(where: { $0.contains(Ask.otherOptionLabel) && $0.contains("❯") }))
+
+        // A normal multi-row entry below the window threshold is NOT clamped.
+        modal.up() // Huge
+        modal.up() // Small
+        let back = modal.render(maxRows: maxRows)
+        let plain = back.map { ANSI.stripEscapes($0) }.joined()
+        #expect(plain.contains("short"))
+    }
+
+    @Test("other-input wraps an overlong buffer and keeps the tail visible")
     func otherInputLongBuffer() {
         let log = OutcomeLog()
         let modal = makeModal(prompt(singleQuestion()), width: 40, onComplete: log.callback)
@@ -446,9 +489,11 @@ struct AskModalTests {
         modal.confirm()
         _ = modal.handleText(String(repeating: "a", count: 60) + "TAIL")
         let lines = modal.render(maxRows: 10)
+        #expect(lines.count <= 10)
         #expect(lines.allSatisfy { ANSI.visibleWidth($0) <= 40 })
-        #expect(lines.contains(where: { $0.contains("TAIL") }))
-        #expect(lines.contains(where: { $0.contains("…") }))
+        // Wrapped, not truncated: the full buffer reassembles from the rows.
+        let plain = lines.map { ANSI.stripEscapes($0).replacingOccurrences(of: " ", with: "") }.joined()
+        #expect(plain.contains(String(repeating: "a", count: 60) + "TAIL"))
     }
 
     @Test("other-input render shows the buffer and its own hints")

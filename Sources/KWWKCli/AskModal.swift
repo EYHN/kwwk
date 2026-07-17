@@ -44,10 +44,12 @@ final class AskModal: Modal {
 
     private let prompt: AskPrompt
     /// Live display width, queried per render (a resize reflow must re-fit).
-    /// Every emitted line is clamped to it: the frame wraps overlong modal
-    /// lines into extra physical rows and then keeps only the bottom of an
-    /// overflowing modal, so one logical line MUST be one terminal row for
-    /// the `maxRows` windowing contract to hold.
+    /// Every emitted line is pre-wrapped to it: the frame wraps overlong
+    /// modal lines into extra physical rows and then keeps only the bottom
+    /// of an overflowing modal, so one emitted line MUST be one terminal row
+    /// for the `maxRows` windowing contract to hold. Content is never
+    /// truncated — long labels and descriptions wrap with a hanging indent
+    /// and the window scrolls over physical rows.
     private let displayWidth: () -> Int
     private let onComplete: @MainActor (AskOutcome) -> Void
     private var completed = false
@@ -208,12 +210,32 @@ final class AskModal: Modal {
         return true
     }
 
+    /// Wrap a styled line into physical rows: the first row carries `first`
+    /// (prefix + marker), continuations get a hanging indent of the same
+    /// visible width so wrapped content stays aligned under its own column.
+    private func wrapHanging(first: String, content: String, width: Int) -> [String] {
+        let indentWidth = ANSI.visibleWidth(first)
+        let pieces = ANSI.wrap(content, width: max(8, width - indentWidth))
+        let indent = String(repeating: " ", count: indentWidth)
+        return [first + (pieces.first ?? "")] + pieces.dropFirst().map { indent + $0 }
+    }
+
+    /// Edge-scroll for a windowed list of physical rows where the selection
+    /// spans a row RANGE (a wrapped entry): keep the whole entry visible,
+    /// preferring its first row when it is taller than the window.
+    private func rangeScrollOffset(
+        start: Int, end: Int, count: Int, windowSize: Int, previous: Int
+    ) -> Int {
+        var scroll = previous
+        if end >= scroll + windowSize { scroll = end - windowSize + 1 }
+        if start < scroll { scroll = start }
+        return max(0, min(scroll, max(0, count - windowSize)))
+    }
+
     func render(maxRows: Int) -> [String] {
         let width = max(24, displayWidth())
         // The question is content — wrap it (charged against `maxRows` as
-        // chrome) rather than cutting it off. Everything below is one row
-        // per line by construction: option/description rows are truncated to
-        // the width, so the body window count is exact.
+        // chrome) rather than cutting it off.
         var title = "  ? \(prompt.question.question)"
         if let progress = prompt.progressText {
             title += " " + Style.dimmed("(\(progress))")
@@ -221,37 +243,38 @@ final class AskModal: Modal {
         let titleLines = ANSI.wrap(Style.header(title), width: width)
 
         if mode == .otherInput {
+            let footer = Style.dimmed("  Enter: submit   Esc: back to options")
+            let footerLines = ANSI.wrap(footer, width: width)
+            let display = buffer.isEmpty
+                ? Style.dimmed("(type your answer)")
+                : Style.prompt(buffer)
+            var inputLines = wrapHanging(first: Style.prompt("  ❯ "), content: display, width: width)
+            let roomy = maxRows >= titleLines.count + inputLines.count + footerLines.count + 3
+            // A very long pasted answer overflows the viewport: keep the
+            // TAIL rows — that's where the cursor is.
+            let inputBudget = max(1, maxRows - titleLines.count - footerLines.count - (roomy ? 3 : 0))
+            if inputLines.count > inputBudget {
+                inputLines = Array(inputLines.suffix(inputBudget))
+            }
             var out: [String] = []
-            let roomy = maxRows >= titleLines.count + 6
             if roomy { out.append("") }
             out.append(contentsOf: titleLines)
             if roomy { out.append("") }
-            // Show the tail of an overlong buffer — that's where typing
-            // happens.
-            let inputBudget = width - 6
-            var visibleBuffer = buffer
-            if ANSI.visibleWidth(visibleBuffer) > inputBudget {
-                while ANSI.visibleWidth(visibleBuffer) > inputBudget - 1 {
-                    visibleBuffer.removeFirst()
-                }
-                visibleBuffer = "…" + visibleBuffer
-            }
-            let display = buffer.isEmpty
-                ? Style.dimmed("(type your answer)")
-                : Style.prompt(visibleBuffer)
-            out.append(Style.prompt("  ❯ ") + display)
+            out.append(contentsOf: inputLines)
             if roomy { out.append("") }
-            out.append(Style.dimmed("  Enter: submit   Esc: back to options"))
+            out.append(contentsOf: footerLines)
             return out
         }
 
-        // Display lines: one line per entry plus an optional description
-        // sub-line, tracking each entry's first line for the scroll window.
-        var lines: [String] = []
-        var selectedLine = 0
+        // Physical display rows, one row array per entry: each entry wraps
+        // into one or more rows with a hanging indent. Content is only ever
+        // cut when a SINGLE entry is taller than the whole scroll window —
+        // wrapping handles everything below that, and an over-tall entry
+        // could never be scrolled through anyway (↑/↓ move entry to entry).
+        var entryRows: [[String]] = []
         for (entryIndex, entry) in entries.enumerated() {
             let isCursor = entryIndex == selectedIndex
-            if isCursor { selectedLine = lines.count }
+            var rows: [String] = []
             let prefix = isCursor ? Style.prompt("  ❯ ") : "    "
             switch entry {
             case .option(let i):
@@ -268,22 +291,34 @@ final class AskModal: Modal {
                 if i == prompt.question.recommended {
                     label += Style.dimmed(Ask.recommendedSuffix)
                 }
-                lines.append(ANSI.truncate("\(prefix)\(marker) \(label)", to: width))
+                rows.append(contentsOf: wrapHanging(
+                    first: "\(prefix)\(marker) ", content: label, width: width
+                ))
                 if let description = option.description {
-                    lines.append(ANSI.truncate(Theme.faintText("        ↳ \(description)"), to: width))
+                    // Style row-by-row: wrap the plain text, then paint each
+                    // row faint including its indent.
+                    let descIndent = "        ↳ "
+                    let pieces = ANSI.wrap(description, width: max(8, width - ANSI.visibleWidth(descIndent)))
+                    rows.append(Theme.faintText(descIndent + (pieces.first ?? "")))
+                    let indent = String(repeating: " ", count: ANSI.visibleWidth(descIndent))
+                    rows.append(contentsOf: pieces.dropFirst().map { Theme.faintText(indent + $0) })
                 }
             case .done:
                 let count = checked.count
                 let base = isCursor ? Style.prompt("Done") : "Done"
                 let suffix = count > 0 ? Style.dimmed(" (\(count) selected)") : ""
-                lines.append(ANSI.truncate(prefix + "  " + base + suffix, to: width))
+                rows.append(contentsOf: wrapHanging(
+                    first: prefix + "  ", content: base + suffix, width: width
+                ))
             case .other:
                 let label = Ask.otherOptionLabel
-                lines.append(ANSI.truncate(
-                    prefix + "  " + (isCursor ? Style.prompt(label) : Style.dimmed(label)),
-                    to: width
+                rows.append(contentsOf: wrapHanging(
+                    first: prefix + "  ",
+                    content: isCursor ? Style.prompt(label) : Style.dimmed(label),
+                    width: width
                 ))
             }
+            entryRows.append(rows)
         }
 
         var hints = ["↑/↓: move", prompt.question.multi ? "Enter: toggle" : "Enter: select"]
@@ -292,15 +327,42 @@ final class AskModal: Modal {
 
         // Cosmetic blank spacers are dropped on short terminals; chrome is
         // the wrapped title + footer (+ 3 spacers when roomy), everything
-        // else is the windowed body.
-        let roomy = maxRows >= lines.count + titleLines.count + 4
-        let chrome = titleLines.count + 1 + (roomy ? 3 : 0)
+        // else is the windowed body. Whether the list is windowed is probed
+        // with a one-row footer estimate — the `n/m` indicator only needs to
+        // appear whenever rows are actually hidden.
+        let totalRows = entryRows.reduce(0) { $0 + $1.count }
+        let windowedProbe = totalRows + titleLines.count + 1 > maxRows
+        let position = windowedProbe ? "\(selectedIndex + 1)/\(entries.count)   " : ""
+        let footer = Style.dimmed("  " + position + hints.joined(separator: "   "))
+        let footerLines = ANSI.wrap(footer, width: width)
+
+        let roomy = maxRows >= totalRows + titleLines.count + footerLines.count + 3
+        let chrome = titleLines.count + footerLines.count + (roomy ? 3 : 0)
         let bodyBudget = max(1, maxRows - chrome)
-        scroll = edgeScrollOffset(
-            selection: selectedLine, count: lines.count,
-            windowSize: bodyBudget, previous: scroll
+
+        // Flatten, clamping any entry taller than the window to the window
+        // height with a dim `… +N lines` marker as its last visible row.
+        var lines: [String] = []
+        var selectedRange = 0...0
+        for (entryIndex, rows) in entryRows.enumerated() {
+            let rangeStart = lines.count
+            if rows.count > bodyBudget, bodyBudget >= 2 {
+                let hidden = rows.count - (bodyBudget - 1)
+                lines.append(contentsOf: rows.prefix(bodyBudget - 1))
+                lines.append(Style.dimmed("      … +\(hidden) more lines"))
+            } else if rows.count > bodyBudget {
+                // Degenerate one-row window: the entry's first row stands in
+                // for the whole entry.
+                lines.append(rows[0])
+            } else {
+                lines.append(contentsOf: rows)
+            }
+            if entryIndex == selectedIndex { selectedRange = rangeStart...(lines.count - 1) }
+        }
+        scroll = rangeScrollOffset(
+            start: selectedRange.lowerBound, end: selectedRange.upperBound,
+            count: lines.count, windowSize: bodyBudget, previous: scroll
         )
-        let windowed = lines.count > bodyBudget
 
         var out: [String] = []
         if roomy { out.append("") }
@@ -308,11 +370,7 @@ final class AskModal: Modal {
         if roomy { out.append("") }
         out.append(contentsOf: lines[scroll ..< min(lines.count, scroll + bodyBudget)])
         if roomy { out.append("") }
-        let position = windowed ? "\(selectedIndex + 1)/\(entries.count)   " : ""
-        out.append(ANSI.truncate(
-            Style.dimmed("  " + position + hints.joined(separator: "   ")),
-            to: width
-        ))
+        out.append(contentsOf: footerLines)
         return out
     }
 }

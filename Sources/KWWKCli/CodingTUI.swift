@@ -638,7 +638,11 @@ func runCodingTUIInternal(
                 let presentation = AskPresentation(continuation)
                 let askModal = AskModal(
                     prompt: prompt,
-                    displayWidth: { runner.terminal.width }
+                    // The live zone renders children one column narrow
+                    // (TUI reserves the last column against pending-wrap);
+                    // wrapping at the full width would get every exactly-full
+                    // row re-wrapped by the frame into a spilled orphan cell.
+                    displayWidth: { max(0, runner.terminal.width - 1) }
                 ) { outcome in
                     modal.close()
                     presentation.resume(outcome)
