@@ -113,6 +113,7 @@ struct AskParseTests {
             "options": .array([
                 .object(["label": .string("JWT"), "description": .string("Bearer tokens")]),
                 .object(["label": .string("Sessions")]),
+                .object(["label": .string("Other"), "description": .string("\n\t")]),
             ]),
             "multi": .bool(true),
             "recommended": .int(1),
@@ -124,6 +125,7 @@ struct AskParseTests {
             options: [
                 AskOption(label: "JWT", description: "Bearer tokens"),
                 AskOption(label: "Sessions", description: nil),
+                AskOption(label: "Other", description: nil),
             ],
             multi: true,
             recommended: 1

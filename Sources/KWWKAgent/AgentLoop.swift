@@ -1102,8 +1102,7 @@ public enum AgentLoop {
                 assistantMessage: placeholder,
                 toolCall: call,
                 config: config,
-                cancellation: cancellation,
-                turnToolState: turnToolState
+                cancellation: cancellation
             )
             switch prep {
             case .immediate(let result, let isError):
@@ -1340,25 +1339,24 @@ public enum AgentLoop {
         // one, reject the entire poll set immediately; running the first could
         // still strand the turn on a slow id that appeared separately from a
         // fast one. Every call still receives a paired tool result.
-        // Prepare actual task tools up front so schema validation and
+        // Prepare task_poll calls up front so schema validation and
         // `beforeToolCall` rewrites are part of the classification. Other tools
         // retain their existing just-in-time sequential behavior.
-        var preparedTaskCalls: [String: ToolPreparation] = [:]
+        var preparedPollCalls: [String: ToolPreparation] = [:]
         for call in toolCalls {
             guard !duplicateCallIds.contains(call.id) else { continue }
             guard !rejectedTerminalCallIds.contains(call.id) else { continue }
             guard currentContext.tools.first(where: { $0.name == call.name })?
-                .isBackgroundTaskTool == true else { continue }
-            preparedTaskCalls[call.id] = await prepareToolCall(
+                .isBackgroundTaskPollTool == true else { continue }
+            preparedPollCalls[call.id] = await prepareToolCall(
                 context: currentContext,
                 assistantMessage: assistantMessage,
                 toolCall: call,
                 config: config,
-                cancellation: cancellation,
-                turnToolState: turnToolState
+                cancellation: cancellation
             )
         }
-        let pollCallIds = preparedTaskCalls.compactMap { id, preparation -> String? in
+        let pollCallIds = preparedPollCalls.compactMap { id, preparation -> String? in
             guard case .prepared(let prepared) = preparation,
                   isBlockingTaskPoll(prepared) else { return nil }
             return id
@@ -1383,7 +1381,7 @@ public enum AgentLoop {
                 toolCalls: toolCalls,
                 config: config,
                 cancellation: cancellation,
-                preparedTaskCalls: preparedTaskCalls,
+                preparedPollCalls: preparedPollCalls,
                 rejectedPollCallIds: rejectedPollCallIds,
                 rejectedTerminalCallIds: rejectedTerminalCallIds,
                 duplicateCallIds: duplicateCallIds,
@@ -1397,7 +1395,7 @@ public enum AgentLoop {
                 toolCalls: toolCalls,
                 config: config,
                 cancellation: cancellation,
-                preparedTaskCalls: preparedTaskCalls,
+                preparedPollCalls: preparedPollCalls,
                 rejectedPollCallIds: rejectedPollCallIds,
                 rejectedTerminalCallIds: rejectedTerminalCallIds,
                 duplicateCallIds: duplicateCallIds,
@@ -1408,12 +1406,12 @@ public enum AgentLoop {
     }
 
     private static func isBlockingTaskPoll(_ prepared: PreparedToolCall) -> Bool {
-        prepared.tool.isBackgroundTaskTool && taskRequestWillPoll(prepared.args)
+        prepared.tool.isBackgroundTaskPollTool
     }
 
     private static func multipleTaskPollsError() -> AgentToolResult {
         errorToolResult(
-            "Multiple task polls, or a blocking task poll batched with another tool call, are rejected. Make one poll containing every task id and issue it alone."
+            "Multiple task_poll calls, or task_poll batched with another tool call, are rejected. Put every task ID in one task_poll call and issue it alone."
         )
     }
 
@@ -1443,7 +1441,7 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
-        preparedTaskCalls: [String: ToolPreparation],
+        preparedPollCalls: [String: ToolPreparation],
         rejectedPollCallIds: Set<String>,
         rejectedTerminalCallIds: Set<String>,
         duplicateCallIds: Set<String>,
@@ -1463,7 +1461,7 @@ public enum AgentLoop {
                 prep = .immediate(duplicateToolCallIdError(call.id), true)
             } else if rejectedPollCallIds.contains(call.id) {
                 prep = .immediate(multipleTaskPollsError(), true)
-            } else if let prepared = preparedTaskCalls[call.id] {
+            } else if let prepared = preparedPollCalls[call.id] {
                 prep = prepared
             } else {
                 prep = await prepareToolCall(
@@ -1471,8 +1469,7 @@ public enum AgentLoop {
                     assistantMessage: assistantMessage,
                     toolCall: call,
                     config: config,
-                    cancellation: cancellation,
-                    turnToolState: turnToolState
+                    cancellation: cancellation
                 )
             }
             switch prep {
@@ -1514,7 +1511,7 @@ public enum AgentLoop {
         toolCalls: [ToolCall],
         config: AgentLoopConfig,
         cancellation: CancellationHandle?,
-        preparedTaskCalls: [String: ToolPreparation],
+        preparedPollCalls: [String: ToolPreparation],
         rejectedPollCallIds: Set<String>,
         rejectedTerminalCallIds: Set<String>,
         duplicateCallIds: Set<String>,
@@ -1538,7 +1535,7 @@ public enum AgentLoop {
                 prep = .immediate(duplicateToolCallIdError(call.id), true)
             } else if rejectedPollCallIds.contains(call.id) {
                 prep = .immediate(multipleTaskPollsError(), true)
-            } else if let prepared = preparedTaskCalls[call.id] {
+            } else if let prepared = preparedPollCalls[call.id] {
                 prep = prepared
             } else {
                 prep = await prepareToolCall(
@@ -1546,8 +1543,7 @@ public enum AgentLoop {
                     assistantMessage: assistantMessage,
                     toolCall: call,
                     config: config,
-                    cancellation: cancellation,
-                    turnToolState: turnToolState
+                    cancellation: cancellation
                 )
             }
             switch prep {
@@ -1559,7 +1555,7 @@ public enum AgentLoop {
         // Execute *and finalize* each call in its own task. Finalization emits
         // toolExecutionEnd, runtime lifecycle events, and after-tool hooks, so
         // keeping it outside this task used to make a fast completion (or an
-        // immediate quota error) look "running" until the slowest sibling
+        // immediate validation error) look "running" until the slowest sibling
         // finished. Model-visible tool-result messages are still published
         // below in source order to preserve provider transcript invariants.
         var finalizationTasks: [(index: Int, task: Task<ToolResultMessage, Never>)] = []
@@ -1641,27 +1637,10 @@ public enum AgentLoop {
         assistantMessage: AssistantMessage,
         toolCall: ToolCall,
         config: AgentLoopConfig,
-        cancellation: CancellationHandle?,
-        turnToolState: TurnToolExecutionState
+        cancellation: CancellationHandle?
     ) async -> ToolPreparation {
         guard let tool = context.tools.first(where: { $0.name == toolCall.name }) else {
             return .immediate(errorToolResult("Tool \(toolCall.name) not found"), true)
-        }
-        if let configuredMax = tool.maxCallsPerTurn {
-            let maxCalls = max(0, configuredMax)
-            let configuredKey = tool.turnLimitKey?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            let limitKey = configuredKey.flatMap { $0.isEmpty ? nil : $0 } ?? tool.name
-            if !turnToolState.reserveLimitedCall(
-                callId: toolCall.id,
-                key: limitKey,
-                maxCalls: maxCalls
-            ) {
-                return .immediate(
-                    turnCallLimitError(toolName: tool.name, key: limitKey, maxCalls: maxCalls),
-                    true
-                )
-            }
         }
         let kwaiTool = tool.toKWAITool()
         let args: JSONValue
@@ -1714,23 +1693,6 @@ public enum AgentLoop {
 
     private static func schemaValidationMessage(_ error: Error) -> String {
         (error as? JSONSchemaError)?.description ?? "\(error)"
-    }
-
-    private static func turnCallLimitError(
-        toolName: String,
-        key: String,
-        maxCalls: Int
-    ) -> AgentToolResult {
-        errorToolResult(
-            "Tool \(toolName) exceeded its per-turn call limit of \(maxCalls); "
-                + "additional calls in this assistant turn are rejected.",
-            details: .object([
-                "error": .string("turn_call_limit_exceeded"),
-                "tool": .string(toolName),
-                "limit_key": .string(key),
-                "max_calls_per_turn": .int(maxCalls),
-            ])
-        )
     }
 
     private static func executePrepared(
@@ -2068,7 +2030,6 @@ private final class TurnToolExecutionState: @unchecked Sendable {
     private var activeCursorPoll: (callId: String, cancellation: CancellationHandle)?
     private var cursorCallIds: Set<String> = []
     private var duplicateCursorCallIds: Set<String> = []
-    private var limitedCallIds: [String: Set<String>] = [:]
     private var leases: [String: AgentToolRetentionLease] = [:]
 
     deinit {
@@ -2141,26 +2102,9 @@ private final class TurnToolExecutionState: @unchecked Sendable {
     }
 
     func resetPollGateForRetry() {
-        // Poll attempts are allowed to retry, but semantic tool-call quotas are
-        // deliberately not reset. Reusing the same call id remains idempotent;
-        // genuinely new calls from a retried stream still consume the original
-        // assistant turn's allowance.
         lock.withLock {
             sawBlockingPoll = false
             activeCursorPoll = nil
-        }
-    }
-
-    func reserveLimitedCall(callId: String, key: String, maxCalls: Int) -> Bool {
-        lock.withLock {
-            var ids = limitedCallIds[key, default: []]
-            // A retry/duplicate is another real execution attempt. Never let
-            // an untrusted repeated id make that attempt quota-free.
-            if ids.contains(callId) { return false }
-            guard ids.count < maxCalls else { return false }
-            ids.insert(callId)
-            limitedCallIds[key] = ids
-            return true
         }
     }
 

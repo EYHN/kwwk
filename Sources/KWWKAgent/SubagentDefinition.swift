@@ -59,13 +59,11 @@ public struct SubagentDefinition: Sendable {
 }
 
 /// Resource limits shared by all invocations launched through one `agent`
-/// tool (or one `SubagentRunner`). Defaults are deliberately bounded so a
-/// single model turn cannot create an unbounded fan-out.
+/// tool (or one `SubagentRunner`).
 public struct SubagentLimits: Sendable, Equatable {
     public var maxConcurrent: Int
     public var maxConcurrentMutating: Int
     public var maxTotal: Int
-    public var maxCallsPerTurn: Int
     public var maxTurns: Int?
     public var timeoutSeconds: Int?
 
@@ -73,14 +71,12 @@ public struct SubagentLimits: Sendable, Equatable {
         maxConcurrent: Int = 4,
         maxConcurrentMutating: Int = 1,
         maxTotal: Int = 64,
-        maxCallsPerTurn: Int = 4,
         maxTurns: Int? = 16,
         timeoutSeconds: Int? = 600
     ) {
         self.maxConcurrent = max(1, maxConcurrent)
         self.maxConcurrentMutating = max(1, min(maxConcurrentMutating, self.maxConcurrent))
         self.maxTotal = max(1, maxTotal)
-        self.maxCallsPerTurn = max(1, maxCallsPerTurn)
         self.maxTurns = maxTurns.map { max(1, $0) }
         self.timeoutSeconds = timeoutSeconds.map { max(1, $0) }
     }

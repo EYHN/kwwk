@@ -229,15 +229,23 @@ struct ParallelToolsTests {
         #expect(results == ["slow", "fast"])
     }
 
-    @Test("parallel mode publishes immediate rejection before a slow sibling finishes")
-    func publishesImmediateRejectionWithoutWaitAllDelay() async throws {
+    @Test("parallel mode publishes schema rejection before a slow sibling finishes")
+    func publishesImmediateSchemaRejectionWithoutWaitAllDelay() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         faux.setResponses([
             .message(fauxAssistantMessage(
                 blocks: [
-                    fauxToolCall(name: "limited_slow", arguments: [:], id: "slow"),
-                    fauxToolCall(name: "limited_slow", arguments: [:], id: "rejected"),
+                    fauxToolCall(
+                        name: "limited_slow",
+                        arguments: ["value": .string("valid")],
+                        id: "slow"
+                    ),
+                    fauxToolCall(
+                        name: "limited_slow",
+                        arguments: ["value": .bool(true)],
+                        id: "rejected"
+                    ),
                 ],
                 stopReason: .toolUse
             )),
@@ -245,11 +253,16 @@ struct ParallelToolsTests {
         ])
 
         let timeline = TimelineRecorder()
-        var tool = AgentTool(
+        let tool = AgentTool(
             name: "limited_slow",
             label: "limited slow",
-            description: "one slow permitted call",
-            parameters: ["type": "object"],
+            description: "slow typed call",
+            parameters: [
+                "type": "object",
+                "properties": ["value": ["type": "string"]],
+                "required": ["value"],
+                "additionalProperties": false,
+            ],
             execute: { _, _, _, _ in
                 await timeline.mark("slow-body-start")
                 try? await Task.sleep(nanoseconds: 150_000_000)
@@ -257,8 +270,6 @@ struct ParallelToolsTests {
                 return AgentToolResult(content: [.text(TextContent(text: "slow"))])
             }
         )
-        tool.turnLimitKey = "limited-slow"
-        tool.maxCallsPerTurn = 1
         let agent = Agent(options: AgentOptions(
             initialState: AgentInitialState(model: faux.getModel(), tools: [tool]),
             toolExecution: .parallel

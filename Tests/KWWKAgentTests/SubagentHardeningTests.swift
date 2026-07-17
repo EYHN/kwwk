@@ -500,8 +500,8 @@ struct SubagentHardeningTests {
         #expect(await reads.value() == 1)
     }
 
-    @Test("one agent tool enforces total and per-turn launch budgets")
-    func launchBudgets() async throws {
+    @Test("one agent tool enforces its total launch budget")
+    func totalLaunchBudget() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         faux.setResponses([.message(hardeningYieldMessage("first child"))])
@@ -509,13 +509,10 @@ struct SubagentHardeningTests {
             maxConcurrent: 1,
             maxConcurrentMutating: 1,
             maxTotal: 1,
-            maxCallsPerTurn: 3,
             maxTurns: 4,
             timeoutSeconds: 10
         )
         let tool = makeTool(model: faux.getModel(), limits: limits)
-        #expect(tool.turnLimitKey == "subagent")
-        #expect(tool.maxCallsPerTurn == 3)
 
         _ = try await executeMini(tool, callId: "first")
         do {
@@ -528,6 +525,61 @@ struct SubagentHardeningTests {
             }
             #expect(details["failure_kind"] == .string("total_limit"))
         }
+    }
+
+    @Test("one assistant turn may launch more than four agent calls")
+    func assistantTurnAllowsMoreThanFourAgentCalls() async throws {
+        let parentFaux = await registerFauxProvider()
+        defer { parentFaux.unregister() }
+        let childFaux = await registerFauxProvider()
+        defer { childFaux.unregister() }
+        let callCount = 6
+        let calls = (1...callCount).map { index in
+            fauxToolCall(
+                name: "agent",
+                arguments: .object([
+                    "description": .string("child \(index)"),
+                    "prompt": .string("complete child \(index)"),
+                    "subagent_type": .string("mini"),
+                ]),
+                id: "agent-fanout-\(index)"
+            )
+        }
+        parentFaux.setResponses([
+            .message(fauxAssistantMessage(blocks: calls, stopReason: .toolUse)),
+            .message(fauxAssistantMessage("fanout complete")),
+        ])
+        childFaux.setResponses((1...callCount).map { index in
+            .message(hardeningYieldMessage("child \(index) complete", id: "yield-\(index)"))
+        })
+        let tool = makeTool(
+            model: childFaux.getModel(),
+            limits: SubagentLimits(
+                maxConcurrent: 1,
+                maxConcurrentMutating: 1,
+                maxTotal: callCount,
+                maxTurns: 4,
+                timeoutSeconds: 10
+            )
+        )
+        let parent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: parentFaux.getModel(),
+                tools: [tool]
+            ),
+            toolExecution: .sequential
+        ))
+
+        try await parent.prompt("launch six children in one turn")
+
+        let results = parent.state.messages.compactMap { message -> ToolResultMessage? in
+            guard case .toolResult(let result) = message,
+                  result.toolName == "agent" else { return nil }
+            return result
+        }
+        #expect(results.count == callCount)
+        #expect(results.allSatisfy { !$0.isError })
+        #expect(childFaux.state.callCount == callCount)
     }
 
     @Test("active mutating children are fail-fast serialized")
@@ -544,7 +596,6 @@ struct SubagentHardeningTests {
             maxConcurrent: 4,
             maxConcurrentMutating: 1,
             maxTotal: 8,
-            maxCallsPerTurn: 4,
             maxTurns: 4,
             timeoutSeconds: 10
         )
@@ -606,7 +657,6 @@ struct SubagentHardeningTests {
             maxConcurrent: 1,
             maxConcurrentMutating: 1,
             maxTotal: 4,
-            maxCallsPerTurn: 4,
             maxTurns: 4,
             timeoutSeconds: 10
         )
@@ -649,17 +699,18 @@ struct SubagentHardeningTests {
         #expect(secondQueued?.runningAt == nil)
         #expect(await manager.get(cancelledId)?.status == .queued)
 
-        let task = createTaskTool(manager: manager, sessionId: "capacity-parent")
-        let listed = try await task.execute(
+        let taskList = createTaskListTool(manager: manager, sessionId: "capacity-parent")
+        let listed = try await taskList.execute(
             "list-capacity",
-            .object(["list": .bool(true)]),
+            .object([:]),
             nil,
             nil
         )
         #expect(hardeningResultText(listed).contains("waiting_for_capacity"))
-        _ = try await task.execute(
+        let taskCancel = createTaskCancelTool(manager: manager, sessionId: "capacity-parent")
+        _ = try await taskCancel.execute(
             "cancel-capacity",
-            .object(["cancel": .array([.string(cancelledId)])]),
+            .object(["task_ids": .array([.string(cancelledId)])]),
             nil,
             nil
         )
@@ -821,7 +872,6 @@ struct SubagentHardeningTests {
                 maxConcurrent: 1,
                 maxConcurrentMutating: 1,
                 maxTotal: 2,
-                maxCallsPerTurn: 2,
                 maxTurns: 4,
                 timeoutSeconds: 1
             )

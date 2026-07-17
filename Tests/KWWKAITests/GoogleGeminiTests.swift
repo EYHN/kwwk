@@ -189,7 +189,18 @@ struct GoogleGeminiTests {
                 messages: [.user(UserMessage(text: "hi"))],
                 tools: [Tool(
                     name: "calc", description: "arith",
-                    parameters: ["type": "object", "properties": ["a": ["type": "number"]]]
+                    parameters: [
+                        "type": "object",
+                        "properties": [
+                            "a": [
+                                "anyOf": [
+                                    ["type": "number"],
+                                    ["type": "null"],
+                                ],
+                            ],
+                        ],
+                        "additionalProperties": false,
+                    ]
                 )]
             ),
             options: StreamOptions(toolChoice: .required)
@@ -203,6 +214,12 @@ struct GoogleGeminiTests {
         let tools = json?["tools"] as? [[String: Any]]
         let decls = tools?.first?["functionDeclarations"] as? [[String: Any]]
         #expect(decls?.first?["name"] as? String == "calc")
+        let schema = decls?.first?["parametersJsonSchema"] as? [String: Any]
+        #expect(schema?["additionalProperties"] as? Bool == false)
+        let properties = schema?["properties"] as? [String: Any]
+        let a = properties?["a"] as? [String: Any]
+        #expect((a?["anyOf"] as? [[String: Any]])?.count == 2)
+        #expect(decls?.first?["parameters"] == nil)
         let config = json?["toolConfig"] as? [String: Any]
         let inner = config?["functionCallingConfig"] as? [String: Any]
         #expect(inner?["mode"] as? String == "ANY")

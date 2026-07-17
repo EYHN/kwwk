@@ -491,6 +491,39 @@ struct BashToolBackgroundTests {
         #expect(snap?.status == .completed)
     }
 
+    @Test("blank optional background description is treated as omitted")
+    func blankBackgroundDescriptionUsesCommandLabel() async throws {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let cwdDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cwdDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        defer { Task { await manager.killAll(sessionId: nil) } }
+        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
+            environment: testBashEnvironment,
+            manager: manager,
+            sessionId: "blank-description"
+        ))
+        let result = try await tool.execute(
+            "blank-description",
+            .object([
+                "command": .string("echo blank-description"),
+                "run_in_background": .bool(true),
+                "description": .string("\n\t  "),
+            ]),
+            nil,
+            nil
+        )
+        guard case .object(let details) = result.details ?? .null,
+              case .string(let taskId) = details["taskId"] ?? .null,
+              let snapshot = await manager.get(taskId) else {
+            Issue.record("expected background task snapshot")
+            return
+        }
+        #expect(snapshot.spec.description == nil)
+        #expect(!snapshot.spec.label.isEmpty)
+    }
+
     @Test("foreground command within timeout returns normally (no flip)")
     func foregroundNoFlip() async throws {
         let outputDir = makeTempDir()

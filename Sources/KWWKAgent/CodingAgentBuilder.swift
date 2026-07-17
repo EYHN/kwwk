@@ -6,8 +6,9 @@ import KWWKAI
 /// compose an arbitrary subset (`[.read, .grep, .bash]`). Filesystem path
 /// containment is configured separately through `FileAccessPolicy`.
 ///
-/// `.task` is only honored when a `backgroundManager` is supplied. `.bash`
-/// works without a manager (legacy pipe executor) — it just loses
+/// `.task` registers the `task_list`, `task_read`, `task_poll`, and
+/// `task_cancel` group when a `backgroundManager` is supplied. `.bash` works
+/// without a manager (legacy pipe executor) — it just loses
 /// `run_in_background` and the auto-background-on-timeout flip.
 public struct CodingTools: OptionSet, Sendable {
     public let rawValue: UInt32
@@ -239,10 +240,12 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
             bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
             bashShellPath: config.bashShellPath
         ))
-        tools.append(createSubagentHistoryTool(
-            store: subagentHistoryStore,
-            sessionId: sessionId
-        ))
+        if bgManager != nil {
+            tools.append(createSubagentHistoryTool(
+                store: subagentHistoryStore,
+                sessionId: sessionId
+            ))
+        }
     }
 
     let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(
@@ -322,7 +325,7 @@ internal func buildCodingToolList(
         tools.append(createLSTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
     }
     if selected.contains(.task), let backgroundManager {
-        tools.append(createTaskTool(
+        tools.append(contentsOf: createTaskTools(
             manager: backgroundManager,
             sessionId: sessionId,
             deliveryConsumer: backgroundDeliveryConsumer

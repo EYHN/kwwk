@@ -1394,8 +1394,8 @@ struct BackgroundTaskManagerTests {
         #expect(note(.completed).messageText().hasPrefix("A background task completed:"))
     }
 
-    @Test("subagent correlation ids are first-class notification tags")
-    func subagentIdsGetFirstClassTags() {
+    @Test("subagent notification hides child session ids from model-facing XML")
+    func subagentNotificationRedactsChildSessionIds() {
         let n = BackgroundTaskNotification(
             taskId: "bg_agent",
             sessionId: nil,
@@ -1409,6 +1409,10 @@ struct BackgroundTaskManagerTests {
                 details: .object([
                     "child_session_id": .string("child-123"),
                     "subagent_type": .string("explore"),
+                    "nested": .object([
+                        "childSessionId": .string("child-456"),
+                        "kept": .string("visible-metadata"),
+                    ]),
                 ])
             ),
             outputTail: "",
@@ -1417,8 +1421,15 @@ struct BackgroundTaskManagerTests {
             stalled: false
         )
         let text = n.messageText()
-        #expect(text.contains("<child-session-id>child-123</child-session-id>"))
+        #expect(text.contains("<task-id>bg_agent</task-id>"))
         #expect(text.contains("<subagent-type>explore</subagent-type>"))
+        #expect(text.contains("<details-json>"))
+        #expect(text.contains("visible-metadata"))
+        #expect(!text.contains("<child-session-id>"))
+        #expect(!text.contains("child_session_id"))
+        #expect(!text.contains("childSessionId"))
+        #expect(!text.contains("child-123"))
+        #expect(!text.contains("child-456"))
     }
 
     @Test("notification never derives XML syntax from outcome detail keys")
@@ -1534,6 +1545,8 @@ struct BackgroundTaskManagerTests {
         #expect(text.contains("<status>stalled</status>"))
         #expect(text.contains("<suggestion>"))
         #expect(text.contains("appears stuck"))
+        #expect(text.contains("task_read({\"task_id\":\"bg_x\"})"))
+        #expect(text.contains("task_cancel({\"task_ids\":[\"bg_x\"]})"))
     }
 }
 

@@ -149,13 +149,13 @@ struct AgentLoopPolicyTests {
         #expect(toolResultText(result).contains("$.value: expected string, got boolean"))
     }
 
-    @Test("the fifth limited call is rejected in sequential and parallel batches")
-    func perTurnLimitCoversNormalExecutionModes() async throws {
+    @Test("more than four calls to one tool execute in one assistant turn")
+    func oneTurnAllowsMoreThanFourCallsToOneTool() async throws {
         for mode in [ToolExecutionMode.sequential, .parallel] {
             let faux = await registerFauxProvider()
             defer { faux.unregister() }
-            let calls = (1...5).map { index in
-                fauxToolCall(name: "limited", arguments: [:], id: "\(mode.rawValue)-\(index)")
+            let calls = (1...6).map { index in
+                fauxToolCall(name: "unlimited", arguments: [:], id: "\(mode.rawValue)-\(index)")
             }
             faux.setResponses([
                 .message(fauxAssistantMessage(blocks: calls, stopReason: .toolUse)),
@@ -163,36 +163,31 @@ struct AgentLoopPolicyTests {
             ])
 
             let executions = ToolCallRecorder()
-            var tool = AgentTool(
-                name: "limited",
-                label: "limited",
-                description: "limited test tool",
+            let tool = AgentTool(
+                name: "unlimited",
+                label: "unlimited",
+                description: "unlimited test tool",
                 parameters: ["type": "object"],
                 execute: { id, _, _, _ in
                     await executions.record(id)
                     return AgentToolResult(content: [.text(TextContent(text: id))])
                 }
             )
-            tool.turnLimitKey = "delegation"
-            tool.maxCallsPerTurn = 4
             let agent = Agent(options: AgentOptions(
                 initialState: AgentInitialState(model: faux.getModel(), tools: [tool]),
                 toolExecution: mode
             ))
 
-            try await agent.prompt("run five calls")
+            try await agent.prompt("run six calls")
 
-            #expect(await executions.snapshot().count == 4)
-            let fifth = toolResult(in: agent.state.messages, id: "\(mode.rawValue)-5")
-            #expect(fifth?.isError == true)
-            #expect(toolResultText(fifth).contains("per-turn call limit of 4"))
-            guard case .object(let details) = fifth?.details ?? .null else {
-                Issue.record("expected structured turn-limit details for \(mode.rawValue)")
-                continue
+            let executed = await executions.snapshot()
+            #expect(executed.count == 6)
+            for index in 1...6 {
+                let id = "\(mode.rawValue)-\(index)"
+                let result = toolResult(in: agent.state.messages, id: id)
+                #expect(result?.isError == false)
+                #expect(toolResultText(result) == id)
             }
-            #expect(details["error"] == .string("turn_call_limit_exceeded"))
-            #expect(details["limit_key"] == .string("delegation"))
-            #expect(details["max_calls_per_turn"] == .int(4))
         }
     }
 
@@ -212,7 +207,7 @@ struct AgentLoopPolicyTests {
                 .message(fauxAssistantMessage("done")),
             ])
             let executions = ToolCallRecorder()
-            var tool = AgentTool(
+            let tool = AgentTool(
                 name: "limited",
                 label: "limited",
                 description: "limited duplicate-id test tool",
@@ -222,8 +217,6 @@ struct AgentLoopPolicyTests {
                     return AgentToolResult(content: [.text(TextContent(text: id))])
                 }
             )
-            tool.turnLimitKey = "delegation"
-            tool.maxCallsPerTurn = 1
             let agent = Agent(options: AgentOptions(
                 initialState: AgentInitialState(model: faux.getModel(), tools: [tool]),
                 toolExecution: mode
@@ -246,8 +239,8 @@ struct AgentLoopPolicyTests {
         }
     }
 
-    @Test("Cursor retry preserves quota and repeated ids cannot execute twice")
-    func cursorRetryPreservesTurnLimit() async throws {
+    @Test("Cursor retry rejects repeated ids but executes a new call")
+    func cursorRetryRejectsRepeatedIdsAndExecutesNewCall() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         let attempts = RetryAttemptCounter()
@@ -293,18 +286,16 @@ struct AgentLoopPolicyTests {
             return pair.stream
         }
 
-        var tool = AgentTool(
+        let tool = AgentTool(
             name: "limited",
             label: "limited",
-            description: "limited Cursor test tool",
+            description: "Cursor retry test tool",
             parameters: ["type": "object"],
             execute: { id, _, _, _ in
                 await executions.record(id)
                 return AgentToolResult(content: [.text(TextContent(text: id))])
             }
         )
-        tool.turnLimitKey = "delegation"
-        tool.maxCallsPerTurn = 4
         let agent = Agent(options: AgentOptions(
             initialState: AgentInitialState(model: faux.getModel(), tools: [tool]),
             streamFn: streamFn
@@ -314,13 +305,12 @@ struct AgentLoopPolicyTests {
         try await agent.prompt("retry inline calls")
 
         #expect(await attempts.snapshot() == 2)
-        #expect(await executions.snapshot() == ["a", "b", "c", "d"])
+        #expect(await executions.snapshot() == ["a", "b", "c", "d", "e"])
         let retained = agent.state.messages.compactMap { message -> ToolResultMessage? in
             guard case .toolResult(let result) = message else { return nil }
             return result
         }
         #expect(retained.count == 5)
-        #expect(retained.allSatisfy { $0.isError })
         for repeatedId in ["a", "b", "c", "d"] {
             let result = retained.first { $0.toolCallId == repeatedId }
             guard case .object(let details) = result?.details ?? .null else {
@@ -330,10 +320,11 @@ struct AgentLoopPolicyTests {
             #expect(details["error"] == .string("duplicate_tool_call_id"))
         }
         let newResult = retained.first { $0.toolCallId == "e" }
-        #expect(toolResultText(newResult).contains("per-turn call limit of 4"))
+        #expect(newResult?.isError == false)
+        #expect(toolResultText(newResult) == "e")
     }
 
-    @Test("a blocking task poll mixed with another tool rejects the entire batch")
+    @Test("a blocking task_poll mixed with another tool rejects the entire batch")
     func mixedBlockingPollBatchIsRejected() async throws {
         try await withRetries { _ in
             try await runMixedBlockingPollBatchIsRejected()
@@ -347,10 +338,10 @@ struct AgentLoopPolicyTests {
             .message(fauxAssistantMessage(
                 blocks: [
                     fauxToolCall(
-                        name: "task",
+                        name: "task_poll",
                         arguments: .object([
-                            "poll": .array([.string("bg-does-not-need-to-exist")]),
-                            "timeout_seconds": .int(600),
+                            "task_ids": .array([.string("bg-does-not-need-to-exist")]),
+                            "timeout_seconds": .int(300),
                         ]),
                         id: "mixed-poll"
                     ),
@@ -361,7 +352,7 @@ struct AgentLoopPolicyTests {
             .message(fauxAssistantMessage("batch rejected")),
         ])
         let manager = BackgroundTaskManager()
-        let task = createTaskTool(manager: manager, sessionId: "mixed-poll-parent")
+        let task = createTaskPollTool(manager: manager, sessionId: "mixed-poll-parent")
         let executions = ToolCallRecorder()
         let slow = AgentTool(
             name: "slow",
@@ -386,7 +377,7 @@ struct AgentLoopPolicyTests {
         try await agent.prompt("emit a mixed blocking batch")
 
         // The rejection must return without paying for the 2s slow tool or
-        // the 600s poll. Wall-clock timing flakes under CI load, so a slow
+        // the 300s poll. Wall-clock timing flakes under CI load, so a slow
         // early attempt retries instead of failing the test.
         let elapsed = Date().timeIntervalSince(startedAt)
         try retryCheck(elapsed < 1.75, "rejection took \(elapsed)s, expected < 1.75s")

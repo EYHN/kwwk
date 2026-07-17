@@ -206,7 +206,7 @@ public func createGrepTool(
             }
             let rawPath: String
             if case .string(let p) = obj["path"] ?? .null {
-                rawPath = p
+                rawPath = p.isEmpty ? "." : p
             } else {
                 rawPath = "."
             }

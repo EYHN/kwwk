@@ -206,16 +206,9 @@ public struct AgentTool: Sendable {
     /// Long-running, side-effect-free waits may opt in so queued user
     /// steering can end the wait without aborting the whole agent run.
     public var interruptible: Bool
-    /// Internal semantic marker used after schema validation and hook rewrites
-    /// to apply the turn-scoped blocking-poll gate. A name match is not enough:
-    /// SDK users may register an unrelated custom tool called `task`.
-    var isBackgroundTaskTool: Bool
-    /// Optional semantic quota shared by every execution path for one
-    /// assistant turn. Tools with the same key consume the same allowance;
-    /// nil `maxCallsPerTurn` means unlimited. Internal so tool factories can
-    /// opt in without exposing an unenforced prompt-only policy to SDK users.
-    var turnLimitKey: String?
-    var maxCallsPerTurn: Int?
+    /// Internal marker for the built-in blocking background-task poll.
+    /// Name matching is insufficient because SDK tools may reuse the name.
+    var isBackgroundTaskPollTool: Bool
     /// Filesystem boundary attached to the registered write capability so
     /// provider-native file operations (notably Cursor delete) cannot bypass
     /// the same policy.
@@ -256,9 +249,7 @@ public struct AgentTool: Sendable {
         self.description = description
         self.parameters = parameters
         self.interruptible = interruptible
-        self.isBackgroundTaskTool = false
-        self.turnLimitKey = nil
-        self.maxCallsPerTurn = nil
+        self.isBackgroundTaskPollTool = false
         self.fileAccessPolicy = nil
         self.fileAccessCwd = nil
         self.codingToolCapabilities = []

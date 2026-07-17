@@ -619,7 +619,7 @@ struct GrepToolTests {
         let tool = createGrepTool(cwd: dir.path)
         let result = try await tool.execute(
             "call-1",
-            ["pattern": .string("needle"), "path": .string(dir.path)],
+            ["pattern": .string("needle"), "path": .string("")],
             nil, nil
         )
         let output = textOutput(result)
@@ -673,7 +673,7 @@ struct FindToolTests {
         let tool = createFindTool(cwd: dir.path)
         let result = try await tool.execute(
             "call-1",
-            ["pattern": .string("**/*.swift"), "path": .string(dir.path)],
+            ["pattern": .string("**/*.swift"), "path": .string("")],
             nil, nil
         )
         let output = textOutput(result)
@@ -739,11 +739,29 @@ struct LSToolTests {
         let tool = createLSTool(cwd: dir.path)
         let result = try await tool.execute(
             "call-1",
-            ["path": .string(dir.path)],
+            ["path": .string("")],
             nil, nil
         )
         let output = textOutput(result)
         #expect(output.contains("a.txt"))
         #expect(output.contains("b.txt"))
+    }
+
+    @Test("allows an explicit absolute directory outside cwd by default")
+    func allowsAbsoluteDirectoryOutsideCwd() async throws {
+        let cwd = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: cwd) }
+        let outsideDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outsideDir) }
+        try write("x", to: outsideDir.appendingPathComponent("outside.txt"))
+
+        let tool = createLSTool(cwd: cwd.path)
+        let result = try await tool.execute(
+            "call-absolute",
+            ["path": .string(outsideDir.path)],
+            nil, nil
+        )
+
+        #expect(textOutput(result).contains("outside.txt"))
     }
 }

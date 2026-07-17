@@ -42,6 +42,47 @@ struct CompactionSerializationTests {
         #expect(serialized.contains("checked the invariant"))
     }
 
+    @Test("recursively removes child session ids from tool result details")
+    func redactsChildSessionIdsFromToolDetails() {
+        let message = Message.toolResult(ToolResultMessage(
+            toolCallId: "agent-result",
+            toolName: "agent",
+            content: [.text(TextContent(text: "completed"))],
+            details: .object([
+                "child_session_id": .string("top-secret-child"),
+                "task_id": .string("bg_visible"),
+                "nested": .object([
+                    "childSessionId": .string("nested-secret-child"),
+                    "subagent_type": .string("explore"),
+                ]),
+                "items": .array([
+                    .object([
+                        "child_session_id": .string("array-secret-child"),
+                        "status": .string("completed"),
+                    ]),
+                    .object([
+                        "childSessionId": .string("array-camel-secret-child"),
+                        "result": .string("kept-result"),
+                    ]),
+                ]),
+            ])
+        ))
+
+        let serialized = CompactionTranscriptSerializer.serialize([message])
+
+        #expect(!serialized.contains("child_session_id"))
+        #expect(!serialized.contains("childSessionId"))
+        #expect(!serialized.contains("top-secret-child"))
+        #expect(!serialized.contains("nested-secret-child"))
+        #expect(!serialized.contains("array-secret-child"))
+        #expect(!serialized.contains("array-camel-secret-child"))
+        #expect(serialized.contains("bg_visible"))
+        #expect(serialized.contains("subagent_type"))
+        #expect(serialized.contains("explore"))
+        #expect(serialized.contains("completed"))
+        #expect(serialized.contains("kept-result"))
+    }
+
     @Test("bounds large tool output while retaining both ends")
     func truncatesToolOutputHeadAndTail() {
         let payload = "HEAD-" + String(repeating: "x", count: 1_000) + "-TAIL"

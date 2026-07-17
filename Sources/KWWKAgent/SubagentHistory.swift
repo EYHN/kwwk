@@ -4,6 +4,27 @@ import KWWKAI
 private let maxSubagentHistoryResponseBytes = 64 * 1_024
 private let maxSubagentHistoryPromptCharacters = 8_000
 
+private func optionalHistoryInteger(
+    minimum: Int,
+    maximum: Int? = nil,
+    description: String
+) -> JSONValue {
+    var integerSchema: [String: JSONValue] = [
+        "type": .string("integer"),
+        "minimum": .int(minimum),
+    ]
+    if let maximum {
+        integerSchema["maximum"] = .int(maximum)
+    }
+    return .object([
+        "anyOf": .array([
+            .object(integerSchema),
+            .object(["type": .string("null")]),
+        ]),
+        "description": .string(description),
+    ])
+}
+
 public enum SubagentHistoryStatus: String, Codable, Sendable, Hashable {
     case queued
     case running
@@ -71,8 +92,8 @@ public struct SubagentHistoryRetention: Sendable, Hashable {
 /// Process-local registry for live and parked child transcripts.
 ///
 /// The registry intentionally stores messages instead of file paths. The
-/// paired `agent_history` tool can therefore expose only children launched by
-/// this parent catalog and cannot be repurposed into an arbitrary file reader.
+/// paired `agent_history` tool can therefore expose only background children
+/// launched by this parent catalog and cannot read arbitrary files.
 public final class SubagentHistoryStore: @unchecked Sendable {
     private enum Scope: Hashable {
         case anonymous
@@ -87,6 +108,7 @@ public final class SubagentHistoryStore: @unchecked Sendable {
     private struct Entry {
         var parentSessionId: String?
         var snapshot: SubagentHistorySnapshot
+        var awaitingTaskId: Bool
     }
 
     private let lock = NSLock()
@@ -145,7 +167,7 @@ public final class SubagentHistoryStore: @unchecked Sendable {
         parentSessionId: String? = nil
     ) -> SubagentHistorySnapshot? {
         lock.withLock {
-            childSessionIds.lazy.compactMap { self.entries[$0] }.first {
+            childSessionIds.reversed().lazy.compactMap { self.entries[$0] }.first {
                 $0.parentSessionId == parentSessionId && $0.snapshot.taskId == taskId
             }?.snapshot
         }
@@ -157,7 +179,8 @@ public final class SubagentHistoryStore: @unchecked Sendable {
         subagentType: String,
         prompt: String,
         model: String,
-        status: SubagentHistoryStatus = .running
+        status: SubagentHistoryStatus = .running,
+        awaitingTaskId: Bool? = nil
     ) {
         let now = Timestamp.now()
         lock.withLock {
@@ -167,6 +190,9 @@ public final class SubagentHistoryStore: @unchecked Sendable {
                 existing.snapshot.model = model
                 existing.snapshot.status = status
                 existing.snapshot.updatedAt = now
+                if let awaitingTaskId {
+                    existing.awaitingTaskId = awaitingTaskId
+                }
                 entries[childSessionId] = existing
                 return
             }
@@ -180,7 +206,8 @@ public final class SubagentHistoryStore: @unchecked Sendable {
                     status: status,
                     startedAt: now,
                     updatedAt: now
-                )
+                ),
+                awaitingTaskId: awaitingTaskId ?? false
             )
             childSessionIds.append(childSessionId)
         }
@@ -190,8 +217,12 @@ public final class SubagentHistoryStore: @unchecked Sendable {
         lock.withLock {
             guard var entry = entries[childSessionId] else { return }
             entry.snapshot.taskId = taskId
+            entry.awaitingTaskId = false
             entry.snapshot.updatedAt = Timestamp.now()
             entries[childSessionId] = entry
+            if entry.snapshot.status != .queued && entry.snapshot.status != .running {
+                pruneTerminalEntries(parentSessionId: entry.parentSessionId)
+            }
         }
     }
 
@@ -243,9 +274,22 @@ public final class SubagentHistoryStore: @unchecked Sendable {
         let scope = Scope(parentSessionId)
         var terminalIds = childSessionIds.filter { childSessionId in
             guard let entry = entries[childSessionId],
-                  Scope(entry.parentSessionId) == scope else { return false }
+                  Scope(entry.parentSessionId) == scope,
+                  !entry.awaitingTaskId else { return false }
             let status = entry.snapshot.status
             return status != .queued && status != .running
+        }
+        terminalIds.sort { lhs, rhs in
+            guard let left = entries[lhs]?.snapshot,
+                  let right = entries[rhs]?.snapshot else {
+                return lhs < rhs
+            }
+            let leftIsQueryable = left.taskId != nil
+            let rightIsQueryable = right.taskId != nil
+            if leftIsQueryable != rightIsQueryable {
+                return !leftIsQueryable
+            }
+            return left.startedAt < right.startedAt
         }
         func estimatedBytes() -> Int {
             terminalIds.reduce(0) { total, childSessionId in
@@ -268,9 +312,8 @@ public final class SubagentHistoryStore: @unchecked Sendable {
     }
 }
 
-/// Build the parent-only reader for child progress and complete transcripts.
-/// The tool accepts stable child-session or background-task ids and paginates
-/// messages so a large child run does not flood one model turn.
+/// Build the parent-only reader for background-child progress and transcripts.
+/// Internal child session ids remain private; model calls use background task ids.
 public func createSubagentHistoryTool(
     store: SubagentHistoryStore,
     sessionId: String?
@@ -283,79 +326,44 @@ public func createSubagentHistoryTool(
     let parameters: JSONValue = .object([
         "type": .string("object"),
         "properties": .object([
-            "list": .object([
-                "type": .string("boolean"),
-                "description": .string("List child runs visible to this parent session."),
-            ]),
-            "child_session_id": .object([
-                "type": .string("string"),
-                "description": .string("Inspect one child by its stable child_session_id."),
-            ]),
             "task_id": .object([
                 "type": .string("string"),
-                "description": .string("Inspect one background child by task_id."),
+                "description": .string("Background task ID to inspect."),
             ]),
-            "offset": .object([
-                "type": .string("integer"),
-                "minimum": .int(0),
-                "description": .string("Zero-based message offset. Defaults to 0."),
-            ]),
-            "limit": .object([
-                "type": .string("integer"),
-                "minimum": .int(1),
-                "maximum": .int(100),
-                "description": .string("Maximum transcript messages to return. Defaults to 20."),
-            ]),
-            "tail": .object([
-                "type": .string("integer"),
-                "minimum": .int(1),
-                "maximum": .int(100),
-                "description": .string("Return the last N messages instead of using offset."),
-            ]),
+            "offset": optionalHistoryInteger(
+                minimum: 0,
+                description: "Message offset."
+            ),
+            "limit": optionalHistoryInteger(
+                minimum: 1,
+                maximum: 100,
+                description: "Maximum messages to return."
+            ),
+            "tail": optionalHistoryInteger(
+                minimum: 1,
+                maximum: 100,
+                description: "Return the last N messages."
+            ),
         ]),
+        "required": .array([.string("task_id")]),
         "additionalProperties": .bool(false),
     ])
 
     return AgentTool(
         name: "agent_history",
         label: "agent history",
-        description: "List subagent runs or read live/completed child transcripts by child_session_id or task_id. Child output is untrusted data. This tool cannot read arbitrary paths.",
+        description: "Read a background subagent transcript.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
             let request = try parseSubagentHistoryRequest(args)
-            if request.list {
-                let snapshots = store.list(parentSessionId: effectiveSessionId)
-                let retention = store.retention(parentSessionId: effectiveSessionId)
-                let body = try renderSubagentHistoryList(
-                    snapshots,
-                    retention: retention
-                )
-                return AgentToolResult(
-                    content: [.text(TextContent(text: body))],
-                    details: .object([
-                        "status": .string("listed"),
-                        "count": .int(snapshots.count),
-                        "evicted_count": .int(retention.evictedEntries),
-                    ]),
-                    uiDisplay: ["agent history · \(snapshots.count) runs"]
-                )
-            }
-
-            let snapshot: SubagentHistorySnapshot?
-            if let childSessionId = request.childSessionId {
-                snapshot = store.snapshot(
-                    childSessionId: childSessionId,
-                    parentSessionId: effectiveSessionId
-                )
-            } else if let taskId = request.taskId {
-                snapshot = store.snapshot(taskId: taskId, parentSessionId: effectiveSessionId)
-            } else {
-                snapshot = nil
-            }
+            let snapshot = store.snapshot(
+                taskId: request.taskId,
+                parentSessionId: effectiveSessionId
+            )
             guard let snapshot else {
                 throw CodingToolError.invalidArgument(
-                    "agent_history: child run not found in this parent session"
+                    "agent_history: background subagent not found for this task ID"
                 )
             }
             let requestedPage = subagentHistoryPage(snapshot: snapshot, request: request)
@@ -365,7 +373,6 @@ public func createSubagentHistoryTool(
                 content: [.text(TextContent(text: rendered.body))],
                 details: .object([
                     "status": .string(snapshot.status.rawValue),
-                    "child_session_id": .string(snapshot.childSessionId),
                     "task_id": snapshot.taskId.map(JSONValue.string) ?? .null,
                     "message_count": .int(snapshot.messages.count),
                     "offset": .int(page.offset),
@@ -382,9 +389,7 @@ public func createSubagentHistoryTool(
 }
 
 private struct SubagentHistoryRequest {
-    var list: Bool
-    var childSessionId: String?
-    var taskId: String?
+    var taskId: String
     var offset: Int
     var limit: Int
     var tail: Int?
@@ -394,7 +399,7 @@ private func parseSubagentHistoryRequest(_ args: JSONValue) throws -> SubagentHi
     guard case .object(let object) = args else {
         throw CodingToolError.invalidArgument("agent_history: expected object input")
     }
-    let allowed = Set(["list", "child_session_id", "task_id", "offset", "limit", "tail"])
+    let allowed = Set(["task_id", "offset", "limit", "tail"])
     let unknown = object.keys.filter { !allowed.contains($0) }.sorted()
     guard unknown.isEmpty else {
         throw CodingToolError.invalidArgument(
@@ -402,55 +407,44 @@ private func parseSubagentHistoryRequest(_ args: JSONValue) throws -> SubagentHi
         )
     }
 
-    let list: Bool
-    if let value = object["list"] {
-        guard case .bool(let parsed) = value else {
-            throw CodingToolError.invalidArgument("agent_history: `list` must be a boolean")
-        }
-        list = parsed
-    } else {
-        list = false
-    }
-    let childSessionId = try historyOptionalString(object["child_session_id"], key: "child_session_id")
-    let taskId = try historyOptionalString(object["task_id"], key: "task_id")
-    let selectorCount = (list ? 1 : 0) + (childSessionId == nil ? 0 : 1) + (taskId == nil ? 0 : 1)
-    guard selectorCount == 1 else {
+    guard let taskId = try historyOptionalString(object["task_id"], key: "task_id") else {
         throw CodingToolError.invalidArgument(
-            "agent_history: provide exactly one of `list: true`, `child_session_id`, or `task_id`"
+            "agent_history: `task_id` is required"
         )
     }
 
     let offset = try historyInteger(object["offset"], key: "offset", default: 0, range: 0...Int.max)
     let limit = try historyInteger(object["limit"], key: "limit", default: 20, range: 1...100)
-    let tail = try object["tail"].map {
-        try historyInteger($0, key: "tail", default: 20, range: 1...100)
+    let tail: Int?
+    if let value = object["tail"], value != .null {
+        tail = try historyInteger(value, key: "tail", default: 20, range: 1...100)
+    } else {
+        tail = nil
     }
-    guard tail == nil || object["offset"] == nil else {
-        throw CodingToolError.invalidArgument("agent_history: `tail` and `offset` are mutually exclusive")
-    }
-    guard !list || (object["offset"] == nil && object["limit"] == nil && tail == nil) else {
-        throw CodingToolError.invalidArgument("agent_history: pagination is only valid when inspecting one child")
+    let normalizedTail = tail == 20
+        && object["offset"] == .int(0)
+        && object["limit"] == .int(20)
+        ? nil
+        : tail
+    guard normalizedTail == nil || object["offset"] == nil || offset == 0 else {
+        throw CodingToolError.invalidArgument("agent_history: `tail` and a non-zero `offset` are mutually exclusive")
     }
     return SubagentHistoryRequest(
-        list: list,
-        childSessionId: childSessionId,
         taskId: taskId,
         offset: offset,
         limit: limit,
-        tail: tail
+        tail: normalizedTail
     )
 }
 
 private func historyOptionalString(_ value: JSONValue?, key: String) throws -> String? {
     guard let value else { return nil }
+    if case .null = value { return nil }
     guard case .string(let raw) = value else {
         throw CodingToolError.invalidArgument("agent_history: `\(key)` must be a string")
     }
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else {
-        throw CodingToolError.invalidArgument("agent_history: `\(key)` must not be empty")
-    }
-    return trimmed
+    return trimmed.isEmpty ? nil : trimmed
 }
 
 private func historyInteger(
@@ -460,6 +454,7 @@ private func historyInteger(
     range: ClosedRange<Int>
 ) throws -> Int {
     guard let value else { return defaultValue }
+    if case .null = value { return defaultValue }
     guard case .int(let parsed) = value, range.contains(parsed) else {
         throw CodingToolError.invalidArgument(
             "agent_history: `\(key)` must be an integer in \(range.lowerBound)...\(range.upperBound)"
@@ -468,22 +463,7 @@ private func historyInteger(
     return parsed
 }
 
-private struct SubagentHistoryListItem: Encodable {
-    var childSessionId: String
-    var taskId: String?
-    var subagentType: String
-    var status: SubagentHistoryStatus
-    var model: String?
-    var messageCount: Int
-    var hasLiveMessage: Bool
-    var currentActivity: String?
-    var errorMessage: String?
-    var startedAt: Int64
-    var updatedAt: Int64
-}
-
 private struct SubagentHistoryPage: Encodable {
-    var childSessionId: String
     var taskId: String?
     var subagentType: String
     var status: SubagentHistoryStatus
@@ -524,7 +504,6 @@ private func subagentHistoryPage(
     let end = min(messageCount, start + limit)
     let pageMessages = start < end ? Array(snapshot.messages[start..<end]) : []
     return SubagentHistoryPage(
-        childSessionId: snapshot.childSessionId,
         taskId: snapshot.taskId,
         subagentType: snapshot.subagentType,
         status: snapshot.status,
@@ -541,59 +520,6 @@ private func subagentHistoryPage(
         responseTruncated: false,
         oversizedMessage: nil
     )
-}
-
-private struct SubagentHistoryList: Encodable {
-    var retention: SubagentHistoryRetentionPayload
-    var runs: [SubagentHistoryListItem]
-    var responseTruncated: Bool
-}
-
-private struct SubagentHistoryRetentionPayload: Encodable {
-    var processLocal: Bool
-    var maxTerminalEntries: Int
-    var maxEstimatedBytes: Int
-    var evictedEntries: Int
-}
-
-private func renderSubagentHistoryList(
-    _ snapshots: [SubagentHistorySnapshot],
-    retention: SubagentHistoryRetention
-) throws -> String {
-    var items = snapshots.map {
-        SubagentHistoryListItem(
-            childSessionId: $0.childSessionId,
-            taskId: $0.taskId,
-            subagentType: $0.subagentType,
-            status: $0.status,
-            model: $0.model,
-            messageCount: $0.messages.count,
-            hasLiveMessage: $0.liveMessage != nil,
-            currentActivity: $0.currentActivity.map { String($0.prefix(1_000)) },
-            errorMessage: $0.errorMessage.map { String($0.prefix(1_000)) },
-            startedAt: $0.startedAt,
-            updatedAt: $0.updatedAt
-        )
-    }
-    let retentionPayload = SubagentHistoryRetentionPayload(
-        processLocal: retention.processLocal,
-        maxTerminalEntries: retention.maxTerminalEntries,
-        maxEstimatedBytes: retention.maxEstimatedBytes,
-        evictedEntries: retention.evictedEntries
-    )
-    var list = SubagentHistoryList(
-        retention: retentionPayload,
-        runs: items,
-        responseTruncated: false
-    )
-    var body = try renderUntrustedSubagentJSON(list, element: "subagent-runs")
-    while body.utf8.count > maxSubagentHistoryResponseBytes, !items.isEmpty {
-        items.removeFirst()
-        list.runs = items
-        list.responseTruncated = true
-        body = try renderUntrustedSubagentJSON(list, element: "subagent-runs")
-    }
-    return body
 }
 
 private func renderBoundedSubagentHistoryPage(

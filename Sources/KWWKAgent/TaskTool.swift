@@ -1,252 +1,373 @@
 import Foundation
 import KWWKAI
 
-/// Unified background-task control. Polling accepts many ids in one tool call
-/// and returns as soon as any watched task reaches a terminal state. Background
-/// results auto-deliver through runtime asides, so polling is only for moments
-/// when the agent is genuinely blocked on a result.
-public func createTaskTool(
+private func taskDeliveryConsumer(
+    sessionId: String?,
+    explicit: BackgroundTaskDeliveryConsumer?
+) -> BackgroundTaskDeliveryConsumer {
+    if let explicit, explicit.sessionId == sessionId {
+        return explicit
+    }
+    return BackgroundTaskDeliveryConsumer(sessionId: sessionId)
+}
+
+private func optionalTaskParameter(
+    _ valueSchema: [String: JSONValue],
+    description: String
+) -> JSONValue {
+    .object([
+        "anyOf": .array([
+            .object(valueSchema),
+            .object(["type": .string("null")]),
+        ]),
+        "description": .string(description),
+    ])
+}
+
+/// Creates the four background-task tools with one shared delivery consumer.
+/// Filter this array when exposing a subset so the selected tools keep that shared consumer.
+public func createTaskTools(
+    manager: BackgroundTaskManager,
+    sessionId: String? = nil,
+    deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
+) -> [AgentTool] {
+    let consumer = taskDeliveryConsumer(sessionId: sessionId, explicit: explicitConsumer)
+    return [
+        makeTaskListTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer),
+        makeTaskReadTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer),
+        makeTaskPollTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer),
+        makeTaskCancelTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer),
+    ]
+}
+
+func createTaskListTool(
     manager: BackgroundTaskManager,
     sessionId: String? = nil,
     deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
 ) -> AgentTool {
-    let deliveryConsumer = explicitConsumer ?? BackgroundTaskDeliveryConsumer(sessionId: sessionId)
+    let consumer = taskDeliveryConsumer(sessionId: sessionId, explicit: explicitConsumer)
+    return makeTaskListTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer)
+}
+
+func createTaskReadTool(
+    manager: BackgroundTaskManager,
+    sessionId: String? = nil,
+    deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
+) -> AgentTool {
+    let consumer = taskDeliveryConsumer(sessionId: sessionId, explicit: explicitConsumer)
+    return makeTaskReadTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer)
+}
+
+func createTaskPollTool(
+    manager: BackgroundTaskManager,
+    sessionId: String? = nil,
+    deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
+) -> AgentTool {
+    let consumer = taskDeliveryConsumer(sessionId: sessionId, explicit: explicitConsumer)
+    return makeTaskPollTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer)
+}
+
+func createTaskCancelTool(
+    manager: BackgroundTaskManager,
+    sessionId: String? = nil,
+    deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
+) -> AgentTool {
+    let consumer = taskDeliveryConsumer(sessionId: sessionId, explicit: explicitConsumer)
+    return makeTaskCancelTool(manager: manager, sessionId: sessionId, deliveryConsumer: consumer)
+}
+
+private func makeTaskListTool(
+    manager: BackgroundTaskManager,
+    sessionId: String?,
+    deliveryConsumer: BackgroundTaskDeliveryConsumer
+) -> AgentTool {
     let parameters: JSONValue = .object([
         "type": .string("object"),
         "properties": .object([
-            "poll": .object([
-                "type": .string("array"),
-                "items": .object(["type": .string("string")]),
-                "description": .string(
-                    "Task ids to watch. Returns when any one finishes. Omit all actions to watch every running task."
-                ),
-            ]),
-            "cancel": .object([
-                "type": .string("array"),
-                "items": .object(["type": .string("string")]),
-                "description": .string("Task ids to cancel."),
-            ]),
-            "list": .object([
-                "type": .string("boolean"),
-                "description": .string(
-                    "List queued/running and recent terminal tasks without waiting. Output is paginated and includes at most 512 bytes of trust-bounded log preview per task; use read for complete output."
-                ),
-            ]),
-            "include_all": .object([
-                "type": .string("boolean"),
-                "description": .string("With list=true, include older terminal history too."),
-            ]),
-            "list_offset": .object([
-                "type": .string("integer"),
-                "minimum": .int(0),
-                "description": .string("Zero-based list page offset. Defaults to 0."),
-            ]),
-            "list_limit": .object([
-                "type": .string("integer"),
-                "minimum": .int(1),
-                "maximum": .int(50),
-                "description": .string("List page size. Defaults to 20, maximum 50."),
-            ]),
-            "read": .object([
-                "type": .string("object"),
-                "properties": .object([
-                    "task_id": .object(["type": .string("string")]),
-                    "offset": .object([
-                        "type": .string("integer"),
-                        "minimum": .int(0),
-                        "description": .string("Byte offset. Defaults to 0."),
-                    ]),
-                    "limit": .object([
-                        "type": .string("integer"),
-                        "minimum": .int(1),
-                        "maximum": .int(32_768),
-                        "description": .string("Target bytes. Defaults to 8192; a valid UTF-8 scalar may extend a page by at most 3 bytes so next_offset remains text-safe."),
-                    ]),
-                ]),
-                "required": .array([.string("task_id")]),
-                "additionalProperties": .bool(false),
-                "description": .string("Read a bounded range of a manager-owned output artifact by task id."),
-            ]),
-            "timeout_seconds": .object([
-                "type": .string("integer"),
-                "minimum": .int(1),
-                "maximum": .int(300),
-                "description": .string("Maximum poll duration. Defaults to 30 seconds."),
-            ]),
+            "include_all": optionalTaskParameter(
+                ["type": .string("boolean")],
+                description: "Include older terminal tasks."
+            ),
+            "offset": optionalTaskParameter(
+                ["type": .string("integer"), "minimum": .int(0)],
+                description: "Task offset."
+            ),
+            "limit": optionalTaskParameter(
+                [
+                    "type": .string("integer"),
+                    "minimum": .int(1),
+                    "maximum": .int(50),
+                ],
+                description: "Maximum tasks to return."
+            ),
         ]),
         "additionalProperties": .bool(false),
     ])
-
-    var tool = AgentTool(
-        name: "task",
-        label: "task",
-        description: """
-        Manage background tasks. Results are delivered automatically when tasks finish; do not poll merely to retrieve output. When completely blocked, make one call with poll containing every relevant task id. Poll is wait-any across queued and running tasks: it returns on the first terminal result, timeout, or queued user message. Queue time does not consume a task's hard runtime timeout. Never emit multiple task poll calls in one assistant turn. Use list=true for a bounded status page, read={task_id,offset,limit} for manager-authorized log paging, and cancel=[...] to stop queued or running tasks.
-        """,
+    let tool = AgentTool(
+        name: "task_list",
+        label: "task_list",
+        description: "List queued, running, and recent background tasks.",
         parameters: parameters,
-        interruptible: true,
-        execute: { _, args, cancellation, onUpdate in
+        execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
-            guard case .object(let object) = args else {
-                throw CodingToolError.invalidArgument("task: expected an object")
-            }
-
-            let allowedKeys: Set<String> = [
-                "poll", "cancel", "list", "include_all", "list_offset",
-                "list_limit", "read", "timeout_seconds",
-            ]
-            if let unknown = object.keys.filter({ !allowedKeys.contains($0) }).sorted().first {
-                throw CodingToolError.invalidArgument("task: unknown argument `\(unknown)`")
-            }
-
-            var seenCancelIds: Set<String> = []
-            let cancelIds = try taskStringArray(object["cancel"], field: "cancel")
-                .filter { seenCancelIds.insert($0).inserted }
-            let requestedPollIds = try taskStringArray(object["poll"], field: "poll")
-            let shouldList = try taskBool(object["list"], field: "list")
-            let includeAll = try taskBool(object["include_all"], field: "include_all")
-            let listOffset = try taskBoundedInteger(
-                object["list_offset"],
-                field: "list_offset",
+            let object = try taskObject(
+                args,
+                toolName: "task_list",
+                allowedKeys: ["include_all", "offset", "limit"]
+            )
+            let includeAll = try taskBool(
+                object["include_all"], field: "include_all", toolName: "task_list"
+            )
+            let offset = try taskBoundedInteger(
+                object["offset"],
+                field: "offset",
+                toolName: "task_list",
                 defaultValue: 0,
                 range: 0...1_000_000_000
             )
-            let listLimit = try taskBoundedInteger(
-                object["list_limit"],
-                field: "list_limit",
+            let limit = try taskBoundedInteger(
+                object["limit"],
+                field: "limit",
+                toolName: "task_list",
                 defaultValue: 20,
                 range: 1...50
             )
-            let readRequest = try taskReadRequest(object["read"])
-            let timeoutSeconds = try taskTimeout(object["timeout_seconds"])
+            let page = await manager.listPage(
+                sessionId: sessionId,
+                includeAllTerminal: includeAll,
+                offset: offset,
+                limit: limit
+            )
+            return taskListResult(page: page)
+        }
+    )
+    return configureTaskTool(tool, manager: manager, deliveryConsumer: deliveryConsumer)
+}
 
-            if readRequest != nil,
-               shouldList || !cancelIds.isEmpty || !requestedPollIds.isEmpty {
-                throw CodingToolError.invalidArgument(
-                    "task: `read` cannot be combined with poll, cancel, or list"
+private func makeTaskReadTool(
+    manager: BackgroundTaskManager,
+    sessionId: String?,
+    deliveryConsumer: BackgroundTaskDeliveryConsumer
+) -> AgentTool {
+    let parameters: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "task_id": .object([
+                "type": .string("string"),
+                "description": .string("Task ID."),
+            ]),
+            "offset": optionalTaskParameter(
+                ["type": .string("integer"), "minimum": .int(0)],
+                description: "Byte offset."
+            ),
+            "limit": optionalTaskParameter(
+                [
+                    "type": .string("integer"),
+                    "minimum": .int(1),
+                    "maximum": .int(32_768),
+                ],
+                description: "Maximum bytes to return."
+            ),
+        ]),
+        "required": .array([.string("task_id")]),
+        "additionalProperties": .bool(false),
+    ])
+    let tool = AgentTool(
+        name: "task_read",
+        label: "task_read",
+        description: "Read a byte range from a background task's output.",
+        parameters: parameters,
+        execute: { _, args, cancellation, _ in
+            try cancellation?.throwIfCancelled()
+            let object = try taskObject(
+                args,
+                toolName: "task_read",
+                allowedKeys: ["task_id", "offset", "limit"]
+            )
+            let taskId = try parsedTaskId(object["task_id"], toolName: "task_read")
+            let offset = try taskBoundedInteger(
+                object["offset"],
+                field: "offset",
+                toolName: "task_read",
+                defaultValue: 0,
+                range: 0...1_000_000_000
+            )
+            let limit = try taskBoundedInteger(
+                object["limit"],
+                field: "limit",
+                toolName: "task_read",
+                defaultValue: 8_192,
+                range: 1...32_768
+            )
+            do {
+                let chunk = try await manager.readOutput(
+                    taskId: taskId,
+                    sessionId: sessionId,
+                    offset: offset,
+                    limit: limit
                 )
-            }
-            if shouldList, !requestedPollIds.isEmpty {
-                throw CodingToolError.invalidArgument(
-                    "task: `list` cannot be combined with a non-empty poll"
-                )
-            }
-            if !shouldList,
-               object["include_all"] != nil || object["list_offset"] != nil
-                    || object["list_limit"] != nil {
-                throw CodingToolError.invalidArgument(
-                    "task: include_all/list_offset/list_limit require list=true"
-                )
-            }
-
-            if let readRequest {
-                try cancellation?.throwIfCancelled()
-                let chunk: BackgroundTaskOutputChunk
-                do {
-                    chunk = try await manager.readOutput(
-                        taskId: readRequest.taskId,
-                        sessionId: sessionId,
-                        offset: readRequest.offset,
-                        limit: readRequest.limit
-                    )
-                } catch let error as BackgroundTaskError {
-                    throw CodingToolError.invalidArgument(error.localizedDescription)
-                }
                 return taskOutputReadResult(chunk)
+            } catch let error as BackgroundTaskError {
+                throw CodingToolError.invalidArgument(error.localizedDescription)
+            }
+        }
+    )
+    return configureTaskTool(tool, manager: manager, deliveryConsumer: deliveryConsumer)
+}
+
+private func makeTaskCancelTool(
+    manager: BackgroundTaskManager,
+    sessionId: String?,
+    deliveryConsumer: BackgroundTaskDeliveryConsumer
+) -> AgentTool {
+    let parameters: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "task_ids": optionalTaskParameter(
+                [
+                    "type": .string("array"),
+                    "items": .object(["type": .string("string")]),
+                ],
+                description: "Task IDs to cancel."
+            ),
+        ]),
+        "additionalProperties": .bool(false),
+    ])
+    let tool = AgentTool(
+        name: "task_cancel",
+        label: "task_cancel",
+        description: "Cancel background tasks by ID.",
+        parameters: parameters,
+        execute: { _, args, cancellation, _ in
+            try cancellation?.throwIfCancelled()
+            let object = try taskObject(
+                args,
+                toolName: "task_cancel",
+                allowedKeys: ["task_ids"]
+            )
+            var seen: Set<String> = []
+            let taskIds = try taskStringArray(
+                object["task_ids"], field: "task_ids", toolName: "task_cancel"
+            ).filter { seen.insert($0).inserted }
+            guard !taskIds.isEmpty else {
+                return taskActionResult(snapshots: [], cancelledIds: [])
             }
 
-            // Resolve and validate every target before the first mutation. A
-            // mixed valid/invalid cancel list must never partially kill work.
-            for id in cancelIds {
+            // Validate the complete set before mutating any task.
+            for id in taskIds {
                 guard let snapshot = await manager.get(id),
                       taskIsVisible(snapshot, sessionId: sessionId) else {
-                    throw CodingToolError.invalidArgument("task not found in this session: \(id)")
-                }
-            }
-
-            // Empty action arrays are no-ops. An entirely action-less request
-            // still means poll-all, while `list: true` plus empty arrays must
-            // remain an immediate list operation.
-            let shouldPoll = !requestedPollIds.isEmpty
-                || (!shouldList && cancelIds.isEmpty && readRequest == nil)
-            let pollIds: [String]
-            if shouldPoll {
-                if requestedPollIds.isEmpty {
-                    pollIds = await manager.activeTaskIds(sessionId: sessionId)
-                } else {
-                    var seen: Set<String> = []
-                    pollIds = requestedPollIds.filter { seen.insert($0).inserted }
-                    _ = try await manager.snapshots(
-                        taskIds: pollIds,
-                        sessionId: sessionId,
-                        includeOutputTails: false
+                    throw CodingToolError.invalidArgument(
+                        "task_cancel: task not found in this session: \(id)"
                     )
                 }
-            } else {
-                pollIds = []
             }
 
-            var seenWatched: Set<String> = []
-            let watchedIds = (cancelIds + pollIds).filter { seenWatched.insert($0).inserted }
-            let alreadyDelivered = deliveryConsumer.beginWatching(taskIds: watchedIds)
+            _ = deliveryConsumer.beginWatching(taskIds: taskIds)
             var watchFinished = false
             defer {
                 if !watchFinished {
                     deliveryConsumer.finishWatching(
-                        taskIds: watchedIds,
+                        taskIds: taskIds,
                         terminalTaskIds: []
                     )?.rollback()
                 }
             }
 
             try cancellation?.throwIfCancelled()
-            let cancellationBatch = try await manager.killAtomically(
-                cancelIds,
-                sessionId: sessionId
+            let batch = try await manager.killAtomically(taskIds, sessionId: sessionId)
+            let snapshots = taskOrderedSnapshots(batch.snapshots, ids: taskIds)
+            let terminalIds = Set(snapshots.filter(\.status.isTerminal).map(\.id))
+            let lease = deliveryConsumer.finishWatching(
+                taskIds: taskIds,
+                terminalTaskIds: terminalIds
             )
-            let cancelledIds = cancellationBatch.cancelledIds
+            watchFinished = true
+            var result = taskActionResult(
+                snapshots: snapshots,
+                cancelledIds: batch.cancelledIds,
+                requestedCancelIds: Set(taskIds)
+            )
+            result.retentionLease = lease
+            return result
+        }
+    )
+    return configureTaskTool(tool, manager: manager, deliveryConsumer: deliveryConsumer)
+}
 
-            if !shouldPoll {
-                if shouldList {
-                    let page = await manager.listPage(
+private func makeTaskPollTool(
+    manager: BackgroundTaskManager,
+    sessionId: String?,
+    deliveryConsumer: BackgroundTaskDeliveryConsumer
+) -> AgentTool {
+    let parameters: JSONValue = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "task_ids": optionalTaskParameter(
+                [
+                    "type": .string("array"),
+                    "items": .object(["type": .string("string")]),
+                ],
+                description: "Task IDs to watch; omit to watch all active tasks."
+            ),
+            "timeout_seconds": optionalTaskParameter(
+                [
+                    "type": .string("integer"),
+                    "minimum": .int(1),
+                    "maximum": .int(300),
+                ],
+                description: "Maximum wait in seconds."
+            ),
+        ]),
+        "additionalProperties": .bool(false),
+    ])
+    var tool = AgentTool(
+        name: "task_poll",
+        label: "task_poll",
+        description: "Wait until any watched background task finishes; use only when otherwise blocked.",
+        parameters: parameters,
+        interruptible: true,
+        execute: { _, args, cancellation, onUpdate in
+            try cancellation?.throwIfCancelled()
+            let object = try taskObject(
+                args,
+                toolName: "task_poll",
+                allowedKeys: ["task_ids", "timeout_seconds"]
+            )
+            var seen: Set<String> = []
+            let requestedIds = try taskStringArray(
+                object["task_ids"], field: "task_ids", toolName: "task_poll"
+            ).filter { seen.insert($0).inserted }
+            let timeoutSeconds = try taskTimeout(object["timeout_seconds"])
+            let taskIds: [String]
+            if requestedIds.isEmpty {
+                taskIds = await manager.activeTaskIds(sessionId: sessionId)
+            } else {
+                do {
+                    _ = try await manager.snapshots(
+                        taskIds: requestedIds,
                         sessionId: sessionId,
-                        includeAllTerminal: includeAll,
-                        offset: listOffset,
-                        limit: listLimit
+                        includeOutputTails: false
                     )
-                    let terminalIds = Set(cancellationBatch.snapshots.filter {
-                        $0.status.isTerminal
-                    }.map(\.id))
-                    let lease = deliveryConsumer.finishWatching(
-                        taskIds: watchedIds,
-                        terminalTaskIds: terminalIds
-                    )
-                    watchFinished = true
-                    var result = taskListResult(page: page, cancelledIds: cancelledIds)
-                    result.retentionLease = lease
-                    return result
+                } catch let error as BackgroundTaskError {
+                    throw CodingToolError.invalidArgument(error.localizedDescription)
                 }
-                let snapshots = taskOrderedSnapshots(cancellationBatch.snapshots, ids: cancelIds)
-                let watchedIdSet = Set(watchedIds)
-                let terminalIds = Set(snapshots.filter {
-                    watchedIdSet.contains($0.id) && $0.status.isTerminal
-                }.map(\.id))
-                let lease = deliveryConsumer.finishWatching(
-                    taskIds: watchedIds,
-                    terminalTaskIds: terminalIds
-                )
-                watchFinished = true
-                var result = taskActionResult(
-                    snapshots: snapshots,
-                    cancelledIds: cancelledIds,
-                    requestedCancelIds: Set(cancelIds)
-                )
-                result.retentionLease = lease
-                return result
+                taskIds = requestedIds
             }
 
-            guard !pollIds.isEmpty else {
-                _ = deliveryConsumer.finishWatching(taskIds: watchedIds, terminalTaskIds: [])
+            let alreadyDelivered = deliveryConsumer.beginWatching(taskIds: taskIds)
+            var watchFinished = false
+            defer {
+                if !watchFinished {
+                    deliveryConsumer.finishWatching(
+                        taskIds: taskIds,
+                        terminalTaskIds: []
+                    )?.rollback()
+                }
+            }
+
+            guard !taskIds.isEmpty else {
+                _ = deliveryConsumer.finishWatching(taskIds: [], terminalTaskIds: [])
                 watchFinished = true
                 return AgentToolResult(
                     content: [.text(TextContent(text: "No queued or running background tasks."))],
@@ -260,7 +381,7 @@ public func createTaskTool(
             let watched: [BackgroundTaskSnapshot]
             do {
                 watched = try await manager.snapshots(
-                    taskIds: pollIds,
+                    taskIds: taskIds,
                     sessionId: sessionId,
                     includeOutputTails: false
                 )
@@ -268,7 +389,7 @@ public func createTaskTool(
                 throw CodingToolError.invalidArgument(error.localizedDescription)
             }
 
-            var snapshots = taskOrderedSnapshots(watched, ids: pollIds)
+            var snapshots = taskOrderedSnapshots(watched, ids: taskIds)
             var reason = "completed"
             let pollStartedAt = Date()
             let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -287,14 +408,16 @@ public func createTaskTool(
             }
 
             emitPollProgress(force: true)
-
             while !snapshots.contains(where: { $0.status.isTerminal }) {
                 if cancellation?.isCancelled == true {
                     if cancellation?.reason == "steering" {
                         reason = "interrupted"
                         break
                     }
-                    _ = deliveryConsumer.finishWatching(taskIds: watchedIds, terminalTaskIds: [])
+                    _ = deliveryConsumer.finishWatching(
+                        taskIds: taskIds,
+                        terminalTaskIds: []
+                    )
                     watchFinished = true
                     throw CodingToolError.aborted
                 }
@@ -303,50 +426,52 @@ public func createTaskTool(
                     break
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
-                snapshots = await taskSnapshots(manager: manager, ids: pollIds)
+                snapshots = await taskSnapshots(manager: manager, ids: taskIds)
                 emitPollProgress()
             }
 
-            // Take one final actor-isolated snapshot and use this exact value
-            // for both rendered output and lease acknowledgement. If a task
-            // completes after the snapshot, finishWatching sees it was not
-            // represented and restores its automatic aside.
+            // Render and acknowledge the same actor-isolated terminal snapshot.
             let finalLightweight = (try? await manager.snapshots(
-                taskIds: watchedIds,
+                taskIds: taskIds,
                 sessionId: sessionId,
                 includeOutputTails: false
             )) ?? []
-            let finalWatched = await taskHydrateTerminalSnapshots(
-                manager: manager,
-                snapshots: finalLightweight
+            let renderedSnapshots = taskOrderedSnapshots(
+                await taskHydrateTerminalSnapshots(
+                    manager: manager,
+                    snapshots: finalLightweight
+                ),
+                ids: taskIds
             )
-            let renderedPollSnapshots = taskOrderedSnapshots(finalWatched, ids: pollIds)
-            if renderedPollSnapshots.contains(where: { $0.status.isTerminal }) {
+            if renderedSnapshots.contains(where: { $0.status.isTerminal }) {
                 reason = "completed"
             }
-            let pollIdSet = Set(pollIds)
-            let renderedCancelSnapshots = taskOrderedSnapshots(
-                finalWatched,
-                ids: cancelIds.filter { !pollIdSet.contains($0) }
-            )
-            let renderedSnapshots = renderedCancelSnapshots + renderedPollSnapshots
-            let terminalIds = Set(renderedSnapshots.filter { $0.status.isTerminal }.map(\.id))
+            let terminalIds = Set(renderedSnapshots.filter(\.status.isTerminal).map(\.id))
             let lease = deliveryConsumer.finishWatching(
-                taskIds: watchedIds,
+                taskIds: taskIds,
                 terminalTaskIds: terminalIds
             )
             watchFinished = true
             var result = taskPollResult(
                 snapshots: renderedSnapshots,
                 reason: reason,
-                alreadyDeliveredTaskIds: alreadyDelivered,
-                cancelledIds: cancelledIds
+                alreadyDeliveredTaskIds: alreadyDelivered
             )
             result.retentionLease = lease
             return result
         }
     )
-    tool.isBackgroundTaskTool = true
+    tool = configureTaskTool(tool, manager: manager, deliveryConsumer: deliveryConsumer)
+    tool.isBackgroundTaskPollTool = true
+    return tool
+}
+
+private func configureTaskTool(
+    _ tool: AgentTool,
+    manager: BackgroundTaskManager,
+    deliveryConsumer: BackgroundTaskDeliveryConsumer
+) -> AgentTool {
+    var tool = tool
     tool.codingToolCapabilities = .task
     tool.backgroundDeliveryConsumer = deliveryConsumer
     tool.backgroundTaskManager = manager
@@ -363,7 +488,7 @@ private func taskPollProgressResult(
     let terminal = snapshots.count { $0.status.isTerminal }
     let elapsed = Double(max(0, elapsedMs)) / 1_000
     let summary = String(
-        format: "task poll waiting · watched=%d · running=%d · queued=%d · terminal=%d · %.1fs/%ds",
+        format: "task_poll waiting · watched=%d · running=%d · queued=%d · terminal=%d · %.1fs/%ds",
         snapshots.count,
         running,
         queued,
@@ -386,80 +511,68 @@ private func taskPollProgressResult(
     )
 }
 
-/// Must be called only after schema validation and the before-tool hook rewrite.
-/// It intentionally mirrors `createTaskTool`'s action semantics exactly.
-func taskRequestWillPoll(_ args: JSONValue) -> Bool {
-    guard case .object(let object) = args else { return false }
-    let allowedKeys: Set<String> = [
-        "poll", "cancel", "list", "include_all", "list_offset",
-        "list_limit", "read", "timeout_seconds",
-    ]
-    guard object.keys.allSatisfy(allowedKeys.contains) else { return false }
-    guard let pollIds = try? taskStringArray(object["poll"], field: "poll"),
-          let cancelIds = try? taskStringArray(object["cancel"], field: "cancel") else {
-        return false
-    }
-    let shouldList: Bool = {
-        if case .bool(let value) = object["list"] ?? .null { return value }
-        return false
-    }()
-    return !pollIds.isEmpty
-        || (!shouldList && cancelIds.isEmpty && object["read"] == nil)
-}
-
-private struct TaskReadRequest {
-    let taskId: String
-    let offset: Int
-    let limit: Int
-}
-
-private func taskReadRequest(_ value: JSONValue?) throws -> TaskReadRequest? {
-    guard let value else { return nil }
+private func taskObject(
+    _ value: JSONValue,
+    toolName: String,
+    allowedKeys: Set<String>
+) throws -> [String: JSONValue] {
     guard case .object(let object) = value else {
-        throw CodingToolError.invalidArgument("task: `read` must be an object")
+        throw CodingToolError.invalidArgument("\(toolName): expected an object")
     }
-    let allowed: Set<String> = ["task_id", "offset", "limit"]
-    if let unknown = object.keys.filter({ !allowed.contains($0) }).sorted().first {
-        throw CodingToolError.invalidArgument("task: unknown read argument `\(unknown)`")
+    if let unknown = object.keys.filter({ !allowedKeys.contains($0) }).sorted().first {
+        throw CodingToolError.invalidArgument("\(toolName): unknown argument `\(unknown)`")
     }
-    guard case .string(let taskId) = object["task_id"] ?? .null,
-          !taskId.isEmpty else {
-        throw CodingToolError.invalidArgument("task: `read.task_id` is required")
-    }
-    return TaskReadRequest(
-        taskId: taskId,
-        offset: try taskBoundedInteger(
-            object["offset"],
-            field: "read.offset",
-            defaultValue: 0,
-            range: 0...1_000_000_000
-        ),
-        limit: try taskBoundedInteger(
-            object["limit"],
-            field: "read.limit",
-            defaultValue: 8_192,
-            range: 1...32_768
-        )
-    )
+    return object
 }
 
-private func taskStringArray(_ value: JSONValue?, field: String) throws -> [String] {
+private func parsedTaskId(_ value: JSONValue?, toolName: String) throws -> String {
+    guard case .string(let raw) = value ?? .null else {
+        throw CodingToolError.invalidArgument("\(toolName): `task_id` is required")
+    }
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw CodingToolError.invalidArgument("\(toolName): `task_id` is required")
+    }
+    return trimmed
+}
+
+private func taskStringArray(
+    _ value: JSONValue?,
+    field: String,
+    toolName: String
+) throws -> [String] {
     guard let value else { return [] }
+    if case .null = value { return [] }
     guard case .array(let values) = value else {
-        throw CodingToolError.invalidArgument("task: `\(field)` must be an array of task ids")
+        throw CodingToolError.invalidArgument(
+            "\(toolName): `\(field)` must be an array of task IDs"
+        )
     }
     return try values.map { value in
-        guard case .string(let id) = value, !id.isEmpty else {
-            throw CodingToolError.invalidArgument("task: `\(field)` must contain only task ids")
+        guard case .string(let raw) = value else {
+            throw CodingToolError.invalidArgument(
+                "\(toolName): `\(field)` must contain only task IDs"
+            )
+        }
+        let id = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else {
+            throw CodingToolError.invalidArgument(
+                "\(toolName): `\(field)` must contain only task IDs"
+            )
         }
         return id
     }
 }
 
-private func taskBool(_ value: JSONValue?, field: String) throws -> Bool {
+private func taskBool(
+    _ value: JSONValue?,
+    field: String,
+    toolName: String
+) throws -> Bool {
     guard let value else { return false }
+    if case .null = value { return false }
     guard case .bool(let bool) = value else {
-        throw CodingToolError.invalidArgument("task: `\(field)` must be a boolean")
+        throw CodingToolError.invalidArgument("\(toolName): `\(field)` must be a boolean")
     }
     return bool
 }
@@ -467,10 +580,12 @@ private func taskBool(_ value: JSONValue?, field: String) throws -> Bool {
 private func taskBoundedInteger(
     _ value: JSONValue?,
     field: String,
+    toolName: String,
     defaultValue: Int,
     range: ClosedRange<Int>
 ) throws -> Int {
     guard let value else { return defaultValue }
+    if case .null = value { return defaultValue }
     let raw: Int
     switch value {
     case .int(let integer):
@@ -481,18 +596,18 @@ private func taskBoundedInteger(
               double >= Double(range.lowerBound),
               double <= Double(range.upperBound) else {
             throw CodingToolError.invalidArgument(
-                "task: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
+                "\(toolName): `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
             )
         }
         raw = Int(double)
     default:
         throw CodingToolError.invalidArgument(
-            "task: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
+            "\(toolName): `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
         )
     }
     guard range.contains(raw) else {
         throw CodingToolError.invalidArgument(
-            "task: `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
+            "\(toolName): `\(field)` must be an integer from \(range.lowerBound) through \(range.upperBound)"
         )
     }
     return raw
@@ -500,6 +615,7 @@ private func taskBoundedInteger(
 
 private func taskTimeout(_ value: JSONValue?) throws -> Int {
     guard let value else { return 30 }
+    if case .null = value { return 30 }
     let raw: Int
     switch value {
     case .int(let integer):
@@ -510,18 +626,18 @@ private func taskTimeout(_ value: JSONValue?) throws -> Int {
               double >= 1,
               double <= 300 else {
             throw CodingToolError.invalidArgument(
-                "task: `timeout_seconds` must be a finite integer from 1 through 300"
+                "task_poll: `timeout_seconds` must be a finite integer from 1 through 300"
             )
         }
         raw = Int(double)
     default:
         throw CodingToolError.invalidArgument(
-            "task: `timeout_seconds` must be a finite integer from 1 through 300"
+            "task_poll: `timeout_seconds` must be a finite integer from 1 through 300"
         )
     }
     guard (1...300).contains(raw) else {
         throw CodingToolError.invalidArgument(
-            "task: `timeout_seconds` must be a finite integer from 1 through 300"
+            "task_poll: `timeout_seconds` must be a finite integer from 1 through 300"
         )
     }
     return raw
@@ -569,14 +685,8 @@ private func taskHydrateTerminalSnapshots(
     return hydrated
 }
 
-private func taskListResult(
-    page: BackgroundTaskListPage,
-    cancelledIds: [String]
-) -> AgentToolResult {
+private func taskListResult(page: BackgroundTaskListPage) -> AgentToolResult {
     var lines: [String] = []
-    if !cancelledIds.isEmpty {
-        lines.append("Cancelled: \(cancelledIds.joined(separator: ", "))")
-    }
     if page.tasks.isEmpty {
         lines.append("No queued, running, or recent background tasks.")
     } else {
@@ -606,17 +716,16 @@ private func taskListResult(
                 lines.append("  output_tail:\n  <untrusted-output>\n\(taskEscapeUntrustedOutput(snapshot.outputTail.trimmingCharacters(in: .newlines)))\n  </untrusted-output>")
             }
             if snapshot.outputTailTruncated {
-                lines.append("  output_truncated: true · use task read for the complete artifact")
+                lines.append("  output_truncated: true · use task_read for the complete artifact")
             }
         }
     }
     if let next = page.nextOffset {
-        lines.append("More tasks available: call task(list:true, list_offset:\(next)).")
+        lines.append("More tasks available: call task_list({\"offset\":\(next)}).")
     }
     return AgentToolResult(
         content: [.text(TextContent(text: lines.joined(separator: "\n")))],
         details: .object([
-            "cancelled": .array(cancelledIds.map(JSONValue.string)),
             "count": .int(page.tasks.count),
             "total": .int(page.total),
             "offset": .int(page.offset),
@@ -685,13 +794,9 @@ private func taskActionResult(
 private func taskPollResult(
     snapshots: [BackgroundTaskSnapshot],
     reason: String,
-    alreadyDeliveredTaskIds: Set<String> = [],
-    cancelledIds: [String] = []
+    alreadyDeliveredTaskIds: Set<String> = []
 ) -> AgentToolResult {
-    var body = "task poll: \(reason)"
-    if !cancelledIds.isEmpty {
-        body += "\n\ncancelled: \(cancelledIds.joined(separator: ", "))"
-    }
+    var body = "task_poll: \(reason)"
     for snapshot in snapshots {
         if alreadyDeliveredTaskIds.contains(snapshot.id), snapshot.status.isTerminal {
             body += "\n\ntask \(snapshot.id): completion was already delivered through runtime context"
@@ -706,7 +811,7 @@ private func taskPollResult(
             }
             if snapshot.outputSizeBytes > 0 {
                 body += "\noutput_bytes: \(snapshot.outputSizeBytes)"
-                body += "\nhint: use task read with this task id to recover the complete output artifact"
+                body += "\nhint: use task_read with this task id to recover the complete output artifact"
             }
         } else {
             body += "\n\n\(taskSnapshotText(snapshot))"
@@ -719,7 +824,6 @@ private func taskPollResult(
             "completed_task_ids": .array(
                 snapshots.filter { $0.status.isTerminal }.map { .string($0.id) }
             ),
-            "cancelled": .array(cancelledIds.map(JSONValue.string)),
             "tasks": .array(snapshots.map(taskSnapshotJSON)),
         ])
     )
@@ -743,7 +847,7 @@ private func taskSnapshotText(_ snapshot: BackgroundTaskSnapshot) -> String {
             body += "\nerror: \(taskEscapeUntrustedOutput(error))"
         }
         if let details = outcome.details,
-           let data = try? JSONEncoder().encode(details),
+           let data = try? JSONEncoder().encode(modelFacingJSON(details)),
            let json = String(data: data, encoding: .utf8) {
             body += "\noutcome_details: \(taskEscapeUntrustedOutput(json))"
         }
@@ -758,7 +862,7 @@ private func taskSnapshotText(_ snapshot: BackgroundTaskSnapshot) -> String {
         body += "\n</untrusted-output>"
     }
     if snapshot.outputTailTruncated {
-        body += "\noutput_truncated: true (use task read with byte offsets for the complete artifact)"
+        body += "\noutput_truncated: true (use task_read with byte offsets for the complete artifact)"
     }
     return body
 }
@@ -791,7 +895,9 @@ private func taskSnapshotJSON(_ snapshot: BackgroundTaskSnapshot) -> JSONValue {
     if let file = snapshot.outputFile { value["output_file"] = .string(file) }
     if let outcome = snapshot.outcome {
         value["summary"] = .string(outcome.summary)
-        if let details = outcome.details { value["outcome_details"] = details }
+        if let details = outcome.details {
+            value["outcome_details"] = modelFacingJSON(details)
+        }
         if let error = outcome.errorMessage { value["error_message"] = .string(error) }
     }
     return .object(value)

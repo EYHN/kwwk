@@ -350,7 +350,7 @@ public actor BackgroundTaskManager {
     }
 
     /// Validate an entire cancellation set, then apply it without actor
-    /// reentrancy. This gives `task cancel` all-or-none mutation semantics with
+    /// reentrancy. This gives `task_cancel` all-or-none mutation semantics with
     /// respect to invalid ids and user cancellation observed before this call.
     func killAtomically(
         _ taskIds: [String],
@@ -1272,9 +1272,9 @@ struct BackgroundTaskCancellationBatch: Sendable {
 /// `BackgroundTaskManager` still broadcasts every notification to its public
 /// listeners. This mailbox only coordinates the choice between two delivery
 /// paths for one Agent: automatic runtime aside, or an explicitly retained
-/// `task` tool result. A poll temporarily watches task ids; terminal notices are
-/// held until the paired tool result is committed, and are restored if that
-/// result is rewound (notably Cursor inline-exec retry/abort).
+/// `task_poll`/`task_cancel` result. A tool call temporarily watches task ids;
+/// terminal notices are held until its result is committed, then restored if
+/// that result is rewound (notably Cursor inline-exec retry/abort).
 public final class BackgroundTaskDeliveryConsumer: @unchecked Sendable {
     let id = UUID()
     public let sessionId: String?

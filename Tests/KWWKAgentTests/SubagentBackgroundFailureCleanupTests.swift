@@ -58,13 +58,13 @@ struct SubagentBackgroundFailureCleanupTests {
         #expect(snapshot.outputTail.hasPrefix("[incomplete]"))
         #expect(!snapshot.outputTail.hasPrefix("[error]"))
 
-        let task = createTaskTool(
+        let task = createTaskPollTool(
             manager: manager,
             sessionId: "background-incomplete-parent"
         )
         let polled = try await task.execute(
             "poll-incomplete-subagent",
-            .object(["poll": .array([.string(started.taskId)])]),
+            .object(["task_ids": .array([.string(started.taskId)])]),
             nil,
             nil
         )
@@ -116,7 +116,6 @@ struct SubagentBackgroundFailureCleanupTests {
                 maxConcurrent: 1,
                 maxConcurrentMutating: 1,
                 maxTotal: 2,
-                maxCallsPerTurn: 2,
                 maxTurns: 4,
                 timeoutSeconds: 5
             ),
@@ -146,11 +145,11 @@ struct SubagentBackgroundFailureCleanupTests {
         #expect(failedOutput.contains(FailingThenSuccessfulLifecycleProvider.failureMessage))
         #expect(provider.closedSessions.contains(failed.childSessionId))
 
-        let task = createTaskTool(manager: manager, sessionId: parentSessionId)
+        let task = createTaskPollTool(manager: manager, sessionId: parentSessionId)
         let polledFailure = try await task.execute(
             "poll-failed-subagent",
             .object([
-                "poll": .array([.string(failed.taskId)]),
+                "task_ids": .array([.string(failed.taskId)]),
                 "timeout_seconds": .int(1),
             ]),
             nil,

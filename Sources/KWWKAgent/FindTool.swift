@@ -51,7 +51,7 @@ public func createFindTool(
             }
             let rawRoot: String
             if case .string(let p) = obj["path"] ?? .null {
-                rawRoot = p
+                rawRoot = p.isEmpty ? "." : p
             } else {
                 rawRoot = "."
             }

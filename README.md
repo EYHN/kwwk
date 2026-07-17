@@ -189,10 +189,10 @@ propagated to child tools. Conversation-specific hooks such as
 `betweenTurns`, `transformContext`, `convertToLlm`, and `userPromptSubmit`
 remain local to the parent.
 
-Each `agent` surface has bounded defaults: four active children, one active
-child with write/edit/bash capability, four launches per assistant turn,
-64 launches for the parent lifetime, 16 child turns, and a 600-second child
-deadline. Configure these through `SubagentLimits`. Model-issued overrides
+Each `agent` surface defaults to four active children, one active child with
+write/edit/bash capability, 64 launches for the parent lifetime, 16 child
+turns, and a 600-second child deadline. Configure these through
+`SubagentLimits`. Model-issued overrides
 must name the parent model, a same-provider catalog model, or a host-approved
 `allowedSubagentModels` entry; programmatic `SubagentModel.override` remains
 the trusted host path for custom models. Child completion uses an internal,
@@ -210,19 +210,19 @@ finishes or is cancelled, the generic background-task session is closed:
 still-running tasks in that child session are killed and queued
 notifications for that child session are discarded. If the parent starts
 the subagent itself with `run_in_background`, that top-level subagent task
-remains parent-visible so `task poll` and automatic runtime completion
-notifications still work. Normal completion is delivered automatically;
-`task poll` is only for a parent that is otherwise blocked, and one poll can
-watch multiple task ids with wait-any semantics.
+remains parent-visible to `task_poll` and automatic runtime completion
+notifications. Normal completion is delivered automatically; `task_poll` is
+only for a parent that is otherwise blocked, and one call can watch multiple
+task ids with wait-any semantics.
 
-`makeCodingAgent` also registers a parent-only `agent_history` tool whenever
-subagents are configured. It lists live/terminal children and pages their full
-retained messages by stable child-session or background-task id, rather than
-depending on the task output tail. The registry is process-local, keeps at most
-the newest 32 terminal children (subject to a 16 MiB estimated transcript
-budget), and reports eviction counts; it does not survive application restart.
-Each tool response is capped at 64 KiB and explicitly marks an individual
-message that is too large for one response. SDK users who construct
+When background execution is available, `makeCodingAgent` registers a
+parent-only `agent_history` tool that pages a background subagent's retained
+messages by task id. Use `task_list` to discover task ids. Internal child session
+ids are not exposed to the model. The registry is process-local, keeps at most
+the newest 32 terminal children subject to a 16 MiB estimated transcript
+budget, and does not survive application restart. Each response is capped at
+64 KiB and marks an individual message that is too large for one response. SDK
+users who construct
 `createAgentTool` directly can share a `SubagentHistoryStore` with
 `createSubagentHistoryTool`; `SubagentRunner.historyStore` exposes the same
 process-local registry for direct-run integrations.
@@ -241,9 +241,9 @@ usage, cost, turns, duration, status, model, and child session id.
 Background subagents are recorded when the parent-visible background task
 is started; their terminal completion/failure is emitted later as the same
 `SubagentLifecycleEvent`, correlated by background task id and child session
-id, independently of whether a runtime aside or `task poll` consumes the
-model-facing notification. `task` snapshots retain the structured outcome,
-including usage and cost. `agent.backgroundSubagentRuns()` exposes the
+id, independently of whether a runtime aside or `task_poll` consumes the
+model-facing notification. Background-task snapshots retain the structured
+outcome, including usage and cost. `agent.backgroundSubagentRuns()` exposes the
 terminal cross-run aggregate to SDK hosts.
 
 The interactive `kwwk` CLI enables five built-ins by default: `explore`,
@@ -260,10 +260,10 @@ sandbox—the selected build system still executes trusted project code. Interac
 CLI built-ins default to background execution so independent team fan-out
 does not turn the parent into a wait-all barrier; pass
 `run_in_background: false` when the parent must block for one result.
-`agent_history(task_id: ...)` exposes a child's live transcript while parent
-work remains. `task(list: true)` exposes live status plus a bounded progress/output tail,
-and completion is delivered as an internal runtime aside rather than an
-editable user queue item. Use `--no-subagents` to disable them or
+`agent_history({"task_id":"..."})` exposes a child's live transcript while
+parent work remains. `task_list({})` exposes live status plus a bounded
+progress/output tail, and completion is delivered as an internal runtime aside
+rather than an editable user queue item. Use `--no-subagents` to disable them or
 `--subagents read-only` or `--subagents general,test-runner` to enable only a
 subset. The SDK does not enable those automatically. `readOnly` is a
 tool whitelist, not an operating-system filesystem sandbox. The built-in
@@ -273,8 +273,8 @@ path policy still does not constrain Bash/custom tools and is not an OS-level
 sandbox or a defense against hostile concurrent symlink replacement.
 
 One-shot `kwwk -p` deliberately disables background execution: it does not
-expose the task tool or background bash options, and rejects background
-subagent requests instead of exiting after reporting a task as started.
+expose the background-task tools or background bash options, and rejects
+background subagent requests instead of exiting after reporting a task as started.
 
 When an SDK application is done with an agent session, call
 `await agent.closeSession()` to release provider-owned resources keyed by

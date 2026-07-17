@@ -98,7 +98,7 @@ enum Ask {
                     throw CodingToolError.invalidArgument("ask: each option needs a non-empty `label`")
                 }
                 if case .string(let description) = o["description"] ?? .null,
-                   !description.trimmingCharacters(in: .whitespaces).isEmpty {
+                   !description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     return AskOption(label: label, description: description)
                 }
                 return AskOption(label: label, description: nil)

@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Subagent tool")
 struct SubagentToolTests {
-    @Test("coding agent only exposes agent and history tools when subagents are configured")
+    @Test("coding agent exposes history only when subagents and background tasks are configured")
     func agentToolIsConditional() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -21,15 +21,64 @@ struct SubagentToolTests {
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent" })
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent_history" })
 
-        let withSubagents = await makeCodingAgent(CodingAgentConfig(
+        let withSubagentsOnly = await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
             subagents: [minimalSubagent()],
             bashEnvironment: [:]
         )).agent
-        #expect(withSubagents.state.tools.contains { $0.name == "agent" })
-        #expect(withSubagents.state.tools.contains { $0.name == "agent_history" })
+        #expect(withSubagentsOnly.state.tools.contains { $0.name == "agent" })
+        #expect(!withSubagentsOnly.state.tools.contains { $0.name == "agent_history" })
+
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let withBackgroundTasks = await makeCodingAgent(CodingAgentConfig(
+            model: faux.getModel(),
+            cwd: cwd.path,
+            tools: .readOnly,
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            subagents: [minimalSubagent()],
+            bashEnvironment: [:]
+        )).agent
+        #expect(withBackgroundTasks.state.tools.contains { $0.name == "agent" })
+        #expect(withBackgroundTasks.state.tools.contains { $0.name == "agent_history" })
+        #expect(withBackgroundTasks.state.tools.first { $0.name == "agent_history" }?.description
+            == "Read a background subagent transcript.")
+    }
+
+    @Test("agent description lists task tools only when they can be registered")
+    func agentDescriptionMatchesBackgroundCapability() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let definition = minimalSubagent(tools: .task)
+        let withoutManager = createAgentTool(
+            cwd: FileManager.default.currentDirectoryPath,
+            subagents: [definition],
+            parentModel: faux.getModel(),
+            parentTools: .standard,
+            bashEnvironment: testBashEnvironment
+        )
+        #expect(!withoutManager.description.contains("task_list"))
+        #expect(!withoutManager.description.contains("run_in_background"))
+        #expect(withoutManager.description.contains(
+            "result; summarize it for the user when relevant.\n- Subagents cannot spawn other subagents."
+        ))
+
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let withManager = createAgentTool(
+            cwd: FileManager.default.currentDirectoryPath,
+            subagents: [definition],
+            parentModel: faux.getModel(),
+            parentTools: .standard,
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            sessionId: "parent",
+            bashEnvironment: testBashEnvironment
+        )
+        for name in ["task_list", "task_read", "task_poll", "task_cancel"] {
+            #expect(withManager.description.contains(name))
+        }
     }
 
     @Test("unknown subagent type returns a clear error")
@@ -223,11 +272,11 @@ struct SubagentToolTests {
         #expect(done)
         guard done else { return }
 
-        let taskTool = createTaskTool(manager: manager, sessionId: "sdk-parent")
+        let taskTool = createTaskPollTool(manager: manager, sessionId: "sdk-parent")
         let waitResult = try await taskTool.execute(
             "wait",
             .object([
-                "poll": .array([.string(started.taskId)]),
+                "task_ids": .array([.string(started.taskId)]),
                 "timeout_seconds": .int(1),
             ]),
             nil,
@@ -614,7 +663,7 @@ struct SubagentToolTests {
         #expect(detailString(result, "model") == "live-parent")
     }
 
-    @Test("background subagent writes output and can be read with task poll")
+    @Test("background subagent writes output and can be read with task_poll")
     func backgroundSubagent() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -647,7 +696,8 @@ struct SubagentToolTests {
             Issue.record("expected task_id detail")
             return
         }
-        #expect(resultText(result).contains("agent_history(task_id: \"\(taskId)\")"))
+        #expect(resultText(result).contains("agent_history({\"task_id\":\"\(taskId)\"})"))
+        #expect(resultText(result).contains("task_list({})"))
         #expect(resultText(result).contains("poll only when otherwise blocked"))
 
         let done = await awaitUntil(12000) {
@@ -661,11 +711,11 @@ struct SubagentToolTests {
         let contents = snap?.outputFile.flatMap { try? String(contentsOfFile: $0, encoding: .utf8) } ?? ""
         #expect(contents.contains("background subagent answer"))
 
-        let taskTool = createTaskTool(manager: manager, sessionId: "s1")
+        let taskTool = createTaskPollTool(manager: manager, sessionId: "s1")
         let waitResult = try await taskTool.execute(
             "wait-1",
             .object([
-                "poll": .array([.string(taskId)]),
+                "task_ids": .array([.string(taskId)]),
                 "timeout_seconds": .int(1),
             ]),
             nil,
@@ -674,7 +724,7 @@ struct SubagentToolTests {
         #expect(resultText(waitResult).contains("background subagent answer"))
     }
 
-    @Test("background progress is visible through task list before completion")
+    @Test("background progress is visible through task_list before completion")
     func backgroundProgressIsVisibleWhileRunning() async throws {
         let faux = await registerFauxProvider(RegisterFauxProviderOptions(
             tokensPerSecond: 50,
@@ -735,10 +785,10 @@ struct SubagentToolTests {
         }
         #expect(progressVisible)
 
-        let taskTool = createTaskTool(manager: manager, sessionId: "progress-parent")
+        let taskTool = createTaskListTool(manager: manager, sessionId: "progress-parent")
         let listed = try await taskTool.execute(
             "list-progress",
-            .object(["list": .bool(true)]),
+            .object([:]),
             nil,
             nil
         )
@@ -749,7 +799,7 @@ struct SubagentToolTests {
               case .array(let tasks) = details["tasks"] ?? .null,
               case .object(let task) = tasks.first ?? .null,
               case .string(let outputTail) = task["output_tail"] ?? .null else {
-            Issue.record("expected structured output_tail in task list")
+            Issue.record("expected structured output_tail in task_list")
             return
         }
         #expect(outputTail.contains("[progress]"))

@@ -63,7 +63,7 @@ public func createLSTool(
             try cancellation?.throwIfCancelled()
             let rawPath: String
             if case .object(let obj) = args, case .string(let p) = obj["path"] ?? .null {
-                rawPath = p
+                rawPath = p.isEmpty ? "." : p
             } else {
                 rawPath = "."
             }

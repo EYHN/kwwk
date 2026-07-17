@@ -87,6 +87,10 @@ struct HeadlessTests {
         let agent = await makeHeadlessCodingAgent(config)
         let toolNames = Set(agent.state.tools.map(\.name))
         #expect(!toolNames.contains("task"))
+        #expect(!toolNames.contains("task_poll"))
+        #expect(!toolNames.contains("task_cancel"))
+        #expect(!toolNames.contains("task_list"))
+        #expect(!toolNames.contains("task_read"))
 
         guard let bash = agent.state.tools.first(where: { $0.name == "bash" }),
               case .object(let bashSchema) = bash.parameters,

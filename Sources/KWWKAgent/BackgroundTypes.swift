@@ -174,7 +174,7 @@ public struct BackgroundTaskNotification: Sendable {
     public let outcome: BackgroundTaskOutcome?   // nil while `stalled == true`
     public let outputTail: String
     /// True when the completion card contains only a bounded preview. Callers
-    /// can retrieve the complete artifact through the `task` output reader.
+    /// can retrieve the complete artifact through `task_read`.
     public var outputTruncated: Bool = false
     public let outputFile: String?
     public let durationMs: Int
@@ -223,25 +223,20 @@ public struct BackgroundTaskNotification: Sendable {
         }
         if let outcome {
             lines.append("  <summary>\(escape(outcome.summary))</summary>")
-            if let details = outcome.details {
+            if let rawDetails = outcome.details {
+                let details = modelFacingJSON(rawDetails)
                 // Preserve only the legacy primitive tag consumed by the
                 // compact CLI summary. Never derive sibling XML semantics from
                 // arbitrary runner keys: even a syntactically safe key such as
                 // `instruction` or `status` can spoof trusted structure. The
-                // complete object is retained below as escaped JSON data.
+                // model-safe object is retained below as escaped JSON data.
                 if case .object(let obj) = details {
                     if let value = obj["exitCode"],
                        let exitCode = value.asStringForTag() {
                         lines.append("  <exit-code>\(escape(exitCode))</exit-code>")
                     }
-                    // Subagent follow-up handles get first-class tags so the
-                    // model can call agent_history / route by type without
-                    // parsing the escaped details JSON. Exact known keys only —
-                    // never derive tag structure from arbitrary runner keys.
-                    if let value = obj["child_session_id"],
-                       let childSessionId = value.asStringForTag() {
-                        lines.append("  <child-session-id>\(escape(childSessionId))</child-session-id>")
-                    }
+                    // Subagent type remains useful for routing. Internal child
+                    // session ids were removed above.
                     if let value = obj["subagent_type"],
                        let subagentType = value.asStringForTag() {
                         lines.append("  <subagent-type>\(escape(subagentType))</subagent-type>")
@@ -261,7 +256,7 @@ public struct BackgroundTaskNotification: Sendable {
         lines.append("  <duration-ms>\(durationMs)</duration-ms>")
         if let outputFile {
             lines.append("  <output-file>\(escape(outputFile))</output-file>")
-            lines.append("  <hint>Use task output reading to inspect the complete stdout/stderr artifact.</hint>")
+            lines.append("  <hint>Use task_read({\"task_id\":\"\(escape(taskId))\"}) to inspect the complete stdout/stderr artifact.</hint>")
         }
         if !outputTail.isEmpty {
             let trimmed = outputTail
@@ -282,9 +277,9 @@ public struct BackgroundTaskNotification: Sendable {
         if stalled {
             switch stallReason {
             case .noOutputGrowth:
-                lines.append("  <suggestion>The command has produced no output for an extended period and may be hung. If it should have finished by now, cancel it with task(cancel:[task_id]) and retry differently; if silence is expected (linking, large download), keep working — the completion notification will still arrive.</suggestion>")
+                lines.append("  <suggestion>The command has produced no output for an extended period and may be hung. If it should have finished by now, cancel it with task_cancel({\"task_ids\":[\"\(escape(taskId))\"]}) and retry differently; if silence is expected (linking, large download), keep working — the completion notification will still arrive.</suggestion>")
             case .interactivePrompt, nil:
-                lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with task(cancel:[task_id]) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
+                lines.append("  <suggestion>The command looks blocked on an interactive prompt. Cancel it with task_cancel({\"task_ids\":[\"\(escape(taskId))\"]}) and retry with piped input (e.g. `echo y | command`) or a non-interactive flag.</suggestion>")
             }
         }
         lines.append("</task-notification>")

@@ -216,7 +216,7 @@ enum CompactionTranscriptSerializer {
                 toolName: result.toolName,
                 isError: result.isError,
                 detailsJSON: result.details.map {
-                    boundedJSON($0, byteLimit: limits.toolDetailsBytes)
+                    boundedJSON(modelFacingJSON($0), byteLimit: limits.toolDetailsBytes)
                 }
             )
         }

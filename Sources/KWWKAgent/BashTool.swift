@@ -294,7 +294,7 @@ private func bashToolDescription(hasManager: Bool, cwd: String) -> String {
 
         \(outputGuidance)
 
-        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task(list:true) for bounded live status and task(read:{task_id,offset,limit}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
+        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task_list({}) for bounded live status and task_read({"task_id":"...","offset":0,"limit":8192}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
 
         Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.
         """
@@ -354,7 +354,10 @@ private struct BashInput {
             throw CodingToolError.invalidArgument("bash: `command` is required")
         }
         let description: String? = {
-            if case .string(let s) = obj["description"] ?? .null { return s }
+            if case .string(let s) = obj["description"] ?? .null {
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
             return nil
         }()
         let timeoutSec: Int = {
@@ -634,7 +637,7 @@ private func runBashInBackground(
         runner: runner,
         sessionId: sessionId
     )
-    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. Use task(read:{task_id:\"\(taskId)\",offset,limit}) to inspect stdout/stderr in the meantime; do NOT poll or sleep. (Raw output file, outside the workspace: \(outputFile.path).)"
+    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. Use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}) to inspect stdout/stderr in the meantime; do NOT poll or sleep. (Raw output file, outside the workspace: \(outputFile.path).)"
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
@@ -733,7 +736,7 @@ private func runBashForegroundWithFlip(
             await bundle.awaitAdoptedCompletion(cancellation: bgCancel)
         }
     )
-    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. Use task(read:{task_id:\"\(taskId)\",offset,limit}) to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start. (Raw output file, outside the workspace: \(adoptedFile.path).)"
+    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. Use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}) to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start. (Raw output file, outside the workspace: \(adoptedFile.path).)"
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([

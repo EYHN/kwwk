@@ -298,7 +298,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                         "description": tool.description,
                     ]
                     if let params = anyFromJSONValue(tool.parameters) {
-                        entry["parameters"] = params
+                        entry["parametersJsonSchema"] = params
                     }
                     return entry
                 }
