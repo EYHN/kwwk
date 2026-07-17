@@ -340,6 +340,9 @@ private func runAskQuestions(
     let isWizard = questions.count > 1
     var index = 0
     while index < questions.count {
+        // Cancellation can land between questions (or race the previous
+        // answer's resume) — never present another question for a dead run.
+        try cancellation?.throwIfCancelled()
         let question = questions[index]
         let previous = answers[index]
         let outcome = await present(AskPrompt(
@@ -372,6 +375,9 @@ private func runAskQuestions(
             index += 1
         }
     }
+    // A user confirm can race a cancellation that fired while the LAST
+    // question was up — an aborted run must not receive a normal result.
+    try cancellation?.throwIfCancelled()
     let resolved = answers.compactMap { $0 }
 
     let text = resolved.count == 1

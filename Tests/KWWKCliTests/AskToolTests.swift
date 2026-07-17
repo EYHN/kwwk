@@ -301,6 +301,42 @@ struct AskExecuteTests {
         #expect(results.count == 2)
     }
 
+    @Test("an answer racing a cancellation never yields a normal result")
+    func answerRacingCancellationThrows() async throws {
+        let cancellation = CancellationHandle()
+        // Presenter simulating the race: the run is cancelled while the
+        // question is up, and the user's confirm still resumes with an answer.
+        let present: AskPresenter = { _, handle in
+            handle?.cancel()
+            return .answered(selected: ["A"], customInput: nil)
+        }
+        let tool = createAskTool(present: present, abortRun: {})
+        await #expect(throws: CancellationError.self) {
+            _ = try await tool.execute("t1", askArgs([questionJSON()]), cancellation, nil)
+        }
+    }
+
+    @Test("cancellation between wizard questions stops before the next one")
+    func cancellationBetweenQuestions() async throws {
+        let cancellation = CancellationHandle()
+        let presented = AbortFlag() // reused flag: set when a SECOND question is presented
+        let present: AskPresenter = { prompt, handle in
+            if prompt.question.id == "second" { presented.set() }
+            handle?.cancel()
+            return .answered(selected: ["A"], customInput: nil)
+        }
+        let tool = createAskTool(present: present, abortRun: {})
+        await #expect(throws: CancellationError.self) {
+            _ = try await tool.execute(
+                "t1",
+                askArgs([questionJSON(id: "first"), questionJSON(id: "second")]),
+                cancellation,
+                nil
+            )
+        }
+        #expect(!presented.aborted)
+    }
+
     @Test("multi answer and skipped question render omp-style lines")
     func multiAndSkipped() async throws {
         let q1 = questionJSON(id: "langs", question: "Which?", options: ["Swift", "Rust"], multi: true)

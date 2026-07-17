@@ -645,7 +645,11 @@ func runCodingTUIInternal(
                     displayWidth: { max(0, runner.terminal.width - 1) }
                 ) { outcome in
                     modal.close()
-                    presentation.resume(outcome)
+                    // The cancel teardown below reaches this actor on a Task
+                    // hop, so a user confirm can race in after the run was
+                    // already cancelled. Resolve the race at this single
+                    // resume point: a cancelled run never gets an answer.
+                    presentation.resume(cancellation?.isCancelled == true ? .cancelled : outcome)
                 }
                 modal.open(askModal)
                 // A run abort landing while the modal is still up (Ctrl-C
