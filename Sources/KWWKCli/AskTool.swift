@@ -123,17 +123,25 @@ enum Ask {
 
     // MARK: - Result shaping (mirrors omp's `ask` result text)
 
-    /// `id: value` line for the multi-question "User answers:" block.
+    /// `id: value` line for the multi-question "User answers:" block. A
+    /// multi answer can carry checked options AND a custom input — both are
+    /// reported.
     static func answerLine(_ a: AskAnswer) -> String {
-        if let custom = a.customInput {
+        let selection = a.selectedOptions.isEmpty
+            ? nil
+            : a.multi
+                ? "[\(a.selectedOptions.joined(separator: ", "))]"
+                : a.selectedOptions[0]
+        switch (selection, a.customInput) {
+        case (let selection?, let custom?):
+            return "\(a.id): \(selection) + \"\(custom)\""
+        case (let selection?, nil):
+            return "\(a.id): \(selection)"
+        case (nil, let custom?):
             return "\(a.id): \"\(custom)\""
+        case (nil, nil):
+            return "\(a.id): (no selection)"
         }
-        if !a.selectedOptions.isEmpty {
-            return a.multi
-                ? "\(a.id): [\(a.selectedOptions.joined(separator: ", "))]"
-                : "\(a.id): \(a.selectedOptions[0])"
-        }
-        return "\(a.id): (no selection)"
     }
 
     /// Model-facing result text for a single-question call.
@@ -162,16 +170,17 @@ enum Ask {
         "User answers:\n" + answers.map(answerLine).joined(separator: "\n")
     }
 
-    /// One transcript line per question: `question → answer`.
+    /// One transcript line per question: `question → answer`. Checked
+    /// options and a custom input can coexist on a multi answer.
     static func displayLine(_ a: AskAnswer) -> String {
-        let answer: String
-        if let custom = a.customInput {
-            answer = "\"\(custom.replacingOccurrences(of: "\n", with: " "))\""
-        } else if !a.selectedOptions.isEmpty {
-            answer = a.selectedOptions.joined(separator: ", ")
-        } else {
-            answer = "(no selection)"
+        var parts: [String] = []
+        if !a.selectedOptions.isEmpty {
+            parts.append(a.selectedOptions.joined(separator: ", "))
         }
+        if let custom = a.customInput {
+            parts.append("\"\(custom.replacingOccurrences(of: "\n", with: " "))\"")
+        }
+        let answer = parts.isEmpty ? "(no selection)" : parts.joined(separator: " + ")
         return "\(a.question) → \(answer)"
     }
 
@@ -254,6 +263,33 @@ private let askParameters: JSONValue = .object([
     "required": .array([.string("questions")]),
 ])
 
+/// FIFO gate serializing concurrent `ask` executions. The agent loop runs a
+/// tool batch in parallel by default, but there is one ModalHost — a second
+/// `ask` opening mid-question would replace the first modal and strand its
+/// suspended continuation forever. omp marks its ask `concurrency:
+/// "exclusive"` for the same reason; here the later call simply waits for
+/// the earlier one's questions to finish.
+private actor AskGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if busy {
+            await withCheckedContinuation { waiters.append($0) }
+        } else {
+            busy = true
+        }
+    }
+
+    func release() {
+        if waiters.isEmpty {
+            busy = false
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 /// Build the `ask` tool. `present` suspends until the user answers one
 /// question; `abortRun` is invoked when the user cancels (Esc) — mirroring
 /// omp, a cancelled ask aborts the whole run rather than handing the model a
@@ -262,7 +298,8 @@ func createAskTool(
     present: @escaping AskPresenter,
     abortRun: @escaping @Sendable () -> Void
 ) -> AgentTool {
-    AgentTool(
+    let gate = AskGate()
+    return AgentTool(
         name: "ask",
         label: "ask",
         description: askDescription,
@@ -271,52 +308,78 @@ func createAskTool(
             try cancellation?.throwIfCancelled()
             let questions = try Ask.parseQuestions(args)
 
-            var answers: [AskAnswer?] = Array(repeating: nil, count: questions.count)
-            let isWizard = questions.count > 1
-            var index = 0
-            while index < questions.count {
-                let question = questions[index]
-                let previous = answers[index]
-                let outcome = await present(AskPrompt(
-                    question: question,
-                    progressText: isWizard ? "\(index + 1)/\(questions.count)" : nil,
-                    allowBack: isWizard && index > 0,
-                    allowForward: isWizard,
-                    previousSelection: previous?.selectedOptions ?? [],
-                    previousCustomInput: previous?.customInput
-                ), cancellation)
-                let record: ([String], String?) -> Void = { selected, customInput in
-                    answers[index] = AskAnswer(
-                        id: question.id,
-                        question: question.question,
-                        options: question.options.map(\.label),
-                        multi: question.multi,
-                        selectedOptions: selected,
-                        customInput: customInput
-                    )
-                }
-                switch outcome {
-                case .cancelled:
-                    abortRun()
-                    throw CodingToolError.aborted
-                case .back(let selected, let customInput):
-                    record(selected, customInput)
-                    index = max(0, index - 1)
-                case .answered(let selected, let customInput):
-                    record(selected, customInput)
-                    index += 1
-                }
+            await gate.acquire()
+            do {
+                let result = try await runAskQuestions(
+                    questions: questions,
+                    present: present,
+                    abortRun: abortRun,
+                    cancellation: cancellation
+                )
+                await gate.release()
+                return result
+            } catch {
+                await gate.release()
+                throw error
             }
-            let resolved = answers.compactMap { $0 }
+        }
+    )
+}
 
-            let text = resolved.count == 1
-                ? Ask.singleResultText(resolved[0])
-                : Ask.multiResultText(resolved)
-            return AgentToolResult(
-                content: [.text(TextContent(text: text))],
-                details: Ask.details(resolved),
-                uiDisplay: resolved.map(Ask.displayLine)
+private func runAskQuestions(
+    questions: [AskQuestion],
+    present: AskPresenter,
+    abortRun: @Sendable () -> Void,
+    cancellation: CancellationHandle?
+) async throws -> AgentToolResult {
+    // A run abort may have landed while this call was queued behind another
+    // ask — don't present a dead run's questions.
+    try cancellation?.throwIfCancelled()
+
+    var answers: [AskAnswer?] = Array(repeating: nil, count: questions.count)
+    let isWizard = questions.count > 1
+    var index = 0
+    while index < questions.count {
+        let question = questions[index]
+        let previous = answers[index]
+        let outcome = await present(AskPrompt(
+            question: question,
+            progressText: isWizard ? "\(index + 1)/\(questions.count)" : nil,
+            allowBack: isWizard && index > 0,
+            allowForward: isWizard,
+            previousSelection: previous?.selectedOptions ?? [],
+            previousCustomInput: previous?.customInput
+        ), cancellation)
+        let record: ([String], String?) -> Void = { selected, customInput in
+            answers[index] = AskAnswer(
+                id: question.id,
+                question: question.question,
+                options: question.options.map(\.label),
+                multi: question.multi,
+                selectedOptions: selected,
+                customInput: customInput
             )
         }
+        switch outcome {
+        case .cancelled:
+            abortRun()
+            throw CodingToolError.aborted
+        case .back(let selected, let customInput):
+            record(selected, customInput)
+            index = max(0, index - 1)
+        case .answered(let selected, let customInput):
+            record(selected, customInput)
+            index += 1
+        }
+    }
+    let resolved = answers.compactMap { $0 }
+
+    let text = resolved.count == 1
+        ? Ask.singleResultText(resolved[0])
+        : Ask.multiResultText(resolved)
+    return AgentToolResult(
+        content: [.text(TextContent(text: text))],
+        details: Ask.details(resolved),
+        uiDisplay: resolved.map(Ask.displayLine)
     )
 }

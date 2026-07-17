@@ -161,6 +161,16 @@ struct AskParseTests {
 
 @Suite("Ask result shaping")
 struct AskResultTests {
+    @Test("multi answer with checked options AND custom input reports both")
+    func multiWithCustomKeepsSelections() {
+        let answer = AskAnswer(
+            id: "q", question: "Which?", options: [], multi: true,
+            selectedOptions: ["A", "B"], customInput: "also this"
+        )
+        #expect(Ask.answerLine(answer) == "q: [A, B] + \"also this\"")
+        #expect(Ask.displayLine(answer) == "Which? → A, B + \"also this\"")
+    }
+
     @Test("answer lines mirror omp: custom / multi / single / none")
     func answerLines() {
         #expect(Ask.answerLine(AskAnswer(
@@ -255,6 +265,40 @@ struct AskExecuteTests {
         // the second question's in-progress state survives the round trip.
         #expect(prompts[2].previousSelection == ["A"])
         #expect(prompts[3].previousSelection == ["X"])
+    }
+
+    @Test("parallel ask calls serialize instead of hanging on the one modal host")
+    func parallelCallsSerialize() async throws {
+        // Presenter that fails the test if two presentations ever overlap,
+        // mirroring the single-ModalHost constraint.
+        final class OverlapGuard: @unchecked Sendable {
+            private let lock = NSLock()
+            private var active = 0
+            private(set) var overlapped = false
+            private(set) var served = 0
+            func present(_ prompt: AskPrompt, _ cancellation: CancellationHandle?) async -> AskOutcome {
+                lock.withLock {
+                    active += 1
+                    if active > 1 { overlapped = true }
+                }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+                lock.withLock {
+                    active -= 1
+                    served += 1
+                }
+                return .answered(selected: ["A"], customInput: nil)
+            }
+        }
+        let guardBox = OverlapGuard()
+        let tool = createAskTool(present: guardBox.present, abortRun: {})
+
+        async let first = tool.execute("t1", askArgs([questionJSON(id: "one")]), nil, nil)
+        async let second = tool.execute("t2", askArgs([questionJSON(id: "two")]), nil, nil)
+        let results = try await [first, second]
+
+        #expect(!guardBox.overlapped)
+        #expect(guardBox.served == 2)
+        #expect(results.count == 2)
     }
 
     @Test("multi answer and skipped question render omp-style lines")
@@ -382,6 +426,21 @@ struct AskModalTests {
         )
         modal.right()
         #expect(log.outcomes == [.answered(selected: ["B"], customInput: nil)])
+    }
+
+    @Test("wizard nav carries an in-progress Other draft")
+    func navCarriesOtherDraft() {
+        let log = OutcomeLog()
+        let modal = makeModal(
+            prompt(singleQuestion(), allowBack: true, allowForward: true),
+            onComplete: log.callback
+        )
+        modal.up() // Other row
+        modal.confirm() // into free-text entry
+        _ = modal.handleText("draft answer")
+        modal.cancel() // back to the list, buffer retained
+        modal.right()
+        #expect(log.outcomes == [.answered(selected: [], customInput: "draft answer")])
     }
 
     @Test("render shows question, markers, recommended tag, and hints")

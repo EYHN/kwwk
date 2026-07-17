@@ -162,10 +162,13 @@ final class AskModal: Modal {
 
     /// Current answer state for wizard navigation: multi carries the live
     /// checkboxes, single-select carries whatever answer the question already
-    /// had (the cursor alone is not a selection).
+    /// had (the cursor alone is not a selection). The custom input is the
+    /// LIVE "Other" buffer — it starts as the previous custom answer and an
+    /// in-progress draft must survive ←/→ exactly like checkbox state does.
     private var navigationState: (selected: [String], customInput: String?) {
         let selected = prompt.question.multi ? orderedSelection : prompt.previousSelection
-        return (selected, prompt.previousCustomInput)
+        let draft = buffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (selected, draft.isEmpty ? nil : draft)
     }
 
     func left() {
