@@ -8333,6 +8333,9 @@
     "k2p7" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/api.kimi.com\/coding",
+      "compat" : {
+        "forceAdaptiveThinking" : true
+      },
       "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
@@ -8353,9 +8356,49 @@
       "provider" : "kimi-coding",
       "reasoning" : true
     },
+    "k3" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/api.kimi.com\/coding",
+      "compat" : {
+        "allowEmptySignature" : true,
+        "forceAdaptiveThinking" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "headers" : {
+        "User-Agent" : "KimiCLI\/1.5"
+      },
+      "id" : "k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Kimi K3",
+      "provider" : "kimi-coding",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : null,
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
     "kimi-for-coding" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/api.kimi.com\/coding",
+      "compat" : {
+        "allowEmptySignature" : true,
+        "forceAdaptiveThinking" : true
+      },
       "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
@@ -8376,9 +8419,38 @@
       "provider" : "kimi-coding",
       "reasoning" : true
     },
+    "kimi-for-coding-highspeed" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/api.kimi.com\/coding",
+      "compat" : {
+        "forceAdaptiveThinking" : true
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "headers" : {
+        "User-Agent" : "KimiCLI\/1.5"
+      },
+      "id" : "kimi-for-coding-highspeed",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 32768,
+      "name" : "Kimi For Coding HighSpeed",
+      "provider" : "kimi-coding",
+      "reasoning" : true
+    },
     "kimi-k2-thinking" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/api.kimi.com\/coding",
+      "compat" : {
+        "forceAdaptiveThinking" : true
+      },
       "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
@@ -9357,6 +9429,45 @@
       "thinkingLevelMap" : {
         "off" : null
       }
+    },
+    "kimi-k3" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/api.moonshot.ai\/v1",
+      "compat" : {
+        "deferredToolsMode" : "kimi",
+        "maxTokensField" : "max_tokens",
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsDeveloperRole" : false,
+        "supportsReasoningEffort" : false,
+        "supportsStore" : false,
+        "supportsStrictMode" : false,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.3,
+        "cacheWrite" : 0,
+        "input" : 3,
+        "output" : 15
+      },
+      "id" : "kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Kimi K3",
+      "provider" : "moonshotai",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : null,
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
     }
   },
   "moonshotai-cn" : {
@@ -9611,6 +9722,45 @@
       "reasoning" : true,
       "thinkingLevelMap" : {
         "off" : null
+      }
+    },
+    "kimi-k3" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/api.moonshot.cn\/v1",
+      "compat" : {
+        "deferredToolsMode" : "kimi",
+        "maxTokensField" : "max_tokens",
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsDeveloperRole" : false,
+        "supportsReasoningEffort" : false,
+        "supportsStore" : false,
+        "supportsStrictMode" : false,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.3,
+        "cacheWrite" : 0,
+        "input" : 3,
+        "output" : 15
+      },
+      "id" : "kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Kimi K3",
+      "provider" : "moonshotai-cn",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : null,
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
       }
     }
   },
@@ -13080,6 +13230,31 @@
         "off" : null
       }
     },
+    "grok-4.5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false
+      },
+      "contextWindow" : 500000,
+      "cost" : {
+        "cacheRead" : 0.5,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 6
+      },
+      "id" : "grok-4.5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 500000,
+      "name" : "Grok 4.5",
+      "provider" : "opencode-go",
+      "reasoning" : true
+    },
     "kimi-k2.6" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
@@ -13135,6 +13310,31 @@
       ],
       "maxTokens" : 262144,
       "name" : "Kimi K2.7 Code",
+      "provider" : "opencode-go",
+      "reasoning" : true
+    },
+    "kimi-k3" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.3,
+        "cacheWrite" : 0,
+        "input" : 3,
+        "output" : 15
+      },
+      "id" : "kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Kimi K3",
       "provider" : "opencode-go",
       "reasoning" : true
     },
@@ -13449,19 +13649,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.15,
+        "cacheRead" : 0.3,
         "cacheWrite" : 0,
-        "input" : 0.66,
-        "output" : 3.41
+        "input" : 3,
+        "output" : 15
       },
       "id" : "~moonshotai\/kimi-latest",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 131072,
       "name" : "MoonshotAI Kimi Latest",
       "provider" : "openrouter",
       "reasoning" : true
@@ -14044,7 +14244,7 @@
         "cacheControlFormat" : "anthropic",
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1000000,
+      "contextWindow" : 200000,
       "cost" : {
         "cacheRead" : 0.3,
         "cacheWrite" : 3.75,
@@ -14409,14 +14609,14 @@
       "cost" : {
         "cacheRead" : 0.135,
         "cacheWrite" : 0,
-        "input" : 0.24,
-        "output" : 0.9
+        "input" : 0.27,
+        "output" : 1.12
       },
       "id" : "deepseek\/deepseek-chat-v3-0324",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 65536,
       "name" : "DeepSeek: DeepSeek V3 0324",
       "provider" : "openrouter",
       "reasoning" : false
@@ -14497,12 +14697,12 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 163840,
+      "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.13,
+        "cacheRead" : 0.135,
         "cacheWrite" : 0,
         "input" : 0.27,
-        "output" : 0.95
+        "output" : 1
       },
       "id" : "deepseek\/deepseek-v3.1-terminus",
       "input" : [
@@ -14520,18 +14720,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 128000,
+      "contextWindow" : 163840,
       "cost" : {
-        "cacheRead" : 0.02145,
+        "cacheRead" : 0.1345,
         "cacheWrite" : 0,
-        "input" : 0.2145,
-        "output" : 0.32175
+        "input" : 0.269,
+        "output" : 0.4
       },
       "id" : "deepseek\/deepseek-v3.2",
       "input" : [
         "text"
       ],
-      "maxTokens" : 64000,
+      "maxTokens" : 65536,
       "name" : "DeepSeek: DeepSeek V3.2",
       "provider" : "openrouter",
       "reasoning" : true
@@ -14567,18 +14767,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 1048575,
       "cost" : {
-        "cacheRead" : 0.018,
+        "cacheRead" : 0.0196,
         "cacheWrite" : 0,
-        "input" : 0.09,
-        "output" : 0.18
+        "input" : 0.098,
+        "output" : 0.196
       },
       "id" : "deepseek\/deepseek-v4-flash",
       "input" : [
         "text"
       ],
-      "maxTokens" : 65536,
+      "maxTokens" : 4096,
       "name" : "DeepSeek: DeepSeek V4 Flash",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -14944,17 +15144,17 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.04,
         "cacheWrite" : 0,
         "input" : 0.08,
-        "output" : 0.16
+        "output" : 0.45
       },
       "id" : "google\/gemma-3-27b-it",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 131072,
       "name" : "Google: Gemma 3 27B",
       "provider" : "openrouter",
       "reasoning" : false
@@ -14966,19 +15166,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 256000,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.06,
-        "output" : 0.33
+        "input" : 0.1,
+        "output" : 0.3
       },
       "id" : "google\/gemma-4-26b-a4b-it",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 256000,
       "name" : "Google: Gemma 4 26B A4B ",
       "provider" : "openrouter",
       "reasoning" : true
@@ -15016,17 +15216,17 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.12,
         "cacheWrite" : 0,
-        "input" : 0.06,
-        "output" : 0.35
+        "input" : 0.22,
+        "output" : 0.55
       },
       "id" : "google\/gemma-4-31b-it",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 8192,
+      "maxTokens" : 262144,
       "name" : "Google: Gemma 4 31B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -15251,16 +15451,16 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.025,
         "cacheWrite" : 0,
-        "input" : 0.02,
-        "output" : 0.03
+        "input" : 0.05,
+        "output" : 0.08
       },
       "id" : "meta-llama\/llama-3.1-8b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 131072,
       "name" : "Meta: Llama 3.1 8B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -15299,14 +15499,14 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.1,
-        "output" : 0.32
+        "input" : 0.13,
+        "output" : 0.4
       },
       "id" : "meta-llama\/llama-3.3-70b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 128000,
       "name" : "Meta: Llama 3.3 70B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -15382,6 +15582,30 @@
       "provider" : "openrouter",
       "reasoning" : false
     },
+    "meta\/muse-spark-1.1" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 1.25,
+        "output" : 4.25
+      },
+      "id" : "meta\/muse-spark-1.1",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 4096,
+      "name" : "Meta: Muse Spark 1.1",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
     "minimax\/minimax-m1" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -15393,7 +15617,7 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.4,
+        "input" : 0.55,
         "output" : 2.2
       },
       "id" : "minimax\/minimax-m1",
@@ -15481,18 +15705,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 196608,
+      "contextWindow" : 204800,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.06,
         "cacheWrite" : 0,
-        "input" : 0.24,
-        "output" : 0.96
+        "input" : 0.3,
+        "output" : 1.2
       },
       "id" : "minimax\/minimax-m2.7",
       "input" : [
         "text"
       ],
-      "maxTokens" : 196608,
+      "maxTokens" : 131072,
       "name" : "MiniMax: MiniMax M2.7",
       "provider" : "openrouter",
       "reasoning" : true
@@ -15504,7 +15728,7 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1000000,
+      "contextWindow" : 524288,
       "cost" : {
         "cacheRead" : 0.06,
         "cacheWrite" : 0,
@@ -15516,7 +15740,7 @@
         "text",
         "image"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 512000,
       "name" : "MiniMax: MiniMax M3",
       "provider" : "openrouter",
       "reasoning" : true
@@ -15792,14 +16016,14 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.02,
+        "input" : 0.019,
         "output" : 0.03
       },
       "id" : "mistralai\/mistral-nemo",
       "input" : [
         "text"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 16384,
       "name" : "Mistral: Mistral Nemo",
       "provider" : "openrouter",
       "reasoning" : false
@@ -15834,19 +16058,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 128000,
+      "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.01,
         "cacheWrite" : 0,
-        "input" : 0.075,
-        "output" : 0.2
+        "input" : 0.1,
+        "output" : 0.3
       },
       "id" : "mistralai\/mistral-small-3.2-24b-instruct",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 4096,
       "name" : "Mistral: Mistral Small 3.2 24B",
       "provider" : "openrouter",
       "reasoning" : false
@@ -15976,7 +16200,7 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.15,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
         "input" : 0.6,
         "output" : 2.5
@@ -15985,7 +16209,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 100352,
+      "maxTokens" : 262144,
       "name" : "MoonshotAI: Kimi K2 Thinking",
       "provider" : "openrouter",
       "reasoning" : true
@@ -16024,17 +16248,17 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.15,
+        "cacheRead" : 0.16,
         "cacheWrite" : 0,
-        "input" : 0.66,
-        "output" : 3.41
+        "input" : 0.95,
+        "output" : 4
       },
       "id" : "moonshotai\/kimi-k2.6",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 4096,
       "name" : "MoonshotAI: Kimi K2.6",
       "provider" : "openrouter",
       "reasoning" : true
@@ -16048,10 +16272,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.149,
+        "cacheRead" : 0.16,
         "cacheWrite" : 0,
-        "input" : 0.719,
-        "output" : 3.49
+        "input" : 0.75,
+        "output" : 3.5
       },
       "id" : "moonshotai\/kimi-k2.7-code",
       "input" : [
@@ -16060,6 +16284,30 @@
       ],
       "maxTokens" : 262144,
       "name" : "MoonshotAI: Kimi K2.7 Code",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "moonshotai\/kimi-k3" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.3,
+        "cacheWrite" : 0,
+        "input" : 3,
+        "output" : 15
+      },
+      "id" : "moonshotai\/kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "MoonshotAI: Kimi K3",
       "provider" : "openrouter",
       "reasoning" : true
     },
@@ -16211,12 +16459,12 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.06,
         "cacheWrite" : 0,
-        "input" : 0.08,
-        "output" : 0.45
+        "input" : 0.21,
+        "output" : 0.455
       },
       "id" : "nvidia\/nemotron-3-super-120b-a12b",
       "input" : [
@@ -16257,18 +16505,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 512288,
       "cost" : {
-        "cacheRead" : 0.1,
+        "cacheRead" : 0.2,
         "cacheWrite" : 0,
-        "input" : 0.5,
-        "output" : 2.2
+        "input" : 0.6,
+        "output" : 3.6
       },
       "id" : "nvidia\/nemotron-3-ultra-550b-a55b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 4096,
       "name" : "NVIDIA: Nemotron 3 Ultra",
       "provider" : "openrouter",
       "reasoning" : true
@@ -16494,7 +16742,7 @@
         "text",
         "image"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 32768,
       "name" : "OpenAI: GPT-4.1",
       "provider" : "openrouter",
       "reasoning" : false
@@ -16553,7 +16801,7 @@
       },
       "contextWindow" : 128000,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 1.25,
         "cacheWrite" : 0,
         "input" : 2.5,
         "output" : 10
@@ -16829,7 +17077,7 @@
       },
       "contextWindow" : 128000,
       "cost" : {
-        "cacheRead" : 0.13,
+        "cacheRead" : 0.125,
         "cacheWrite" : 0,
         "input" : 1.25,
         "output" : 10
@@ -16839,7 +17087,7 @@
         "text",
         "image"
       ],
-      "maxTokens" : 32000,
+      "maxTokens" : 16384,
       "name" : "OpenAI: GPT-5.1 Chat",
       "provider" : "openrouter",
       "reasoning" : false
@@ -16852,7 +17100,7 @@
       },
       "contextWindow" : 400000,
       "cost" : {
-        "cacheRead" : 0.13,
+        "cacheRead" : 0.125,
         "cacheWrite" : 0,
         "input" : 1.25,
         "output" : 10
@@ -17465,16 +17713,16 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.03,
         "cacheWrite" : 0,
-        "input" : 0.029,
-        "output" : 0.14
+        "input" : 0.03,
+        "output" : 0.13
       },
       "id" : "openai\/gpt-oss-20b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 131072,
       "name" : "OpenAI: gpt-oss-20b",
       "provider" : "openrouter",
       "reasoning" : true
@@ -17511,8 +17759,8 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.03,
-        "output" : 0.15
+        "input" : 0.037,
+        "output" : 0.17
       },
       "id" : "openai\/gpt-oss-120b",
       "input" : [
@@ -18062,14 +18310,14 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.1,
+        "input" : 0.12,
         "output" : 0.24
       },
       "id" : "qwen\/qwen3-14b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 40960,
+      "maxTokens" : 16384,
       "name" : "Qwen: Qwen3 14B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18104,18 +18352,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 128000,
+      "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.04815,
-        "output" : 0.19305
+        "input" : 0.1,
+        "output" : 0.3
       },
       "id" : "qwen\/qwen3-30b-a3b-instruct-2507",
       "input" : [
         "text"
       ],
-      "maxTokens" : 32000,
+      "maxTokens" : 4096,
       "name" : "Qwen: Qwen3 30B A3B Instruct 2507",
       "provider" : "openrouter",
       "reasoning" : false
@@ -18244,10 +18492,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.1,
         "cacheWrite" : 0,
-        "input" : 0.22,
-        "output" : 1.8
+        "input" : 0.3,
+        "output" : 1
       },
       "id" : "qwen\/qwen3-coder",
       "input" : [
@@ -18428,16 +18676,16 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.07000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.09,
+        "input" : 0.1,
         "output" : 1.1
       },
       "id" : "qwen\/qwen3-next-80b-a3b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 262144,
       "name" : "Qwen: Qwen3 Next 80B A3B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -18615,19 +18863,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.11,
+        "cacheRead" : 0.1,
         "cacheWrite" : 0,
-        "input" : 0.2,
-        "output" : 0.88
+        "input" : 0.21,
+        "output" : 1.9
       },
       "id" : "qwen\/qwen3-vl-235b-a22b-instruct",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 32768,
       "name" : "Qwen: Qwen3 VL 235B A22B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -18713,7 +18961,7 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.05,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
         "input" : 0.14,
         "output" : 1
@@ -18723,7 +18971,7 @@
         "text",
         "image"
       ],
-      "maxTokens" : 81920,
+      "maxTokens" : 262144,
       "name" : "Qwen: Qwen3.5-35B-A3B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18747,7 +18995,7 @@
         "text",
         "image"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 65536,
       "name" : "Qwen: Qwen3.5-122B-A10B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18759,19 +19007,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.111,
+        "cacheRead" : 0.225,
         "cacheWrite" : 0,
-        "input" : 0.385,
-        "output" : 2.45
+        "input" : 0.45,
+        "output" : 3
       },
       "id" : "qwen\/qwen3.5-397b-a17b",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 65536,
       "name" : "Qwen: Qwen3.5 397B A17B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18855,19 +19103,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.289,
-        "output" : 2.4
+        "input" : 0.45,
+        "output" : 2.7
       },
       "id" : "qwen\/qwen3.6-27b",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 65536,
       "name" : "Qwen: Qwen3.6 27B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18976,10 +19224,10 @@
       },
       "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0.25,
-        "cacheWrite" : 1.5625,
-        "input" : 1.25,
-        "output" : 3.75
+        "cacheRead" : 0.295,
+        "cacheWrite" : 1.84375,
+        "input" : 1.475,
+        "output" : 4.425
       },
       "id" : "qwen\/qwen3.7-max",
       "input" : [
@@ -19164,16 +19412,16 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.035,
+        "cacheRead" : 0.05,
         "cacheWrite" : 0,
-        "input" : 0.14,
-        "output" : 0.58
+        "input" : 0.2,
+        "output" : 0.8
       },
       "id" : "tencent\/hy3",
       "input" : [
         "text"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 131072,
       "name" : "Tencent: Hy3",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19373,11 +19621,11 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.028,
+        "cacheRead" : 0.0028,
         "cacheWrite" : 0,
-        "input" : 0.105,
+        "input" : 0.14,
         "output" : 0.28
       },
       "id" : "xiaomi\/mimo-v2.5",
@@ -19385,7 +19633,7 @@
         "text",
         "image"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 131072,
       "name" : "Xiaomi: MiMo-V2.5",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19490,18 +19738,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 198000,
+      "contextWindow" : 202752,
       "cost" : {
-        "cacheRead" : 0.08,
+        "cacheRead" : 0.1,
         "cacheWrite" : 0,
-        "input" : 0.43,
-        "output" : 1.75
+        "input" : 0.5,
+        "output" : 2
       },
       "id" : "z-ai\/glm-4.6",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 4.6",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19560,18 +19808,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 202752,
+      "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.01,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.06,
+        "input" : 0.0605,
         "output" : 0.4
       },
       "id" : "z-ai\/glm-4.7-flash",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 4.7 Flash",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19583,7 +19831,7 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 198000,
+      "contextWindow" : 202752,
       "cost" : {
         "cacheRead" : 0.119,
         "cacheWrite" : 0,
@@ -19594,7 +19842,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 128000,
+      "maxTokens" : 202752,
       "name" : "Z.ai: GLM 5",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19606,7 +19854,7 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 202752,
       "cost" : {
         "cacheRead" : 0.24,
         "cacheWrite" : 0,
@@ -19652,18 +19900,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1024000,
+      "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.1716,
+        "cacheRead" : 0.16874,
         "cacheWrite" : 0,
-        "input" : 0.924,
-        "output" : 2.904
+        "input" : 0.9086,
+        "output" : 2.8556
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
         "text"
       ],
-      "maxTokens" : 128000,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5.2",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -21065,6 +21313,34 @@
         "xhigh" : "xhigh"
       }
     },
+    "anthropic\/claude-opus-4.7-fast" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 3,
+        "cacheWrite" : 37.5,
+        "input" : 30,
+        "output" : 150
+      },
+      "id" : "anthropic\/claude-opus-4.7-fast",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 4.7 (Fast)",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
     "anthropic\/claude-opus-4.8" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -21086,6 +21362,34 @@
       ],
       "maxTokens" : 128000,
       "name" : "Claude Opus 4.8",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
+    "anthropic\/claude-opus-4.8-fast" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 1,
+        "cacheWrite" : 12.5,
+        "input" : 10,
+        "output" : 50
+      },
+      "id" : "anthropic\/claude-opus-4.8-fast",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 4.8 (Fast)",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -21328,8 +21632,8 @@
       "cost" : {
         "cacheRead" : 0.13,
         "cacheWrite" : 0,
-        "input" : 0.21,
-        "output" : 0.79
+        "input" : 0.25,
+        "output" : 0.95
       },
       "id" : "deepseek\/deepseek-v3.1",
       "input" : [
@@ -22492,6 +22796,26 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
+    "moonshotai\/kimi-k3" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.3,
+        "cacheWrite" : 0,
+        "input" : 3,
+        "output" : 15
+      },
+      "id" : "moonshotai\/kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Kimi K3",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
     "nvidia\/nemotron-3-nano-30b-a3b" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -23530,6 +23854,26 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
+    "thinkingmachines\/inkling" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 256000,
+      "cost" : {
+        "cacheRead" : 0.17,
+        "cacheWrite" : 0,
+        "input" : 1,
+        "output" : 4.05
+      },
+      "id" : "thinkingmachines\/inkling",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 256000,
+      "name" : "Inkling",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
     "xai\/grok-4.1-fast-non-reasoning" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -24080,54 +24424,6 @@
     }
   },
   "xai" : {
-    "grok-3" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.x.ai\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false
-      },
-      "contextWindow" : 131072,
-      "cost" : {
-        "cacheRead" : 0.75,
-        "cacheWrite" : 0,
-        "input" : 3,
-        "output" : 15
-      },
-      "id" : "grok-3",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 8192,
-      "name" : "Grok 3",
-      "provider" : "xai",
-      "reasoning" : false
-    },
-    "grok-3-fast" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.x.ai\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false
-      },
-      "contextWindow" : 131072,
-      "cost" : {
-        "cacheRead" : 1.25,
-        "cacheWrite" : 0,
-        "input" : 5,
-        "output" : 25
-      },
-      "id" : "grok-3-fast",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 8192,
-      "name" : "Grok 3 Fast",
-      "provider" : "xai",
-      "reasoning" : false
-    },
     "grok-4.3" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/api.x.ai\/v1",
@@ -24154,12 +24450,10 @@
       "reasoning" : true
     },
     "grok-4.5" : {
-      "api" : "openai-completions",
+      "api" : "openai-responses",
       "baseUrl" : "https:\/\/api.x.ai\/v1",
       "compat" : {
-        "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false
+        "supportsLongCacheRetention" : false
       },
       "contextWindow" : 500000,
       "cost" : {
@@ -24176,57 +24470,11 @@
       "maxTokens" : 500000,
       "name" : "Grok 4.5",
       "provider" : "xai",
-      "reasoning" : true
-    },
-    "grok-4.20-0309-non-reasoning" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.x.ai\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false
-      },
-      "contextWindow" : 1000000,
-      "cost" : {
-        "cacheRead" : 0.2,
-        "cacheWrite" : 0,
-        "input" : 1.25,
-        "output" : 2.5
-      },
-      "id" : "grok-4.20-0309-non-reasoning",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "maxTokens" : 30000,
-      "name" : "Grok 4.20 (Non-Reasoning)",
-      "provider" : "xai",
-      "reasoning" : false
-    },
-    "grok-4.20-0309-reasoning" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.x.ai\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false
-      },
-      "contextWindow" : 1000000,
-      "cost" : {
-        "cacheRead" : 0.2,
-        "cacheWrite" : 0,
-        "input" : 1.25,
-        "output" : 2.5
-      },
-      "id" : "grok-4.20-0309-reasoning",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "maxTokens" : 30000,
-      "name" : "Grok 4.20 (Reasoning)",
-      "provider" : "xai",
-      "reasoning" : true
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "minimal" : null,
+        "off" : null
+      }
     },
     "grok-build-0.1" : {
       "api" : "openai-completions",
@@ -24252,30 +24500,6 @@
       "name" : "Grok Build 0.1",
       "provider" : "xai",
       "reasoning" : true
-    },
-    "grok-code-fast-1" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.x.ai\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false
-      },
-      "contextWindow" : 32768,
-      "cost" : {
-        "cacheRead" : 0.02,
-        "cacheWrite" : 0,
-        "input" : 0.2,
-        "output" : 1.5
-      },
-      "id" : "grok-code-fast-1",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 8192,
-      "name" : "Grok Code Fast 1",
-      "provider" : "xai",
-      "reasoning" : false
     }
   },
   "xiaomi" : {
