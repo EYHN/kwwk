@@ -12,8 +12,11 @@ A Swift-native coding agent with two faces:
 
 ## Requirements
 
-- macOS 14+
-- Swift 6.1 toolchain (Xcode 16.3+ or the matching `swift` toolchain)
+- macOS 14+ runtime; Homebrew release bottles target macOS 15+ on Apple
+  Silicon and Intel.
+- A bottled Homebrew install has no Swift or Xcode runtime dependency.
+- Building from source requires the Swift 6.1 toolchain (Xcode 16.3+ or the
+  matching `swift` toolchain).
 
 ---
 
@@ -30,9 +33,19 @@ brew install EYHN/tap/kwwk
 Or build from source:
 
 ```sh
-swift build -c release
-cp .build/release/kwwk /usr/local/bin/
+swift build -c release --product kwwk
+bin_dir="$(swift build -c release --show-bin-path)"
+sudo install -d /usr/local/libexec/kwwk /usr/local/bin
+sudo install -m 0755 "$bin_dir/kwwk" /usr/local/libexec/kwwk/kwwk
+sudo cp -R "$bin_dir/kwwk_KWWKAI.bundle" /usr/local/libexec/kwwk/
+printf '%s\n' '#!/bin/sh' 'exec /usr/local/libexec/kwwk/kwwk "$@"' \
+  | sudo tee /usr/local/bin/kwwk >/dev/null
+sudo chmod 0755 /usr/local/bin/kwwk
 ```
+
+The resource bundle must stay beside the real executable. The launcher above
+executes that path directly; replacing it with a symlink can make SwiftPM look
+for `kwwk_KWWKAI.bundle` beside the symlink instead.
 
 ### Run
 

@@ -7,19 +7,24 @@ on:
 
 jobs:
   build-macos:
-    # macos-15 = oldest supported toolchain; macos-26 tracks the newest Swift,
-    # which is what `brew install` users compile the release tarball with.
-    # Newer compilers enforce stricter concurrency checking, so green on the
-    # newest image is what guarantees source builds don't break on user machines.
+    # macos-15 covers the oldest supported toolchain on both Apple Silicon and
+    # Intel; macos-26 tracks the newest Swift. Normal Homebrew installs use a
+    # prebuilt package, but this matrix keeps each bottle architecture plus
+    # source/HEAD installs and SwiftPM consumers buildable.
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, macos-26]
+        os: [macos-15, macos-15-intel, macos-26]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+      - name: Select Swift 6.1 toolchain
+        if: startsWith(matrix.os, 'macos-15')
+        run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
       - name: swift build
         run: swift build --product kwwk
+      - name: bundled resource self-test
+        run: .build/debug/kwwk --self-test
       - name: swift test
         run: swift test
 
@@ -36,5 +41,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: swift build
         run: swift build --product kwwk
+      - name: bundled resource self-test
+        run: .build/debug/kwwk --self-test
       - name: swift test
         run: swift test
