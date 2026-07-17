@@ -60,12 +60,17 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             // environment; provider variants that support Cloudflare pass
             // explicit values through their own URL builders.
             base = substituteCloudflarePlaceholders(in: base, value: { _ in nil })
-            // Tolerate catalog entries that bake `/v1` into baseURL
-            // (pi-mono's models.generated.ts does this for OpenAI).
-            // Without this, the session baseURL `https://api.openai.com`
-            // → `/v1/chat/completions`, but a `/model` swap pulls in
-            // `https://api.openai.com/v1` and we'd double-suffix.
-            let versioned = base.hasSuffix("/v1") ? base : "\(base)/v1"
+            // Tolerate catalog entries that bake a version segment into
+            // baseURL — pi-mono's models.generated.ts does this for OpenAI
+            // (`…/v1`) and Z.AI (`…/coding/paas/v4`). Without this, the
+            // session baseURL `https://api.openai.com` → `/v1/chat/completions`,
+            // but a `/model` swap pulls in `https://api.openai.com/v1` and
+            // we'd double-suffix; Z.AI's `/v4` would gain a bogus `/v1`.
+            let lastSegment = base.split(separator: "/").last ?? ""
+            let alreadyVersioned = lastSegment.count > 1
+                && lastSegment.first == "v"
+                && lastSegment.dropFirst().allSatisfy(\.isNumber)
+            let versioned = alreadyVersioned ? base : "\(base)/v1"
             return URL(string: "\(versioned)/chat/completions")
                 ?? fallback.appendingPathComponent("v1/chat/completions")
         }

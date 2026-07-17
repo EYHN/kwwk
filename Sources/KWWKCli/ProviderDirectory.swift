@@ -99,6 +99,27 @@ let providerDirectory: [ProviderDescriptor] = [
         displayName: "Cursor",
         formTitle: nil
     ),
+    ProviderDescriptor(
+        storeId: "kimi-coding",
+        scope: "kimi-coding",
+        catalogKey: "kimi-coding",
+        displayName: "Kimi For Coding",
+        formTitle: nil
+    ),
+    ProviderDescriptor(
+        storeId: "zai",
+        scope: "zai",
+        catalogKey: "zai",
+        displayName: "Z.AI Coding Plan",
+        formTitle: "Z.AI API key"
+    ),
+    ProviderDescriptor(
+        storeId: "zai-coding-cn",
+        scope: "zai-coding-cn",
+        catalogKey: "zai-coding-cn",
+        displayName: "Z.AI Coding Plan (China)",
+        formTitle: "Z.AI API key (China)"
+    ),
 ]
 
 /// Descriptor for a store id, or nil for unknown / `env:` sentinel ids —

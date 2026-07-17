@@ -264,6 +264,10 @@ func registerStored(
         return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "cursor":
         return await registerCursor(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+    case "kimi-coding":
+        return await registerKimiCoding(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+    case "zai", "zai-coding-cn":
+        return await registerZai(storeId: storeId, creds: creds, modelOverride: modelOverride)
     default:
         FileHandle.standardError.write(Data(
             "kwwk: stored credentials for '\(storeId)' aren't wired up; skipping.\n".utf8
@@ -807,6 +811,101 @@ private func registerCursor(
         model: model,
         modelLabel: "\(modelId) · Cursor",
         authResolver: oauthResolver(manager: manager, providerId: "cursor", scheme: .bearer)
+    )
+}
+
+// MARK: - Kimi For Coding (OAuth device flow)
+
+private func registerKimiCoding(
+    store: OAuthStore,
+    creds: OAuthCredentials,
+    modelOverride: String? = nil,
+    primeToken: Bool = true
+) async -> ResolvedAuth {
+    let manager = OAuthManager(store: store)
+    // Prime the token only for the active provider; the resolver refreshes
+    // lazily on the first request for the others.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "kimi-coding")
+    }
+
+    // Kimi's coding endpoint speaks anthropic-messages but authenticates with
+    // a Bearer token instead of `x-api-key`. The resolver below supplies the
+    // OAuth token per request; the header builder covers any static-key path.
+    await APIRegistry.shared.register(AnthropicProvider(
+        authHeaderBuilder: { key in ["Authorization": cliBearerHeaderValue(key)] }
+    ), scope: "kimi-coding")
+
+    let modelId = modelOverride ?? "kimi-for-coding"
+    let catalog = ModelsCatalog.model(provider: "kimi-coding", id: modelId)
+    let model = Model(
+        id: modelId,
+        name: catalog?.name ?? modelId,
+        api: "anthropic-messages",
+        provider: "kimi-coding",
+        baseURL: catalog?.baseURL ?? "https://api.kimi.com/coding",
+        reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text, .image],
+        cost: catalog?.cost ?? ModelCost(),
+        contextWindow: catalog?.contextWindow ?? 262_144,
+        maxTokens: catalog?.maxTokens ?? 32_768,
+        // Uncatalogued ids still need the KimiCLI agent string the coding
+        // endpoint expects.
+        headers: catalog?.headers ?? ["User-Agent": "KimiCLI/1.5"],
+        compat: catalog?.compat,
+        thinkingLevelMap: catalog?.thinkingLevelMap
+    )
+    return ResolvedAuth(
+        model: model,
+        modelLabel: "\(modelId) · Kimi For Coding",
+        authResolver: oauthResolver(manager: manager, providerId: "kimi-coding", scheme: .bearer)
+    )
+}
+
+// MARK: - Z.AI GLM Coding Plan (login form)
+
+private func registerZai(
+    storeId: String,
+    creds: OAuthCredentials,
+    modelOverride: String? = nil
+) async -> ResolvedAuth {
+    await APIRegistry.shared.register(
+        OpenAICompletionsProvider(defaultAPIKey: creds.access),
+        scope: storeId
+    )
+
+    let fallbackBase = storeId == "zai-coding-cn"
+        ? "https://open.bigmodel.cn/api/coding/paas/v4"
+        : "https://api.z.ai/api/coding/paas/v4"
+    let modelId = modelOverride ?? "glm-5.2"
+    let catalog = ModelsCatalog.model(provider: storeId, id: modelId)
+    // Uncatalogued ids still route with the Z.AI thinking format so reasoning
+    // deltas keep parsing.
+    let fallbackCompat: ModelCompat = {
+        var c = ModelCompat()
+        c.thinkingFormat = "zai"
+        c.zaiToolStream = true
+        return c
+    }()
+    let model = Model(
+        id: modelId,
+        name: catalog?.name ?? modelId,
+        api: "openai-completions",
+        provider: storeId,
+        baseURL: catalog?.baseURL ?? fallbackBase,
+        reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text],
+        cost: catalog?.cost ?? ModelCost(),
+        contextWindow: catalog?.contextWindow ?? 204_800,
+        maxTokens: catalog?.maxTokens ?? 131_072,
+        headers: catalog?.headers,
+        compat: catalog?.compat ?? fallbackCompat,
+        thinkingLevelMap: catalog?.thinkingLevelMap
+    )
+    return ResolvedAuth(
+        model: model,
+        modelLabel: "\(modelId) · \(providerDisplayName(forStoreId: storeId))",
+        authResolver: nil
     )
 }
 

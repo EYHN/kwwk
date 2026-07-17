@@ -204,6 +204,54 @@ struct GitHubCopilotOAuthTests {
     }
 }
 
+@Suite("OAuth refresh — Kimi For Coding")
+struct KimiCodingOAuthTests {
+    @Test("form POST with grant_type=refresh_token + X-Msh device headers")
+    func kimiRefresh() async throws {
+        let body = #"""
+        {"access_token":"kimi-new","refresh_token":"kimi-refresh-2","expires_in":3600}
+        """#
+        let client = StubResponseClient(body: Data(body.utf8))
+        let updated = try await KimiCodingOAuthProvider(deviceId: "test-device").refresh(
+            OAuthCredentials(access: "old", refresh: "kimi-refresh-1", expires: 0),
+            using: client
+        )
+        #expect(updated.access == "kimi-new")
+        #expect(updated.refresh == "kimi-refresh-2")
+        // Refreshed ~5 minutes before the hour-long expiry.
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        #expect(updated.expires > now + 50 * 60 * 1000)
+        #expect(updated.expires <= now + 60 * 60 * 1000)
+
+        let req = client.lastRequest!
+        #expect(req.method == "POST")
+        #expect(req.url.absoluteString == "https://auth.kimi.com/api/oauth/token")
+        let form = String(data: req.body ?? Data(), encoding: .utf8) ?? ""
+        #expect(form.contains("grant_type=refresh_token"))
+        #expect(form.contains("refresh_token=kimi-refresh-1"))
+        #expect(form.contains("client_id=\(KimiOAuth.clientID)"))
+        #expect(req.headers["X-Msh-Platform"] == "kimi_cli")
+        #expect(req.headers["X-Msh-Device-Id"] == "test-device")
+        #expect(req.headers["User-Agent"]?.hasPrefix("KimiCLI/") == true)
+    }
+
+    @Test("keeps the old refresh token when the server omits a new one")
+    func kimiRefreshKeepsOldToken() async throws {
+        let body = #"{"access_token":"kimi-new","expires_in":3600}"#
+        let client = StubResponseClient(body: Data(body.utf8))
+        let updated = try await KimiCodingOAuthProvider(deviceId: "test-device").refresh(
+            OAuthCredentials(access: "old", refresh: "keep-me", expires: 0),
+            using: client
+        )
+        #expect(updated.refresh == "keep-me")
+    }
+
+    @Test("kimi-coding is a default OAuthManager provider")
+    func kimiInDefaultProviders() {
+        #expect(OAuthManager.defaultProviders().contains { $0.id == "kimi-coding" })
+    }
+}
+
 @Suite("OAuthManager integration")
 struct OAuthManagerTests {
     /// Provider that counts refresh calls so we can verify caching.

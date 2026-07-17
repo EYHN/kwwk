@@ -3,9 +3,9 @@
 A Swift-native coding agent with two faces:
 
 - **`kwwk`** — an interactive coding CLI (TUI) that drives your existing
-  Anthropic, ChatGPT (Codex), or GitHub Copilot subscription — or an API
-  key for Anthropic, OpenAI, Google (Gemini), OpenRouter, or any
-  OpenAI-compatible endpoint.
+  Anthropic, ChatGPT (Codex), GitHub Copilot, Cursor, or Kimi For Coding
+  subscription — or an API key for Anthropic, OpenAI, Google (Gemini),
+  OpenRouter, the Z.AI GLM Coding Plan, or any OpenAI-compatible endpoint.
 - **`KWWKAgent` / `KWWKAI`** — the agent runtime underneath, exposed as
   SwiftPM libraries so you can embed it in your own app, build custom
   tools, or swap the LLM provider.
@@ -45,8 +45,9 @@ Credentials come from the OAuth store at `~/.kwwk/oauth.json`; if no login
 exists, the CLI checks supported API-key environment variables. With
 neither configured, kwwk starts logged out — launch it and run `/login`
 to sign in to a provider (OAuth subscription like ChatGPT Codex, Copilot,
-or Claude Code; or an API key for Anthropic, OpenAI, Google (Gemini),
-OpenRouter, or any OpenAI-compatible endpoint).
+Claude Code, Cursor, or Kimi For Coding; or an API key for Anthropic,
+OpenAI, Google (Gemini), OpenRouter, the Z.AI GLM Coding Plan, or any
+OpenAI-compatible endpoint).
 
 Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,

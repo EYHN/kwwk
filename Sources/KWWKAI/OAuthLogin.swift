@@ -318,6 +318,107 @@ public enum OAuthLogin {
         throw OAuthError.transport("copilot device flow timed out")
     }
 
+    // MARK: - Kimi For Coding (device flow)
+    //
+    // Kimi's coding plan uses an OAuth device-authorization grant against
+    // `auth.kimi.com`: POST `/api/oauth/device_authorization` for a one-time
+    // user code, hand the verification URL to the browser, and poll
+    // `/api/oauth/token` until the user approves. Mirrors oh-my-pi's
+    // `loginKimi`. Every request carries the `X-Msh-*` device headers.
+
+    public static func loginKimiCoding(
+        clientID: String = KimiOAuth.clientID,
+        host: URL = KimiOAuth.host,
+        // Injectable for tests; the default persists one at
+        // `~/.kwwk/kimi-device-id`.
+        deviceId: String? = nil,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        var headers = KimiOAuth.commonHeaders(deviceId: deviceId)
+        headers["accept"] = "application/json"
+        headers["content-type"] = "application/x-www-form-urlencoded"
+
+        callbacks.onProgress("requesting Kimi device code…")
+        let (deviceResponse, deviceBody) = try await client.request(
+            url: host.appendingPathComponent("api/oauth/device_authorization"),
+            method: "POST",
+            headers: headers,
+            body: Data(OAuth.urlEncodedForm(["client_id": clientID]).utf8)
+        )
+        if deviceResponse.statusCode >= 400 {
+            throw OAuthError.refreshFailed("kimi device code \(deviceResponse.statusCode): \(String(data: deviceBody, encoding: .utf8) ?? "")")
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: deviceBody) as? [String: Any],
+              let userCode = obj["user_code"] as? String,
+              let deviceCode = obj["device_code"] as? String,
+              let verifyURLString = (obj["verification_uri_complete"] as? String)
+                ?? (obj["verification_uri"] as? String),
+              let verifyURL = URL(string: verifyURLString) else {
+            throw OAuthError.invalidResponse("kimi device code response")
+        }
+        var intervalSec = (obj["interval"] as? Int).flatMap { $0 >= 0 ? $0 : nil } ?? 5
+        let expiresInSec = (obj["expires_in"] as? Int) ?? 15 * 60
+
+        callbacks.onAuthURL(verifyURL)
+        callbacks.onProgress("enter code in your browser: \(userCode)")
+
+        // Poll for the token until the user approves (or the code expires).
+        let pollURL = host.appendingPathComponent("api/oauth/token")
+        let deadline = Date().addingTimeInterval(TimeInterval(expiresInSec))
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: UInt64(intervalSec) * 1_000_000_000)
+            let (pollResponse, pollBody) = try await client.request(
+                url: pollURL,
+                method: "POST",
+                headers: headers,
+                body: Data(OAuth.urlEncodedForm([
+                    "client_id": clientID,
+                    "device_code": deviceCode,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                ]).utf8)
+            )
+            guard let polled = try? JSONSerialization.jsonObject(with: pollBody) as? [String: Any] else {
+                if pollResponse.statusCode >= 400 {
+                    throw OAuthError.refreshFailed("kimi device flow: HTTP \(pollResponse.statusCode)")
+                }
+                continue
+            }
+            if let err = polled["error"] as? String {
+                switch err {
+                case "authorization_pending":
+                    continue
+                case "slow_down":
+                    intervalSec += 5
+                    if let serverInterval = polled["interval"] as? Int, serverInterval > intervalSec {
+                        intervalSec = serverInterval
+                    }
+                    continue
+                case "expired_token":
+                    throw OAuthError.refreshFailed("kimi device authorization expired")
+                case "access_denied":
+                    throw OAuthError.refreshFailed("kimi device authorization denied")
+                default:
+                    let description = (polled["error_description"] as? String).map { ": \($0)" } ?? ""
+                    throw OAuthError.refreshFailed("kimi device flow: \(err)\(description)")
+                }
+            }
+            if pollResponse.statusCode < 400, let access = polled["access_token"] as? String {
+                guard let refresh = polled["refresh_token"] as? String, !refresh.isEmpty else {
+                    throw OAuthError.invalidResponse("kimi token response missing refresh token")
+                }
+                let expiresIn = (polled["expires_in"] as? Int) ?? 15 * 60
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                return OAuthCredentials(
+                    access: access,
+                    refresh: refresh,
+                    expires: now + Int64(expiresIn) * 1000 - 5 * 60 * 1000
+                )
+            }
+        }
+        throw OAuthError.transport("kimi device flow timed out")
+    }
+
     // MARK: - JSON helpers
 
     private static func postJSON(

@@ -40,6 +40,11 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "kimi-coding",
+        display: "Kimi For Coding (Moonshot coding plan)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "anthropic-api-key",
         display: "Anthropic API key (api.anthropic.com)",
         flow: .apiKey(
@@ -132,6 +137,38 @@ let loginProviders: [LoginEntry] = [
                 ),
             ],
             extrasKeys: ["defaultModel"]
+        )
+    ),
+    LoginEntry(
+        id: "zai",
+        display: "Z.AI GLM Coding Plan (api.z.ai)",
+        flow: .apiKey(
+            fields: [
+                APIKeyFormField(
+                    key: "apiKey",
+                    label: "API key",
+                    hint: "from z.ai/manage-apikey/apikey-list",
+                    placeholder: "sk-…",
+                    required: true
+                ),
+            ],
+            extrasKeys: []
+        )
+    ),
+    LoginEntry(
+        id: "zai-coding-cn",
+        display: "Z.AI GLM Coding Plan — China (open.bigmodel.cn)",
+        flow: .apiKey(
+            fields: [
+                APIKeyFormField(
+                    key: "apiKey",
+                    label: "API key",
+                    hint: "from bigmodel.cn API-keys console",
+                    placeholder: "…",
+                    required: true
+                ),
+            ],
+            extrasKeys: []
         )
     ),
     LoginEntry(
@@ -249,6 +286,8 @@ func runOAuthFlow(providerId: String) async throws {
             return try await OAuthLogin.loginGitHubCopilot(callbacks: callbacks)
         case "cursor":
             return try await OAuthLogin.loginCursor(callbacks: callbacks)
+        case "kimi-coding":
+            return try await OAuthLogin.loginKimiCoding(callbacks: callbacks)
         default:
             throw LoginError.unknownProvider(providerId)
         }

@@ -235,6 +235,141 @@ public struct CursorOAuthProvider: OAuthProvider {
     }
 }
 
+// MARK: - Kimi For Coding (Moonshot coding plan)
+//
+// Kimi's coding-plan auth is an OAuth device-authorization grant against
+// `auth.kimi.com` (see `OAuthLogin.loginKimiCoding`). Refresh is a standard
+// `grant_type=refresh_token` form POST to the same token endpoint. Every
+// request carries the `X-Msh-*` device-identity headers the Kimi CLI sends.
+
+public struct KimiCodingOAuthProvider: OAuthProvider {
+    public let id = "kimi-coding"
+    public let name = "Kimi For Coding"
+    public let tokenURL: URL
+    public let clientID: String
+    /// Injectable for tests; the default persists one at
+    /// `~/.kwwk/kimi-device-id`.
+    public let deviceId: String?
+
+    public init(
+        tokenURL: URL = URL(string: "https://auth.kimi.com/api/oauth/token")!,
+        clientID: String = KimiOAuth.clientID,
+        deviceId: String? = nil
+    ) {
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+        self.deviceId = deviceId
+    }
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let form = OAuth.urlEncodedForm([
+            "grant_type": "refresh_token",
+            "refresh_token": credentials.refresh,
+            "client_id": clientID,
+        ])
+        var headers = KimiOAuth.commonHeaders(deviceId: deviceId)
+        headers["content-type"] = "application/x-www-form-urlencoded"
+        headers["accept"] = "application/json"
+        let (response, body) = try await client.request(
+            url: tokenURL, method: "POST", headers: headers, body: Data(form.utf8)
+        )
+        if response.statusCode >= 400 {
+            let text = String(data: body, encoding: .utf8) ?? ""
+            throw OAuthError.refreshFailed("kimi-coding \(response.statusCode): \(text)")
+        }
+        let json = try OAuth.decodeTokenResponse(body)
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return OAuthCredentials(
+            access: json.accessToken,
+            refresh: json.refreshToken ?? credentials.refresh,
+            expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
+            extras: credentials.extras
+        )
+    }
+}
+
+/// Constants + device-identity headers shared by the Kimi device-flow login
+/// and the refresh provider. Kimi's endpoints expect the CLI's `X-Msh-*`
+/// fingerprint headers alongside a `KimiCLI/<version>` User-Agent (the same
+/// agent string the bundled kimi-coding catalog models pin for chat requests).
+public enum KimiOAuth {
+    public static let clientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
+    public static let host = URL(string: "https://auth.kimi.com")!
+    /// Keep in sync with the `User-Agent` header on the bundled `kimi-coding`
+    /// catalog models.
+    static let cliVersion = "1.5"
+
+    /// Headers for Kimi OAuth endpoints. `deviceId` is injectable for tests;
+    /// the default persists a random id at `~/.kwwk/kimi-device-id` so the
+    /// device fingerprint is stable across logins.
+    public static func commonHeaders(deviceId: String? = nil) -> [String: String] {
+        [
+            "User-Agent": "KimiCLI/\(cliVersion)",
+            "X-Msh-Platform": "kimi_cli",
+            "X-Msh-Version": cliVersion,
+            "X-Msh-Device-Name": sanitized(ProcessInfo.processInfo.hostName),
+            "X-Msh-Device-Model": sanitized(deviceModel()),
+            "X-Msh-Os-Version": sanitized(ProcessInfo.processInfo.operatingSystemVersionString),
+            "X-Msh-Device-Id": sanitized(deviceId ?? persistentDeviceId()),
+        ]
+    }
+
+    /// Header values must be printable ASCII; anything else (or an empty
+    /// result) collapses to "unknown".
+    private static func sanitized(_ value: String) -> String {
+        let filtered = value.unicodeScalars
+            .filter { $0.value >= 0x20 && $0.value <= 0x7E }
+            .map(Character.init)
+        let result = String(filtered).trimmingCharacters(in: .whitespaces)
+        return result.isEmpty ? "unknown" : result
+    }
+
+    private static func deviceModel() -> String {
+        #if os(macOS)
+        let system = "macOS"
+        #elseif os(Linux)
+        let system = "Linux"
+        #else
+        let system = "unknown"
+        #endif
+        #if arch(arm64)
+        let arch = "arm64"
+        #elseif arch(x86_64)
+        let arch = "x86_64"
+        #else
+        let arch = "unknown"
+        #endif
+        return "\(system) \(arch)"
+    }
+
+    /// Read (or create, 0600) the stable device id beside the OAuth store.
+    /// Best-effort: an unwritable directory falls back to a fresh id per run.
+    static func persistentDeviceId(
+        at url: URL = OAuthStore.defaultURL()
+            .deletingLastPathComponent()
+            .appendingPathComponent("kimi-device-id")
+    ) -> String {
+        if let existing = try? String(contentsOf: url, encoding: .utf8) {
+            let trimmed = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        let fresh = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        _ = FileManager.default.createFile(
+            atPath: url.path,
+            contents: Data("\(fresh)\n".utf8),
+            attributes: [.posixPermissions: 0o600]
+        )
+        return fresh
+    }
+}
+
 // MARK: - Helpers
 
 enum OAuth {

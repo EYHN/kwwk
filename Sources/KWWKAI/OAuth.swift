@@ -224,6 +224,7 @@ public actor OAuthManager {
             OpenAICodexOAuthProvider(),
             GitHubCopilotOAuthProvider(),
             CursorOAuthProvider(),
+            KimiCodingOAuthProvider(),
         ]
     }
 

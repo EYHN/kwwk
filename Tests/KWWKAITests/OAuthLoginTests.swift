@@ -116,6 +116,107 @@ struct OAuthLoginShapeTests {
         #expect(pollBody.contains("device_code=DC"))
         #expect(pollBody.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
     }
+
+    @Test("kimi device flow rides authorization_pending and returns both tokens")
+    func kimiDeviceFlowShape() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC-1234","verification_uri":"https://auth.kimi.com/device","verification_uri_complete":"https://auth.kimi.com/device?code=UC-1234","interval":0,"expires_in":900}"#
+        ))
+        client.queue.append((
+            status: 400,
+            body: #"{"error":"authorization_pending"}"#
+        ))
+        client.queue.append((
+            status: 200,
+            body: #"{"access_token":"kimi-access","refresh_token":"kimi-refresh","expires_in":3600}"#
+        ))
+
+        let authURL = CapturedURL()
+        let creds = try await OAuthLogin.loginKimiCoding(
+            clientID: "test-client",
+            deviceId: "test-device",
+            callbacks: OAuthLogin.Callbacks(
+                onAuthURL: { authURL.set($0) },
+                onProgress: { _ in }
+            ),
+            client: client
+        )
+        #expect(creds.access == "kimi-access")
+        #expect(creds.refresh == "kimi-refresh")
+        // The complete verification URL (with the embedded code) is preferred.
+        #expect(authURL.get()?.absoluteString == "https://auth.kimi.com/device?code=UC-1234")
+
+        // First call: device authorization request with the fingerprint headers.
+        let device = client.recorded[0]
+        #expect(device.url.absoluteString == "https://auth.kimi.com/api/oauth/device_authorization")
+        let deviceBody = String(data: device.body ?? Data(), encoding: .utf8) ?? ""
+        #expect(deviceBody == "client_id=test-client")
+        #expect(device.headers["X-Msh-Platform"] == "kimi_cli")
+        #expect(device.headers["X-Msh-Device-Id"] == "test-device")
+        #expect(device.headers["User-Agent"]?.hasPrefix("KimiCLI/") == true)
+
+        // Polls carry device_code + the device-code grant; the pending
+        // response is retried rather than surfaced.
+        #expect(client.recorded.count == 3)
+        for poll in client.recorded[1...] {
+            #expect(poll.url.absoluteString == "https://auth.kimi.com/api/oauth/token")
+            let body = String(data: poll.body ?? Data(), encoding: .utf8) ?? ""
+            #expect(body.contains("device_code=DC"))
+            #expect(body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
+        }
+    }
+
+    @Test("kimi device flow surfaces access_denied instead of polling forever")
+    func kimiDeviceFlowDenied() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://auth.kimi.com/device","interval":0,"expires_in":900}"#
+        ))
+        client.queue.append((
+            status: 400,
+            body: #"{"error":"access_denied"}"#
+        ))
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginKimiCoding(
+                clientID: "test-client",
+                deviceId: "test-device",
+                callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+                client: client
+            )
+        }
+    }
+
+    @Test("kimi token response without a refresh token is rejected")
+    func kimiDeviceFlowMissingRefresh() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://auth.kimi.com/device","interval":0,"expires_in":900}"#
+        ))
+        client.queue.append((
+            status: 200,
+            body: #"{"access_token":"kimi-access","expires_in":3600}"#
+        ))
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginKimiCoding(
+                clientID: "test-client",
+                deviceId: "test-device",
+                callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+                client: client
+            )
+        }
+    }
+}
+
+/// Thread-safe URL capture for @Sendable callback assertions.
+private final class CapturedURL: @unchecked Sendable {
+    private let lock = NSLock()
+    private var url: URL?
+    func set(_ u: URL) { lock.withLock { url = u } }
+    func get() -> URL? { lock.withLock { url } }
 }
 
 // MARK: - Stub helpers

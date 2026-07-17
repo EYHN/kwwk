@@ -129,6 +129,116 @@ struct MultiProviderAuthTests {
         }
     }
 
+    // MARK: - Kimi For Coding + Z.AI Coding Plan (first-class providers)
+
+    @Test("registerStored wires a Kimi For Coding login onto the bearer anthropic wire")
+    func registerStoredKimiCoding() async throws {
+        try await withSharedAPIRegistry {
+            await APIRegistry.shared.unregisterScope("kimi-coding")
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-kimi-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            // Never-expiring credentials so registration skips the token refresh.
+            try await store.set(OAuthCredentials(
+                access: "kimi-token", refresh: "kimi-refresh", expires: .max
+            ), for: "kimi-coding")
+
+            let resolved = try await registerStored(
+                storeId: "kimi-coding", store: store, modelOverride: nil, context1m: false
+            )
+            #expect(resolved?.model.id == "kimi-for-coding")
+            #expect(resolved?.model.provider == "kimi-coding")
+            #expect(resolved?.model.api == "anthropic-messages")
+            #expect(resolved?.model.baseURL == "https://api.kimi.com/coding")
+            // The KimiCLI agent string rides along from the catalog so the
+            // coding endpoint accepts the request.
+            #expect(resolved?.model.headers?["User-Agent"]?.hasPrefix("KimiCLI/") == true)
+            let catalogEntry = try #require(ModelsCatalog.model(provider: "kimi-coding", id: "kimi-for-coding"))
+            #expect(resolved?.model.contextWindow == catalogEntry.contextWindow)
+            #expect(resolved?.modelLabel == "kimi-for-coding · Kimi For Coding")
+            // The OAuth resolver supplies a bearer token per request.
+            let auth = try await resolved?.authResolver?(catalogEntry, nil)
+            #expect(auth?.token == "kimi-token")
+            let scoped = await APIRegistry.shared.provider(scope: "kimi-coding", api: "anthropic-messages")
+            #expect(scoped is AnthropicProvider)
+            await APIRegistry.shared.unregisterScope("kimi-coding")
+        }
+    }
+
+    @Test("registerStored wires Z.AI global + China logins with catalog metadata")
+    func registerStoredZai() async throws {
+        try await withSharedAPIRegistry {
+            for (storeId, base) in [
+                ("zai", "https://api.z.ai/api/coding/paas/v4"),
+                ("zai-coding-cn", "https://open.bigmodel.cn/api/coding/paas/v4"),
+            ] {
+                await APIRegistry.shared.unregisterScope(storeId)
+                let dir = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("kwwk-zai-\(UUID().uuidString.prefix(8))")
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+                try await store.set(OAuthCredentials(
+                    access: "zai-key", refresh: "", expires: .max
+                ), for: storeId)
+
+                let resolved = try await registerStored(
+                    storeId: storeId, store: store, modelOverride: nil, context1m: false
+                )
+                #expect(resolved?.model.id == "glm-5.2")
+                #expect(resolved?.model.provider == storeId)
+                #expect(resolved?.model.api == "openai-completions")
+                #expect(resolved?.model.baseURL == base)
+                // Catalog compat — the Z.AI thinking format — rides along.
+                #expect(resolved?.model.compat?.thinkingFormat == "zai")
+                let scoped = await APIRegistry.shared.provider(scope: storeId, api: "openai-completions")
+                #expect(scoped is OpenAICompletionsProvider)
+
+                // An uncatalogued override still routes through the coding
+                // endpoint with the Z.AI thinking format.
+                let custom = try await registerStored(
+                    storeId: storeId, store: store,
+                    modelOverride: "glm-99-experimental", context1m: false
+                )
+                #expect(custom?.model.id == "glm-99-experimental")
+                #expect(custom?.model.baseURL == base)
+                #expect(custom?.model.compat?.thinkingFormat == "zai")
+                await APIRegistry.shared.unregisterScope(storeId)
+            }
+        }
+    }
+
+    @Test("the completions URL builder keeps versioned bases (Z.AI /paas/v4) intact")
+    func zaiURLNotDoubleVersioned() {
+        let provider = OpenAICompletionsProvider(defaultAPIKey: "k")
+        let fallback = URL(string: "https://api.openai.com")!
+        let zai = Model(
+            id: "glm-5.2", name: "GLM-5.2", api: "openai-completions",
+            provider: "zai", baseURL: "https://api.z.ai/api/coding/paas/v4"
+        )
+        #expect(
+            provider.urlBuilder(zai, nil, fallback).absoluteString
+                == "https://api.z.ai/api/coding/paas/v4/chat/completions"
+        )
+        // Bare hosts still gain the default /v1; existing /v1 bases don't double it.
+        let bare = Model(
+            id: "m", name: "m", api: "openai-completions",
+            provider: "x", baseURL: "https://api.deepseek.com"
+        )
+        #expect(
+            provider.urlBuilder(bare, nil, fallback).absoluteString
+                == "https://api.deepseek.com/v1/chat/completions"
+        )
+        let v1 = Model(
+            id: "m", name: "m", api: "openai-completions",
+            provider: "x", baseURL: "https://openrouter.ai/api/v1"
+        )
+        #expect(
+            provider.urlBuilder(v1, nil, fallback).absoluteString
+                == "https://openrouter.ai/api/v1/chat/completions"
+        )
+    }
+
     // MARK: - Unified resolver dispatch
 
     @Test("SessionAuthResolvers dispatches by model.provider and supports mid-session add/remove")
