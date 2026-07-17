@@ -838,6 +838,14 @@ private func registerKimiCoding(
 
     let modelId = modelOverride ?? "kimi-for-coding"
     let catalog = ModelsCatalog.model(provider: "kimi-coding", id: modelId)
+    // Uncatalogued ids still need the thinking wire shape every bundled
+    // kimi-coding model pins (adaptive thinking, unsigned thinking blocks).
+    let fallbackCompat: ModelCompat = {
+        var c = ModelCompat()
+        c.allowEmptySignature = true
+        c.forceAdaptiveThinking = true
+        return c
+    }()
     let model = Model(
         id: modelId,
         name: catalog?.name ?? modelId,
@@ -852,7 +860,7 @@ private func registerKimiCoding(
         // Uncatalogued ids still need the KimiCLI agent string the coding
         // endpoint expects.
         headers: catalog?.headers ?? ["User-Agent": "KimiCLI/1.5"],
-        compat: catalog?.compat,
+        compat: catalog?.compat ?? fallbackCompat,
         thinkingLevelMap: catalog?.thinkingLevelMap
     )
     return ResolvedAuth(

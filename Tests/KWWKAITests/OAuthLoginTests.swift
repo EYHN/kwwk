@@ -168,6 +168,50 @@ struct OAuthLoginShapeTests {
         }
     }
 
+    @Test("kimi device flow rides a transient non-JSON HTTP error")
+    func kimiDeviceFlowTransientError() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://auth.kimi.com/device","interval":0,"expires_in":900}"#
+        ))
+        // A gateway blip with an HTML body must be retried, not surfaced.
+        client.queue.append((status: 502, body: "<html>bad gateway</html>"))
+        client.queue.append((
+            status: 200,
+            body: #"{"access_token":"kimi-access","refresh_token":"kimi-refresh","expires_in":3600}"#
+        ))
+        let creds = try await OAuthLogin.loginKimiCoding(
+            clientID: "test-client",
+            deviceId: "test-device",
+            callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+            client: client
+        )
+        #expect(creds.access == "kimi-access")
+        #expect(client.recorded.count == 3)
+    }
+
+    @Test("kimi device flow aborts after 3 consecutive hard HTTP errors")
+    func kimiDeviceFlowConsecutiveErrors() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://auth.kimi.com/device","interval":0,"expires_in":900}"#
+        ))
+        for _ in 0..<3 {
+            client.queue.append((status: 502, body: "<html>bad gateway</html>"))
+        }
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginKimiCoding(
+                clientID: "test-client",
+                deviceId: "test-device",
+                callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+                client: client
+            )
+        }
+        #expect(client.recorded.count == 4)
+    }
+
     @Test("kimi device flow surfaces access_denied instead of polling forever")
     func kimiDeviceFlowDenied() async throws {
         let client = SequentialStubClient()

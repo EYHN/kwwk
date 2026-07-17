@@ -364,8 +364,12 @@ public enum OAuthLogin {
         callbacks.onProgress("enter code in your browser: \(userCode)")
 
         // Poll for the token until the user approves (or the code expires).
+        // Transient HTTP failures with non-JSON bodies (gateway errors, …)
+        // are retried; only 3 consecutive ones abort the flow, so a blip
+        // can't kill an authorization the user is mid-way through.
         let pollURL = host.appendingPathComponent("api/oauth/token")
         let deadline = Date().addingTimeInterval(TimeInterval(expiresInSec))
+        var consecutiveErrors = 0
         while Date() < deadline {
             try await Task.sleep(nanoseconds: UInt64(intervalSec) * 1_000_000_000)
             let (pollResponse, pollBody) = try await client.request(
@@ -380,10 +384,14 @@ public enum OAuthLogin {
             )
             guard let polled = try? JSONSerialization.jsonObject(with: pollBody) as? [String: Any] else {
                 if pollResponse.statusCode >= 400 {
-                    throw OAuthError.refreshFailed("kimi device flow: HTTP \(pollResponse.statusCode)")
+                    consecutiveErrors += 1
+                    if consecutiveErrors >= 3 {
+                        throw OAuthError.refreshFailed("kimi device flow: HTTP \(pollResponse.statusCode)")
+                    }
                 }
                 continue
             }
+            consecutiveErrors = 0
             if let err = polled["error"] as? String {
                 switch err {
                 case "authorization_pending":

@@ -162,6 +162,18 @@ struct MultiProviderAuthTests {
             #expect(auth?.token == "kimi-token")
             let scoped = await APIRegistry.shared.provider(scope: "kimi-coding", api: "anthropic-messages")
             #expect(scoped is AnthropicProvider)
+
+            // An uncatalogued override still routes through the coding
+            // endpoint with the Kimi thinking wire shape.
+            let custom = try await registerStored(
+                storeId: "kimi-coding", store: store,
+                modelOverride: "kimi-k9-experimental", context1m: false
+            )
+            #expect(custom?.model.id == "kimi-k9-experimental")
+            #expect(custom?.model.baseURL == "https://api.kimi.com/coding")
+            #expect(custom?.model.headers?["User-Agent"]?.hasPrefix("KimiCLI/") == true)
+            #expect(custom?.model.compat?.forceAdaptiveThinking == true)
+            #expect(custom?.model.compat?.allowEmptySignature == true)
             await APIRegistry.shared.unregisterScope("kimi-coding")
         }
     }

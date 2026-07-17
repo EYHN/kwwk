@@ -344,8 +344,16 @@ public enum KimiOAuth {
         return "\(system) \(arch)"
     }
 
+    /// Process-stable fallback id, used only when the id file can't be
+    /// written: login and refresh both go through `commonHeaders`, and Kimi
+    /// may reject a refresh whose `X-Msh-Device-Id` differs from login's, so
+    /// the id must at least survive the process even when it can't survive
+    /// a restart.
+    private static let fallbackLock = NSLock()
+    nonisolated(unsafe) private static var fallbackDeviceId: String?
+
     /// Read (or create, 0600) the stable device id beside the OAuth store.
-    /// Best-effort: an unwritable directory falls back to a fresh id per run.
+    /// Best-effort: an unwritable directory falls back to one id per process.
     static func persistentDeviceId(
         at url: URL = OAuthStore.defaultURL()
             .deletingLastPathComponent()
@@ -361,11 +369,16 @@ public enum KimiOAuth {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        _ = FileManager.default.createFile(
+        let wrote = FileManager.default.createFile(
             atPath: url.path,
             contents: Data("\(fresh)\n".utf8),
             attributes: [.posixPermissions: 0o600]
         )
+        if wrote { return fresh }
+        fallbackLock.lock()
+        defer { fallbackLock.unlock() }
+        if let cached = fallbackDeviceId { return cached }
+        fallbackDeviceId = fresh
         return fresh
     }
 }
