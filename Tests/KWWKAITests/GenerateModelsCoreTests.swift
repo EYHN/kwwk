@@ -93,6 +93,75 @@ struct GenerateModelsCoreTests {
         #expect(model["contextWindow"] as? Int == 400_000)
     }
 
+    @Test("inlines JSON-backed split pi provider catalogs")
+    func inlinesJSONBackedSplitProviderCatalogs() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-generate-models-\(UUID().uuidString)")
+        let providers = root.appendingPathComponent("providers")
+        let data = providers.appendingPathComponent("data")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let generated = """
+        import { OPENAI_MODELS } from "./providers/openai.models.ts";
+
+        export const MODELS = {
+          "openai": OPENAI_MODELS,
+        } as const;
+        """
+        try generated.write(
+            to: root.appendingPathComponent("models.generated.ts"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let provider = """
+        import values from "./data/openai.json" with { type: "json" };
+        import type { Model } from "../types.ts";
+
+        export const OPENAI_MODELS = values as {
+          "gpt-5.5": Model<"openai-responses"> & {
+            id: "gpt-5.5";
+            provider: "openai";
+          };
+        };
+        """
+        try provider.write(
+            to: providers.appendingPathComponent("openai.models.ts"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let values = """
+        {
+          "gpt-5.5": {
+            "id": "gpt-5.5",
+            "name": "GPT-5.5",
+            "api": "openai-responses",
+            "provider": "openai",
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000
+          }
+        }
+        """
+        try values.write(
+            to: data.appendingPathComponent("openai.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try GenerateModelsCore.generate(
+            fromFile: root.appendingPathComponent("models.generated.ts")
+        )
+        let openai = try #require(result.root["openai"] as? [String: Any])
+        let model = try #require(openai["gpt-5.5"] as? [String: Any])
+
+        #expect(model["id"] as? String == "gpt-5.5")
+        #expect(model["api"] as? String == "openai-responses")
+        #expect(model["contextWindow"] as? Int == 400_000)
+    }
+
     @Test("preserves providers from the source catalog")
     func preservesSourceProviders() throws {
         let raw = """
