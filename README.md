@@ -463,10 +463,19 @@ don't update one without the other:
    Cursor catalog).
 
 ```sh
+# In the pi-mono checkout, materialize the generated provider JSON first.
+node packages/ai/scripts/generate-models.ts
+
+# In the kwwk checkout, use that exact pi-mono checkout as the input.
 swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts
 swift run kwwk-generate-cursor-models
 swift test
 ```
+
+Current pi-mono provider catalogs import their values from generated
+`packages/ai/src/providers/data/*.json` files. Those files are intentionally
+Git-ignored upstream, so the pi-mono generator must run in that checkout before
+`kwwk-generate-models`. Older inline provider catalogs remain supported.
 
 `kwwk-generate-cursor-models` authenticates via `CURSOR_ACCESS_TOKEN`,
 an existing `cursor` login in `~/.kwwk/oauth.json`, or — with neither

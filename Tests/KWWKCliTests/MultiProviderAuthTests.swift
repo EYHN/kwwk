@@ -151,14 +151,17 @@ struct MultiProviderAuthTests {
             #expect(resolved?.model.provider == "kimi-coding")
             #expect(resolved?.model.api == "anthropic-messages")
             #expect(resolved?.model.baseURL == "https://api.kimi.com/coding")
-            // The KimiCLI agent string rides along from the catalog so the
-            // coding endpoint accepts the request.
+            // The KimiCLI agent string comes from the catalog when present;
+            // if pi-mono no longer lists the legacy default id, the resolver
+            // supplies the same metadata so the coding endpoint accepts it.
             #expect(resolved?.model.headers?["User-Agent"]?.hasPrefix("KimiCLI/") == true)
-            let catalogEntry = try #require(ModelsCatalog.model(provider: "kimi-coding", id: "kimi-for-coding"))
-            #expect(resolved?.model.contextWindow == catalogEntry.contextWindow)
+            let resolvedModel = try #require(resolved?.model)
+            #expect(resolvedModel.contextWindow == 262_144)
+            #expect(resolvedModel.compat?.forceAdaptiveThinking == true)
+            #expect(resolvedModel.compat?.allowEmptySignature == true)
             #expect(resolved?.modelLabel == "kimi-for-coding · Kimi For Coding")
             // The OAuth resolver supplies a bearer token per request.
-            let auth = try await resolved?.authResolver?(catalogEntry, nil)
+            let auth = try await resolved?.authResolver?(resolvedModel, nil)
             #expect(auth?.token == "kimi-token")
             let scoped = await APIRegistry.shared.provider(scope: "kimi-coding", api: "anthropic-messages")
             #expect(scoped is AnthropicProvider)

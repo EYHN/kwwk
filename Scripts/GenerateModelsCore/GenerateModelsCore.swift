@@ -115,15 +115,106 @@ public enum GenerateModelsCore {
 
             let importedURL = URL(fileURLWithPath: importPath, relativeTo: baseURL).standardizedFileURL
             let importedRaw = try String(contentsOf: importedURL, encoding: .utf8)
-            let object = try objectLiteral(named: reference.constant, in: importedRaw)
+            let object = try providerModelsObject(
+                named: reference.constant,
+                in: importedRaw,
+                sourceURL: importedURL
+            )
             lines.append(#""\#(reference.provider)": \#(object),"#)
         }
         lines.append("} as const;")
         return lines.joined(separator: "\n")
     }
 
+    /// pi-mono provider catalogs were originally emitted as inline TypeScript
+    /// object literals. Newer generated catalogs import their values from a
+    /// sibling JSON file and retain only a type map in the `.models.ts` file.
+    /// Prefer the inline object for backwards compatibility, otherwise resolve
+    /// the exported identifier to its JSON import and inline that JSON object.
+    private static func providerModelsObject(
+        named constant: String,
+        in raw: String,
+        sourceURL: URL
+    ) throws -> String {
+        let marker = "export const \(constant) ="
+        guard let markerRange = raw.range(of: marker) else {
+            throw GenerateModelsCoreError.conversion("could not find exported constant \(constant)")
+        }
+
+        let expression = raw[markerRange.upperBound...]
+            .drop(while: { $0.isWhitespace })
+        guard let first = expression.first else {
+            throw GenerateModelsCoreError.conversion("missing value for exported constant \(constant)")
+        }
+
+        if first == "{" {
+            let end = try matchingBrace(in: raw, from: expression.startIndex)
+            return String(raw[expression.startIndex...end])
+        }
+
+        let matches = regexMatches(#"^([A-Za-z_][A-Za-z0-9_]*)\s+as\b"#, in: String(expression))
+        guard let importedName = matches.first?.first else {
+            throw GenerateModelsCoreError.conversion(
+                "unsupported value for exported constant \(constant)"
+            )
+        }
+
+        let jsonImports = importedJSONValues(in: raw)
+        guard let importPath = jsonImports[importedName] else {
+            throw GenerateModelsCoreError.conversion(
+                "missing JSON import for provider constant \(constant)"
+            )
+        }
+
+        let jsonURL = URL(
+            fileURLWithPath: importPath,
+            relativeTo: sourceURL.deletingLastPathComponent()
+        ).standardizedFileURL
+        let json: String
+        do {
+            json = try String(contentsOf: jsonURL, encoding: .utf8)
+        } catch {
+            throw GenerateModelsCoreError.conversion(
+                "could not read provider JSON for \(constant) at \(jsonURL.path); "
+                    + "run pi-mono's `node packages/ai/scripts/generate-models.ts` first: \(error)"
+            )
+        }
+
+        guard let data = json.data(using: .utf8) else {
+            throw GenerateModelsCoreError.conversion(
+                "could not decode provider JSON for \(constant) as UTF-8"
+            )
+        }
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            throw GenerateModelsCoreError.conversion(
+                "invalid provider JSON for \(constant): \(error)"
+            )
+        }
+        guard parsed is [String: Any] else {
+            throw GenerateModelsCoreError.conversion(
+                "provider JSON for \(constant) is not an object"
+            )
+        }
+        return json
+    }
+
     private static func importedModelConstants(in raw: String) -> [String: String] {
         let pattern = #"(?m)^\s*import\s+\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\s+from\s+"([^"]+)";"#
+        let matches = regexMatches(pattern, in: raw)
+
+        var imports: [String: String] = [:]
+        for match in matches {
+            guard match.count == 2 else { continue }
+            imports[match[0]] = match[1]
+        }
+        return imports
+    }
+
+    private static func importedJSONValues(in raw: String) -> [String: String] {
+        let pattern = #"(?m)^\s*import\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+"([^"]+\.json)""#
         let matches = regexMatches(pattern, in: raw)
 
         var imports: [String: String] = [:]
