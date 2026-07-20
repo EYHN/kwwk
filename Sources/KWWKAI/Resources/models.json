@@ -8384,32 +8384,6 @@
     }
   },
   "kimi-coding" : {
-    "k2p7" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/api.kimi.com\/coding",
-      "compat" : {
-        "forceAdaptiveThinking" : true
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0.19,
-        "cacheWrite" : 0,
-        "input" : 0.95,
-        "output" : 4
-      },
-      "headers" : {
-        "User-Agent" : "KimiCLI\/1.5"
-      },
-      "id" : "k2p7",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "maxTokens" : 32768,
-      "name" : "Kimi K2.7 Code",
-      "provider" : "kimi-coding",
-      "reasoning" : true
-    },
     "k3" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/api.kimi.com\/coding",
@@ -8445,6 +8419,33 @@
         "off" : null,
         "xhigh" : null
       }
+    },
+    "kimi-for-coding" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/api.kimi.com\/coding",
+      "compat" : {
+        "allowEmptySignature" : true,
+        "forceAdaptiveThinking" : true
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0.19,
+        "cacheWrite" : 0,
+        "input" : 0.95,
+        "output" : 4
+      },
+      "headers" : {
+        "User-Agent" : "KimiCLI\/1.5"
+      },
+      "id" : "kimi-for-coding",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 32768,
+      "name" : "Kimi K2.7 Code",
+      "provider" : "kimi-coding",
+      "reasoning" : true
     },
     "kimi-for-coding-highspeed" : {
       "api" : "anthropic-messages",
@@ -10251,37 +10252,6 @@
       ],
       "maxTokens" : 8192,
       "name" : "GPT-OSS-120B",
-      "provider" : "nvidia",
-      "reasoning" : true
-    },
-    "qwen\/qwen3.5-122b-a10b" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "headers" : {
-        "NVCF-POLL-SECONDS" : "3600"
-      },
-      "id" : "qwen\/qwen3.5-122b-a10b",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "maxTokens" : 65536,
-      "name" : "Qwen3.5 122B-A10B",
       "provider" : "nvidia",
       "reasoning" : true
     },
@@ -12762,12 +12732,10 @@
       }
     },
     "grok-4.5" : {
-      "api" : "openai-completions",
+      "api" : "openai-responses",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
       "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsStore" : false
+        "sessionAffinityFormat" : "openai-nosession"
       },
       "contextWindow" : 500000,
       "cost" : {
@@ -13233,12 +13201,10 @@
       }
     },
     "grok-4.5" : {
-      "api" : "openai-completions",
+      "api" : "openai-responses",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
       "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsStore" : false
+        "sessionAffinityFormat" : "openai-nosession"
       },
       "contextWindow" : 500000,
       "cost" : {
@@ -15513,29 +15479,6 @@
       "provider" : "openrouter",
       "reasoning" : false
     },
-    "meta-llama\/llama-3.3-70b-instruct:free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 65536,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "meta-llama\/llama-3.3-70b-instruct:free",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 4096,
-      "name" : "Meta: Llama 3.3 70B Instruct (free)",
-      "provider" : "openrouter",
-      "reasoning" : false
-    },
     "meta-llama\/llama-4-maverick" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -16438,18 +16381,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1000000,
+      "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.06,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.21,
-        "output" : 0.455
+        "input" : 0.08500000000000001,
+        "output" : 0.4
       },
       "id" : "nvidia\/nemotron-3-super-120b-a12b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 16384,
       "name" : "NVIDIA: Nemotron 3 Super",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18309,18 +18252,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 40960,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.2275,
-        "output" : 0.91
+        "input" : 0.12,
+        "output" : 0.24
       },
       "id" : "qwen\/qwen3-14b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 8192,
+      "maxTokens" : 16384,
       "name" : "Qwen: Qwen3 14B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18474,14 +18417,14 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.1495,
-        "output" : 1.495
+        "input" : 0.3,
+        "output" : 3
       },
       "id" : "qwen\/qwen3-235b-a22b-thinking-2507",
       "input" : [
         "text"
       ],
-      "maxTokens" : 4096,
+      "maxTokens" : 32768,
       "name" : "Qwen: Qwen3 235B A22B Thinking 2507",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18601,29 +18544,6 @@
       "provider" : "openrouter",
       "reasoning" : false
     },
-    "qwen\/qwen3-coder:free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262000,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "qwen\/qwen3-coder:free",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 262000,
-      "name" : "Qwen: Qwen3 Coder 480B A35B (free)",
-      "provider" : "openrouter",
-      "reasoning" : false
-    },
     "qwen\/qwen3-max" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -18690,29 +18610,6 @@
       ],
       "maxTokens" : 262144,
       "name" : "Qwen: Qwen3 Next 80B A3B Instruct",
-      "provider" : "openrouter",
-      "reasoning" : false
-    },
-    "qwen\/qwen3-next-80b-a3b-instruct:free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "qwen\/qwen3-next-80b-a3b-instruct:free",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 4096,
-      "name" : "Qwen: Qwen3 Next 80B A3B Instruct (free)",
       "provider" : "openrouter",
       "reasoning" : false
     },
@@ -19858,7 +19755,7 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 202752,
+      "contextWindow" : 204800,
       "cost" : {
         "cacheRead" : 0.119,
         "cacheWrite" : 0,
@@ -19869,7 +19766,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 202752,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19929,10 +19826,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.04836,
+        "cacheRead" : 0.17966,
         "cacheWrite" : 0,
-        "input" : 0.2604,
-        "output" : 0.8184
+        "input" : 0.9674,
+        "output" : 3.0404
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
@@ -20006,34 +19903,6 @@
         "minimal" : null,
         "xhigh" : null
       }
-    },
-    "essentialai\/Rnj-1-Instruct" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.together.ai\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false,
-        "thinkingFormat" : "together"
-      },
-      "contextWindow" : 32768,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 0.15
-      },
-      "id" : "essentialai\/Rnj-1-Instruct",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 32768,
-      "name" : "Rnj-1 Instruct",
-      "provider" : "together",
-      "reasoning" : false
     },
     "google\/gemma-4-31B-it" : {
       "api" : "openai-completions",
@@ -20356,34 +20225,6 @@
       "provider" : "together",
       "reasoning" : false
     },
-    "Qwen\/Qwen3-235B-A22B-Instruct-2507-tput" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.together.ai\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false,
-        "thinkingFormat" : "together"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.2,
-        "output" : 0.6
-      },
-      "id" : "Qwen\/Qwen3-235B-A22B-Instruct-2507-tput",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 262144,
-      "name" : "Qwen3 235B A22B Instruct 2507 FP8",
-      "provider" : "together",
-      "reasoning" : false
-    },
     "Qwen\/Qwen3.5-9B" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/api.together.ai\/v1",
@@ -20410,40 +20251,6 @@
       ],
       "maxTokens" : 65536,
       "name" : "Qwen3.5 9B",
-      "provider" : "together",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "low" : null,
-        "medium" : null,
-        "minimal" : null
-      }
-    },
-    "Qwen\/Qwen3.5-397B-A17B" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.together.ai\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false,
-        "thinkingFormat" : "together"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.6,
-        "output" : 3.6
-      },
-      "id" : "Qwen\/Qwen3.5-397B-A17B",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "maxTokens" : 130000,
-      "name" : "Qwen3.5 397B A17B",
       "provider" : "together",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -20539,72 +20346,6 @@
       ],
       "maxTokens" : 131072,
       "name" : "Inkling",
-      "provider" : "together",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "low" : null,
-        "medium" : null,
-        "minimal" : null
-      }
-    },
-    "zai-org\/GLM-5" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.together.ai\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false,
-        "thinkingFormat" : "together"
-      },
-      "contextWindow" : 202752,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 1,
-        "output" : 3.2
-      },
-      "id" : "zai-org\/GLM-5",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 131072,
-      "name" : "GLM-5",
-      "provider" : "together",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "low" : null,
-        "medium" : null,
-        "minimal" : null
-      }
-    },
-    "zai-org\/GLM-5.1" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/api.together.ai\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false,
-        "thinkingFormat" : "together"
-      },
-      "contextWindow" : 202752,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 1.4,
-        "output" : 4.4
-      },
-      "id" : "zai-org\/GLM-5.1",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 131072,
-      "name" : "GLM-5.1",
       "provider" : "together",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -23960,7 +23701,7 @@
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
       "contextWindow" : 500000,
       "cost" : {
-        "cacheRead" : 0.5,
+        "cacheRead" : 0.3,
         "cacheWrite" : 0,
         "input" : 2,
         "output" : 6
@@ -24478,7 +24219,7 @@
       },
       "contextWindow" : 500000,
       "cost" : {
-        "cacheRead" : 0.5,
+        "cacheRead" : 0.3,
         "cacheWrite" : 0,
         "input" : 2,
         "output" : 6
