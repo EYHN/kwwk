@@ -8411,8 +8411,8 @@
       "provider" : "kimi-coding",
       "reasoning" : true,
       "thinkingLevelMap" : {
-        "high" : null,
-        "low" : null,
+        "high" : "high",
+        "low" : "low",
         "max" : "max",
         "medium" : null,
         "minimal" : null,
@@ -9463,8 +9463,8 @@
       "provider" : "moonshotai",
       "reasoning" : true,
       "thinkingLevelMap" : {
-        "high" : null,
-        "low" : null,
+        "high" : "high",
+        "low" : "low",
         "max" : "max",
         "medium" : null,
         "minimal" : null,
@@ -9757,8 +9757,8 @@
       "provider" : "moonshotai-cn",
       "reasoning" : true,
       "thinkingLevelMap" : {
-        "high" : null,
-        "low" : null,
+        "high" : "high",
+        "low" : "low",
         "max" : "max",
         "medium" : null,
         "minimal" : null,
@@ -11583,7 +11583,7 @@
       "compat" : {
         "supportsToolSearch" : true
       },
-      "contextWindow" : 372000,
+      "contextWindow" : 272000,
       "cost" : {
         "cacheRead" : 0.1,
         "cacheWrite" : 1.25,
@@ -11620,7 +11620,7 @@
       "compat" : {
         "supportsToolSearch" : true
       },
-      "contextWindow" : 372000,
+      "contextWindow" : 272000,
       "cost" : {
         "cacheRead" : 0.5,
         "cacheWrite" : 6.25,
@@ -11657,7 +11657,7 @@
       "compat" : {
         "supportsToolSearch" : true
       },
-      "contextWindow" : 372000,
+      "contextWindow" : 272000,
       "cost" : {
         "cacheRead" : 0.25,
         "cacheWrite" : 3.125,
@@ -14737,10 +14737,10 @@
       },
       "contextWindow" : 1048575,
       "cost" : {
-        "cacheRead" : 0.0196,
+        "cacheRead" : 0.01876,
         "cacheWrite" : 0,
-        "input" : 0.098,
-        "output" : 0.196
+        "input" : 0.09379999999999999,
+        "output" : 0.1876
       },
       "id" : "deepseek\/deepseek-v4-flash",
       "input" : [
@@ -15184,17 +15184,17 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.12,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.22,
-        "output" : 0.55
+        "input" : 0.12,
+        "output" : 0.37
       },
       "id" : "google\/gemma-4-31b-it",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 16384,
       "name" : "Google: Gemma 4 31B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -15409,6 +15409,29 @@
       "name" : "Kwaipilot: KAT-Coder-Pro V2.5",
       "provider" : "openrouter",
       "reasoning" : false
+    },
+    "meituan\/longcat-2.0" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048756,
+      "cost" : {
+        "cacheRead" : 0.006,
+        "cacheWrite" : 0,
+        "input" : 0.3,
+        "output" : 1.2
+      },
+      "id" : "meituan\/longcat-2.0",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 262144,
+      "name" : "Meituan: LongCat 2.0",
+      "provider" : "openrouter",
+      "reasoning" : true
     },
     "meta-llama\/llama-3.1-8b-instruct" : {
       "api" : "openai-completions",
@@ -16217,10 +16240,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.17,
+        "cacheRead" : 0.16,
         "cacheWrite" : 0,
-        "input" : 0.85,
-        "output" : 3.8
+        "input" : 0.82,
+        "output" : 3.75
       },
       "id" : "moonshotai\/kimi-k2.7-code",
       "input" : [
@@ -16385,14 +16408,14 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.08500000000000001,
-        "output" : 0.4
+        "input" : 0.08,
+        "output" : 0.45
       },
       "id" : "nvidia\/nemotron-3-super-120b-a12b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 4096,
       "name" : "NVIDIA: Nemotron 3 Super",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18597,18 +18620,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.07000000000000001,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.1,
-        "output" : 1.1
+        "input" : 0.0975,
+        "output" : 0.78
       },
       "id" : "qwen\/qwen3-next-80b-a3b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 32768,
       "name" : "Qwen: Qwen3 Next 80B A3B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -19312,16 +19335,16 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.05,
+        "cacheRead" : 0.035,
         "cacheWrite" : 0,
-        "input" : 0.2,
-        "output" : 0.8
+        "input" : 0.14,
+        "output" : 0.58
       },
       "id" : "tencent\/hy3",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 262144,
       "name" : "Tencent: Hy3",
       "provider" : "openrouter",
       "reasoning" : true
@@ -19346,29 +19369,6 @@
       ],
       "maxTokens" : 4096,
       "name" : "Tencent: Hy3 preview",
-      "provider" : "openrouter",
-      "reasoning" : true
-    },
-    "tencent\/hy3:free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "supportsDeveloperRole" : false,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "tencent\/hy3:free",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 262144,
-      "name" : "Tencent: Hy3 (free)",
       "provider" : "openrouter",
       "reasoning" : true
     },
@@ -19826,10 +19826,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.17966,
+        "cacheRead" : 0.18018,
         "cacheWrite" : 0,
-        "input" : 0.9674,
-        "output" : 3.0404
+        "input" : 0.9702,
+        "output" : 3.0492
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
@@ -19865,6 +19865,776 @@
       "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5V Turbo",
       "provider" : "openrouter",
+      "reasoning" : true
+    }
+  },
+  "qwen-token-plan" : {
+    "deepseek-v3.2" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 131072,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "deepseek-v3.2",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 65536,
+      "name" : "DeepSeek V3.2",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "deepseek-v4-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "deepseek-v4-flash",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 384000,
+      "name" : "DeepSeek V4 Flash",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null
+      }
+    },
+    "deepseek-v4-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "deepseek-v4-pro",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 384000,
+      "name" : "DeepSeek V4 Pro",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null
+      }
+    },
+    "glm-5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 202752,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "glm-5",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 16384,
+      "name" : "GLM-5",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "glm-5.1" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 202752,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "glm-5.1",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 128000,
+      "name" : "GLM-5.1",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "glm-5.2" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "glm-5.2",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 131072,
+      "name" : "GLM-5.2",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "kimi-k2.5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "kimi-k2.5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 32768,
+      "name" : "Kimi K2.5",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "kimi-k2.6" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "kimi-k2.6",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 16384,
+      "name" : "Kimi K2.6",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "kimi-k2.7-code" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "kimi-k2.7-code",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 262144,
+      "name" : "Kimi K2.7 Code",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "MiniMax-M2.5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 196608,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "MiniMax-M2.5",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 24576,
+      "name" : "MiniMax-M2.5",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "qwen3.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Qwen3.6 Flash",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "qwen3.6-plus" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.6-plus",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Qwen3.6 Plus",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "qwen3.7-max" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.7-max",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Qwen3.7 Max",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "qwen3.7-plus" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.7-plus",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 64000,
+      "name" : "Qwen3.7 Plus",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    },
+    "qwen3.8-max-preview" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.ap-southeast-1.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.8-max-preview",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Qwen3.8 Max Preview",
+      "provider" : "qwen-token-plan",
+      "reasoning" : true
+    }
+  },
+  "qwen-token-plan-cn" : {
+    "deepseek-v3.2" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 131072,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "deepseek-v3.2",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 65536,
+      "name" : "DeepSeek V3.2",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "deepseek-v4-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "deepseek-v4-flash",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 384000,
+      "name" : "DeepSeek V4 Flash",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null
+      }
+    },
+    "deepseek-v4-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "deepseek-v4-pro",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 384000,
+      "name" : "DeepSeek V4 Pro",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : null,
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null
+      }
+    },
+    "glm-5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 202752,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "glm-5",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 16384,
+      "name" : "GLM-5",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "glm-5.1" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 202752,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "glm-5.1",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 128000,
+      "name" : "GLM-5.1",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "glm-5.2" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "glm-5.2",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 131072,
+      "name" : "GLM-5.2",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "kimi-k2.5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "kimi-k2.5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 32768,
+      "name" : "Kimi K2.5",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "kimi-k2.6" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "kimi-k2.6",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 16384,
+      "name" : "Kimi K2.6",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "kimi-k2.7-code" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "kimi-k2.7-code",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 262144,
+      "name" : "Kimi K2.7 Code",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "MiniMax-M2.5" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 196608,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "MiniMax-M2.5",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 24576,
+      "name" : "MiniMax-M2.5",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "qwen3.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Qwen3.6 Flash",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "qwen3.6-plus" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.6-plus",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Qwen3.6 Plus",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "qwen3.7-max" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.7-max",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Qwen3.7 Max",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "qwen3.7-plus" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.7-plus",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 64000,
+      "name" : "Qwen3.7 Plus",
+      "provider" : "qwen-token-plan-cn",
+      "reasoning" : true
+    },
+    "qwen3.8-max-preview" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan.cn-beijing.maas.aliyuncs.com\/compatible-mode\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "thinkingFormat" : "qwen"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "qwen3.8-max-preview",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Qwen3.8 Max Preview",
+      "provider" : "qwen-token-plan-cn",
       "reasoning" : true
     }
   },
