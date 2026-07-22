@@ -6814,6 +6814,52 @@
         "off" : null
       }
     },
+    "gemini-3.5-flash-lite" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.03,
+        "cacheWrite" : 0,
+        "input" : 0.3,
+        "output" : 2.5
+      },
+      "id" : "gemini-3.5-flash-lite",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Gemini 3.5 Flash Lite",
+      "provider" : "google",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "off" : null
+      }
+    },
+    "gemini-3.6-flash" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 1.5,
+        "output" : 7.5
+      },
+      "id" : "gemini-3.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Gemini 3.6 Flash",
+      "provider" : "google",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "off" : null
+      }
+    },
     "gemini-flash-latest" : {
       "api" : "google-generative-ai",
       "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
@@ -9441,10 +9487,10 @@
         "maxTokensField" : "max_tokens",
         "requiresReasoningContentOnAssistantMessages" : true,
         "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
+        "supportsReasoningEffort" : true,
         "supportsStore" : false,
         "supportsStrictMode" : false,
-        "thinkingFormat" : "deepseek"
+        "thinkingFormat" : "openai"
       },
       "contextWindow" : 1048576,
       "cost" : {
@@ -9735,10 +9781,10 @@
         "maxTokensField" : "max_tokens",
         "requiresReasoningContentOnAssistantMessages" : true,
         "supportsDeveloperRole" : false,
-        "supportsReasoningEffort" : false,
+        "supportsReasoningEffort" : true,
         "supportsStore" : false,
         "supportsStrictMode" : false,
-        "thinkingFormat" : "deepseek"
+        "thinkingFormat" : "openai"
       },
       "contextWindow" : 1048576,
       "cost" : {
@@ -12148,6 +12194,52 @@
         "off" : null
       }
     },
+    "gemini-3.5-flash-lite" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.03,
+        "cacheWrite" : 0,
+        "input" : 0.3,
+        "output" : 2.5
+      },
+      "id" : "gemini-3.5-flash-lite",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Gemini 3.5 Flash Lite",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "off" : null
+      }
+    },
+    "gemini-3.6-flash" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 1.5,
+        "output" : 7.5
+      },
+      "id" : "gemini-3.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Gemini 3.6 Flash",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "off" : null
+      }
+    },
     "glm-5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
@@ -12786,30 +12878,6 @@
         "off" : null
       }
     },
-    "hy3-free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsStore" : false
-      },
-      "contextWindow" : 190000,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "hy3-free",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 64000,
-      "name" : "Hy3 Free",
-      "provider" : "opencode",
-      "reasoning" : true
-    },
     "kimi-k2.5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
@@ -12886,6 +12954,30 @@
       ],
       "maxTokens" : 262144,
       "name" : "Kimi K2.7 Code",
+      "provider" : "opencode",
+      "reasoning" : true
+    },
+    "laguna-s-2.1-free" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false
+      },
+      "contextWindow" : 256000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "laguna-s-2.1-free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 32000,
+      "name" : "Laguna S 2.1 Free",
       "provider" : "opencode",
       "reasoning" : true
     },
@@ -13574,7 +13666,7 @@
         "cacheRead" : 0.15,
         "cacheWrite" : 0.083333,
         "input" : 1.5,
-        "output" : 9
+        "output" : 7.5
       },
       "id" : "~google\/gemini-flash-latest",
       "input" : [
@@ -15076,6 +15168,54 @@
       ],
       "maxTokens" : 65536,
       "name" : "Google: Gemini 3.5 Flash",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "google\/gemini-3.5-flash-lite" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.03,
+        "cacheWrite" : 0.083333,
+        "input" : 0.3,
+        "output" : 2.5
+      },
+      "id" : "google\/gemini-3.5-flash-lite",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Google: Gemini 3.5 Flash-Lite",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "google\/gemini-3.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0.083333,
+        "input" : 1.5,
+        "output" : 7.5
+      },
+      "id" : "google\/gemini-3.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Google: Gemini 3.6 Flash",
       "provider" : "openrouter",
       "reasoning" : true
     },
@@ -18084,6 +18224,52 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
+    "poolside\/laguna-s-2.1" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.01,
+        "cacheWrite" : 0,
+        "input" : 0.1,
+        "output" : 0.2
+      },
+      "id" : "poolside\/laguna-s-2.1",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Poolside: Laguna S 2.1",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "poolside\/laguna-s-2.1:free" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "poolside\/laguna-s-2.1:free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 32768,
+      "name" : "Poolside: Laguna S 2.1 (free)",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
     "poolside\/laguna-xs-2.1" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -18620,18 +18806,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.07000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.0975,
-        "output" : 0.78
+        "input" : 0.1,
+        "output" : 1.1
       },
       "id" : "qwen\/qwen3-next-80b-a3b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 32768,
+      "maxTokens" : 262144,
       "name" : "Qwen: Qwen3 Next 80B A3B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -19826,10 +20012,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.18018,
+        "cacheRead" : 0.15314,
         "cacheWrite" : 0,
-        "input" : 0.9702,
-        "output" : 3.0492
+        "input" : 0.8246,
+        "output" : 2.5916
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
@@ -22491,6 +22677,46 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
+    "google\/gemini-3.5-flash-lite" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.03,
+        "cacheWrite" : 0,
+        "input" : 0.3,
+        "output" : 2.5
+      },
+      "id" : "google\/gemini-3.5-flash-lite",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65000,
+      "name" : "Gemini 3.5 Flash Lite",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "google\/gemini-3.6-flash" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 1.5,
+        "output" : 7.5
+      },
+      "id" : "google\/gemini-3.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 64000,
+      "name" : "Gemini 3.6 Flash",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
     "google\/gemma-4-26b-a4b-it" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -24324,6 +24550,44 @@
       ],
       "maxTokens" : 100000,
       "name" : "o4-mini",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "poolside\/laguna-s-2.1" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.01,
+        "cacheWrite" : 0,
+        "input" : 0.1,
+        "output" : 0.2
+      },
+      "id" : "poolside\/laguna-s-2.1",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Laguna S 2.1",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "poolside\/laguna-s-2.1-free" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 256000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "poolside\/laguna-s-2.1-free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 32768,
+      "name" : "Laguna S 2.1 Free",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
