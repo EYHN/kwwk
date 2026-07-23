@@ -51,7 +51,9 @@ struct GenerateModelsCoreTests {
         let generated = """
         import { OPENAI_MODELS } from "./providers/openai.models.ts";
 
-        export const MODELS = {
+        export const MODELS: {
+          readonly "openai": typeof OPENAI_MODELS;
+        } = {
           "openai": OPENAI_MODELS,
         } as const;
         """
@@ -117,14 +119,10 @@ struct GenerateModelsCoreTests {
 
         let provider = """
         import values from "./data/openai.json" with { type: "json" };
-        import type { Model } from "../types.ts";
+        import { flattenModelCatalog, type ModelCatalog } from "../model-catalog.ts";
 
-        export const OPENAI_MODELS = values as {
-          "gpt-5.5": Model<"openai-responses"> & {
-            id: "gpt-5.5";
-            provider: "openai";
-          };
-        };
+        export const OPENAI_MODELS: ModelCatalog<typeof values, "openai"> =
+          flattenModelCatalog("openai", values);
         """
         try provider.write(
             to: providers.appendingPathComponent("openai.models.ts"),
@@ -134,14 +132,16 @@ struct GenerateModelsCoreTests {
 
         let values = """
         {
-          "gpt-5.5": {
-            "id": "gpt-5.5",
-            "name": "GPT-5.5",
-            "api": "openai-responses",
-            "provider": "openai",
-            "input": ["text", "image"],
-            "contextWindow": 400000,
-            "maxTokens": 128000
+          "openai-responses": {
+            "gpt-5.5": {
+              "id": "gpt-5.5",
+              "name": "GPT-5.5",
+              "api": "openai-responses",
+              "provider": "openai",
+              "input": ["text", "image"],
+              "contextWindow": 400000,
+              "maxTokens": 128000
+            }
           }
         }
         """
