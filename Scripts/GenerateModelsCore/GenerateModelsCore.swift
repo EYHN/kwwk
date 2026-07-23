@@ -63,8 +63,8 @@ public enum GenerateModelsCore {
     public static func convert(_ raw: String) throws -> String {
         var text = raw
 
-        if let range = text.range(of: "export const MODELS = ") {
-            text = String(text[range.upperBound...])
+        if text.range(of: "export const MODELS") != nil {
+            text = try objectLiteral(named: "MODELS", in: text)
         } else if let firstBrace = text.firstIndex(of: "{") {
             text = String(text[firstBrace...])
         } else {
@@ -136,12 +136,18 @@ public enum GenerateModelsCore {
         in raw: String,
         sourceURL: URL
     ) throws -> String {
-        let marker = "export const \(constant) ="
+        let marker = "export const \(constant)"
         guard let markerRange = raw.range(of: marker) else {
             throw GenerateModelsCoreError.conversion("could not find exported constant \(constant)")
         }
+        guard let assignment = assignmentOperator(
+            in: raw,
+            after: markerRange.upperBound
+        ) else {
+            throw GenerateModelsCoreError.conversion("could not find assignment for exported constant \(constant)")
+        }
 
-        let expression = raw[markerRange.upperBound...]
+        let expression = raw[raw.index(after: assignment)...]
             .drop(while: { $0.isWhitespace })
         guard let first = expression.first else {
             throw GenerateModelsCoreError.conversion("missing value for exported constant \(constant)")
@@ -152,8 +158,14 @@ public enum GenerateModelsCore {
             return String(raw[expression.startIndex...end])
         }
 
-        let matches = regexMatches(#"^([A-Za-z_][A-Za-z0-9_]*)\s+as\b"#, in: String(expression))
-        guard let importedName = matches.first?.first else {
+        let expressionText = String(expression)
+        let directImport = regexMatches(#"^([A-Za-z_][A-Za-z0-9_]*)\s+as\b"#, in: expressionText)
+            .first?.first
+        let flattenedImport = regexMatches(
+            #"^flattenModelCatalog\(\s*"[^"]+"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"#,
+            in: expressionText
+        ).first?.first
+        guard let importedName = directImport ?? flattenedImport else {
             throw GenerateModelsCoreError.conversion(
                 "unsupported value for exported constant \(constant)"
             )
@@ -198,6 +210,36 @@ public enum GenerateModelsCore {
                 "provider JSON for \(constant) is not an object"
             )
         }
+        if flattenedImport != nil {
+            guard let groups = parsed as? [String: Any] else {
+                throw GenerateModelsCoreError.conversion(
+                    "grouped provider JSON for \(constant) is not an object"
+                )
+            }
+            var models: [String: Any] = [:]
+            for (groupName, value) in groups {
+                guard let group = value as? [String: Any] else {
+                    throw GenerateModelsCoreError.conversion(
+                        "provider JSON group \(groupName) for \(constant) is not an object"
+                    )
+                }
+                for (modelId, model) in group {
+                    guard models[modelId] == nil else {
+                        throw GenerateModelsCoreError.conversion(
+                            "duplicate model \(modelId) while flattening provider JSON for \(constant)"
+                        )
+                    }
+                    models[modelId] = model
+                }
+            }
+            let flattened = try JSONSerialization.data(withJSONObject: models, options: [.sortedKeys])
+            guard let flattenedJSON = String(data: flattened, encoding: .utf8) else {
+                throw GenerateModelsCoreError.conversion(
+                    "could not encode flattened provider JSON for \(constant)"
+                )
+            }
+            return flattenedJSON
+        }
         return json
     }
 
@@ -237,15 +279,61 @@ public enum GenerateModelsCore {
     }
 
     private static func objectLiteral(named constant: String, in raw: String) throws -> String {
-        let marker = "export const \(constant) ="
+        let marker = "export const \(constant)"
         guard let markerRange = raw.range(of: marker) else {
             throw GenerateModelsCoreError.conversion("could not find exported constant \(constant)")
         }
-        guard let start = raw[markerRange.upperBound...].firstIndex(of: "{") else {
+        guard let assignment = assignmentOperator(
+            in: raw,
+            after: markerRange.upperBound
+        ) else {
+            throw GenerateModelsCoreError.conversion("could not find assignment for exported constant \(constant)")
+        }
+        guard let start = raw[raw.index(after: assignment)...].firstIndex(of: "{") else {
             throw GenerateModelsCoreError.conversion("could not find object for exported constant \(constant)")
         }
         let end = try matchingBrace(in: raw, from: start)
         return String(raw[start...end])
+    }
+
+    /// Finds the declaration's assignment operator while skipping balanced
+    /// delimiters in an optional TypeScript type annotation.
+    private static func assignmentOperator(
+        in text: String,
+        after start: String.Index
+    ) -> String.Index? {
+        var index = start
+        var delimiterStack: [Character] = []
+        var quote: Character?
+        var escaped = false
+
+        while index < text.endIndex {
+            let character = text[index]
+
+            if let activeQuote = quote {
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == activeQuote {
+                    quote = nil
+                }
+            } else if character == "\"" || character == "'" || character == "`" {
+                quote = character
+            } else if character == "{" || character == "[" || character == "(" {
+                delimiterStack.append(character)
+            } else if character == "}" || character == "]" || character == ")" {
+                _ = delimiterStack.popLast()
+            } else if character == "=" && delimiterStack.isEmpty {
+                return index
+            } else if character == ";" && delimiterStack.isEmpty {
+                return nil
+            }
+
+            index = text.index(after: index)
+        }
+
+        return nil
     }
 
     private static func matchingBrace(in text: String, from start: String.Index) throws -> String.Index {
