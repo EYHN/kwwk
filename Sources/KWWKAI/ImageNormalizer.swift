@@ -60,22 +60,8 @@ public struct NormalizedImage: Sendable, Hashable {
 }
 
 public enum ImageNormalizer {
-    public static func normalize(
-        _ data: Data,
-        excludingWebP: Bool? = nil
-    ) throws -> NormalizedImage {
-        try normalize(
-            data,
-            options: .default(
-                excludingWebP: excludingWebP
-                    ?? excludesWebP(in: ProcessInfo.processInfo.environment)
-            )
-        )
-    }
-
-    static func excludesWebP(in environment: [String: String]) -> Bool {
-        guard let raw = environment["KWWK_NO_WEBP"] else { return false }
-        return raw == "1" || raw.lowercased() == "true"
+    public static func normalize(_ data: Data) throws -> NormalizedImage {
+        try normalize(data, options: .default())
     }
 
     static func normalize(
@@ -113,7 +99,6 @@ public enum ImageNormalizer {
             && source.height <= options.maximumHeight
             && data.count <= options.maximumBytes / 4
             && orientation == .identity
-            && !(options.excludeWebP && sourceFormat == .webp)
 
         if isComfortablyWithinLimits {
             return NormalizedImage(
@@ -139,21 +124,13 @@ public enum ImageNormalizer {
         )
         let target = try resize(source, width: targetSize.width, height: targetSize.height)
 
-        var best = try encodeSmallest(
-            target,
-            quality: options.initialQuality,
-            excludingWebP: options.excludeWebP
-        )
+        var best = try encodeSmallest(target, quality: options.initialQuality)
         if best.data.count <= options.maximumBytes {
             return normalizedImage(best, source: source)
         }
 
         for quality in options.qualitySteps {
-            let candidate = try encodeSmallestLossy(
-                target,
-                quality: quality,
-                excludingWebP: options.excludeWebP
-            )
+            let candidate = try encodeSmallestLossy(target, quality: quality)
             if candidate.data.count < best.data.count {
                 best = candidate
             }
@@ -171,11 +148,7 @@ public enum ImageNormalizer {
 
             let scaled = try resize(source, width: width, height: height)
             for quality in options.qualitySteps {
-                let candidate = try encodeSmallestLossy(
-                    scaled,
-                    quality: quality,
-                    excludingWebP: options.excludeWebP
-                )
+                let candidate = try encodeSmallestLossy(scaled, quality: quality)
                 if candidate.data.count < best.data.count {
                     best = candidate
                 }
@@ -338,26 +311,21 @@ public enum ImageNormalizer {
 
     private static func encodeSmallest(
         _ image: RasterImage,
-        quality: Int,
-        excludingWebP: Bool
+        quality: Int
     ) throws -> EncodedImage {
-        var candidates = try [
+        let candidates = try [
             encodePNG(image),
             encodeJPEG(image, quality: quality),
+            encodeWebP(image, quality: quality),
         ]
-        if !excludingWebP {
-            candidates.append(try encodeWebP(image, quality: quality))
-        }
         return candidates.min(by: { $0.data.count < $1.data.count })!
     }
 
     private static func encodeSmallestLossy(
         _ image: RasterImage,
-        quality: Int,
-        excludingWebP: Bool
+        quality: Int
     ) throws -> EncodedImage {
         let jpeg = try encodeJPEG(image, quality: quality)
-        guard !excludingWebP else { return jpeg }
         let webP = try encodeWebP(image, quality: quality)
         return jpeg.data.count < webP.data.count ? jpeg : webP
     }
@@ -441,9 +409,8 @@ struct ImageNormalizationOptions: Sendable {
     let qualitySteps: [Int]
     let scaleSteps: [Double]
     let minimumFallbackDimension: Int
-    let excludeWebP: Bool
 
-    static func `default`(excludingWebP: Bool = false) -> ImageNormalizationOptions {
+    static func `default`() -> ImageNormalizationOptions {
         ImageNormalizationOptions(
             maximumWidth: 1568,
             maximumHeight: 1568,
@@ -452,8 +419,7 @@ struct ImageNormalizationOptions: Sendable {
             initialQuality: 80,
             qualitySteps: [70, 60, 50, 40],
             scaleSteps: [1.0, 0.75, 0.5, 0.35, 0.25],
-            minimumFallbackDimension: 100,
-            excludeWebP: excludingWebP
+            minimumFallbackDimension: 100
         )
     }
 }

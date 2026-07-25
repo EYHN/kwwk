@@ -6,7 +6,7 @@ import Testing
 struct ImageNormalizerTests {
     @Test("upscales undersized images to the 200px floor")
     func minimumDimension() throws {
-        let result = try ImageNormalizer.normalize(redPixelPNG, excludingWebP: false)
+        let result = try ImageNormalizer.normalize(redPixelPNG)
 
         #expect(result.originalWidth == 1)
         #expect(result.originalHeight == 1)
@@ -27,8 +27,7 @@ struct ImageNormalizerTests {
             initialQuality: 80,
             qualitySteps: [70, 60, 50, 40],
             scaleSteps: [1.0, 0.75, 0.5, 0.35, 0.25],
-            minimumFallbackDimension: 1,
-            excludeWebP: false
+            minimumFallbackDimension: 1
         )
         let result = try ImageNormalizer.normalize(sixteenByOnePNG, options: options)
 
@@ -45,9 +44,9 @@ struct ImageNormalizerTests {
 
     @Test("keeps normalized images unchanged on the comfortable-size fast path")
     func fastPath() throws {
-        let first = try ImageNormalizer.normalize(redPixelPNG, excludingWebP: false)
+        let first = try ImageNormalizer.normalize(redPixelPNG)
         let firstBytes = try #require(Data(base64Encoded: first.content.data))
-        let second = try ImageNormalizer.normalize(firstBytes, excludingWebP: false)
+        let second = try ImageNormalizer.normalize(firstBytes)
 
         #expect(!second.wasReencoded)
         #expect(second.content == first.content)
@@ -58,33 +57,10 @@ struct ImageNormalizerTests {
 
     @Test("chooses the smallest of PNG, JPEG, and WebP")
     func choosesSmallestFormat() throws {
-        let result = try ImageNormalizer.normalize(redPixelPNG, excludingWebP: false)
+        let result = try ImageNormalizer.normalize(redPixelPNG)
 
         #expect(result.content.mimeType == "image/webp")
         #expect(Data(base64Encoded: result.content.data)?.starts(with: Array("RIFF".utf8)) == true)
-    }
-
-    @Test("can exclude WebP and re-encodes WebP sources on the fast path")
-    func excludesWebP() throws {
-        let webP = try ImageNormalizer.normalize(redPixelPNG, excludingWebP: false)
-        let webPBytes = try #require(Data(base64Encoded: webP.content.data))
-
-        let result = try ImageNormalizer.normalize(webPBytes, excludingWebP: true)
-
-        #expect(webP.content.mimeType == "image/webp")
-        #expect(result.content.mimeType != "image/webp")
-        #expect(result.wasReencoded)
-        #expect(result.width == 200)
-        #expect(result.height == 200)
-    }
-
-    @Test("KWWK_NO_WEBP accepts only 1 or true")
-    func webPEnvironmentFlag() {
-        #expect(ImageNormalizer.excludesWebP(in: ["KWWK_NO_WEBP": "1"]))
-        #expect(ImageNormalizer.excludesWebP(in: ["KWWK_NO_WEBP": "TRUE"]))
-        #expect(!ImageNormalizer.excludesWebP(in: ["KWWK_NO_WEBP": "0"]))
-        #expect(!ImageNormalizer.excludesWebP(in: ["KWWK_NO_WEBP": ""]))
-        #expect(!ImageNormalizer.excludesWebP(in: [:]))
     }
 
     @Test("walks the quality and scale ladders when the target cannot be met")
@@ -97,8 +73,7 @@ struct ImageNormalizerTests {
             initialQuality: 80,
             qualitySteps: [70, 60, 50, 40],
             scaleSteps: [1.0, 0.75, 0.5, 0.35, 0.25],
-            minimumFallbackDimension: 100,
-            excludeWebP: false
+            minimumFallbackDimension: 100
         )
 
         let result = try ImageNormalizer.normalize(redPixelPNG, options: options)
@@ -160,7 +135,7 @@ struct ImageNormalizerTests {
     func orientationSixLandscapeSemantics() throws {
         let orientedJPEG = jpegWithEXIFOrientation(.rotated90Clockwise)
 
-        let result = try ImageNormalizer.normalize(orientedJPEG, excludingWebP: false)
+        let result = try ImageNormalizer.normalize(orientedJPEG)
 
         #expect(result.originalWidth == 3)
         #expect(result.originalHeight == 2)
@@ -169,7 +144,7 @@ struct ImageNormalizerTests {
         #expect(result.wasReencoded)
 
         let output = try #require(Data(base64Encoded: result.content.data))
-        let secondPass = try ImageNormalizer.normalize(output, excludingWebP: false)
+        let secondPass = try ImageNormalizer.normalize(output)
         #expect(secondPass.originalWidth == 300)
         #expect(secondPass.originalHeight == 200)
         #expect(!secondPass.wasReencoded)
@@ -205,12 +180,11 @@ struct ImageNormalizerTests {
     @Test("throws instead of retaining undecodable source bytes")
     func invalidImageThrows() {
         #expect(throws: ImageNormalizationError.unsupportedFormat) {
-            try ImageNormalizer.normalize(Data("not an image".utf8), excludingWebP: false)
+            try ImageNormalizer.normalize(Data("not an image".utf8))
         }
         #expect(throws: ImageNormalizationError.decodeFailed) {
             try ImageNormalizer.normalize(
-                Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
-                excludingWebP: false
+                Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
             )
         }
     }
