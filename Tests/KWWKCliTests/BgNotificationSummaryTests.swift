@@ -58,6 +58,53 @@ struct BgNotificationSummaryTests {
         #expect(summary?.outputTail == ["Enter password:"])
     }
 
+    @Test("parses a failed notification")
+    func failed() {
+        let text = """
+        A background task failed:
+        <task-notification>
+          <task-id>bg_fail</task-id>
+          <kind>bash</kind>
+          <label>build</label>
+          <status>failed</status>
+          <summary>exit 1</summary>
+          <exit-code>1</exit-code>
+          <duration-ms>3400</duration-ms>
+          <output-tail><untrusted-output>error: linker failed</untrusted-output></output-tail>
+        </task-notification>
+        """
+        let summary = BgNotificationSummary.parse(text)
+        #expect(summary != nil)
+        #expect(summary?.label == "build")
+        #expect(summary?.status == "failed")
+        #expect(summary?.isError == true)
+        #expect(summary?.isStalled == false)
+        #expect(summary?.outputTail == ["error: linker failed"])
+        let rendered = ANSI.stripEscapes(summary?.render().joined(separator: "\n") ?? "")
+        #expect(rendered.contains("● bg(build) · failed · exit 1"))
+        #expect(!rendered.contains("<task-notification>"))
+    }
+
+    @Test("parses a killed notification")
+    func killed() {
+        let text = """
+        A background task was killed:
+        <task-notification>
+          <task-id>bg_kill</task-id>
+          <kind>bash</kind>
+          <label>server</label>
+          <status>killed</status>
+          <duration-ms>500</duration-ms>
+        </task-notification>
+        """
+        let summary = BgNotificationSummary.parse(text)
+        #expect(summary != nil)
+        #expect(summary?.label == "server")
+        #expect(summary?.status == "killed")
+        #expect(summary?.isError == true)
+        #expect(summary?.isStalled == false)
+    }
+
     @Test("explicitly incomplete agent result renders as a warning, not an error")
     func incompleteAgentResult() {
         let text = """

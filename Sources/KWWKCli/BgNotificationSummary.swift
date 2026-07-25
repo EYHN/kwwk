@@ -22,14 +22,21 @@ struct BgNotificationSummary {
     let isIncomplete: Bool
 
     /// Return nil if `text` isn't a background-task notification. We only
-    /// recognise the two lead-ins the bridge emits so genuine user
+    /// recognise the lead-ins the bridge emits (see
+    /// `BackgroundTaskNotification.messageText()`) so genuine user
     /// messages that happen to contain XML-looking strings pass through
-    /// untouched.
+    /// untouched. All four terminal/stall lead-ins must stay in sync with
+    /// the emitter — a missing one falls through to the raw user-bar render
+    /// and dumps the full `<task-notification>` XML into the transcript.
     static func parse(_ text: String) -> BgNotificationSummary? {
         let completedLead = "A background task completed:"
+        let failedLead    = "A background task failed:"
+        let killedLead    = "A background task was killed:"
         let stalledLead   = "A background task appears stuck"
         let isStalled: Bool
-        if text.hasPrefix(completedLead) {
+        if text.hasPrefix(completedLead)
+            || text.hasPrefix(failedLead)
+            || text.hasPrefix(killedLead) {
             isStalled = false
         } else if text.hasPrefix(stalledLead) {
             isStalled = true
@@ -51,6 +58,7 @@ struct BgNotificationSummary {
         let truncated = tag(text, "output-truncated") == "true"
         let isError = !isIncomplete && (
             rawStatus == "failed"
+                || rawStatus == "killed"
                 || summary?.contains("exit") == true
                     && summary?.contains("exit 0") == false
                     && rawStatus != "completed"
