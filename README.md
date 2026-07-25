@@ -67,8 +67,6 @@ Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 LS, and background-task tools out of the box.
 
 Image inputs are resized and recompressed before entering the conversation.
-Set `KWWK_NO_WEBP=1` when the target backend cannot decode WebP (for example,
-llama.cpp builds that use stb_image).
 
 ---
 
