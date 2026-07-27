@@ -1189,6 +1189,326 @@
       "input" : 0,
       "output" : 0
     },
+    "id" : "claude-opus-5-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-high-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-low-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Medium",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-medium-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Medium Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Thinking",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-high-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Thinking Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Low Thinking",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-low-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Low Thinking Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-max",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Max Thinking",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-max-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Max Thinking Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Medium Thinking",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-medium-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Medium Thinking Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-xhigh",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Extra High Thinking",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-thinking-xhigh-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Opus 5 1M Extra High Thinking Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
     "id" : "claude-sonnet-5-high",
     "input" : [
       "text",
