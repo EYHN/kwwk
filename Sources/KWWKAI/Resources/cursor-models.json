@@ -3698,5 +3698,62 @@
     "name" : "Kimi K2.7 Code",
     "provider" : "cursor",
     "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "kimi-k3-high",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Kimi K3 High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "kimi-k3-low",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Kimi K3 Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "kimi-k3-max",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Kimi K3",
+    "provider" : "cursor",
+    "reasoning" : false
   }
 ]
