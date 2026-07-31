@@ -620,7 +620,10 @@ enum CursorProto {
             case 2: args.fileText = f.value.asString ?? ""
             case 3: args.toolCallId = f.value.asString ?? ""
             case 4: args.returnFileContentAfterWrite = f.value.asBool ?? false
-            case 5: args.fileBytes = f.value.asData ?? Data()
+            case 5:
+                if let fileBytes = f.value.asData {
+                    args.fileBytes = fileBytes
+                }
             default: break
             }
         }

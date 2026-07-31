@@ -355,6 +355,22 @@ struct CursorExecDecodeTests {
         #expect(args.toolCallId == "call-9")
     }
 
+    @Test("write args decode text and binary content")
+    func writeArgs() {
+        var w = ProtoWriter()
+        w.stringField(1, "/tmp/output.bin")
+        w.stringField(2, "fallback")
+        w.stringField(3, "call-10")
+        w.boolField(4, true)
+        w.bytesField(5, Data([0x00, 0x7F, 0xFF]))
+        let args = CursorProto.decodeWriteArgs(w.data)
+        #expect(args.path == "/tmp/output.bin")
+        #expect(args.fileText == "fallback")
+        #expect(args.toolCallId == "call-10")
+        #expect(args.returnFileContentAfterWrite)
+        #expect(args.fileBytes == Data([0x00, 0x7F, 0xFF]))
+    }
+
     @Test("mcp args decode the raw map into loose JSON")
     func mcpArgs() {
         var w = ProtoWriter()
