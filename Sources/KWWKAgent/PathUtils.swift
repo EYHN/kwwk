@@ -1,6 +1,8 @@
 import Foundation
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
 #elseif canImport(Glibc)
 import Glibc
 #endif
@@ -159,6 +161,9 @@ public enum PathUtils {
         #if canImport(Darwin)
         var info = Darwin.stat()
         let result = path.withCString { Darwin.lstat($0, &info) }
+        #elseif canImport(Musl)
+        var info = Musl.stat()
+        let result = path.withCString { Musl.lstat($0, &info) }
         #elseif canImport(Glibc)
         var info = Glibc.stat()
         let result = path.withCString { Glibc.lstat($0, &info) }
@@ -166,7 +171,7 @@ public enum PathUtils {
         let result: Int32 = FileManager.default.fileExists(atPath: path) ? 0 : -1
         #endif
         if result == 0 { return .exists }
-        #if canImport(Darwin) || canImport(Glibc)
+        #if canImport(Darwin) || canImport(Musl) || canImport(Glibc)
         if errno == ENOENT || errno == ENOTDIR { return .missing }
         return .inaccessible
         #else
@@ -187,7 +192,7 @@ public enum PathUtils {
     /// atomic temp-file rename which allocates a new inode and detaches
     /// symlinks/hard links.
     public static func writeFileInPlace(_ path: String, data: Data, createMode: mode_t = 0o644) throws {
-        #if canImport(Darwin) || canImport(Glibc)
+        #if canImport(Darwin) || canImport(Musl) || canImport(Glibc)
         let fd = path.withCString { open($0, O_WRONLY | O_CREAT | O_TRUNC, createMode) }
         if fd < 0 {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)

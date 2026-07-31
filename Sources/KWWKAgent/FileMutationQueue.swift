@@ -1,6 +1,8 @@
 import Foundation
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
 #elseif canImport(Glibc)
 import Glibc
 #endif
@@ -53,7 +55,7 @@ public actor FileMutationQueue {
         // "../"-relative spellings collapse onto one queue. realpath fails when
         // the final component does not exist yet (a fresh write) — fall back to
         // the normalized absolute path, matching pi's realpathSync fallback.
-        #if canImport(Darwin) || canImport(Glibc)
+        #if canImport(Darwin) || canImport(Musl) || canImport(Glibc)
         if let resolved = realpath(path, nil) {
             defer { free(resolved) }
             return String(cString: resolved)

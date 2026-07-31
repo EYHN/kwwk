@@ -2,6 +2,8 @@ import Foundation
 import KWWKAI
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
 #elseif canImport(Glibc)
 import Glibc
 #endif
@@ -39,7 +41,7 @@ public struct LocalEditOperations: EditOperations {
     }
 }
 
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || canImport(Musl) || canImport(Glibc)
 private let editAccessExistsMode: Int32 = F_OK
 private let editAccessReadWriteMode: Int32 = R_OK | W_OK
 #else
@@ -50,6 +52,8 @@ private let editAccessReadWriteMode: Int32 = 6
 private func checkPOSIXAccess(_ absolutePath: String, mode: Int32) throws {
     #if canImport(Darwin)
     let accessResult = Darwin.access(absolutePath, mode)
+    #elseif canImport(Musl)
+    let accessResult = Musl.access(absolutePath, mode)
     #elseif canImport(Glibc)
     let accessResult = Glibc.access(absolutePath, mode)
     #else
@@ -63,6 +67,8 @@ private func checkPOSIXAccess(_ absolutePath: String, mode: Int32) throws {
     #endif
     if accessResult != 0 {
         #if canImport(Darwin)
+        let errorCode = errno
+        #elseif canImport(Musl)
         let errorCode = errno
         #elseif canImport(Glibc)
         let errorCode = errno

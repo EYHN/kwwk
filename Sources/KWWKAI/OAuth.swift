@@ -4,6 +4,8 @@ import FoundationNetworking
 #endif
 #if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
 #elseif canImport(Glibc)
 import Glibc
 #endif

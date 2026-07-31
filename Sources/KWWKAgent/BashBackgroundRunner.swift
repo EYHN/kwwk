@@ -1,9 +1,11 @@
 import Foundation
 import KWWKAI
-#if os(Linux)
-import Glibc
-#else
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
+import Glibc
 #endif
 
 /// `BackgroundTaskRunner` backed by `Process`. Spawns the command with
@@ -258,7 +260,7 @@ struct SpawnedBashProcess: Sendable {
         guard inputFd >= 0 else { throw SpawnError.openDevNull }
         defer { close(inputFd) }
 
-        // Glibc imports these spawn handles as concrete structs, Darwin as
+        // Linux libc modules import these spawn handles as concrete structs, Darwin as
         // optional opaque pointers — declare each per-platform so `&handle`
         // matches the C function's pointee on both.
         #if os(Linux)
