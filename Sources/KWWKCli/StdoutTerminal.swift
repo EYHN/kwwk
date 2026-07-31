@@ -2,7 +2,9 @@
 import Foundation
 #if canImport(Darwin)
 import Darwin
-#else
+#elseif canImport(Musl)
+import Musl
+#elseif canImport(Glibc)
 import Glibc
 #endif
 
