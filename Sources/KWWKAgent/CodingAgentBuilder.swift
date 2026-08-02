@@ -35,8 +35,8 @@ public struct CodingTools: OptionSet, Sendable {
 }
 
 /// Configuration for `makeCodingAgent`. Bundles the model, working directory,
-/// tool selection, optional background task manager, and an optional
-/// system-prompt override.
+/// tool selection, background task manager, and an optional system-prompt
+/// override.
 public struct CodingAgentConfig: Sendable {
     public var model: Model
     public var cwd: String
@@ -53,11 +53,17 @@ public struct CodingAgentConfig: Sendable {
     /// Skill directories to scan for `<available_skills>`. Empty by default so
     /// library callers do not implicitly read project or user config.
     public var skillDirectories: [String]
-    /// When non-nil, wired into both the bash tool (for
+    /// A fresh manager is created by default. Pass `nil` to disable background
+    /// execution. When non-nil, wired into both the bash tool (for
     /// `run_in_background` + auto-background-on-timeout) and the
     /// agent's notification bridge (so task results arrive as internal runtime
     /// asides at turn boundaries).
     public var backgroundManager: BackgroundTaskManager?
+    /// Whether a completed background task may start a fresh model run while
+    /// the Agent is idle. This does not change the tool schema or prevent
+    /// explicit task polling. Enabled by default; one-shot hosts can disable it
+    /// while retaining background execution during their top-level loop.
+    public var backgroundAutoContinue: Bool
     /// Programmatic subagents available to the model through the `agent` tool.
     /// When empty, no `agent` tool is registered.
     public var subagents: [SubagentDefinition]
@@ -90,7 +96,8 @@ public struct CodingAgentConfig: Sendable {
         systemPrompt: String? = nil,
         contextFiles: [(path: String, content: String)] = [],
         skillDirectories: [String] = [],
-        backgroundManager: BackgroundTaskManager? = nil,
+        backgroundManager: BackgroundTaskManager? = BackgroundTaskManager(),
+        backgroundAutoContinue: Bool = true,
         subagents: [SubagentDefinition] = [],
         subagentLimits: SubagentLimits = .init(),
         allowedSubagentModels: [Model] = [],
@@ -112,6 +119,7 @@ public struct CodingAgentConfig: Sendable {
         self.contextFiles = contextFiles
         self.skillDirectories = skillDirectories
         self.backgroundManager = backgroundManager
+        self.backgroundAutoContinue = backgroundAutoContinue
         self.subagents = subagents
         self.subagentLimits = subagentLimits
         self.allowedSubagentModels = allowedSubagentModels
@@ -148,10 +156,12 @@ public extension CodingAgentConfig {
 public struct CodingAgent: Sendable {
     public let agent: Agent
     /// Detaches the auto-continue background bridge that `makeCodingAgent`
-    /// installs when a `backgroundManager` is supplied. `nil` when no manager
-    /// was attached. The bridge autonomously starts a new (billable) model run
-    /// when a background task completes while the agent is idle; call this to
-    /// stop that behavior. In-flight background tasks keep running.
+    /// installs for the default or explicitly supplied `backgroundManager`.
+    /// This is `nil` only when background execution was explicitly disabled.
+    /// Unless `backgroundAutoContinue` was disabled, the bridge autonomously
+    /// starts a new (billable) model run when a background task completes while
+    /// the agent is idle; call this to stop delivery entirely. In-flight
+    /// background tasks keep running.
     public let detachBackground: (@Sendable () async -> Void)?
 
     public init(agent: Agent, detachBackground: (@Sendable () async -> Void)?) {
@@ -167,17 +177,18 @@ public struct CodingAgent: Sendable {
 ///     model: model,
 ///     cwd: "/Users/me/project",
 ///     tools: .standard,
-///     backgroundManager: BackgroundTaskManager(),
 ///     bashEnvironment: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
 /// )).agent
 /// try await agent.prompt("list the swift files")
 /// ```
 ///
-/// If `config.backgroundManager` is non-nil, the agent is automatically
-/// attached so completion notifications surface as internal runtime asides — and
-/// that bridge will autonomously start new (billable) model runs when
-/// background tasks complete. Call the returned `CodingAgent.detachBackground`
-/// handle to stop that; ignore it to keep the default auto-continue behavior.
+/// A fresh background manager is configured by default. The agent is
+/// automatically attached so completion notifications surface as internal
+/// runtime asides. With the default `backgroundAutoContinue` setting, that
+/// bridge will autonomously start new (billable) model runs when background
+/// tasks complete. Call the returned `CodingAgent.detachBackground` handle to
+/// stop delivery, set `backgroundAutoContinue: false` for one-shot execution,
+/// or use `backgroundManager: nil` to disable background execution entirely.
 public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
     let cwd = config.cwd
     let bgManager = config.backgroundManager
@@ -273,7 +284,8 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
         detachBackground = await agent.attachBackgroundManager(
             bgManager,
             sessionId: sessionId,
-            deliveryConsumer: backgroundDeliveryConsumer
+            deliveryConsumer: backgroundDeliveryConsumer,
+            autoContinueWhenIdle: config.backgroundAutoContinue
         )
     }
 

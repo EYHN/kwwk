@@ -26,33 +26,36 @@ final class BackgroundAttachment: @unchecked Sendable {
 }
 
 /// Bridges a `BackgroundTaskManager` to an `Agent`: receives notifications and
-/// injects them through the Agent's internal runtime-aside queue, kicking off
-/// a fresh run when the Agent is idle.
+/// injects them through the Agent's internal runtime-aside queue, optionally
+/// kicking off a fresh run when the Agent is idle.
 ///
 /// Delivery strategy:
 ///   - Enqueue the notification as runtime context, separate from the user's
 ///     editable steering queue. A running loop picks it up at the next turn
 ///     boundary automatically.
-///   - If the Agent is not currently streaming when the notification arrives,
-///     kick off `agent.continue()`. If the Agent just started a run in the
-///     meantime, `continue()` throws `alreadyRunning` and we swallow — the
-///     runtime aside is safe in its queue and will be drained next turn.
-///   - After `agentEnd`, wait for the Agent to truly finalize (post
-///     `runLifecycle` teardown), then if the queue still has anything in it,
-///     fire `continue()` once more. This handles the narrow race where a
-///     notification arrives during final teardown.
+///   - When idle auto-continue is enabled and the Agent is not streaming, kick
+///     off `agent.continue()`. If the Agent just started a run in the meantime,
+///     `continue()` throws `alreadyRunning` and we swallow — the runtime aside
+///     is safe in its queue and will be drained next turn.
+///   - With the same option enabled, after `agentEnd` wait for the Agent to
+///     truly finalize (post `runLifecycle` teardown), then fire `continue()` if
+///     the queue still has anything in it. This handles the narrow race where
+///     a notification arrives during final teardown.
 final class BackgroundAgentBridge: @unchecked Sendable {
     let id: UUID
     weak var agent: Agent?
     let sessionId: String?
+    let autoContinueWhenIdle: Bool
 
-    init(agent: Agent, sessionId: String?) {
+    init(agent: Agent, sessionId: String?, autoContinueWhenIdle: Bool) {
         self.id = UUID()
         self.agent = agent
         self.sessionId = sessionId
+        self.autoContinueWhenIdle = autoContinueWhenIdle
     }
 
     func onDeliveryAvailable() {
+        guard autoContinueWhenIdle else { return }
         guard let agent else { return }
         // Always install an idle waiter. This also covers the teardown sliver
         // after Agent.continue drained an empty mailbox but before it publishes
@@ -66,6 +69,7 @@ final class BackgroundAgentBridge: @unchecked Sendable {
     }
 
     func onAgentEvent(_ event: AgentEvent) async {
+        guard autoContinueWhenIdle else { return }
         guard case .agentEnd = event else { return }
         let ref = agent
         Task { [weak ref] in
@@ -83,18 +87,23 @@ final class BackgroundAgentBridge: @unchecked Sendable {
 extension Agent {
     /// Attach a `BackgroundTaskManager`. Notifications from the manager are
     /// injected into this agent as internal runtime asides (drained at a turn
-    /// boundary; fresh `continue()` when idle).
+    /// boundary; fresh `continue()` when idle if enabled).
     ///
     /// Passing a `sessionId` scopes both notification delivery AND the
     /// `abortAndKillBackgroundTasks` sweep: only tasks spawned with the same
     /// sessionId are killed.
+    ///
+    /// Set `autoContinueWhenIdle` to `false` for one-shot hosts that retain the
+    /// background tool interface but must not let completion notifications
+    /// extend the top-level run lifetime.
     ///
     /// Returns an async unsubscribe handle. Safe to call multiple times with
     /// different managers.
     public func attachBackgroundManager(
         _ manager: BackgroundTaskManager,
         sessionId: String? = nil,
-        deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil
+        deliveryConsumer explicitConsumer: BackgroundTaskDeliveryConsumer? = nil,
+        autoContinueWhenIdle: Bool = true
     ) async -> @Sendable () async -> Void {
         // An explicit mailbox is reusable only when its scope exactly matches
         // the attachment. Accepting a broader/narrower consumer here would let
@@ -108,7 +117,11 @@ extension Agent {
                 return tool.backgroundDeliveryConsumer
             }.first(where: { $0.sessionId == sessionId })
             ?? BackgroundTaskDeliveryConsumer(sessionId: sessionId)
-        let bridge = BackgroundAgentBridge(agent: self, sessionId: sessionId)
+        let bridge = BackgroundAgentBridge(
+            agent: self,
+            sessionId: sessionId,
+            autoContinueWhenIdle: autoContinueWhenIdle
+        )
         let attachment = BackgroundAttachment(
             manager: manager,
             sessionId: sessionId,

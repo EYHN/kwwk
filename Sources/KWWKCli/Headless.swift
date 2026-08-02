@@ -13,6 +13,8 @@ import KWWKAgent
 ///   - genuine failures — auth missing, stream error, abort — *do* print
 ///     a one-line message to stderr so the user isn't left staring at a
 ///     silent non-zero exit;
+///   - background tools are available while the top-level Agent loop is live,
+///     but unfinished tasks are cancelled as soon as that loop returns;
 ///   - exit code is `0` when the model reached a clean stop, `1` otherwise.
 ///
 /// Credentials are resolved exactly like `runCodingTUIInternal`: the CLI checks
@@ -50,6 +52,7 @@ func runHeadlessInternal(
         tools: tools,
         contextFiles: loadProjectContextFiles(cwd: cwd),
         skillDirectories: Skills.defaultDirectories(cwd: cwd, includeUserDirectory: true),
+        backgroundAutoContinue: false,
         subagents: defaultCLISubagents(for: tools, selection: builtinSubagents),
         sessionId: sessionId,
         authResolver: resolved.authResolver,
@@ -139,65 +142,22 @@ func runHeadlessInternal(
     return stop == .stop ? 0 : 1
 }
 
-/// Build a one-shot agent with background execution forcibly disabled.
-///
-/// The caller may hand us a reusable config that has a manager attached; copy
-/// it and clear that capability so `kwwk -p` can never report "started in the
-/// background" immediately before its process exits. Without a manager the
-/// bash schema omits background options, the background-task tools are absent, and
-/// a subagent request that smuggles `run_in_background=true` is rejected by the
-/// agent tool at runtime.
+/// Build a one-shot Agent with the config's normal background capabilities.
+/// The caller owns the top-level loop boundary and must call
+/// `cleanupHeadlessAgent` immediately after it returns; cleanup retires the
+/// Agent and kills unfinished work instead of waiting for background tasks to
+/// extend the one-shot process lifetime.
 func makeHeadlessCodingAgent(_ input: CodingAgentConfig) async -> Agent {
     var config = input
-    config.backgroundManager = nil
-    // Reusable interactive definitions may default to background execution.
-    // Hiding the explicit flag is not enough: an omitted argument would still
-    // select that default and then fail because headless intentionally has no
-    // manager. Make the semantic default foreground before building the tool.
-    config.subagents = config.subagents.map { definition in
-        var foreground = definition
-        foreground.runInBackgroundByDefault = false
-        return foreground
-    }
-    let agent = await makeCodingAgent(config).agent
-    agent.state.tools = removingHeadlessBackgroundOptions(from: agent.state.tools)
-    return agent
+    config.backgroundAutoContinue = false
+    return await makeCodingAgent(config).agent
 }
 
-private func removingHeadlessBackgroundOptions(from tools: [AgentTool]) -> [AgentTool] {
-    tools.map { original in
-        guard original.name == "agent" else { return original }
-        var tool = original
-        if case .object(var schema) = tool.parameters,
-           case .object(var properties) = schema["properties"] ?? .null {
-            properties.removeValue(forKey: "run_in_background")
-            schema["properties"] = .object(properties)
-            tool.parameters = .object(schema)
-        }
-        tool.description = tool.description
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { line in
-                !line.contains("run_in_background")
-                    && !line.contains("Background tasks started by the subagent")
-            }
-            .joined(separator: "\n")
-        return tool
-    }
-}
-
-/// Deterministic one-shot teardown for both success and failure paths. The
-/// headless builder currently installs no background attachment, but keeping
-/// the ownership cleanup here prevents future configuration changes (or an SDK
-/// attachment added around this helper) from leaving work behind at exit.
+/// Deterministic one-shot teardown for both success and failure paths. This is
+/// deliberately called when the top-level prompt returns rather than when the
+/// background registry becomes idle: headless work may use background tools
+/// during the Agent loop, but cannot keep the process alive afterward.
 func cleanupHeadlessAgent(_ agent: Agent) async {
-    agent.retire()
-    await agent.abortAndKillBackgroundTasks()
-    // Retirement makes already-scheduled bridge wakes harmless. Discard any
-    // exit-only queues and wait until an in-flight run observes cancellation
-    // before closing provider resources.
-    agent.abort()
-    agent.clearAllQueues()
-    await agent.waitForIdle()
     await agent.closeSession()
 }
 
