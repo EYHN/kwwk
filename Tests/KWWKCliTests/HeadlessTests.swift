@@ -6,8 +6,8 @@ import Testing
 
 @Suite("Headless background policy", .serialized)
 struct HeadlessTests {
-    @Test("headless forces reusable background-default subagents to foreground")
-    func headlessOverridesDefinitionDefault() async throws {
+    @Test("headless preserves reusable background-default subagents")
+    func headlessPreservesDefinitionDefault() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         faux.setResponses([.message(fauxAssistantMessage(
@@ -28,13 +28,14 @@ struct HeadlessTests {
         defer { try? FileManager.default.removeItem(at: cwd) }
         var definition = SubagentDefinition.general(tools: .readOnly)
         definition.runInBackgroundByDefault = true
+        let manager = BackgroundTaskManager(
+            outputDir: cwd.appendingPathComponent("background", isDirectory: true)
+        )
         let agent = await makeHeadlessCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
-            backgroundManager: BackgroundTaskManager(
-                outputDir: cwd.appendingPathComponent("background", isDirectory: true)
-            ),
+            backgroundManager: manager,
             subagents: [definition],
             sessionId: "headless-default",
             autoCompactThreshold: nil,
@@ -46,7 +47,7 @@ struct HeadlessTests {
             return
         }
         let result = try await subagent.execute(
-            "foreground-default",
+            "background-default",
             .object([
                 "description": .string("check default"),
                 "prompt": .string("return a result"),
@@ -55,16 +56,22 @@ struct HeadlessTests {
             nil,
             nil
         )
-        let rendered = result.content.compactMap { block -> String? in
-            if case .text(let text) = block { return text.text }
-            return nil
-        }.joined(separator: "\n")
-        #expect(rendered.contains("foreground child result"))
-        #expect(!rendered.contains("requires a BackgroundTaskManager"))
+        guard case .object(let details) = result.details ?? .null else {
+            Issue.record("expected background result details")
+            return
+        }
+        #expect(details["status"] == .string("background_started"))
+        let startedTasks = await manager.list(sessionId: "headless-default")
+        #expect(!startedTasks.isEmpty)
+        await cleanupHeadlessAgent(agent)
+        let stoppedTasks = await manager.list(sessionId: "headless-default")
+        #expect(stoppedTasks.allSatisfy {
+            !$0.status.isActive
+        })
     }
 
-    @Test("headless builder strips background capabilities even from a reusable config")
-    func headlessBuilderForbidsBackground() async throws {
+    @Test("headless exposes background capabilities but cleanup ends their lifetime")
+    func headlessBuilderAllowsBackground() async throws {
         let cwd = FileManager.default.temporaryDirectory
             .appendingPathComponent("kwwk-headless-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: cwd, withIntermediateDirectories: true)
@@ -86,11 +93,10 @@ struct HeadlessTests {
 
         let agent = await makeHeadlessCodingAgent(config)
         let toolNames = Set(agent.state.tools.map(\.name))
-        #expect(!toolNames.contains("task"))
-        #expect(!toolNames.contains("task_poll"))
-        #expect(!toolNames.contains("task_cancel"))
-        #expect(!toolNames.contains("task_list"))
-        #expect(!toolNames.contains("task_read"))
+        #expect(toolNames.contains("task_poll"))
+        #expect(toolNames.contains("task_cancel"))
+        #expect(toolNames.contains("task_list"))
+        #expect(toolNames.contains("task_read"))
 
         guard let bash = agent.state.tools.first(where: { $0.name == "bash" }),
               case .object(let bashSchema) = bash.parameters,
@@ -98,10 +104,10 @@ struct HeadlessTests {
             Issue.record("expected headless bash schema")
             return
         }
-        #expect(bashProperties["run_in_background"] == nil)
+        #expect(bashProperties["run_in_background"] != nil)
 
         guard let subagent = agent.state.tools.first(where: { $0.name == "agent" }) else {
-            Issue.record("expected foreground subagent tool")
+            Issue.record("expected subagent tool")
             return
         }
         guard case .object(let agentSchema) = subagent.parameters,
@@ -109,25 +115,33 @@ struct HeadlessTests {
             Issue.record("expected headless subagent schema")
             return
         }
-        #expect(agentProperties["run_in_background"] == nil)
-        #expect(!subagent.description.contains("run_in_background"))
-        do {
-            _ = try await subagent.execute(
-                "headless-background-attempt",
-                .object([
-                    "description": .string("background attempt"),
-                    "prompt": .string("do work"),
-                    "subagent_type": .string("general"),
-                    "run_in_background": .bool(true),
-                ]),
-                nil,
-                nil
-            )
-            Issue.record("headless subagent unexpectedly started in background")
-        } catch {
-            #expect("\(error)".contains("requires a BackgroundTaskManager"))
+        #expect(agentProperties["run_in_background"] != nil)
+        #expect(subagent.description.contains("run_in_background"))
+        let result = try await subagent.execute(
+            "headless-background-attempt",
+            .object([
+                "description": .string("background attempt"),
+                "prompt": .string("do work"),
+                "subagent_type": .string("general"),
+                "run_in_background": .bool(true),
+            ]),
+            nil,
+            nil
+        )
+        guard case .object(let details) = result.details ?? .null else {
+            Issue.record("expected background result details")
+            return
         }
-        #expect(await manager.list(sessionId: "headless-policy").isEmpty)
+        #expect(details["status"] == .string("background_started"))
+        let startedTasks = await manager.list(sessionId: "headless-policy")
+        #expect(!startedTasks.isEmpty)
+
+        await cleanupHeadlessAgent(agent)
+
+        let stoppedTasks = await manager.list(sessionId: "headless-policy")
+        #expect(stoppedTasks.allSatisfy {
+            !$0.status.isActive
+        })
     }
 
     @Test("headless teardown kills any agent-owned background work")

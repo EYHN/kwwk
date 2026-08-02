@@ -115,6 +115,46 @@ struct AgentBackgroundTests {
         }
     }
 
+    @Test("background delivery can remain queued without auto-continuing an idle agent")
+    func idleAutoContinueCanBeDisabled() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+        registration.setResponses([
+            .message(fauxAssistantMessage("initial")),
+            .message(fauxAssistantMessage("must not auto-continue")),
+        ])
+
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwbg-no-auto-continue-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
+        try await agent.prompt("seed")
+        let detach = await agent.attachBackgroundManager(
+            manager,
+            sessionId: "no-auto-continue",
+            autoContinueWhenIdle: false
+        )
+        defer { Task { await detach() } }
+
+        let (taskId, _) = await manager.spawn(
+            runner: FauxRunner(
+                label: "queue without waking",
+                outcome: BackgroundTaskOutcome(success: true, summary: "done")
+            ),
+            sessionId: "no-auto-continue"
+        )
+        let delivered = await awaitUntil(2_000) {
+            let snapshot = await manager.get(taskId)
+            return snapshot?.status == .completed && agent.hasQueuedMessages()
+        }
+        #expect(delivered)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(agent.state.messages.count == 2)
+        #expect(!agent.state.isStreaming)
+        await agent.stop()
+    }
+
     @Test("abortAndKillBackgroundTasks drains the manager")
     func abortAndKill() async {
         let outputDir = FileManager.default.temporaryDirectory
@@ -140,6 +180,41 @@ struct AgentBackgroundTests {
 
         let after = await manager.list(sessionId: "s1").filter(\.status.isActive).count
         #expect(after == 0)
+    }
+
+    @Test("closeSession stops owned background tasks and retires the agent")
+    func closeSessionStopsBackgroundTasks() async {
+        let outputDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwbg-close-agent-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let agent = Agent(
+            initialState: AgentInitialState(model: registration.getModel()),
+            sessionId: "close-agent"
+        )
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        let detach = await agent.attachBackgroundManager(manager, sessionId: "close-agent")
+        defer { Task { await detach() } }
+
+        _ = await manager.spawn(
+            runner: ForeverRunner(label: "close with agent"),
+            sessionId: "close-agent"
+        )
+        let started = await awaitUntil(2_000) {
+            await manager.list(sessionId: "close-agent").contains { $0.status.isActive }
+        }
+        #expect(started)
+
+        await agent.closeSession()
+
+        let active = await manager.list(sessionId: "close-agent").filter(\.status.isActive)
+        #expect(active.isEmpty)
+        await #expect(throws: AgentError.alreadyRunning) {
+            try await agent.prompt("must not restart")
+        }
     }
 
     @Test("silent session close does not wake an idle agent")

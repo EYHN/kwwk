@@ -142,33 +142,31 @@ let reviewer = SubagentDefinition(
     model: .inherit
 )
 
-let bg = BackgroundTaskManager()
 let shellEnvironment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
 let coding = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
-    backgroundManager: bg,
     subagents: [reviewer],
     bashEnvironment: shellEnvironment
 ))
 
 try await coding.agent.prompt("Use the reviewer subagent to review Sources/KWWKAgent.")
 
-// With a backgroundManager, completed background tasks auto-continue the
-// agent (new LLM runs start on their own). Call `coding.detachBackground?()`
-// to unsubscribe when embedding.
+// A BackgroundTaskManager is created by default. Completed background tasks
+// auto-continue the agent (new LLM runs start on their own). Call
+// `coding.detachBackground?()` to unsubscribe when embedding, or pass
+// `backgroundManager: nil` to disable background execution entirely.
 ```
 
-For the same built-ins that the CLI uses, SDK users can opt in without
-copying prompts:
+SDK users can enable the same built-ins that the CLI uses without copying
+prompts:
 
 ```swift
 let agent = await makeCodingAgent(CodingAgentConfig(
     model: Models.claudeSonnet5,
     cwd: FileManager.default.currentDirectoryPath,
     tools: .standard,
-    backgroundManager: BackgroundTaskManager(),
     bashEnvironment: shellEnvironment
 ).withBuiltinSubagents([.general, .explore, .plan, .codeReviewer, .testRunner])).agent
 ```
@@ -283,14 +281,19 @@ containment for read/grep/find/ls (including `..` and symlink checks). That
 path policy still does not constrain Bash/custom tools and is not an OS-level
 sandbox or a defense against hostile concurrent symlink replacement.
 
-One-shot `kwwk -p` deliberately disables background execution: it does not
-expose the background-task tools or background bash options, and rejects
-background subagent requests instead of exiting after reporting a task as started.
+One-shot `kwwk -p` exposes the same background-task and background Bash
+capabilities while its top-level Agent loop is running. It does not wait for
+background-only work or start a fresh model run after the loop becomes idle:
+when that loop returns, headless teardown retires the Agent, kills unfinished
+tasks, and exits.
 
 When an SDK application is done with an agent session, call
-`await agent.closeSession()` to release provider-owned resources keyed by
-that session id. For OpenAI Responses WebSocket transport, this closes the
-stored WebSocket connection for the session.
+`await agent.closeSession()`. This permanently stops the agent, kills its
+active background tasks, waits for the current run to finish cancelling, and
+releases provider-owned resources keyed by that session id. For OpenAI
+Responses WebSocket transport, this also closes the stored WebSocket
+connection. Use `await agent.stop()` for the same deterministic agent/task
+shutdown without closing provider session resources.
 
 ### Streaming events
 

@@ -156,6 +156,46 @@ struct AgentInitTests {
         #expect(agent.compactionModel?.provider == compactionModel.provider)
     }
 
+    @Test("coding agent config enables independent background managers by default")
+    func codingAgentEnablesBackgroundByDefault() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+
+        let firstConfig = CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: FileManager.default.temporaryDirectory.path,
+            tools: .standard,
+            bashEnvironment: [:]
+        )
+        let secondConfig = CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: FileManager.default.temporaryDirectory.path,
+            tools: .standard,
+            bashEnvironment: [:]
+        )
+        let firstManager = try #require(firstConfig.backgroundManager)
+        let secondManager = try #require(secondConfig.backgroundManager)
+        #expect(firstManager !== secondManager)
+
+        let coding = await makeCodingAgent(firstConfig)
+        #expect(coding.detachBackground != nil)
+        let toolNames = Set(coding.agent.state.tools.map(\.name))
+        for name in ["task_list", "task_read", "task_poll", "task_cancel"] {
+            #expect(toolNames.contains(name))
+        }
+        await coding.detachBackground?()
+
+        let disabled = await makeCodingAgent(CodingAgentConfig(
+            model: registration.getModel(),
+            cwd: FileManager.default.temporaryDirectory.path,
+            tools: .standard,
+            backgroundManager: nil,
+            bashEnvironment: [:]
+        ))
+        #expect(disabled.detachBackground == nil)
+        #expect(!disabled.agent.state.tools.contains { $0.name.hasPrefix("task_") })
+    }
+
     @Test("coding agent can explicitly disable auto compact")
     func codingAgentCanDisableAutoCompact() async throws {
         let registration = await registerFauxProvider()

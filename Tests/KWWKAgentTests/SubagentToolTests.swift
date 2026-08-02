@@ -25,6 +25,7 @@ struct SubagentToolTests {
             model: faux.getModel(),
             cwd: cwd.path,
             tools: .readOnly,
+            backgroundManager: nil,
             subagents: [minimalSubagent()],
             bashEnvironment: [:]
         )).agent
