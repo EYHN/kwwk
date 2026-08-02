@@ -561,6 +561,8 @@ struct BackgroundTaskManagerTests {
 
         let noneSummary = await manager.runningTasksSummary(sessionId: "other")
         #expect(noneSummary.isEmpty)
+
+        await manager.killAll(sessionId: nil)
     }
 
     @Test("output pagination preserves UTF-8 and exposes invalid bytes losslessly")

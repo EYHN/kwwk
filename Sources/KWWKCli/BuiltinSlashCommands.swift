@@ -974,7 +974,9 @@ private func handleShakeCommand(_ ctx: SlashContext, _ args: String) async {
             }
 
             shakeAgent.state.messages = rewrittenMessages
-            await shakeAgent.closeSession()
+            // `/shake` keeps the Agent reusable; only invalidate the
+            // provider-side chain so the rewritten history is replayed.
+            await KWWKAI.closeProviderSession(sessionId: ctx.sessionId)
             ctx.refreshTranscript()
 
             switch mode {
