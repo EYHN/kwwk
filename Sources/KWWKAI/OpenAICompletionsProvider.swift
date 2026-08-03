@@ -508,7 +508,11 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             zaiToolStream: c?.zaiToolStream ?? false,
             supportsStrictMode: c?.supportsStrictMode ?? (!isMoonshot && !isTogether && !isCfGateway && !isNvidia),
             cacheControlFormat: c?.cacheControlFormat ?? ((provider == "openrouter" && model.id.hasPrefix("anthropic/")) ? "anthropic" : nil),
-            sendSessionAffinityHeaders: c?.sendSessionAffinityHeaders ?? false,
+            // OpenRouter uses the session id to keep provider/model routing
+            // sticky across an agent run. Built-in OpenRouter catalog entries
+            // do not repeat this flag per model, so enable it from provider /
+            // base-URL detection while preserving an explicit opt-out.
+            sendSessionAffinityHeaders: c?.sendSessionAffinityHeaders ?? isOpenRouter,
             sessionAffinityFormat: c?.sessionAffinityFormat ?? (isOpenRouter ? "openrouter" : "openai"),
             supportsLongCacheRetention: c?.supportsLongCacheRetention ?? !(isTogether || isCloudflareWorkers || isCfGateway || isNvidia || isAntLing)
         )

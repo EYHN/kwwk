@@ -297,9 +297,6 @@ struct OpenAICompletionsTests {
         var model = Self.model
         model.provider = "openrouter"
         model.baseURL = "https://openrouter.ai/api"
-        var compat = ModelCompat()
-        compat.sendSessionAffinityHeaders = true
-        model.compat = compat
 
         let client = StubSSEClient(body: Self.textSSE)
         let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
@@ -314,6 +311,22 @@ struct OpenAICompletionsTests {
         #expect(headers["session_id"] == nil)
         #expect(headers["x-client-request-id"] == nil)
         #expect(headers["x-session-affinity"] == nil)
+
+        // Provider defaults remain overridable for proxies or callers that do
+        // not want OpenRouter sticky routing.
+        var optedOut = model
+        var optedOutCompat = ModelCompat()
+        optedOutCompat.sendSessionAffinityHeaders = false
+        optedOut.compat = optedOutCompat
+        let optedOutClient = StubSSEClient(body: Self.textSSE)
+        let optedOutProvider = OpenAICompletionsProvider(client: optedOutClient, defaultAPIKey: "k")
+        _ = optedOutProvider.stream(
+            model: optedOut,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(cacheRetention: .short, sessionId: "session-or")
+        )
+        await Self.waitForRequest(optedOutClient)
+        #expect(optedOutClient.lastRequest?.headers["x-session-id"] == nil)
 
         // An explicit compat format overrides the URL-based detection.
         var pinned = model
