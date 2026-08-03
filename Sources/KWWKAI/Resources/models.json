@@ -9230,6 +9230,29 @@
         "xhigh" : null
       }
     },
+    "thinkingmachines\/Inkling-Small" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/router.huggingface.co\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false
+      },
+      "contextWindow" : 524288,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0.5,
+        "output" : 1.2
+      },
+      "id" : "thinkingmachines\/Inkling-Small",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 1048576,
+      "name" : "Inkling Small",
+      "provider" : "huggingface",
+      "reasoning" : true
+    },
     "XiaomiMiMo\/MiMo-V2-Flash" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/router.huggingface.co\/v1",
@@ -10341,6 +10364,25 @@
       ],
       "maxTokens" : 128000,
       "name" : "Pixtral Large (latest)",
+      "provider" : "mistral",
+      "reasoning" : false
+    },
+    "voxtral-small-latest" : {
+      "api" : "mistral-conversations",
+      "baseUrl" : "https:\/\/api.mistral.ai",
+      "contextWindow" : 32000,
+      "cost" : {
+        "cacheRead" : 0.01,
+        "cacheWrite" : 0,
+        "input" : 0.1,
+        "output" : 0.3
+      },
+      "id" : "voxtral-small-latest",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 32000,
+      "name" : "Voxtral Small (latest)",
       "provider" : "mistral",
       "reasoning" : false
     }
@@ -13639,7 +13681,7 @@
         "text"
       ],
       "maxTokens" : 384000,
-      "name" : "DeepSeek V4 Flash",
+      "name" : "DeepSeek V4 Flash 0731",
       "provider" : "opencode",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -20488,18 +20530,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 131072,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.089999999999999997,
-        "output" : 0.55
+        "input" : 0.1495,
+        "output" : 0.598
       },
       "id" : "qwen\/qwen3-235b-a22b-2507",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 32768,
       "name" : "Qwen: Qwen3 235B A22B Instruct 2507",
       "provider" : "openrouter",
       "reasoning" : false
@@ -20889,8 +20931,8 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.4,
-        "output" : 4
+        "input" : 0.98,
+        "output" : 3.95
       },
       "id" : "qwen\/qwen3-vl-235b-a22b-thinking",
       "input" : [
@@ -20985,8 +21027,8 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.26,
-        "output" : 2.08
+        "input" : 0.4,
+        "output" : 3.2
       },
       "id" : "qwen\/qwen3.5-122b-a10b",
       "input" : [
@@ -21478,7 +21520,7 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 32768,
+      "contextWindow" : 1024000,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
@@ -21489,7 +21531,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 32768,
+      "maxTokens" : 1024000,
       "name" : "TheDrummer: UnslopNemo 12B",
       "provider" : "openrouter",
       "reasoning" : false
@@ -21949,16 +21991,16 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.074620000000000006,
+        "cacheRead" : 0.221,
         "cacheWrite" : 0,
-        "input" : 0.4018,
-        "output" : 1.2628
+        "input" : 1.19,
+        "output" : 3.74
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 262144,
       "name" : "Z.ai: GLM 5.2",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -24587,10 +24629,10 @@
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
       "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0.0028,
+        "cacheRead" : 0.028000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.14,
-        "output" : 0.28
+        "input" : 0.138,
+        "output" : 0.275
       },
       "id" : "deepseek\/deepseek-v4-flash",
       "input" : [
