@@ -1,4 +1,5 @@
 import Foundation
+import KWWKAI
 import KWWKAgent
 
 /// Public entry points for the `kwwk` binary. Everything else in KWWKCli is

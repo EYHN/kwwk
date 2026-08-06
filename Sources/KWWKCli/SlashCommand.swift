@@ -1,4 +1,5 @@
 import Foundation
+import KWWKAI
 import KWWKAgent
 
 /// Parsed result of whatever the user typed at the prompt. Leading `/` →
