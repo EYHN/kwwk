@@ -1,41 +1,55 @@
 import Foundation
-import KWWKAI
 
-/// One stored provider's identity, in every vocabulary the CLI speaks:
+/// One stored provider's identity, in every vocabulary the auth stack speaks:
 /// the `OAuthStore` key it persists under, the `model.provider` scope it
 /// registers on `APIRegistry`, the `ModelsCatalog.byProvider` key holding its
 /// models, and its human-readable labels. Single source of truth — the
 /// priority / scope / catalog / display helpers below all derive from
 /// `providerDirectory`, so adding a provider is one entry here (plus its
-/// `loginProviders` form fields and `registerStored` case).
-struct ProviderDescriptor {
-    /// Key the credentials persist under in `OAuthStore`; also the id
-    /// `/login` and `/logout` operate on.
-    let storeId: String
+/// `registerStored` case and the CLI's `loginProviders` form fields).
+public struct ProviderDescriptor: Sendable {
+    /// Key the credentials persist under in `OAuthStore`; also the id the
+    /// CLI's `/login` and `/logout` operate on.
+    public let storeId: String
     /// The `model.provider` scope the provider registers under on
     /// `APIRegistry` — the key `stream` dispatches on. Intentionally
     /// many-to-one (`anthropic` OAuth and `anthropic-api-key` both drive
     /// Anthropic's `anthropic-messages` wire); `registerAllStored` skips the
     /// later of any collision.
-    let scope: String
+    public let scope: String
     /// The `ModelsCatalog.byProvider` key holding the provider's models —
-    /// used to list models for `/model` and to match a `provider/model`
-    /// launch override to a logged-in account.
-    let catalogKey: String
-    /// Label for the `/model` group header and `/login` / `/logout` listings.
-    let displayName: String
-    /// Title suffix for the API-key `FormModal`; nil for OAuth entries,
+    /// used to list models for the CLI's `/model` and to match a
+    /// `provider/model` override to a logged-in account.
+    public let catalogKey: String
+    /// Label for the CLI's `/model` group header and `/login` / `/logout`
+    /// listings.
+    public let displayName: String
+    /// Title suffix for the CLI's API-key `FormModal`; nil for OAuth entries,
     /// which never open a form.
-    let formTitle: String?
+    public let formTitle: String?
+
+    public init(
+        storeId: String,
+        scope: String,
+        catalogKey: String,
+        displayName: String,
+        formTitle: String?
+    ) {
+        self.storeId = storeId
+        self.scope = scope
+        self.catalogKey = catalogKey
+        self.displayName = displayName
+        self.formTitle = formTitle
+    }
 }
 
-/// Every stored provider the CLI can register, in deterministic priority
-/// order: OAuth subscriptions first, then api keys. The first entry present
-/// in the store is the default *active* provider at launch, and the order
-/// also breaks same-scope ties (e.g. Anthropic OAuth wins over Anthropic API
-/// key). Ids not listed here sort last so they surface a clear "not wired
+/// Every stored provider the auth stack can register, in deterministic
+/// priority order: OAuth subscriptions first, then api keys. The first entry
+/// present in the store is the default *active* provider at launch, and the
+/// order also breaks same-scope ties (e.g. Anthropic OAuth wins over Anthropic
+/// API key). Ids not listed here sort last so they surface a clear "not wired
 /// up" notice rather than a silent miss.
-let providerDirectory: [ProviderDescriptor] = [
+public let providerDirectory: [ProviderDescriptor] = [
     ProviderDescriptor(
         storeId: "openai-codex",
         scope: "chatgpt-codex",
@@ -124,14 +138,14 @@ let providerDirectory: [ProviderDescriptor] = [
 
 /// Descriptor for a store id, or nil for unknown / `env:` sentinel ids —
 /// callers fall back to the raw id so unwired credentials still round-trip.
-func providerDescriptor(forStoreId storeId: String) -> ProviderDescriptor? {
+public func providerDescriptor(forStoreId storeId: String) -> ProviderDescriptor? {
     providerDirectory.first { $0.storeId == storeId }
 }
 
 /// The stored provider ids actually present in `all`, in directory priority
 /// order, with unknown ids appended (sorted) so they still surface in
 /// `/logout` listings and the "not wired up" launch notice.
-func storedProviderOrder(_ all: [String: OAuthCredentials]) -> [String] {
+public func storedProviderOrder(_ all: [String: OAuthCredentials]) -> [String] {
     var order = providerDirectory.map(\.storeId).filter { all[$0] != nil }
     let known = Set(providerDirectory.map(\.storeId))
     order.append(contentsOf: all.keys.filter { !known.contains($0) }.sorted())
@@ -141,21 +155,21 @@ func storedProviderOrder(_ all: [String: OAuthCredentials]) -> [String] {
 /// The `model.provider` scope a stored provider registers under (see
 /// `ProviderDescriptor.scope`). Unknown ids map to themselves so any future
 /// 1:1 id keeps working.
-func modelProviderScope(forStoreId storeId: String) -> String {
+public func modelProviderScope(forStoreId storeId: String) -> String {
     providerDescriptor(forStoreId: storeId)?.scope ?? storeId
 }
 
 /// The `ModelsCatalog.byProvider` key holding a stored provider's models
 /// (see `ProviderDescriptor.catalogKey`). Unknown ids map to themselves.
-func catalogProvider(forStoreId storeId: String) -> String {
+public func catalogProvider(forStoreId storeId: String) -> String {
     providerDescriptor(forStoreId: storeId)?.catalogKey ?? storeId
 }
 
-/// Human-readable label for a stored provider id, shown in the `/model`
+/// Human-readable label for a stored provider id, shown in the CLI's `/model`
 /// group header and `/login` / `/logout` listings. `env:<provider>` sentinel
 /// ids (environment-key sessions) label as "<provider> (env)"; anything else
 /// unknown falls back to the raw id.
-func providerDisplayName(forStoreId storeId: String) -> String {
+public func providerDisplayName(forStoreId storeId: String) -> String {
     if let descriptor = providerDescriptor(forStoreId: storeId) {
         return descriptor.displayName
     }
@@ -169,7 +183,7 @@ func providerDisplayName(forStoreId storeId: String) -> String {
 /// `ModelsCatalog.byProvider`. They're mostly identical except for Codex:
 /// the chatgpt.com variant registers as `chatgpt-codex` on the agent side,
 /// while the catalog lists its models under `openai-codex`.
-/// Internal (not private) so regression tests can pin the mapping.
-func catalogProviderKey(forAgentProvider provider: String) -> String {
+/// Public so regression tests can pin the mapping.
+public func catalogProviderKey(forAgentProvider provider: String) -> String {
     providerDirectory.first { $0.scope == provider }?.catalogKey ?? provider
 }
