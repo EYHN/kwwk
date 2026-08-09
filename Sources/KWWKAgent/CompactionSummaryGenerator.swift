@@ -13,6 +13,12 @@ struct CompactionSummaryRequest: Sendable {
     let config: AgentContextCompactionConfig
     let previousSummary: String?
     let kind: CompactionSummaryKind
+    /// Reasoning level for the summary request. Some endpoints (e.g. xAI's
+    /// reasoning-mandatory Grok models behind OpenRouter) reject requests
+    /// that explicitly disable reasoning, which is what an absent level
+    /// encodes to on several wire formats — so callers that compact on
+    /// behalf of a live agent pass the agent's own effective level here.
+    let reasoning: ReasoningLevel?
     let authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     let stream: StreamFn?
     let cancellation: CancellationHandle?
@@ -91,6 +97,11 @@ enum CompactionSummaryGenerator {
             sessionId: providerSessionId,
             metadata: metadata,
             resolvedAuth: resolvedAuth,
+            // Mirror the live agent's effective reasoning. Leaving this nil
+            // encodes to an explicit "reasoning disabled" on several wire
+            // formats, which reasoning-mandatory endpoints reject with 400 —
+            // permanently wedging compaction for that agent.
+            reasoning: request.reasoning,
             cancellation: request.cancellation,
             toolChoice: ToolChoice.none,
             parallelToolCalls: false

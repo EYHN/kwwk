@@ -757,6 +757,17 @@ extension Agent {
         }
     }
 
+    /// Reasoning level for compaction-summary requests issued on this agent's
+    /// behalf, mirroring the live turn's effective reasoning (gated on the
+    /// summary model's capability). An absent level encodes to an explicit
+    /// "reasoning disabled" on several wire formats, and reasoning-mandatory
+    /// endpoints (e.g. xAI Grok behind OpenRouter) reject that with a 400 —
+    /// which would permanently wedge compaction while live turns keep working.
+    func summaryReasoning(for summaryModel: Model) -> ReasoningLevel? {
+        guard summaryModel.reasoning, state.thinkingLevel != .off else { return nil }
+        return thinkingLevelToReasoning(state.thinkingLevel)
+    }
+
     private func runLifecycle(
         _ executor: @escaping @Sendable (_ cancellation: CancellationHandle, _ emit: @escaping AgentEventSink) async throws -> Void
     ) async throws {

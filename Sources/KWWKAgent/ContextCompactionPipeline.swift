@@ -13,6 +13,9 @@ struct ContextCompactionPipelineRequest: Sendable {
     let sessionId: String?
     let config: AgentContextCompactionConfig
     let targetTokens: Int?
+    /// Reasoning level forwarded to every summary-generation request. See
+    /// `CompactionSummaryRequest.reasoning`.
+    let summaryReasoning: ReasoningLevel?
     let authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     let transformContext: TransformContextHook?
     let convertToLlm: ConvertToLlmHook?
@@ -216,6 +219,7 @@ enum ContextCompactionPipeline {
                     config: summaryConfig,
                     previousSummary: accumulator,
                     kind: kind,
+                    reasoning: request.summaryReasoning,
                     authResolver: request.authResolver,
                     stream: request.stream,
                     cancellation: request.cancellation
