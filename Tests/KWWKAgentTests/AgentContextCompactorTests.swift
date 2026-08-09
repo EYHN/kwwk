@@ -344,11 +344,53 @@ struct AgentContextCompactorTests {
         #expect(snapshot.sessionId != "hook-session")
         #expect(snapshot.temperature == nil)
         #expect(snapshot.maxTokens == nil)
+        #expect(snapshot.reasoning == nil)
         #expect(snapshot.disablesTools)
         #expect(snapshot.disablesParallelTools)
         #expect(snapshot.prompt.contains("feature REDACTED"))
         #expect(snapshot.prompt.contains("converted marker"))
         #expect(!snapshot.prompt.contains("feature X"))
+    }
+
+    @Test("summary requests mirror the agent's effective reasoning level")
+    func summaryRequestInheritsAgentReasoning() async {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
+            FauxModelDefinition(id: "reasoning-model", reasoning: true)
+        ]))
+        defer { faux.unregister() }
+
+        let model = faux.getModel()
+        let capture = SummaryStreamCapture()
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: model,
+                thinkingLevel: .high,
+                messages: conversation(model: model)
+            ),
+            streamFn: { model, context, options in
+                await capture.record(context: context, options: options)
+                let (stream, continuation) = AssistantMessageStream.makeStream()
+                continuation.end(AssistantMessage(
+                    content: [.text(TextContent(text: "reasoned summary"))],
+                    api: model.api,
+                    provider: model.provider,
+                    model: model.id
+                ))
+                return stream
+            }
+        ))
+
+        let outcome = await AgentContextCompactor.compactAgent(
+            agent: agent,
+            sessionId: "reasoning-session"
+        )
+
+        #expect(outcome == .compacted(messagesCompacted: 2, hasRunningTasksLedger: false))
+        // Reasoning-mandatory endpoints (e.g. xAI Grok behind OpenRouter)
+        // reject requests whose absent level encodes to "reasoning disabled",
+        // so the summary must carry the live turn's effective level.
+        let snapshot = await capture.snapshot()
+        #expect(snapshot.reasoning == .high)
     }
 
     @Test("a dedicated compaction model handles summary auth and streaming without changing the main model")
@@ -1041,6 +1083,7 @@ private actor SummaryStreamCapture {
     private var sessionId: String?
     private var temperature: Double?
     private var maxTokens: Int?
+    private var reasoning: ReasoningLevel?
     private var disablesTools = false
     private var disablesParallelTools = false
 
@@ -1055,6 +1098,7 @@ private actor SummaryStreamCapture {
         self.sessionId = options?.sessionId
         self.temperature = options?.temperature
         self.maxTokens = options?.maxTokens
+        self.reasoning = options?.reasoning
         self.disablesTools = options?.toolChoice == ToolChoice.none
         self.disablesParallelTools = options?.parallelToolCalls == false
     }
@@ -1064,10 +1108,11 @@ private actor SummaryStreamCapture {
         sessionId: String?,
         temperature: Double?,
         maxTokens: Int?,
+        reasoning: ReasoningLevel?,
         disablesTools: Bool,
         disablesParallelTools: Bool
     ) {
-        (prompt, sessionId, temperature, maxTokens, disablesTools, disablesParallelTools)
+        (prompt, sessionId, temperature, maxTokens, reasoning, disablesTools, disablesParallelTools)
     }
 }
 
