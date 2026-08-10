@@ -4581,7 +4581,7 @@
         "supportsUsageInStreaming" : true,
         "thinkingFormat" : "baseten"
       },
-      "contextWindow" : 524288,
+      "contextWindow" : 1048576,
       "cost" : {
         "cacheRead" : 0.21,
         "cacheWrite" : 0,
@@ -6284,6 +6284,7 @@
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/api.deepseek.com",
       "compat" : {
+        "maxTokensField" : "max_tokens",
         "requiresReasoningContentOnAssistantMessages" : true,
         "supportsDeveloperRole" : false,
         "supportsStore" : false,
@@ -6316,6 +6317,7 @@
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/api.deepseek.com",
       "compat" : {
+        "maxTokensField" : "max_tokens",
         "requiresReasoningContentOnAssistantMessages" : true,
         "supportsDeveloperRole" : false,
         "supportsStore" : false,
@@ -16341,16 +16343,16 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.017919999999999998,
+        "cacheRead" : 0.0252,
         "cacheWrite" : 0,
-        "input" : 0.089599999999999999,
-        "output" : 0.1792
+        "input" : 0.079995999999999998,
+        "output" : 0.252
       },
       "id" : "~deepseek\/deepseek-v4-flash-latest",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 4096,
       "name" : "DeepSeek V4 Flash Latest",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -16422,7 +16424,7 @@
       "cost" : {
         "cacheRead" : 0.29,
         "cacheWrite" : 0,
-        "input" : 2.5,
+        "input" : 2.8,
         "output" : 14
       },
       "id" : "~moonshotai\/kimi-latest",
@@ -18580,17 +18582,17 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.050000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.070000000000000007,
-        "output" : 0.34
+        "input" : 0.12,
+        "output" : 0.4
       },
       "id" : "google\/gemma-4-26b-a4b-it",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 262144,
       "name" : "Google: Gemma 4 26B A4B ",
       "provider" : "openrouter",
       "reasoning" : true
@@ -18999,19 +19001,19 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 128000,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
         "input" : 0.2,
-        "output" : 0.8
+        "output" : 0.696
       },
       "id" : "meta-llama\/llama-4-maverick",
       "input" : [
         "text",
         "image"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 4096,
       "name" : "Meta: Llama 4 Maverick",
       "provider" : "openrouter",
       "reasoning" : false
@@ -19189,10 +19191,10 @@
       },
       "contextWindow" : 204800,
       "cost" : {
-        "cacheRead" : 0.053999999999999999,
+        "cacheRead" : 0.059999999999999998,
         "cacheWrite" : 0,
-        "input" : 0.27,
-        "output" : 1.08
+        "input" : 0.3,
+        "output" : 1.2
       },
       "id" : "minimax\/minimax-m2.7",
       "input" : [
@@ -19875,7 +19877,7 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.029999999999999999,
+        "cacheRead" : 0.025000000000000001,
         "cacheWrite" : 0,
         "input" : 0.050000000000000003,
         "output" : 0.2
@@ -19884,7 +19886,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 228000,
       "name" : "NVIDIA: Nemotron 3 Nano 30B A3B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -22572,18 +22574,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 40960,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.2275,
-        "output" : 0.91
+        "input" : 0.12,
+        "output" : 0.24
       },
       "id" : "qwen\/qwen3-14b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 8192,
+      "maxTokens" : 16384,
       "name" : "Qwen: Qwen3 14B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -22940,7 +22942,7 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 131072,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
@@ -22951,7 +22953,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 32768,
       "name" : "Qwen: Qwen3 Next 80B A3B Thinking",
       "provider" : "openrouter",
       "reasoning" : true
@@ -24219,10 +24221,10 @@
       },
       "contextWindow" : 1024000,
       "cost" : {
-        "cacheRead" : 0.038219999999999997,
+        "cacheRead" : 0.012999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.2058,
-        "output" : 0.6468
+        "input" : 0.070000000000000007,
+        "output" : 0.22
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
@@ -26001,7 +26003,7 @@
         "supportsStrictMode" : false,
         "thinkingFormat" : "together"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 512000,
       "cost" : {
         "cacheRead" : 0.26,
         "cacheWrite" : 0,
@@ -26847,6 +26849,34 @@
       ],
       "maxTokens" : 128000,
       "name" : "Claude Opus 5",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
+    "anthropic\/claude-opus-5-fast" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 1,
+        "cacheWrite" : 12.5,
+        "input" : 10,
+        "output" : 50
+      },
+      "id" : "anthropic\/claude-opus-5-fast",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5 (Fast)",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -28749,26 +28779,6 @@
       "name" : "GPT 5.1 Codex Mini",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
-    },
-    "openai\/gpt-5.1-instant" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "contextWindow" : 128000,
-      "cost" : {
-        "cacheRead" : 0.13,
-        "cacheWrite" : 0,
-        "input" : 1.25,
-        "output" : 10
-      },
-      "id" : "openai\/gpt-5.1-instant",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "maxTokens" : 16384,
-      "name" : "GPT-5.1 Instant",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : false
     },
     "openai\/gpt-5.1-thinking" : {
       "api" : "anthropic-messages",
