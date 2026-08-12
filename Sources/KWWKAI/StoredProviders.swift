@@ -9,9 +9,8 @@ import Foundation
 // terminal output — diagnostics go through the `notice` callbacks.
 //
 // Every entry point comes in two shapes: one taking an `OAuthManager` (the
-// general form — works over any source, with that manager's refresh policy)
-// and one taking a bare `OAuthStore`, which is the file-backed convenience
-// wrapper the CLI uses.
+// general form — works over any credential source) and one taking a bare
+// `OAuthStore`, which is the file-backed convenience wrapper the CLI uses.
 
 /// Result of resolving which LLM + credentials to use for this session.
 /// The provider has already been registered on `APIRegistry.shared`.
@@ -845,7 +844,7 @@ private func stringExtra(_ creds: OAuthCredentials, _ key: String) -> String? {
 /// Re-read `id` after priming, so the caller sees whatever claims the token
 /// exchange just persisted (Copilot's proxy `endpoint`, Codex's `accountId`).
 /// Falls back to the pre-prime credentials when the source has nothing to add
-/// — priming is best-effort, and a consume-only source never changes here.
+/// — priming is best-effort, and an access-only source never changes here.
 private func primed(
     _ manager: OAuthManager,
     _ id: String,
@@ -866,8 +865,8 @@ private func oauthResolver(
             return ResolvedProviderAuth(token: token, scheme: scheme, baseURL: baseURL)
         } catch OAuthError.missing, OAuthError.unknownProvider {
             // Not logged in for this provider ⇒ anonymous. Any other failure
-            // (refresh/exchange error, or a consume-only source serving an
-            // expired token) propagates so the request surfaces it instead of
+            // (refresh/exchange error, or an unrefreshable entry served
+            // expired) propagates so the request surfaces it instead of
             // silently going out unauthenticated.
             return nil
         }
