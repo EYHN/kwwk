@@ -1,11 +1,17 @@
 import Foundation
 
-// Store-backed provider registration: turn the credentials persisted in an
-// `OAuthStore` (the `~/.kwwk/oauth.json` shape) into live, request-ready
-// providers on `APIRegistry.shared`. Shared by the kwwk CLI's launch/login
-// paths and by library consumers that sync a store from elsewhere (e.g. a
-// backend materializing per-tenant BYOK credentials). Pure library code: no
+// Stored-credential provider registration: turn the credentials an
+// `OAuthManager` can read (the `~/.kwwk/oauth.json` shape, whether they come
+// from that file or from an external `OAuthCredentialSource`) into live,
+// request-ready providers on `APIRegistry.shared`. Shared by the kwwk CLI's
+// launch/login paths and by library consumers that hold credentials elsewhere
+// (e.g. a backend serving per-tenant BYOK tokens). Pure library code: no
 // terminal output — diagnostics go through the `notice` callbacks.
+//
+// Every entry point comes in two shapes: one taking an `OAuthManager` (the
+// general form — works over any source, with that manager's refresh policy)
+// and one taking a bare `OAuthStore`, which is the file-backed convenience
+// wrapper the CLI uses.
 
 /// Result of resolving which LLM + credentials to use for this session.
 /// The provider has already been registered on `APIRegistry.shared`.
@@ -129,13 +135,13 @@ public actor SessionAuthResolvers {
     }
 }
 
-/// Register **every** provider stored in `store` on `APIRegistry.shared`
-/// (each scoped by its `model.provider` so same-wire providers don't clobber
-/// each other), and return a `ResolvedAuth` whose model is the *active*
-/// provider's default and whose `authResolver` is a **unified** closure that
-/// dispatches by `model.provider` across all logged-in accounts. The CLI's
-/// `/model` can then switch to any registered provider's models mid-session
-/// and requests route to the right credentials.
+/// Register **every** provider `manager` holds credentials for on
+/// `APIRegistry.shared` (each scoped by its `model.provider` so same-wire
+/// providers don't clobber each other), and return a `ResolvedAuth` whose
+/// model is the *active* provider's default and whose `authResolver` is a
+/// **unified** closure that dispatches by `model.provider` across all
+/// logged-in accounts. The CLI's `/model` can then switch to any registered
+/// provider's models mid-session and requests route to the right credentials.
 ///
 /// Active-provider selection:
 ///   - `modelOverride` of the form `provider/id` activates that provider (if
@@ -143,17 +149,16 @@ public actor SessionAuthResolvers {
 ///   - Otherwise the highest-priority logged-in provider is active, and a bare
 ///     `modelOverride` names its model.
 ///
-/// Throws `AuthResolveError.noCredentials` when the store is empty (or no
-/// stored entry could be registered). Skipped entries — same-scope dual
-/// logins, unwired ids — are reported through `notice`.
+/// Throws `AuthResolveError.noCredentials` when the manager's source holds
+/// nothing (or no entry could be registered). Skipped entries — same-scope
+/// dual logins, unwired ids — are reported through `notice`.
 public func registerAllStored(
-    store: OAuthStore,
+    manager: OAuthManager,
     modelOverride: String? = nil,
     context1m: Bool = false,
     notice: @escaping @Sendable (String) -> Void = { _ in }
 ) async throws -> ResolvedAuth {
-    let all = await store.all()
-    let order = storedProviderOrder(all)
+    let order = await storedProviderOrder(ids: manager.providerIds())
 
     // Split an explicit `provider/model` override and resolve which logged-in
     // store id it targets (prefer the priority order on ambiguity, e.g.
@@ -179,7 +184,6 @@ public func registerAllStored(
     var active: ResolvedAuth?
 
     for storeId in order {
-        guard all[storeId] != nil else { continue }
         let scope = modelProviderScope(forStoreId: storeId)
         if seenScopes.contains(scope) {
             notice("'\(storeId)' shares the '\(scope)' provider slot with an already-registered login; skipping.")
@@ -192,7 +196,7 @@ public func registerAllStored(
         // fired an OAuth refresh/exchange network round-trip per account on
         // every launch, for accounts the session may never touch.
         guard let resolved = try await registerStored(
-            storeId: storeId, store: store, modelOverride: mo, context1m: context1m,
+            storeId: storeId, manager: manager, modelOverride: mo, context1m: context1m,
             primeToken: storeId == activeStoreId,
             notice: notice
         ) else { continue }
@@ -223,6 +227,20 @@ public func registerAllStored(
     )
 }
 
+/// File-store convenience wrapper: register everything in `store` through a
+/// refresh-on-demand `OAuthManager`. What the CLI calls at launch.
+public func registerAllStored(
+    store: OAuthStore,
+    modelOverride: String? = nil,
+    context1m: Bool = false,
+    notice: @escaping @Sendable (String) -> Void = { _ in }
+) async throws -> ResolvedAuth {
+    try await registerAllStored(
+        manager: OAuthManager(store: store),
+        modelOverride: modelOverride, context1m: context1m, notice: notice
+    )
+}
+
 /// Register one stored provider on `APIRegistry.shared` (scoped by its
 /// `model.provider`) and return its `ResolvedAuth` (default model + optional
 /// per-provider resolver). Shared by launch-time `registerAllStored` and the
@@ -230,7 +248,7 @@ public func registerAllStored(
 /// missing credentials (reporting a `notice` for the former).
 public func registerStored(
     storeId: String,
-    store: OAuthStore,
+    manager: OAuthManager,
     modelOverride: String? = nil,
     context1m: Bool = false,
     // When false, skip the eager OAuth token refresh/exchange network call at
@@ -240,13 +258,13 @@ public func registerStored(
     primeToken: Bool = true,
     notice: @escaping @Sendable (String) -> Void = { _ in }
 ) async throws -> ResolvedAuth? {
-    guard let creds = await store.get(storeId) else { return nil }
+    guard let creds = try await manager.credentials(for: storeId) else { return nil }
     switch storeId {
     case "openai-codex":
-        return await registerCodex(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+        return await registerCodex(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "anthropic":
         return await registerAnthropicOAuth(
-            store: store, creds: creds, modelOverride: modelOverride, context1m: context1m, primeToken: primeToken
+            manager: manager, creds: creds, modelOverride: modelOverride, context1m: context1m, primeToken: primeToken
         )
     case "anthropic-api-key":
         return await registerAnthropicAPIKey(creds: creds, modelOverride: modelOverride)
@@ -259,11 +277,11 @@ public func registerStored(
     case "openrouter":
         return await registerOpenRouter(creds: creds, modelOverride: modelOverride)
     case "github-copilot":
-        return await registerGitHubCopilot(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+        return await registerGitHubCopilot(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "cursor":
-        return await registerCursor(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+        return await registerCursor(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "kimi-coding":
-        return await registerKimiCoding(store: store, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+        return await registerKimiCoding(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "zai", "zai-coding-cn":
         return await registerZai(storeId: storeId, creds: creds, modelOverride: modelOverride)
     default:
@@ -272,15 +290,30 @@ public func registerStored(
     }
 }
 
+/// File-store convenience wrapper for `registerStored(storeId:manager:…)`.
+public func registerStored(
+    storeId: String,
+    store: OAuthStore,
+    modelOverride: String? = nil,
+    context1m: Bool = false,
+    primeToken: Bool = true,
+    notice: @escaping @Sendable (String) -> Void = { _ in }
+) async throws -> ResolvedAuth? {
+    try await registerStored(
+        storeId: storeId, manager: OAuthManager(store: store),
+        modelOverride: modelOverride, context1m: context1m,
+        primeToken: primeToken, notice: notice
+    )
+}
+
 // MARK: - Codex (OAuth)
 
 private func registerCodex(
-    store: OAuthStore,
+    manager: OAuthManager,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
     primeToken: Bool = true
 ) async -> ResolvedAuth {
-    let manager = OAuthManager(store: store)
     // Grab a fresh token if expired. If the refresh fails we still register
     // the provider — the authResolver below will retry on the next request
     // and surface the error to the user there. When not priming, read the
@@ -290,7 +323,7 @@ private func registerCodex(
         _ = try? await manager.apiKey(for: "openai-codex")
     }
 
-    let refreshed = primeToken ? (await store.get("openai-codex") ?? creds) : creds
+    let refreshed = primeToken ? await primed(manager, "openai-codex", fallback: creds) : creds
     let accountId: String? = {
         if case .string(let s) = refreshed.extras["accountId"] ?? .null { return s }
         return nil
@@ -329,13 +362,12 @@ private func registerCodex(
 // MARK: - Anthropic OAuth
 
 private func registerAnthropicOAuth(
-    store: OAuthStore,
+    manager: OAuthManager,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
     context1m: Bool = false,
     primeToken: Bool = true
 ) async -> ResolvedAuth {
-    let manager = OAuthManager(store: store)
     // Prime the token only for the active provider; otherwise the resolver
     // refreshes lazily on the first request.
     if primeToken {
@@ -391,12 +423,11 @@ private func registerAnthropicOAuth(
 // MARK: - GitHub Copilot (OAuth)
 
 private func registerGitHubCopilot(
-    store: OAuthStore,
+    manager: OAuthManager,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
     primeToken: Bool = true
 ) async -> ResolvedAuth {
-    let manager = OAuthManager(store: store)
     // Prime the session token — Copilot's `refresh` is actually a PAT →
     // session-token exchange that must happen before the proxy will route.
     // We ignore the returned token; the resolver below re-fetches on demand
@@ -408,7 +439,7 @@ private func registerGitHubCopilot(
     if primeToken {
         _ = try? await manager.apiKey(for: "github-copilot")
     }
-    let refreshed = primeToken ? (await store.get("github-copilot") ?? creds) : creds
+    let refreshed = primeToken ? await primed(manager, "github-copilot", fallback: creds) : creds
 
     // Copilot Business / Enterprise get a proxy-endpoint claim (e.g.
     // `https://api.business.githubcopilot.com`) that the session-token
@@ -500,12 +531,11 @@ private func registerGitHubCopilot(
 // MARK: - Cursor (OAuth subscription)
 
 private func registerCursor(
-    store: OAuthStore,
+    manager: OAuthManager,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
     primeToken: Bool = true
 ) async -> ResolvedAuth {
-    let manager = OAuthManager(store: store)
     // Prime the token only for the active provider; the resolver refreshes
     // lazily on the first request for the others. Cursor's `refresh` exchanges
     // the stored refresh token for a fresh short-lived JWT access token.
@@ -538,12 +568,11 @@ private func registerCursor(
 // MARK: - Kimi For Coding (OAuth device flow)
 
 private func registerKimiCoding(
-    store: OAuthStore,
+    manager: OAuthManager,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
     primeToken: Bool = true
 ) async -> ResolvedAuth {
-    let manager = OAuthManager(store: store)
     // Prime the token only for the active provider; the resolver refreshes
     // lazily on the first request for the others.
     if primeToken {
@@ -813,6 +842,18 @@ private func stringExtra(_ creds: OAuthCredentials, _ key: String) -> String? {
     return nil
 }
 
+/// Re-read `id` after priming, so the caller sees whatever claims the token
+/// exchange just persisted (Copilot's proxy `endpoint`, Codex's `accountId`).
+/// Falls back to the pre-prime credentials when the source has nothing to add
+/// — priming is best-effort, and a consume-only source never changes here.
+private func primed(
+    _ manager: OAuthManager,
+    _ id: String,
+    fallback: OAuthCredentials
+) async -> OAuthCredentials {
+    (try? await manager.credentials(for: id)) ?? fallback
+}
+
 private func oauthResolver(
     manager: OAuthManager,
     providerId: String,
@@ -825,8 +866,9 @@ private func oauthResolver(
             return ResolvedProviderAuth(token: token, scheme: scheme, baseURL: baseURL)
         } catch OAuthError.missing, OAuthError.unknownProvider {
             // Not logged in for this provider ⇒ anonymous. Any other failure
-            // (refresh/exchange error) propagates so the request surfaces it
-            // instead of silently going out unauthenticated.
+            // (refresh/exchange error, or a consume-only source serving an
+            // expired token) propagates so the request surfaces it instead of
+            // silently going out unauthenticated.
             return nil
         }
     }

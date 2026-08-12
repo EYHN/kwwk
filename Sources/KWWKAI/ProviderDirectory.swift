@@ -146,9 +146,17 @@ public func providerDescriptor(forStoreId storeId: String) -> ProviderDescriptor
 /// order, with unknown ids appended (sorted) so they still surface in
 /// `/logout` listings and the "not wired up" launch notice.
 public func storedProviderOrder(_ all: [String: OAuthCredentials]) -> [String] {
-    var order = providerDirectory.map(\.storeId).filter { all[$0] != nil }
+    storedProviderOrder(ids: Array(all.keys))
+}
+
+/// Same ordering over a bare id list, for credential sources that can name
+/// their providers without materializing every credential
+/// (`OAuthCredentialSource.providerIds()`).
+public func storedProviderOrder(ids: [String]) -> [String] {
+    let present = Set(ids)
+    var order = providerDirectory.map(\.storeId).filter { present.contains($0) }
     let known = Set(providerDirectory.map(\.storeId))
-    order.append(contentsOf: all.keys.filter { !known.contains($0) }.sorted())
+    order.append(contentsOf: present.filter { !known.contains($0) }.sorted())
     return order
 }
 
