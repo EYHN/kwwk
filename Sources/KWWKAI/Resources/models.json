@@ -1805,7 +1805,7 @@
       "compat" : {
         "supportsStrictMode" : true
       },
-      "contextWindow" : 272000,
+      "contextWindow" : 1050000,
       "cost" : {
         "cacheRead" : 0.021999999999999999,
         "cacheWrite" : 0.275,
@@ -1831,10 +1831,10 @@
       "compat" : {
         "supportsStrictMode" : true
       },
-      "contextWindow" : 272000,
+      "contextWindow" : 1050000,
       "cost" : {
         "cacheRead" : 0.55,
-        "cacheWrite" : 6.88,
+        "cacheWrite" : 6.875,
         "input" : 5.5,
         "output" : 33
       },
@@ -1857,7 +1857,7 @@
       "compat" : {
         "supportsStrictMode" : true
       },
-      "contextWindow" : 272000,
+      "contextWindow" : 1050000,
       "cost" : {
         "cacheRead" : 0.22,
         "cacheWrite" : 2.75,
@@ -5184,6 +5184,9 @@
     "gpt-4" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 8192,
       "cost" : {
         "cacheRead" : 0,
@@ -5203,6 +5206,9 @@
     "gpt-4-turbo" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 128000,
       "cost" : {
         "cacheRead" : 0,
@@ -5223,6 +5229,9 @@
     "gpt-4o" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 128000,
       "cost" : {
         "cacheRead" : 1.25,
@@ -5243,6 +5252,9 @@
     "gpt-4o-mini" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 128000,
       "cost" : {
         "cacheRead" : 0.080000000000000002,
@@ -5264,7 +5276,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 400000,
       "cost" : {
@@ -5296,7 +5309,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 400000,
       "cost" : {
@@ -5328,7 +5342,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 400000,
       "cost" : {
@@ -5360,7 +5375,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 400000,
       "cost" : {
@@ -5392,7 +5408,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 400000,
       "cost" : {
@@ -5424,7 +5441,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 1050000,
       "cost" : {
@@ -5456,7 +5474,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 1050000,
       "cost" : {
@@ -5488,7 +5507,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 1050000,
       "cost" : {
@@ -5529,7 +5549,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 1050000,
       "cost" : {
@@ -5561,7 +5582,8 @@
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
       "compat" : {
-        "supportsOpenAIGrammarTools" : true
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true
       },
       "contextWindow" : 1050000,
       "cost" : {
@@ -5601,6 +5623,9 @@
     "o1" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 200000,
       "cost" : {
         "cacheRead" : 7.5,
@@ -5630,6 +5655,9 @@
     "o3" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 200000,
       "cost" : {
         "cacheRead" : 0.5,
@@ -5659,6 +5687,9 @@
     "o3-mini" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 200000,
       "cost" : {
         "cacheRead" : 0.55,
@@ -5687,6 +5718,9 @@
     "o3-pro" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 200000,
       "cost" : {
         "cacheRead" : 0,
@@ -5716,6 +5750,9 @@
     "o4-mini" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/openai",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
       "contextWindow" : 200000,
       "cost" : {
         "cacheRead" : 0.28,
@@ -6307,7 +6344,7 @@
       "reasoning" : true,
       "thinkingLevelMap" : {
         "high" : "high",
-        "low" : null,
+        "low" : "low",
         "max" : "max",
         "medium" : null,
         "minimal" : null
@@ -12286,6 +12323,36 @@
       "provider" : "nvidia",
       "reasoning" : true
     },
+    "nvidia\/nemotron-3.5-lightning-30b-a3b" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsLongCacheRetention" : false,
+        "supportsReasoningEffort" : false,
+        "supportsStore" : false,
+        "supportsStrictMode" : false
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "headers" : {
+        "NVCF-POLL-SECONDS" : "3600"
+      },
+      "id" : "nvidia\/nemotron-3.5-lightning-30b-a3b",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 262144,
+      "name" : "Nemotron 3.5 Lightning 30B A3B",
+      "provider" : "nvidia",
+      "reasoning" : true
+    },
     "nvidia\/nemotron-nano-12b-v2-vl" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
@@ -15282,6 +15349,39 @@
         "off" : null
       }
     },
+    "hy3-free" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false
+      },
+      "contextWindow" : 190000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "hy3-free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 64000,
+      "name" : "Hy3 Free",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
     "kimi-k2.5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
@@ -15599,7 +15699,7 @@
       "provider" : "opencode",
       "reasoning" : true
     },
-    "north-mini-code-free" : {
+    "nemotron-3.5-lightning-free" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
       "compat" : {
@@ -15607,30 +15707,21 @@
         "supportsDeveloperRole" : false,
         "supportsStore" : false
       },
-      "contextWindow" : 256000,
+      "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
         "input" : 0,
         "output" : 0
       },
-      "id" : "north-mini-code-free",
+      "id" : "nemotron-3.5-lightning-free",
       "input" : [
         "text"
       ],
-      "maxTokens" : 64000,
-      "name" : "North Mini Code Free",
+      "maxTokens" : 262144,
+      "name" : "Nemotron 3.5 Lightning Free",
       "provider" : "opencode",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : null,
-        "max" : null,
-        "medium" : null,
-        "minimal" : null,
-        "off" : "none",
-        "xhigh" : null
-      }
+      "reasoning" : true
     },
     "qwen3.5-plus" : {
       "api" : "anthropic-messages",
@@ -16274,18 +16365,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.015959999999999998,
+        "cacheRead" : 0.0144,
         "cacheWrite" : 0,
-        "input" : 0.079799999999999996,
-        "output" : 0.1596
+        "input" : 0.071999999999999995,
+        "output" : 0.144
       },
       "id" : "~deepseek\/deepseek-v4-flash-latest",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 262144,
       "name" : "DeepSeek V4 Flash Latest",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -17509,6 +17600,30 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
+    "bytedance-seed\/seed-2.0-code" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0.5,
+        "output" : 3
+      },
+      "id" : "bytedance-seed\/seed-2.0-code",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 131072,
+      "name" : "ByteDance Seed: Seed-2.0-Code",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
     "bytedance-seed\/seed-2.0-lite" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -17748,12 +17863,12 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 163840,
       "cost" : {
-        "cacheRead" : 0.135,
+        "cacheRead" : 0.13,
         "cacheWrite" : 0,
         "input" : 0.27,
-        "output" : 1
+        "output" : 0.95
       },
       "id" : "deepseek\/deepseek-v3.1-terminus",
       "input" : [
@@ -17884,10 +17999,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.054364000000000003,
+        "cacheRead" : 0.053297999999999998,
         "cacheWrite" : 0,
-        "input" : 0.64432,
-        "output" : 1.28864
+        "input" : 0.63168,
+        "output" : 1.26336
       },
       "id" : "deepseek\/deepseek-v4-pro",
       "input" : [
@@ -18834,6 +18949,29 @@
       "name" : "Kwaipilot: KAT-Coder-Pro V2.5",
       "provider" : "openrouter",
       "reasoning" : false
+    },
+    "liquid\/lfm-2.5-2.6b:free" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 128000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "liquid\/lfm-2.5-2.6b:free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 32768,
+      "name" : "LiquidAI: LFM2.5-2.6B (free)",
+      "provider" : "openrouter",
+      "reasoning" : true
     },
     "meituan\/longcat-2.0" : {
       "api" : "openai-completions",
@@ -20007,6 +20145,29 @@
       ],
       "maxTokens" : 65536,
       "name" : "NVIDIA: Nemotron 3 Ultra (free)",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "nvidia\/nemotron-3.5-lightning:free" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "nvidia\/nemotron-3.5-lightning:free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 65536,
+      "name" : "NVIDIA: Nemotron 3.5 Lightning (free)",
       "provider" : "openrouter",
       "reasoning" : true
     },
@@ -21819,9 +21980,9 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.029999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.036999999999999998,
+        "input" : 0.029999999999999999,
         "output" : 0.17
       },
       "id" : "openai\/gpt-oss-120b",
@@ -23018,10 +23179,10 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.1,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.21,
-        "output" : 1.9
+        "input" : 0.26,
+        "output" : 1.04
       },
       "id" : "qwen\/qwen3-vl-235b-a22b-instruct",
       "input" : [
@@ -23534,6 +23695,30 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
+    "sakana\/sakana-namazu" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 0.95,
+        "output" : 4
+      },
+      "id" : "sakana\/sakana-namazu",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 65536,
+      "name" : "Sakana: Sakana Namazu",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
     "sao10k\/l3.1-euryale-70b" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -24011,12 +24196,12 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 202752,
+      "contextWindow" : 204800,
       "cost" : {
-        "cacheRead" : 0.1,
+        "cacheRead" : 0.11,
         "cacheWrite" : 0,
-        "input" : 0.5,
-        "output" : 2
+        "input" : 0.55,
+        "output" : 2.2
       },
       "id" : "z-ai\/glm-4.6",
       "input" : [
@@ -24173,18 +24358,18 @@
         "supportsDeveloperRole" : false,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 262144,
+      "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.14,
+        "cacheRead" : 0.070000000000000007,
         "cacheWrite" : 0,
-        "input" : 0.76,
-        "output" : 2.42
+        "input" : 0.42,
+        "output" : 1.4
       },
       "id" : "z-ai\/glm-5.2",
       "input" : [
         "text"
       ],
-      "maxTokens" : 262144,
+      "maxTokens" : 1048576,
       "name" : "Z.ai: GLM 5.2",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -29307,6 +29492,26 @@
       ],
       "maxTokens" : 1000000,
       "name" : "Fugu Ultra",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "sakana\/namazu" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "contextWindow" : 256000,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 0.95,
+        "output" : 4
+      },
+      "id" : "sakana\/namazu",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "maxTokens" : 256000,
+      "name" : "Sakana Namazu",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
