@@ -84,6 +84,7 @@ extension OAuthProvider {
 
 public enum OAuthError: Error, LocalizedError {
     case missing(providerId: String)
+    case expired(providerId: String)
     case unknownProvider(String)
     case transport(String)
     case invalidResponse(String)
@@ -94,6 +95,8 @@ public enum OAuthError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .missing(let id): return "no OAuth credentials stored for '\(id)'"
+        case .expired(let id):
+            return "OAuth credentials for '\(id)' are expired and carry no refresh token — the credential source must serve fresh ones"
         case .unknownProvider(let id): return "unknown OAuth provider '\(id)'"
         case .transport(let text): return "OAuth transport error: \(text)"
         case .invalidResponse(let text): return "OAuth invalid response: \(text)"
@@ -103,6 +106,32 @@ public enum OAuthError: Error, LocalizedError {
         case .persistFailed(let text): return "OAuth store write failed: \(text)"
         }
     }
+}
+
+// MARK: - Credential source
+
+/// Where an `OAuthManager` reads credentials from. `OAuthStore` is the
+/// file-backed implementation; a host that owns refresh elsewhere (a backend
+/// minting per-tenant tokens, a keychain daemon, …) implements this instead
+/// and hands it to `OAuthManager(source:)`.
+///
+/// There is no mode switch: whether the manager refreshes is decided by the
+/// credentials themselves. An entry with an empty `refresh` cannot be
+/// refreshed, so an authority that wants to keep refresh (and the refresh
+/// token) entirely to itself simply serves access tokens with `refresh: ""` —
+/// then this process never refreshes and never writes anything, and an
+/// expired credential is the source's fault (`OAuthError.expired`). Sources
+/// that talk to a network authority should do their own caching so the
+/// per-request read stays cheap.
+public protocol OAuthCredentialSource: Sendable {
+    /// Ids the source currently holds credentials for. Registration walks this
+    /// to decide which providers to wire up and in what priority order, so it
+    /// should be as cheap as a cache read.
+    func providerIds() async -> [String]
+
+    /// Current credentials for `providerId`, or nil when the source holds none
+    /// (the caller reports that as `OAuthError.missing`).
+    func credentials(for providerId: String) async throws -> OAuthCredentials?
 }
 
 // MARK: - Credential store
@@ -195,20 +224,48 @@ public actor OAuthStore {
     }
 }
 
+/// The file store is itself a credential source — reading it can't fail (the
+/// only failure mode, a corrupt file, is caught at `init`), so these witness
+/// the throwing requirements without throwing.
+extension OAuthStore: OAuthCredentialSource {
+    public func providerIds() -> [String] { Array(credentials.keys) }
+    public func credentials(for providerId: String) -> OAuthCredentials? { credentials[providerId] }
+}
+
 // MARK: - Manager
 
-/// Refresh-on-demand front end. Wrap an `OAuthStore` with a set of
+/// Refresh-on-demand front end. Wrap a credential source with a set of
 /// `OAuthProvider`s. Call `apiKey(for:)` (or the `resolver()` closure) to
-/// fetch a fresh api-key — `OAuthManager` checks `.isExpired`, refreshes, and
-/// persists new credentials automatically.
+/// fetch a fresh api-key — `OAuthManager` checks `.isExpired`, refreshes
+/// entries that carry a refresh token, and persists new credentials to the
+/// store when the source is one.
+///
+/// There is deliberately no refresh-policy switch: the credentials decide.
+/// An entry whose `refresh` is empty is unrefreshable, so expiry is an error
+/// (`OAuthError.expired`) — which is exactly how an external authority keeps
+/// refresh to itself: serve access tokens with `refresh: ""`.
 public actor OAuthManager {
-    public let store: OAuthStore
+    /// The writable store when the source is one — the store-backed init sets
+    /// it, and refreshed credentials persist there. A plain `init(source:)`
+    /// has nowhere durable to write; see `refreshedOverlay`.
+    public let store: OAuthStore?
+    /// Where credentials are read from. Same object as `store` for the
+    /// store-backed init.
+    public let source: any OAuthCredentialSource
     public let client: HTTPClient
     private var providers: [String: OAuthProvider]
     /// In-flight refresh per provider id. Concurrent `apiKey(for:)` callers
     /// await the same task instead of each launching their own refresh with
     /// the same (rotated-on-use) refresh token.
     private var inFlightRefresh: [String: Task<OAuthCredentials, Error>] = [:]
+    /// Rotations with nowhere durable to go. When a store-less source serves
+    /// a refresh-bearing entry and it expires, the provider rotation must not
+    /// be lost — re-running it with the consumed refresh token would kill the
+    /// login on rotating providers. Each overlay entry remembers the exact
+    /// credentials it was refreshed *from*: while the source still serves
+    /// those, reads see the rotation; the moment the source serves anything
+    /// else (a new login, its own newer tokens), the overlay yields.
+    private var refreshedOverlay: [String: (base: OAuthCredentials, result: OAuthCredentials)] = [:]
 
     public init(
         store: OAuthStore = OAuthStore(),
@@ -216,6 +273,23 @@ public actor OAuthManager {
         client: HTTPClient = URLSessionHTTPClient()
     ) {
         self.store = store
+        self.source = store
+        self.providers = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0) })
+        self.client = client
+    }
+
+    /// Manager over an external credential source. Behavior follows the data
+    /// the source serves: refresh-less entries are consumed as-is and expiry
+    /// is the source's fault; refresh-bearing entries refresh normally, with
+    /// the rotation held in this actor's memory (the source stays the
+    /// authority — a changed entry from it drops the held rotation).
+    public init(
+        source: any OAuthCredentialSource,
+        providers: [OAuthProvider] = OAuthManager.defaultProviders(),
+        client: HTTPClient = URLSessionHTTPClient()
+    ) {
+        self.store = nil
+        self.source = source
         self.providers = Dictionary(uniqueKeysWithValues: providers.map { ($0.id, $0) })
         self.client = client
     }
@@ -234,16 +308,35 @@ public actor OAuthManager {
         providers[provider.id] = provider
     }
 
+    /// Ids the backing source holds credentials for, and the credentials
+    /// themselves. Registration code reads through these so it works the same
+    /// over a file store and over an external authority.
+    public func providerIds() async -> [String] {
+        await source.providerIds()
+    }
+
+    public func credentials(for providerId: String) async throws -> OAuthCredentials? {
+        // A held rotation stands in for exactly the entry it rotated; any
+        // other answer from the source supersedes it (see `reconciled`).
+        reconciled(try await source.credentials(for: providerId), for: providerId)
+    }
+
     /// Get a valid api-key for `providerId`, refreshing if the stored token
-    /// is expired. Throws `OAuthError.missing` if no credentials are stored.
+    /// is expired and refreshable. Throws `OAuthError.missing` if no
+    /// credentials are stored, and `OAuthError.expired` for a stale entry
+    /// with no refresh token — that entry's authority failed to serve a
+    /// fresh one.
     public func apiKey(for providerId: String) async throws -> String {
         guard let provider = providers[providerId] else {
             throw OAuthError.unknownProvider(providerId)
         }
-        guard var credentials = await store.get(providerId) else {
+        guard var credentials = try await credentials(for: providerId) else {
             throw OAuthError.missing(providerId: providerId)
         }
         if credentials.isExpired {
+            guard !credentials.refresh.isEmpty else {
+                throw OAuthError.expired(providerId: providerId)
+            }
             credentials = try await refresh(providerId, provider: provider, stale: credentials)
         }
         return try await provider.apiKey(from: credentials, using: client)
@@ -251,8 +344,8 @@ public actor OAuthManager {
 
     /// Refresh (or join an in-flight refresh for) `providerId`. The first
     /// caller starts the task and records it; concurrent callers await the
-    /// same task. The task re-reads the store on entry so a refresh that
-    /// landed while we were suspended is reused instead of re-run.
+    /// same task. The task re-reads the credentials on entry so a refresh
+    /// that landed while we were suspended is reused instead of re-run.
     private func refresh(
         _ providerId: String,
         provider: OAuthProvider,
@@ -261,18 +354,51 @@ public actor OAuthManager {
         if let existing = inFlightRefresh[providerId] {
             return try await existing.value
         }
-        let store = self.store
         let client = self.client
-        let task = Task<OAuthCredentials, Error> {
-            let current = await store.get(providerId) ?? stale
+        let task = Task<OAuthCredentials, Error> { [store] in
+            // Re-read the raw source answer: the overlay key must be what the
+            // source serves, or the next read would mistake the source's
+            // unchanged entry for a new login and drop the held rotation —
+            // then re-refresh with a consumed refresh token.
+            let served = try await self.source.credentials(for: providerId)
+            let current = await self.reconciled(served, for: providerId) ?? stale
             if !current.isExpired { return current }
             let refreshed = try await provider.refresh(current, using: client)
-            try await store.set(refreshed, for: providerId)
+            if let store {
+                try await store.set(refreshed, for: providerId)
+            } else {
+                await self.holdRotation(refreshed, from: served ?? stale, for: providerId)
+            }
             return refreshed
         }
         inFlightRefresh[providerId] = task
         defer { inFlightRefresh[providerId] = nil }
         return try await task.value
+    }
+
+    /// The credentials in effect for a raw source answer: the held rotation
+    /// while the source still serves the entry it rotated, the source's
+    /// answer otherwise (dropping any superseded rotation).
+    private func reconciled(
+        _ served: OAuthCredentials?, for providerId: String
+    ) -> OAuthCredentials? {
+        guard let served else {
+            refreshedOverlay[providerId] = nil
+            return nil
+        }
+        if let overlay = refreshedOverlay[providerId] {
+            if overlay.base == served { return overlay.result }
+            refreshedOverlay[providerId] = nil
+        }
+        return served
+    }
+
+    private func holdRotation(
+        _ refreshed: OAuthCredentials,
+        from base: OAuthCredentials,
+        for providerId: String
+    ) {
+        refreshedOverlay[providerId] = (base: base, result: refreshed)
     }
 
     /// Build an auth resolver closure. The resolver receives the active model;
@@ -288,6 +414,10 @@ public actor OAuthManager {
                 // request is the correct outcome. A refresh/exchange failure
                 // (any other error) propagates so the provider surfaces it
                 // rather than silently sending an unauthenticated request.
+                // `.expired` is one of those propagating errors on purpose: a
+                // logged-in account whose source served a stale token is a
+                // real fault, and reporting it as "not logged in" would hide
+                // it behind a downstream 401.
                 return nil
             }
         }
@@ -295,7 +425,7 @@ public actor OAuthManager {
 
     private func resolvedAuth(for providerId: String) async throws -> ResolvedProviderAuth {
         let token = try await apiKey(for: providerId)
-        let credentials = await store.get(providerId)
+        let credentials = try await source.credentials(for: providerId)
         return ResolvedProviderAuth(
             token: token,
             scheme: .bearer,
