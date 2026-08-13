@@ -544,6 +544,255 @@ public enum OAuthLogin {
         throw OAuthError.transport("xai device flow timed out")
     }
 
+    // MARK: - OpenRouter (PKCE callback flow)
+    //
+    // OpenRouter's OAuth exchanges the authorization code for a permanent,
+    // user-controlled API key rather than an expiring token pair (mirrors
+    // pi's `openrouter.ts`). The minted key persists in the same sentinel
+    // credentials shape as the API-key login form (`refresh: ""`,
+    // `expires: .max`), so the stored `openrouter` registration path is
+    // unchanged.
+
+    public static func loginOpenRouter(
+        port: UInt16 = OpenRouterOAuth.callbackPort,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        let pkce = PKCE.random()
+        let server = try OAuthCallbackServer(port: port)
+        defer { server.stop() }
+
+        var comps = URLComponents(url: OpenRouterOAuth.authorizeURL, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "callback_url", value: server.redirectURI),
+            URLQueryItem(name: "code_challenge", value: pkce.challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+        ]
+        callbacks.onAuthURL(comps.url!)
+        callbacks.onProgress("waiting for OpenRouter callback on \(server.redirectURI)…")
+
+        let params = try await server.waitForCallback()
+        guard let code = params["code"], !code.isEmpty else {
+            throw OAuthError.invalidResponse("openrouter callback had no code")
+        }
+
+        callbacks.onProgress("exchanging authorization code for an API key…")
+        let (response, responseBody) = try await client.request(
+            url: OpenRouterOAuth.keysURL,
+            method: "POST",
+            headers: ["content-type": "application/json", "accept": "application/json"],
+            body: try JSONSerialization.data(withJSONObject: [
+                "code": code,
+                "code_verifier": pkce.verifier,
+                "code_challenge_method": "S256",
+            ])
+        )
+        if response.statusCode >= 400 {
+            throw OAuthError.refreshFailed("openrouter key exchange \(response.statusCode): \(String(data: responseBody, encoding: .utf8) ?? "")")
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: responseBody) as? [String: Any],
+              let key = obj["key"] as? String, !key.isEmpty else {
+            throw OAuthError.invalidResponse("openrouter key exchange response carried no key")
+        }
+        return OAuthCredentials(access: key, refresh: "", expires: .max)
+    }
+
+    // MARK: - Z.AI GLM Coding Plan (browser sign-in)
+    //
+    // Ported from oh-my-pi's `zai.ts` (ZCode's desktop "Individual Plan"
+    // flow): an authorization-code grant (no PKCE) against chat.z.ai, a JSON
+    // token exchange on zcode.z.ai that yields a short-lived OAuth access
+    // token, then a business-API sequence on api.z.ai that provisions a
+    // durable `id.secret` API key. The minted key persists in the sentinel
+    // credentials shape (refresh "", expires .max) so the stored `zai`
+    // registration consumes it exactly like a hand-entered key.
+
+    public static func loginZai(
+        clientID: String = ZaiOAuth.clientID,
+        port: UInt16 = ZaiOAuth.callbackPort,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        let state = PKCE.randomHex()
+        let server = try OAuthCallbackServer(port: port)
+        defer { server.stop() }
+        let redirect = server.redirectURI
+
+        var comps = URLComponents(url: ZaiOAuth.authorizeURL, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "redirect_uri", value: redirect),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "client_id", value: clientID),
+            URLQueryItem(name: "state", value: state),
+        ]
+        callbacks.onAuthURL(comps.url!)
+        callbacks.onProgress("waiting for Z.AI callback on \(redirect)…")
+
+        let params = try await server.waitForCallback()
+        guard let code = params["code"], !code.isEmpty else {
+            throw OAuthError.invalidResponse("zai callback had no code")
+        }
+        if let callbackState = params["state"], callbackState != state {
+            throw OAuthError.invalidResponse("zai OAuth state mismatch")
+        }
+
+        // Token exchange — non-standard JSON body (no grant_type or PKCE);
+        // matches ZCode verbatim.
+        callbacks.onProgress("exchanging authorization code…")
+        let exchange = try zaiUnwrap(
+            try await zaiJSON(
+                url: ZaiOAuth.tokenURL, method: "POST",
+                body: ["provider": "zai", "code": code, "redirect_uri": redirect, "state": state],
+                bearer: nil, client: client
+            ),
+            operation: "token exchange"
+        )
+        guard let zaiObj = (exchange as? [String: Any])?["zai"] as? [String: Any],
+              let oauthToken = zaiString(zaiObj["access_token"]) else {
+            throw OAuthError.invalidResponse("zai token response missing access token")
+        }
+
+        // Business login: the biz APIs reject the raw OAuth token; exchange
+        // it for a biz bearer first.
+        callbacks.onProgress("provisioning Z.AI API key…")
+        let login = try zaiUnwrap(
+            try await zaiJSON(
+                url: ZaiOAuth.businessLoginURL, method: "POST",
+                body: ["token": oauthToken], bearer: nil, client: client
+            ),
+            operation: "business login"
+        )
+        let loginObj = login as? [String: Any]
+        guard let bizToken = zaiString(loginObj?["access_token"]) ?? zaiString(loginObj?["accessToken"]) else {
+            throw OAuthError.invalidResponse("zai business login returned no access token")
+        }
+
+        // Resolve the default organization/project, then find-or-create the
+        // kwwk-named key under it.
+        let customer = try zaiUnwrap(
+            try await zaiJSON(
+                url: ZaiOAuth.bizBaseURL.appendingPathComponent("api/biz/customer/getCustomerInfo"),
+                method: "GET", body: nil, bearer: bizToken, client: client
+            ),
+            operation: "customer lookup"
+        )
+        let orgs = (customer as? [String: Any])?["organizations"] as? [[String: Any]] ?? []
+        let org = orgs.first { ($0["isDefault"] as? Bool) == true } ?? orgs.first
+        let projects = org?["projects"] as? [[String: Any]] ?? []
+        let project = projects.first { ($0["isDefault"] as? Bool) == true } ?? projects.first
+        guard let organizationId = zaiString(org?["organizationId"]),
+              let projectId = zaiString(project?["projectId"]) else {
+            throw OAuthError.invalidResponse("zai key provisioning: no organization/project on account")
+        }
+
+        let keysURL = ZaiOAuth.bizBaseURL
+            .appendingPathComponent("api/biz/v1/organization/\(organizationId)/projects/\(projectId)/api_keys")
+        let listed = try zaiUnwrap(
+            try await zaiJSON(url: keysURL, method: "GET", body: nil, bearer: bizToken, client: client),
+            operation: "api key list"
+        )
+        let record: [String: Any]?
+        if let existing = zaiKeyArray(listed).first(where: { ($0["name"] as? String) == ZaiOAuth.keyName }) {
+            record = existing
+        } else {
+            record = try zaiUnwrap(
+                try await zaiJSON(
+                    url: keysURL, method: "POST",
+                    body: ["name": ZaiOAuth.keyName], bearer: bizToken, client: client
+                ),
+                operation: "api key create"
+            ) as? [String: Any]
+        }
+        guard let apiKey = zaiString(record?["apiKey"]) else {
+            throw OAuthError.invalidResponse("zai key provisioning returned no apiKey")
+        }
+
+        // Always fetch the secret via the copy endpoint: list entries mask it
+        // (`*****abcd`) and the create response's inline secret is not
+        // reliable across account states, whereas copy returns it in full.
+        let copied = try zaiUnwrap(
+            try await zaiJSON(
+                url: keysURL.appendingPathComponent("copy/\(apiKey)"),
+                method: "GET", body: nil, bearer: bizToken, client: client
+            ),
+            operation: "api key copy"
+        )
+        guard let secretKey = zaiString((copied as? [String: Any])?["secretKey"]) else {
+            throw OAuthError.invalidResponse("zai key provisioning returned no secretKey")
+        }
+
+        return OAuthCredentials(access: "\(apiKey).\(secretKey)", refresh: "", expires: .max)
+    }
+
+    // MARK: - Z.AI helpers
+
+    /// One JSON round-trip: optional JSON body, optional bearer, ≥400 throws
+    /// with the response text, empty bodies come back nil.
+    private static func zaiJSON(
+        url: URL,
+        method: String,
+        body: [String: Any]?,
+        bearer: String?,
+        client: HTTPClient
+    ) async throws -> Any? {
+        var headers = ["accept": "application/json"]
+        if body != nil { headers["content-type"] = "application/json" }
+        if let bearer { headers["authorization"] = "Bearer \(bearer)" }
+        let data = try body.map { try JSONSerialization.data(withJSONObject: $0) }
+        let (response, responseBody) = try await client.request(
+            url: url, method: method, headers: headers, body: data
+        )
+        if response.statusCode >= 400 {
+            throw OAuthError.refreshFailed("zai \(url.lastPathComponent) \(response.statusCode): \(String(data: responseBody, encoding: .utf8) ?? "")")
+        }
+        guard !responseBody.isEmpty else { return nil }
+        return try? JSONSerialization.jsonObject(with: responseBody)
+    }
+
+    /// Z.AI's `{code, msg, data, success}` envelope: the OAuth token endpoint
+    /// signals success with `code: 0`, the biz endpoints with `code: 200` /
+    /// `success: true`. Accept both; surface `msg` on failure. Bodies without
+    /// a status wrapper pass through unchanged.
+    private static func zaiUnwrap(_ body: Any?, operation: String) throws -> Any? {
+        guard let obj = body as? [String: Any],
+              obj["code"] != nil || obj["success"] != nil else {
+            return body
+        }
+        let success: Bool = {
+            if let flag = obj["success"] as? Bool, flag == false { return false }
+            switch obj["code"] {
+            case nil, is NSNull: return true
+            case let n as NSNumber: return n.intValue == 0 || n.intValue == 200
+            case let s as String: return s == "0" || s == "200"
+            default: return false
+            }
+        }()
+        guard success else {
+            let msg = (obj["msg"] as? String) ?? "code \(obj["code"] ?? "?")"
+            throw OAuthError.refreshFailed("zai \(operation) failed: \(msg)")
+        }
+        return obj.keys.contains("data") ? obj["data"] : obj
+    }
+
+    /// Non-empty trimmed string, or nil.
+    private static func zaiString(_ value: Any?) -> String? {
+        guard let s = value as? String else { return nil }
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Coerce an api_keys list response (bare array or common wrapper
+    /// shapes) to an array of records.
+    private static func zaiKeyArray(_ value: Any?) -> [[String: Any]] {
+        if let arr = value as? [[String: Any]] { return arr }
+        if let obj = value as? [String: Any] {
+            for field in ["list", "keys", "apiKeys", "records"] {
+                if let arr = obj[field] as? [[String: Any]] { return arr }
+            }
+        }
+        return []
+    }
+
     // MARK: - JSON helpers
 
     private static func postJSON(

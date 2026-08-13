@@ -54,6 +54,22 @@ struct OAuthCallbackServerTests {
         #expect(params["state"] == "xyz")
     }
 
+    @Test("a callback landing before waitForCallback is buffered, not dropped")
+    func earlyCallbackBuffered() async throws {
+        // Regression: a GET arriving between the port bind and the
+        // continuation registration used to resolve into the void, leaving
+        // waitForCallback to throw "already resolved" (seen on Linux CI,
+        // where the test-driven callback outpaced the wait).
+        let port: UInt16 = 53985
+        let server = try OAuthCallbackServer(port: port)
+        try server.start()
+        // Complete the callback request fully before anyone waits.
+        let url = URL(string: "http://localhost:\(port)/callback?code=early")!
+        _ = try await URLSession.shared.data(from: url)
+        let params = try await server.waitForCallback()
+        #expect(params["code"] == "early")
+    }
+
     @Test("cancel() unblocks waitForCallback with a CancellationError")
     func cancelUnblocks() async throws {
         let server = try OAuthCallbackServer(port: 53981)
@@ -357,6 +373,251 @@ struct OAuthLoginShapeTests {
                 client: client
             )
         }
+    }
+
+    // MARK: - OpenRouter
+
+    /// Drive the local callback once the flow's server is up. `onAuthURL`
+    /// fires just before `waitForCallback` binds the port, so retry the GET
+    /// until it lands.
+    private func fireCallback(port: UInt16, query: String) {
+        Task.detached {
+            let cb = URL(string: "http://localhost:\(port)/callback?\(query)")!
+            for _ in 0..<50 {
+                if (try? await URLSession.shared.data(from: cb)) != nil { return }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+    }
+
+    @Test("openrouter login exchanges the callback code for a permanent key")
+    func openRouterLoginFlow() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((status: 200, body: #"{"key":"sk-or-v1-minted"}"#))
+        let port: UInt16 = 53983
+        let authURL = CapturedURL()
+        let creds = try await OAuthLogin.loginOpenRouter(
+            port: port,
+            callbacks: OAuthLogin.Callbacks(
+                onAuthURL: { url in
+                    authURL.set(url)
+                    self.fireCallback(port: port, query: "code=OR-CODE")
+                },
+                onProgress: { _ in }
+            ),
+            client: client
+        )
+        // OpenRouter mints a permanent key — sentinel credentials shape.
+        #expect(creds.access == "sk-or-v1-minted")
+        #expect(creds.refresh == "")
+        #expect(creds.expires == .max)
+
+        // Authorize URL carries the callback + PKCE challenge.
+        let auth = try #require(authURL.get())
+        let comps = try #require(URLComponents(url: auth, resolvingAgainstBaseURL: false))
+        #expect(comps.host == "openrouter.ai")
+        #expect(comps.path == "/auth")
+        let query = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        #expect(query["callback_url"] == "http://localhost:\(port)/callback")
+        #expect(query["code_challenge"]?.isEmpty == false)
+        #expect(query["code_challenge_method"] == "S256")
+
+        // Exchange request: keys endpoint, JSON body with code + verifier.
+        #expect(client.recorded.count == 1)
+        let exchange = client.recorded[0]
+        #expect(exchange.url.absoluteString == "https://openrouter.ai/api/v1/auth/keys")
+        let body = try JSONSerialization.jsonObject(with: exchange.body ?? Data()) as? [String: Any]
+        #expect(body?["code"] as? String == "OR-CODE")
+        #expect((body?["code_verifier"] as? String)?.isEmpty == false)
+        #expect(body?["code_challenge_method"] as? String == "S256")
+    }
+
+    @Test("openrouter exchange response without a key is rejected")
+    func openRouterMissingKey() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((status: 200, body: #"{}"#))
+        let port: UInt16 = 53984
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginOpenRouter(
+                port: port,
+                callbacks: OAuthLogin.Callbacks(
+                    onAuthURL: { _ in self.fireCallback(port: port, query: "code=OR-CODE") },
+                    onProgress: { _ in }
+                ),
+                client: client
+            )
+        }
+    }
+
+    // MARK: - Z.AI
+
+    /// Echo the state from the authorize URL back through the callback so
+    /// the flow's state check passes.
+    private func fireZaiCallback(port: UInt16, authURL: URL, code: String) {
+        let comps = URLComponents(url: authURL, resolvingAgainstBaseURL: false)
+        let state = comps?.queryItems?.first { $0.name == "state" }?.value ?? ""
+        fireCallback(port: port, query: "code=\(code)&state=\(state)")
+    }
+
+    @Test("zai login exchanges the code and provisions a durable id.secret key")
+    func zaiLoginFlow() async throws {
+        let client = SequentialStubClient()
+        // 1. token exchange (envelope code 0)
+        client.queue.append((
+            status: 200,
+            body: #"{"code":0,"msg":"ok","data":{"zai":{"access_token":"oauth-tok"},"user":{"email":"e@x.ai","id":7}}}"#
+        ))
+        // 2. business login (envelope code 200)
+        client.queue.append((
+            status: 200,
+            body: #"{"code":200,"success":true,"data":{"access_token":"biz-tok"}}"#
+        ))
+        // 3. customer info → default org/project
+        client.queue.append((
+            status: 200,
+            body: #"{"code":200,"data":{"organizations":[{"organizationId":"org-1","isDefault":true,"projects":[{"projectId":"proj-1","isDefault":true}]}]}}"#
+        ))
+        // 4. api key list (empty → create)
+        client.queue.append((status: 200, body: #"{"code":200,"data":[]}"#))
+        // 5. create
+        client.queue.append((status: 200, body: #"{"code":200,"data":{"apiKey":"ak-123"}}"#))
+        // 6. copy → full secret
+        client.queue.append((status: 200, body: #"{"code":200,"data":{"secretKey":"sk-456"}}"#))
+
+        let port: UInt16 = 54549
+        let authURL = CapturedURL()
+        let creds = try await OAuthLogin.loginZai(
+            clientID: "test-client",
+            port: port,
+            callbacks: OAuthLogin.Callbacks(
+                onAuthURL: { url in
+                    authURL.set(url)
+                    self.fireZaiCallback(port: port, authURL: url, code: "ZAI-CODE")
+                },
+                onProgress: { _ in }
+            ),
+            client: client
+        )
+        #expect(creds.access == "ak-123.sk-456")
+        #expect(creds.refresh == "")
+        #expect(creds.expires == .max)
+
+        // Authorize URL: chat.z.ai authorize with client id + state, no PKCE.
+        let auth = try #require(authURL.get())
+        let comps = try #require(URLComponents(url: auth, resolvingAgainstBaseURL: false))
+        #expect(comps.host == "chat.z.ai")
+        let query = Dictionary(uniqueKeysWithValues: (comps.queryItems ?? []).map { ($0.name, $0.value ?? "") })
+        #expect(query["client_id"] == "test-client")
+        #expect(query["response_type"] == "code")
+        #expect(query["redirect_uri"] == "http://localhost:\(port)/callback")
+        #expect(query["state"]?.isEmpty == false)
+        #expect(query["code_challenge"] == nil)
+
+        // Request sequence: exchange → business login → customer → list →
+        // create → copy, with the biz bearer on the provisioning calls.
+        #expect(client.recorded.count == 6)
+        let exchange = client.recorded[0]
+        #expect(exchange.url.absoluteString == "https://zcode.z.ai/api/v1/oauth/token")
+        let exchangeBody = try JSONSerialization.jsonObject(with: exchange.body ?? Data()) as? [String: Any]
+        #expect(exchangeBody?["provider"] as? String == "zai")
+        #expect(exchangeBody?["code"] as? String == "ZAI-CODE")
+        #expect(exchangeBody?["redirect_uri"] as? String == "http://localhost:\(port)/callback")
+        #expect((exchangeBody?["state"] as? String)?.isEmpty == false)
+
+        let login = client.recorded[1]
+        #expect(login.url.absoluteString == "https://api.z.ai/api/auth/z/login")
+        let loginBody = try JSONSerialization.jsonObject(with: login.body ?? Data()) as? [String: Any]
+        #expect(loginBody?["token"] as? String == "oauth-tok")
+
+        let customer = client.recorded[2]
+        #expect(customer.url.absoluteString.hasSuffix("api/biz/customer/getCustomerInfo"))
+        #expect(customer.headers["authorization"] == "Bearer biz-tok")
+
+        let list = client.recorded[3]
+        #expect(list.method == "GET")
+        #expect(list.url.absoluteString.hasSuffix("organization/org-1/projects/proj-1/api_keys"))
+
+        let create = client.recorded[4]
+        #expect(create.method == "POST")
+        let createBody = try JSONSerialization.jsonObject(with: create.body ?? Data()) as? [String: Any]
+        #expect(createBody?["name"] as? String == "kwwk")
+
+        let copy = client.recorded[5]
+        #expect(copy.url.absoluteString.hasSuffix("api_keys/copy/ak-123"))
+    }
+
+    @Test("zai login reuses an existing kwwk-named key instead of creating one")
+    func zaiLoginReusesKey() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"code":0,"data":{"zai":{"access_token":"oauth-tok"}}}"#
+        ))
+        client.queue.append((
+            status: 200,
+            body: #"{"code":200,"data":{"access_token":"biz-tok"}}"#
+        ))
+        client.queue.append((
+            status: 200,
+            body: #"{"code":200,"data":{"organizations":[{"organizationId":"org-1","projects":[{"projectId":"proj-1"}]}]}}"#
+        ))
+        // List already carries the kwwk key (secret masked) — no create call.
+        client.queue.append((
+            status: 200,
+            body: #"{"code":200,"data":[{"name":"kwwk","apiKey":"ak-9"},{"name":"zcode-api-key","apiKey":"ak-other"}]}"#
+        ))
+        client.queue.append((status: 200, body: #"{"code":200,"data":{"secretKey":"sk-full"}}"#))
+
+        let port: UInt16 = 54550
+        let creds = try await OAuthLogin.loginZai(
+            clientID: "test-client",
+            port: port,
+            callbacks: OAuthLogin.Callbacks(
+                onAuthURL: { url in self.fireZaiCallback(port: port, authURL: url, code: "C") },
+                onProgress: { _ in }
+            ),
+            client: client
+        )
+        #expect(creds.access == "ak-9.sk-full")
+        #expect(client.recorded.count == 5)
+        #expect(client.recorded[4].url.absoluteString.hasSuffix("api_keys/copy/ak-9"))
+    }
+
+    @Test("zai envelope failure surfaces the server message")
+    func zaiEnvelopeFailure() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((status: 200, body: #"{"code":500,"msg":"boom"}"#))
+        let port: UInt16 = 54551
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginZai(
+                clientID: "test-client",
+                port: port,
+                callbacks: OAuthLogin.Callbacks(
+                    onAuthURL: { url in self.fireZaiCallback(port: port, authURL: url, code: "C") },
+                    onProgress: { _ in }
+                ),
+                client: client
+            )
+        }
+        #expect(client.recorded.count == 1)
+    }
+
+    @Test("zai callback with a mismatched state is rejected before any exchange")
+    func zaiStateMismatch() async throws {
+        let client = SequentialStubClient()
+        let port: UInt16 = 54552
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginZai(
+                clientID: "test-client",
+                port: port,
+                callbacks: OAuthLogin.Callbacks(
+                    onAuthURL: { _ in self.fireCallback(port: port, query: "code=C&state=WRONG") },
+                    onProgress: { _ in }
+                ),
+                client: client
+            )
+        }
+        #expect(client.recorded.isEmpty)
     }
 }
 

@@ -21,6 +21,12 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     private var continuation: CheckedContinuation<[String: String], Error>?
     private var resolved = false
     private var cancelled = false
+    // A callback can land between `start()` binding the port and
+    // `waitForCallback()` registering its continuation (fast redirects; the
+    // login flow hands out the URL before it awaits). Buffer that early
+    // result so the wait returns it instead of "already resolved".
+    private var pendingParams: [String: String]?
+    private var pendingError: OAuthError?
 
     public init(
         port: UInt16,
@@ -64,7 +70,9 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     }
 
     private func startAsync() async throws {
-        if lock.withLock({ channel != nil }) { return }
+        // Already listening, or already resolved (`stop()` ran after an early
+        // callback) — don't re-bind a port nobody will answer on.
+        if lock.withLock({ channel != nil || resolved }) { return }
 
         let ch = try await makeBootstrap().bind(host: "127.0.0.1", port: Int(port)).get()
         lock.withLock { channel = ch }
@@ -94,8 +102,18 @@ public final class OAuthCallbackServer: @unchecked Sendable {
             try await withCheckedThrowingContinuation { cont in
                 lock.lock()
                 if resolved {
+                    let params = pendingParams
+                    let error = pendingError
+                    pendingParams = nil
+                    pendingError = nil
                     lock.unlock()
-                    cont.resume(throwing: OAuthError.transport("callback server already resolved"))
+                    if let params {
+                        cont.resume(returning: params)
+                    } else if let error {
+                        cont.resume(throwing: error)
+                    } else {
+                        cont.resume(throwing: OAuthError.transport("callback server already resolved"))
+                    }
                     return
                 }
                 if cancelled {
@@ -143,6 +161,7 @@ public final class OAuthCallbackServer: @unchecked Sendable {
         resolved = true
         cont = continuation
         continuation = nil
+        if cont == nil { pendingParams = params }
         lock.unlock()
         cont?.resume(returning: params)
         stop()
@@ -155,6 +174,7 @@ public final class OAuthCallbackServer: @unchecked Sendable {
         resolved = true
         cont = continuation
         continuation = nil
+        if cont == nil { pendingError = error }
         lock.unlock()
         cont?.resume(throwing: error)
         stop()
