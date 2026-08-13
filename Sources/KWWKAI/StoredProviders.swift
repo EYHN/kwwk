@@ -557,7 +557,11 @@ private func registerCursor(
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text],
         contextWindow: catalog?.contextWindow ?? 200_000,
-        maxTokens: catalog?.maxTokens ?? 64_000
+        maxTokens: catalog?.maxTokens ?? 64_000,
+        compat: catalog?.compat,
+        // Without the catalog's map the agent wire never routes a thinking
+        // level to its `…-thinking` variant — the level silently no-ops.
+        thinkingLevelMap: catalog?.thinkingLevelMap
     )
     return ResolvedAuth(
         model: model,
