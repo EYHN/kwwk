@@ -181,6 +181,50 @@ struct MultiProviderAuthTests {
         }
     }
 
+    @Test("registerStored wires an xAI Grok login onto the bearer completions wire")
+    func registerStoredXaiGrok() async throws {
+        try await withSharedAPIRegistry {
+            await APIRegistry.shared.unregisterScope("xai")
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-xai-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            // Never-expiring credentials so registration skips the token refresh.
+            try await store.set(OAuthCredentials(
+                access: "xai-token", refresh: "xai-refresh", expires: .max
+            ), for: "xai")
+
+            let resolved = try await registerStored(
+                storeId: "xai", store: store, modelOverride: nil, context1m: false
+            )
+            #expect(resolved?.model.id == "grok-4.3")
+            #expect(resolved?.model.provider == "xai")
+            #expect(resolved?.model.api == "openai-completions")
+            #expect(resolved?.model.baseURL == "https://api.x.ai/v1")
+            let resolvedModel = try #require(resolved?.model)
+            #expect(resolvedModel.compat?.supportsDeveloperRole == false)
+            #expect(resolvedModel.compat?.supportsReasoningEffort == false)
+            #expect(resolvedModel.compat?.supportsStore == false)
+            #expect(resolved?.modelLabel == "grok-4.3 · xAI Grok")
+            // The OAuth resolver supplies a bearer token per request.
+            let auth = try await resolved?.authResolver?(resolvedModel, nil)
+            #expect(auth?.token == "xai-token")
+            let scoped = await APIRegistry.shared.provider(scope: "xai", api: "openai-completions")
+            #expect(scoped is OpenAICompletionsProvider)
+
+            // An uncatalogued override still routes through api.x.ai with the
+            // Grok request-shape quirks.
+            let custom = try await registerStored(
+                storeId: "xai", store: store,
+                modelOverride: "grok-9-experimental", context1m: false
+            )
+            #expect(custom?.model.id == "grok-9-experimental")
+            #expect(custom?.model.baseURL == "https://api.x.ai/v1")
+            #expect(custom?.model.compat?.supportsDeveloperRole == false)
+            await APIRegistry.shared.unregisterScope("xai")
+        }
+    }
+
     @Test("registerStored wires Z.AI global + China logins with catalog metadata")
     func registerStoredZai() async throws {
         try await withSharedAPIRegistry {

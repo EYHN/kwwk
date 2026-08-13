@@ -427,6 +427,123 @@ public enum OAuthLogin {
         throw OAuthError.transport("kimi device flow timed out")
     }
 
+    // MARK: - xAI Grok (device flow)
+    //
+    // xAI's subscription auth is an RFC 8628 device-authorization grant
+    // against `auth.x.ai`: POST `/oauth2/device/code` for a one-time user
+    // code, hand the verification URL to the browser, and poll
+    // `/oauth2/token` until the user approves. Same client id + scope as the
+    // official Grok CLI (and pi / oh-my-pi). The resulting Bearer token
+    // authenticates `api.x.ai` requests directly.
+
+    public static func loginXai(
+        clientID: String = XaiOAuth.clientID,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        let headers = [
+            "accept": "application/json",
+            "content-type": "application/x-www-form-urlencoded",
+        ]
+
+        callbacks.onProgress("requesting xAI device code…")
+        let (deviceResponse, deviceBody) = try await client.request(
+            url: XaiOAuth.deviceCodeURL,
+            method: "POST",
+            headers: headers,
+            body: Data(OAuth.urlEncodedForm([
+                "client_id": clientID,
+                "scope": XaiOAuth.scope,
+            ]).utf8)
+        )
+        if deviceResponse.statusCode >= 400 {
+            throw OAuthError.refreshFailed("xai device code \(deviceResponse.statusCode): \(String(data: deviceBody, encoding: .utf8) ?? "")")
+        }
+        guard let obj = try JSONSerialization.jsonObject(with: deviceBody) as? [String: Any],
+              let userCode = obj["user_code"] as? String,
+              let deviceCode = obj["device_code"] as? String,
+              let verifyURLString = (obj["verification_uri_complete"] as? String)
+                ?? (obj["verification_uri"] as? String),
+              let verifyURL = URL(string: verifyURLString),
+              // The verification URI is handed to the browser; refuse anything
+              // a malicious response could use to make `open` launch a
+              // non-https handler.
+              verifyURL.scheme == "https" else {
+            throw OAuthError.invalidResponse("xai device code response")
+        }
+        // RFC 8628 allows interval 0 (no minimum wait); reject only negative
+        // or malformed values.
+        var intervalSec = (obj["interval"] as? Int).flatMap { $0 >= 0 ? $0 : nil } ?? 5
+        let expiresInSec = (obj["expires_in"] as? Int) ?? 15 * 60
+
+        callbacks.onAuthURL(verifyURL)
+        callbacks.onProgress("enter code in your browser: \(userCode)")
+
+        // Poll for the token until the user approves (or the code expires).
+        // Transient HTTP failures with non-JSON bodies (gateway errors, …)
+        // are retried; only 3 consecutive ones abort the flow.
+        let deadline = Date().addingTimeInterval(TimeInterval(expiresInSec))
+        var consecutiveErrors = 0
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: UInt64(intervalSec) * 1_000_000_000)
+            let (pollResponse, pollBody) = try await client.request(
+                url: XaiOAuth.tokenURL,
+                method: "POST",
+                headers: headers,
+                body: Data(OAuth.urlEncodedForm([
+                    "client_id": clientID,
+                    "device_code": deviceCode,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                ]).utf8)
+            )
+            guard let polled = try? JSONSerialization.jsonObject(with: pollBody) as? [String: Any] else {
+                if pollResponse.statusCode >= 400 {
+                    consecutiveErrors += 1
+                    if consecutiveErrors >= 3 {
+                        throw OAuthError.refreshFailed("xai device flow: HTTP \(pollResponse.statusCode)")
+                    }
+                }
+                continue
+            }
+            consecutiveErrors = 0
+            if let err = polled["error"] as? String {
+                switch err {
+                case "authorization_pending":
+                    continue
+                case "slow_down":
+                    intervalSec += 5
+                    if let serverInterval = polled["interval"] as? Int, serverInterval > intervalSec {
+                        intervalSec = serverInterval
+                    }
+                    continue
+                case "expired_token":
+                    throw OAuthError.refreshFailed("xai device authorization expired")
+                case "access_denied", "authorization_denied":
+                    throw OAuthError.refreshFailed("xai device authorization denied")
+                default:
+                    let description = (polled["error_description"] as? String).map { ": \($0)" } ?? ""
+                    throw OAuthError.refreshFailed("xai device flow: \(err)\(description)")
+                }
+            }
+            if pollResponse.statusCode < 400, let access = polled["access_token"] as? String {
+                // `offline_access` is in the requested scope, so the initial
+                // grant must carry a refresh token — without one the login
+                // would silently die at first expiry.
+                guard let refresh = polled["refresh_token"] as? String, !refresh.isEmpty else {
+                    throw OAuthError.invalidResponse("xai token response missing refresh token")
+                }
+                let expiresIn = (polled["expires_in"] as? Int) ?? 3600
+                let now = Int64(Date().timeIntervalSince1970 * 1000)
+                return OAuthCredentials(
+                    access: access,
+                    refresh: refresh,
+                    expires: now + Int64(expiresIn) * 1000 - 5 * 60 * 1000
+                )
+            }
+        }
+        throw OAuthError.transport("xai device flow timed out")
+    }
+
     // MARK: - JSON helpers
 
     private static func postJSON(

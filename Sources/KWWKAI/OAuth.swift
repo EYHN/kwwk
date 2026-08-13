@@ -301,6 +301,7 @@ public actor OAuthManager {
             GitHubCopilotOAuthProvider(),
             CursorOAuthProvider(),
             KimiCodingOAuthProvider(),
+            XaiOAuthProvider(),
         ]
     }
 

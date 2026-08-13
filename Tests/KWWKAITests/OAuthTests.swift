@@ -279,6 +279,64 @@ struct KimiCodingOAuthTests {
     }
 }
 
+@Suite("OAuth refresh — xAI Grok")
+struct XaiOAuthTests {
+    @Test("form POST with grant_type=refresh_token to auth.x.ai")
+    func xaiRefresh() async throws {
+        let body = #"""
+        {"access_token":"xai-new","refresh_token":"xai-refresh-2","expires_in":3600}
+        """#
+        let client = StubResponseClient(body: Data(body.utf8))
+        let updated = try await XaiOAuthProvider().refresh(
+            OAuthCredentials(access: "old", refresh: "xai-refresh-1", expires: 0),
+            using: client
+        )
+        #expect(updated.access == "xai-new")
+        #expect(updated.refresh == "xai-refresh-2")
+        // Refreshed ~5 minutes before the hour-long expiry.
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        #expect(updated.expires > now + 50 * 60 * 1000)
+        #expect(updated.expires <= now + 60 * 60 * 1000)
+
+        let req = client.lastRequest!
+        #expect(req.method == "POST")
+        #expect(req.url.absoluteString == "https://auth.x.ai/oauth2/token")
+        let form = String(data: req.body ?? Data(), encoding: .utf8) ?? ""
+        #expect(form.contains("grant_type=refresh_token"))
+        #expect(form.contains("refresh_token=xai-refresh-1"))
+        #expect(form.contains("client_id=\(XaiOAuth.clientID)"))
+    }
+
+    @Test("keeps the old refresh token when the server omits a new one")
+    func xaiRefreshKeepsOldToken() async throws {
+        let body = #"{"access_token":"xai-new","expires_in":3600}"#
+        let client = StubResponseClient(body: Data(body.utf8))
+        let updated = try await XaiOAuthProvider().refresh(
+            OAuthCredentials(access: "old", refresh: "keep-me", expires: 0),
+            using: client
+        )
+        #expect(updated.refresh == "keep-me")
+    }
+
+    @Test("tolerates a token response without expires_in (defaults to 1h)")
+    func xaiRefreshDefaultsExpiry() async throws {
+        let body = #"{"access_token":"xai-new","refresh_token":"r2"}"#
+        let client = StubResponseClient(body: Data(body.utf8))
+        let updated = try await XaiOAuthProvider().refresh(
+            OAuthCredentials(access: "old", refresh: "r1", expires: 0),
+            using: client
+        )
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        #expect(updated.expires > now + 50 * 60 * 1000)
+        #expect(updated.expires <= now + 60 * 60 * 1000)
+    }
+
+    @Test("xai is a default OAuthManager provider")
+    func xaiInDefaultProviders() {
+        #expect(OAuthManager.defaultProviders().contains { $0.id == "xai" })
+    }
+}
+
 @Suite("OAuthManager integration")
 struct OAuthManagerTests {
     /// Provider that counts refresh calls so we can verify caching.

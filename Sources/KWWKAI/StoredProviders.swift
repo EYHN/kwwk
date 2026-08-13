@@ -281,6 +281,8 @@ public func registerStored(
         return await registerCursor(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "kimi-coding":
         return await registerKimiCoding(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+    case "xai":
+        return await registerXaiGrok(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "zai", "zai-coding-cn":
         return await registerZai(storeId: storeId, creds: creds, modelOverride: modelOverride)
     default:
@@ -616,6 +618,57 @@ private func registerKimiCoding(
         model: model,
         modelLabel: "\(modelId) · Kimi For Coding",
         authResolver: oauthResolver(manager: manager, providerId: "kimi-coding", scheme: .bearer)
+    )
+}
+
+// MARK: - xAI Grok (OAuth device flow)
+
+private func registerXaiGrok(
+    manager: OAuthManager,
+    creds: OAuthCredentials,
+    modelOverride: String? = nil,
+    primeToken: Bool = true
+) async -> ResolvedAuth {
+    // Prime the token only for the active provider; the resolver refreshes
+    // lazily on the first request for the others.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "xai")
+    }
+
+    // The subscription token authenticates the regular `api.x.ai` completions
+    // endpoint as a Bearer key; the resolver below supplies it per request.
+    await APIRegistry.shared.register(OpenAICompletionsProvider(), scope: "xai")
+
+    let modelId = modelOverride ?? "grok-4.3"
+    let catalog = ModelsCatalog.model(provider: "xai", id: modelId)
+    // Uncatalogued ids still need the request-shape quirks every bundled xai
+    // model pins (no developer role / reasoning_effort / store fields).
+    let fallbackCompat: ModelCompat = {
+        var c = ModelCompat()
+        c.supportsDeveloperRole = false
+        c.supportsReasoningEffort = false
+        c.supportsStore = false
+        return c
+    }()
+    let model = Model(
+        id: modelId,
+        name: catalog?.name ?? modelId,
+        api: "openai-completions",
+        provider: "xai",
+        baseURL: catalog?.baseURL ?? "https://api.x.ai/v1",
+        reasoning: catalog?.reasoning ?? true,
+        input: catalog?.input ?? [.text, .image],
+        cost: catalog?.cost ?? ModelCost(),
+        contextWindow: catalog?.contextWindow ?? 1_000_000,
+        maxTokens: catalog?.maxTokens ?? 30_000,
+        headers: catalog?.headers,
+        compat: catalog?.compat ?? fallbackCompat,
+        thinkingLevelMap: catalog?.thinkingLevelMap
+    )
+    return ResolvedAuth(
+        model: model,
+        modelLabel: "\(modelId) · xAI Grok",
+        authResolver: oauthResolver(manager: manager, providerId: "xai", scheme: .bearer)
     )
 }
 
