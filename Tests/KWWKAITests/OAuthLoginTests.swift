@@ -54,6 +54,22 @@ struct OAuthCallbackServerTests {
         #expect(params["state"] == "xyz")
     }
 
+    @Test("a callback landing before waitForCallback is buffered, not dropped")
+    func earlyCallbackBuffered() async throws {
+        // Regression: a GET arriving between the port bind and the
+        // continuation registration used to resolve into the void, leaving
+        // waitForCallback to throw "already resolved" (seen on Linux CI,
+        // where the test-driven callback outpaced the wait).
+        let port: UInt16 = 53985
+        let server = try OAuthCallbackServer(port: port)
+        try server.start()
+        // Complete the callback request fully before anyone waits.
+        let url = URL(string: "http://localhost:\(port)/callback?code=early")!
+        _ = try await URLSession.shared.data(from: url)
+        let params = try await server.waitForCallback()
+        #expect(params["code"] == "early")
+    }
+
     @Test("cancel() unblocks waitForCallback with a CancellationError")
     func cancelUnblocks() async throws {
         let server = try OAuthCallbackServer(port: 53981)
