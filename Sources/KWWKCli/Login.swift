@@ -50,6 +50,16 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "zai",
+        display: "Z.AI GLM Coding Plan (chat.z.ai sign-in)",
+        flow: .oauth
+    ),
+    LoginEntry(
+        id: "openrouter",
+        display: "OpenRouter (browser sign-in — mints an API key)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "anthropic-api-key",
         display: "Anthropic API key (api.anthropic.com)",
         flow: .apiKey(
@@ -142,22 +152,6 @@ let loginProviders: [LoginEntry] = [
                 ),
             ],
             extrasKeys: ["defaultModel"]
-        )
-    ),
-    LoginEntry(
-        id: "zai",
-        display: "Z.AI GLM Coding Plan (api.z.ai)",
-        flow: .apiKey(
-            fields: [
-                APIKeyFormField(
-                    key: "apiKey",
-                    label: "API key",
-                    hint: "from z.ai/manage-apikey/apikey-list",
-                    placeholder: "sk-…",
-                    required: true
-                ),
-            ],
-            extrasKeys: []
         )
     ),
     LoginEntry(
@@ -295,6 +289,10 @@ func runOAuthFlow(providerId: String) async throws {
             return try await OAuthLogin.loginKimiCoding(callbacks: callbacks)
         case "xai":
             return try await OAuthLogin.loginXai(callbacks: callbacks)
+        case "zai":
+            return try await OAuthLogin.loginZai(callbacks: callbacks)
+        case "openrouter":
+            return try await OAuthLogin.loginOpenRouter(callbacks: callbacks)
         default:
             throw LoginError.unknownProvider(providerId)
         }

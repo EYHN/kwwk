@@ -24,7 +24,7 @@ struct ProviderDirectoryTests {
         ("cursor", "cursor", "cursor", "Cursor", nil),
         ("kimi-coding", "kimi-coding", "kimi-coding", "Kimi For Coding", nil),
         ("xai", "xai", "xai", "xAI Grok", nil),
-        ("zai", "zai", "zai", "Z.AI Coding Plan", "Z.AI API key"),
+        ("zai", "zai", "zai", "Z.AI Coding Plan", nil),
         ("zai-coding-cn", "zai-coding-cn", "zai-coding-cn", "Z.AI Coding Plan (China)", "Z.AI API key (China)"),
     ]
 

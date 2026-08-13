@@ -448,6 +448,35 @@ public enum XaiOAuth {
     public static let tokenURL = URL(string: "https://auth.x.ai/oauth2/token")!
 }
 
+/// Constants for the OpenRouter PKCE callback login (mirrors pi's
+/// `openrouter.ts`). The code exchange mints a permanent API key, so there
+/// is no refresh provider — the key persists in the sentinel credentials
+/// shape the API-key form uses.
+public enum OpenRouterOAuth {
+    public static let authorizeURL = URL(string: "https://openrouter.ai/auth")!
+    public static let keysURL = URL(string: "https://openrouter.ai/api/v1/auth/keys")!
+    public static let callbackPort: UInt16 = 53693
+}
+
+/// Constants for the Z.AI GLM Coding Plan browser sign-in (mirrors
+/// oh-my-pi's `zai.ts`, which itself mirrors ZCode's desktop flow). The
+/// flow provisions a durable `id.secret` API key, so there is no refresh
+/// provider here either.
+public enum ZaiOAuth {
+    public static let clientID = "client_P8X5CMWmlaRO9gyO-KSqtg"
+    public static let authorizeURL = URL(string: "https://chat.z.ai/api/oauth/authorize")!
+    public static let tokenURL = URL(string: "https://zcode.z.ai/api/v1/oauth/token")!
+    public static let bizBaseURL = URL(string: "https://api.z.ai")!
+    /// Business-login endpoint: exchanges the OAuth access token for the biz
+    /// bearer the provisioning APIs require.
+    public static let businessLoginURL = URL(string: "https://api.z.ai/api/auth/z/login")!
+    /// Name of the provisioned key — kwwk-owned, so sign-in never mutates
+    /// ZCode's own `zcode-api-key` entry.
+    public static let keyName = "kwwk"
+    /// Fixed port matching the redirect URI ZCode's client id expects.
+    public static let callbackPort: UInt16 = 54548
+}
+
 // MARK: - Helpers
 
 enum OAuth {

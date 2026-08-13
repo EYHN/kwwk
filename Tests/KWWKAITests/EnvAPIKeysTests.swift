@@ -63,7 +63,9 @@ struct EnvAPIKeysTests {
         // Spot-check the breadth ported from pi env-api-keys.ts.
         for p in ["openrouter", "mistral", "deepseek", "groq", "xai", "together",
                   "fireworks", "cerebras", "moonshotai", "nvidia", "huggingface",
-                  "vercel-ai-gateway", "kimi-coding", "zai", "minimax"] {
+                  "vercel-ai-gateway", "kimi-coding", "zai", "minimax",
+                  "qwen-token-plan", "qwen-token-plan-cn",
+                  "qwen-token-plan-individual", "baseten"] {
             #expect(EnvAPIKeys.envVars[p] != nil, "missing env var mapping for \(p)")
         }
     }

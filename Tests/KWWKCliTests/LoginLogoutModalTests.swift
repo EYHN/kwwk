@@ -41,9 +41,13 @@ struct LoginLogoutModalTests {
         registerBuiltinSlashCommands(registry)
         await registry.find("login")?.handler(ctx, "")
 
-        // Move to the OpenRouter entry and confirm.
-        guard let index = loginProviders.firstIndex(where: { $0.id == "openrouter" }) else {
-            Issue.record("openrouter login entry missing")
+        // Move to the OpenRouter API-key entry (the OAuth sign-in entry for
+        // the same store id sits earlier in the list) and confirm.
+        guard let index = loginProviders.firstIndex(where: {
+            guard case .apiKey = $0.flow else { return false }
+            return $0.id == "openrouter"
+        }) else {
+            Issue.record("openrouter API-key login entry missing")
             return
         }
         for _ in 0..<index { ctx.modal.routeDown() }

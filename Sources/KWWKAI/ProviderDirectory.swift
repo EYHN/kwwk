@@ -132,7 +132,7 @@ public let providerDirectory: [ProviderDescriptor] = [
         scope: "zai",
         catalogKey: "zai",
         displayName: "Z.AI Coding Plan",
-        formTitle: "Z.AI API key"
+        formTitle: nil
     ),
     ProviderDescriptor(
         storeId: "zai-coding-cn",
