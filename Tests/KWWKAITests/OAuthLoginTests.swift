@@ -253,6 +253,111 @@ struct OAuthLoginShapeTests {
             )
         }
     }
+
+    @Test("xai device flow rides authorization_pending and returns both tokens")
+    func xaiDeviceFlowShape() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC-1234","verification_uri":"https://auth.x.ai/activate","verification_uri_complete":"https://auth.x.ai/activate?code=UC-1234","interval":0,"expires_in":900}"#
+        ))
+        client.queue.append((
+            status: 400,
+            body: #"{"error":"authorization_pending"}"#
+        ))
+        client.queue.append((
+            status: 200,
+            body: #"{"access_token":"xai-access","refresh_token":"xai-refresh","expires_in":3600}"#
+        ))
+
+        let authURL = CapturedURL()
+        let creds = try await OAuthLogin.loginXai(
+            clientID: "test-client",
+            callbacks: OAuthLogin.Callbacks(
+                onAuthURL: { authURL.set($0) },
+                onProgress: { _ in }
+            ),
+            client: client
+        )
+        #expect(creds.access == "xai-access")
+        #expect(creds.refresh == "xai-refresh")
+        // The complete verification URL (with the embedded code) is preferred.
+        #expect(authURL.get()?.absoluteString == "https://auth.x.ai/activate?code=UC-1234")
+
+        // First call: device authorization request with client id + scope.
+        let device = client.recorded[0]
+        #expect(device.url.absoluteString == "https://auth.x.ai/oauth2/device/code")
+        let deviceBody = String(data: device.body ?? Data(), encoding: .utf8) ?? ""
+        #expect(deviceBody.contains("client_id=test-client"))
+        #expect(deviceBody.contains("scope="))
+        #expect(deviceBody.contains("grok-cli%3Aaccess"))
+
+        // Polls carry device_code + the device-code grant; the pending
+        // response is retried rather than surfaced.
+        #expect(client.recorded.count == 3)
+        for poll in client.recorded[1...] {
+            #expect(poll.url.absoluteString == "https://auth.x.ai/oauth2/token")
+            let body = String(data: poll.body ?? Data(), encoding: .utf8) ?? ""
+            #expect(body.contains("device_code=DC"))
+            #expect(body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Adevice_code"))
+        }
+    }
+
+    @Test("xai device flow surfaces authorization_denied instead of polling forever")
+    func xaiDeviceFlowDenied() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://auth.x.ai/activate","interval":0,"expires_in":900}"#
+        ))
+        client.queue.append((
+            status: 400,
+            body: #"{"error":"authorization_denied"}"#
+        ))
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginXai(
+                clientID: "test-client",
+                callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+                client: client
+            )
+        }
+    }
+
+    @Test("xai token response without a refresh token is rejected")
+    func xaiDeviceFlowMissingRefresh() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://auth.x.ai/activate","interval":0,"expires_in":900}"#
+        ))
+        client.queue.append((
+            status: 200,
+            body: #"{"access_token":"xai-access","expires_in":3600}"#
+        ))
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginXai(
+                clientID: "test-client",
+                callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+                client: client
+            )
+        }
+    }
+
+    @Test("xai device flow rejects a non-https verification URI")
+    func xaiDeviceFlowInsecureVerifyURI() async throws {
+        let client = SequentialStubClient()
+        client.queue.append((
+            status: 200,
+            body: #"{"device_code":"DC","user_code":"UC","verification_uri":"javascript:alert(1)","interval":0,"expires_in":900}"#
+        ))
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginXai(
+                clientID: "test-client",
+                callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
+                client: client
+            )
+        }
+    }
 }
 
 /// Thread-safe URL capture for @Sendable callback assertions.

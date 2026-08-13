@@ -23,6 +23,7 @@ struct ProviderDirectoryTests {
         ("github-copilot", "github-copilot", "github-copilot", "GitHub Copilot", nil),
         ("cursor", "cursor", "cursor", "Cursor", nil),
         ("kimi-coding", "kimi-coding", "kimi-coding", "Kimi For Coding", nil),
+        ("xai", "xai", "xai", "xAI Grok", nil),
         ("zai", "zai", "zai", "Z.AI Coding Plan", "Z.AI API key"),
         ("zai-coding-cn", "zai-coding-cn", "zai-coding-cn", "Z.AI Coding Plan (China)", "Z.AI API key (China)"),
     ]

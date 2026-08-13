@@ -45,6 +45,11 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "xai",
+        display: "xAI Grok (SuperGrok / X Premium subscription)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "anthropic-api-key",
         display: "Anthropic API key (api.anthropic.com)",
         flow: .apiKey(
@@ -288,6 +293,8 @@ func runOAuthFlow(providerId: String) async throws {
             return try await OAuthLogin.loginCursor(callbacks: callbacks)
         case "kimi-coding":
             return try await OAuthLogin.loginKimiCoding(callbacks: callbacks)
+        case "xai":
+            return try await OAuthLogin.loginXai(callbacks: callbacks)
         default:
             throw LoginError.unknownProvider(providerId)
         }
