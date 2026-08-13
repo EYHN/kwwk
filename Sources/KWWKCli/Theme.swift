@@ -4,7 +4,7 @@ import Foundation
 /// Maintained by hand — no release tooling touches this file — so bump it
 /// alongside each tag. (`--help` does not print a version.)
 enum KWWKBuild {
-    static let version = "0.1.43"
+    static let version = "0.1.44"
 }
 
 /// Truecolor palette + text styling for the redesigned TUI chrome. The
