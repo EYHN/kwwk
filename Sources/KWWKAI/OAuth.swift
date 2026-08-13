@@ -108,6 +108,26 @@ public enum OAuthError: Error, LocalizedError {
     }
 }
 
+/// A credential source that failed to answer for `providerId`. The agent
+/// loop never retries this one: the source is an external authority (a
+/// backend minting tokens, a keychain daemon), and its refusal means the
+/// user must act — a deleted login, a parked refresh chain — not that a
+/// second attempt would fare better. The underlying error's own text is
+/// what surfaces, so the authority's copy reaches the user unchanged.
+public struct OAuthCredentialSourceError: Error, LocalizedError {
+    public let providerId: String
+    public let underlying: any Error
+
+    public init(providerId: String, underlying: any Error) {
+        self.providerId = providerId
+        self.underlying = underlying
+    }
+
+    public var errorDescription: String? {
+        (underlying as? LocalizedError)?.errorDescription ?? String(describing: underlying)
+    }
+}
+
 // MARK: - Credential source
 
 /// Where an `OAuthManager` reads credentials from. `OAuthStore` is the
@@ -317,9 +337,20 @@ public actor OAuthManager {
     }
 
     public func credentials(for providerId: String) async throws -> OAuthCredentials? {
+        let served: OAuthCredentials?
+        do {
+            served = try await source.credentials(for: providerId)
+        } catch let error as OAuthCredentialSourceError {
+            throw error
+        } catch {
+            // The source's refusal cannot be retried away (see
+            // `OAuthCredentialSourceError`). Wrapped here so every read
+            // path — apiKey, priming, registration — reports it uniformly.
+            throw OAuthCredentialSourceError(providerId: providerId, underlying: error)
+        }
         // A held rotation stands in for exactly the entry it rotated; any
         // other answer from the source supersedes it (see `reconciled`).
-        reconciled(try await source.credentials(for: providerId), for: providerId)
+        return reconciled(served, for: providerId)
     }
 
     /// Get a valid api-key for `providerId`, refreshing if the stored token

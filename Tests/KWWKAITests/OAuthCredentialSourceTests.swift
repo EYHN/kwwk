@@ -51,6 +51,34 @@ struct OAuthCredentialSourceTests {
         )
     }
 
+    /// Stands in for an authority that refuses to answer — a backend whose
+    /// stored login was deleted or parked.
+    struct RefusingSource: OAuthCredentialSource {
+        struct Refusal: LocalizedError {
+            var errorDescription: String? {
+                "This Agent is set to an 'x' model, but the Team has not connected an x login."
+            }
+        }
+
+        func providerIds() async -> [String] { ["x"] }
+        func credentials(for providerId: String) async throws -> OAuthCredentials? {
+            throw Refusal()
+        }
+    }
+
+    @Test("a source that throws surfaces as a credential-source error, message intact")
+    func sourceErrorsAreWrapped() async throws {
+        let provider = RefreshCountingProvider(id: "x")
+        let manager = OAuthManager(source: RefusingSource(), providers: [provider])
+
+        let thrown = await #expect(throws: OAuthCredentialSourceError.self) {
+            _ = try await manager.apiKey(for: "x")
+        }
+        #expect(thrown?.providerId == "x")
+        // The authority's own copy is what the user must see.
+        #expect(thrown?.errorDescription?.contains("has not connected") == true)
+    }
+
     @Test("a fresh token from the source is served without refreshing")
     func servesSourceToken() async throws {
         let source = StubSource(["x": fresh("from-authority")])

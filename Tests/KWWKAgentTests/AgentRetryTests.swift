@@ -146,6 +146,46 @@ struct AgentRetryTests {
             Issue.record("expected assistant error after exhausted retries")
         }
     }
+
+    @Test("a failed credential source ends the run at once, not after the retry budget")
+    func credentialSourceErrorFailsFast() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+        registration.setResponses([.message(fauxAssistantMessage("never reached"))])
+
+        // The message alone would sniff as retryable ("connected…"), which
+        // is exactly the trap: the error's type must win over its text.
+        struct Refusal: LocalizedError {
+            var errorDescription: String? {
+                "This Agent is set to an 'openai-codex' model, but the Team has not connected an openai-codex login."
+            }
+        }
+
+        let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
+        agent.retryBaseDelayMs = 10
+        agent.authResolver = { _, _ in
+            throw OAuthCredentialSourceError(providerId: "openai-codex", underlying: Refusal())
+        }
+
+        let recorder = RetryEventRecorder()
+        _ = agent.subscribe { event, _ in
+            if case .streamRetry(let attempt, let delayMs, let reason) = event {
+                await recorder.record(attempt: attempt, delayMs: delayMs, reason: reason)
+            }
+        }
+
+        try await agent.prompt("hi")
+
+        #expect(await recorder.snapshot().isEmpty)
+        // The run ends in the error state with the authority's copy intact —
+        // this is what the host renders as the agent's failure status.
+        if case .assistant(let msg) = agent.state.messages.last {
+            #expect(msg.stopReason == .error)
+            #expect(msg.errorMessage?.contains("openai-codex") == true)
+        } else {
+            Issue.record("expected the credential failure to surface immediately")
+        }
+    }
 }
 
 @Suite("Retry error classification")

@@ -937,6 +937,16 @@ public enum AgentLoop {
                         emittedStart: emittedStart
                     )
                 }
+                // A failed credential source is the user's to fix — a
+                // deleted or parked login. Retrying cannot change its
+                // answer, and the copy such errors carry ("connect your …
+                // login") reads like a network failure to the string
+                // classifier below.
+                if error is OAuthCredentialSourceError {
+                    let discarded = cursorResults.drain()
+                    turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
+                    throw error
+                }
                 if isRetryableError(reason), attemptIndex < maxRetries - 1 {
                     let discarded = cursorResults.drain()
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
