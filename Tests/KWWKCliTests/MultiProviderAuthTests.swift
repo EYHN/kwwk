@@ -129,6 +129,37 @@ struct MultiProviderAuthTests {
         }
     }
 
+    // MARK: - Cursor
+
+    @Test("registerStored carries Cursor catalog metadata, including the thinking routing map")
+    func registerStoredCursorThinkingMap() async throws {
+        try await withSharedAPIRegistry {
+            await APIRegistry.shared.unregisterScope("cursor")
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-cursor-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            // Never-expiring credentials so registration skips the token refresh.
+            try await store.set(OAuthCredentials(
+                access: "cursor-token", refresh: "cursor-key", expires: .max
+            ), for: "cursor")
+
+            let resolved = try await registerStored(
+                storeId: "cursor", store: store,
+                modelOverride: "claude-4.6-opus-high", context1m: false
+            )
+            let model = try #require(resolved?.model)
+            #expect(model.id == "claude-4.6-opus-high")
+            #expect(model.api == "cursor-agent")
+            #expect(model.provider == "cursor")
+            // The catalog's thinking map must survive registration — it is
+            // the only thing that routes a thinking level to the
+            // `…-thinking` wire variant.
+            #expect(model.thinkingLevelMap?["high"] == "claude-4.6-opus-high-thinking")
+            #expect(model.thinkingLevelMap?["off"] == "claude-4.6-opus-high")
+        }
+    }
+
     // MARK: - Kimi For Coding + Z.AI Coding Plan (first-class providers)
 
     @Test("registerStored wires a Kimi For Coding login onto the bearer anthropic wire")
