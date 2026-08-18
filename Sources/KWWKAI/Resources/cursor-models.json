@@ -35,7 +35,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 4",
+    "name" : "Claude Sonnet 4",
     "provider" : "cursor",
     "reasoning" : true,
     "thinkingLevelMap" : {
@@ -142,7 +142,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.6 1M Max",
+    "name" : "Claude Opus 4.6 1M Max",
     "provider" : "cursor",
     "reasoning" : true,
     "thinkingLevelMap" : {
@@ -195,7 +195,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M (NO ZDR)",
+    "name" : "Claude Fable 5 1M (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -215,7 +215,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Low (NO ZDR)",
+    "name" : "Claude Fable 5 1M Low (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -235,7 +235,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Max (NO ZDR)",
+    "name" : "Claude Fable 5 1M Max (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -255,7 +255,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Medium (NO ZDR)",
+    "name" : "Claude Fable 5 1M Medium (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -275,7 +275,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Thinking (NO ZDR)",
+    "name" : "Claude Fable 5 1M Thinking (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -295,7 +295,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Low Thinking (NO ZDR)",
+    "name" : "Claude Fable 5 1M Low Thinking (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -315,7 +315,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Max Thinking (NO ZDR)",
+    "name" : "Claude Fable 5 1M Max Thinking (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -335,7 +335,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Medium Thinking (NO ZDR)",
+    "name" : "Claude Fable 5 1M Medium Thinking (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -355,7 +355,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Extra High Thinking (NO ZDR)",
+    "name" : "Claude Fable 5 1M Extra High Thinking (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -375,7 +375,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Fable 5 1M Extra High (NO ZDR)",
+    "name" : "Claude Fable 5 1M Extra High (NO ZDR)",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -395,7 +395,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M High",
+    "name" : "Claude Opus 4.7 1M High",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -415,7 +415,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M High Fast",
+    "name" : "Claude Opus 4.7 1M High Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -435,7 +435,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Low",
+    "name" : "Claude Opus 4.7 1M Low",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -455,7 +455,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Low Fast",
+    "name" : "Claude Opus 4.7 1M Low Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -475,7 +475,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Max",
+    "name" : "Claude Opus 4.7 1M Max",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -495,7 +495,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Max Fast",
+    "name" : "Claude Opus 4.7 1M Max Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -515,7 +515,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Medium",
+    "name" : "Claude Opus 4.7 1M Medium",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -535,7 +535,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Medium Fast",
+    "name" : "Claude Opus 4.7 1M Medium Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -555,7 +555,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M High Thinking",
+    "name" : "Claude Opus 4.7 1M High Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -575,7 +575,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M High Thinking Fast",
+    "name" : "Claude Opus 4.7 1M High Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -595,7 +595,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Low Thinking",
+    "name" : "Claude Opus 4.7 1M Low Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -615,7 +615,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Low Thinking Fast",
+    "name" : "Claude Opus 4.7 1M Low Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -635,7 +635,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Max Thinking",
+    "name" : "Claude Opus 4.7 1M Max Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -655,7 +655,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Max Thinking Fast",
+    "name" : "Claude Opus 4.7 1M Max Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -675,7 +675,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Medium Thinking",
+    "name" : "Claude Opus 4.7 1M Medium Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -695,7 +695,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Medium Thinking Fast",
+    "name" : "Claude Opus 4.7 1M Medium Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -715,7 +715,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Thinking",
+    "name" : "Claude Opus 4.7 1M Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -735,7 +735,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Thinking Fast",
+    "name" : "Claude Opus 4.7 1M Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -755,7 +755,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M",
+    "name" : "Claude Opus 4.7 1M",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -775,7 +775,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.7 1M Fast",
+    "name" : "Claude Opus 4.7 1M Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -795,7 +795,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M",
+    "name" : "Claude Opus 4.8 1M",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -815,7 +815,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Fast",
+    "name" : "Claude Opus 4.8 1M Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -835,7 +835,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Low",
+    "name" : "Claude Opus 4.8 1M Low",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -855,7 +855,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Low Fast",
+    "name" : "Claude Opus 4.8 1M Low Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -875,7 +875,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Max",
+    "name" : "Claude Opus 4.8 1M Max",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -895,7 +895,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Max Fast",
+    "name" : "Claude Opus 4.8 1M Max Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -915,7 +915,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Medium",
+    "name" : "Claude Opus 4.8 1M Medium",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -935,7 +935,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Medium Fast",
+    "name" : "Claude Opus 4.8 1M Medium Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -955,7 +955,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Thinking",
+    "name" : "Claude Opus 4.8 1M Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -975,7 +975,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Thinking Fast",
+    "name" : "Claude Opus 4.8 1M Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -995,7 +995,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Low Thinking",
+    "name" : "Claude Opus 4.8 1M Low Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1015,7 +1015,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Low Thinking Fast",
+    "name" : "Claude Opus 4.8 1M Low Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1035,7 +1035,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Max Thinking",
+    "name" : "Claude Opus 4.8 1M Max Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1055,7 +1055,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Max Thinking Fast",
+    "name" : "Claude Opus 4.8 1M Max Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1075,7 +1075,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Medium Thinking",
+    "name" : "Claude Opus 4.8 1M Medium Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1095,7 +1095,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Medium Thinking Fast",
+    "name" : "Claude Opus 4.8 1M Medium Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1115,7 +1115,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Extra High Thinking",
+    "name" : "Claude Opus 4.8 1M Extra High Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1135,7 +1135,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Extra High Thinking Fast",
+    "name" : "Claude Opus 4.8 1M Extra High Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1155,7 +1155,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Extra High",
+    "name" : "Claude Opus 4.8 1M Extra High",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1175,7 +1175,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 4.8 1M Extra High Fast",
+    "name" : "Claude Opus 4.8 1M Extra High Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1195,7 +1195,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M",
+    "name" : "Claude Opus 5 1M",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1215,7 +1215,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Fast",
+    "name" : "Claude Opus 5 1M Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1235,7 +1235,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Low",
+    "name" : "Claude Opus 5 1M Low",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1255,7 +1255,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Low Fast",
+    "name" : "Claude Opus 5 1M Low Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1275,7 +1275,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Medium",
+    "name" : "Claude Opus 5 1M Medium",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1295,7 +1295,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Medium Fast",
+    "name" : "Claude Opus 5 1M Medium Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1315,7 +1315,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Thinking",
+    "name" : "Claude Opus 5 1M Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1335,7 +1335,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Thinking Fast",
+    "name" : "Claude Opus 5 1M Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1355,7 +1355,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Low Thinking",
+    "name" : "Claude Opus 5 1M Low Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1375,7 +1375,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Low Thinking Fast",
+    "name" : "Claude Opus 5 1M Low Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1395,7 +1395,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Max Thinking",
+    "name" : "Claude Opus 5 1M Max Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1415,7 +1415,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Max Thinking Fast",
+    "name" : "Claude Opus 5 1M Max Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1435,7 +1435,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Medium Thinking",
+    "name" : "Claude Opus 5 1M Medium Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1455,7 +1455,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Medium Thinking Fast",
+    "name" : "Claude Opus 5 1M Medium Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1475,7 +1475,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Extra High Thinking",
+    "name" : "Claude Opus 5 1M Extra High Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1495,7 +1495,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Opus 5 1M Extra High Thinking Fast",
+    "name" : "Claude Opus 5 1M Extra High Thinking Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1515,7 +1515,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M",
+    "name" : "Claude Sonnet 5 1M",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1535,7 +1535,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Low",
+    "name" : "Claude Sonnet 5 1M Low",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1555,7 +1555,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Max",
+    "name" : "Claude Sonnet 5 1M Max",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1575,7 +1575,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Medium",
+    "name" : "Claude Sonnet 5 1M Medium",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1595,7 +1595,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Thinking",
+    "name" : "Claude Sonnet 5 1M Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1615,7 +1615,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Low Thinking",
+    "name" : "Claude Sonnet 5 1M Low Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1635,7 +1635,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Max Thinking",
+    "name" : "Claude Sonnet 5 1M Max Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1655,7 +1655,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Medium Thinking",
+    "name" : "Claude Sonnet 5 1M Medium Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1675,7 +1675,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Extra High Thinking",
+    "name" : "Claude Sonnet 5 1M Extra High Thinking",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1695,7 +1695,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Sonnet 5 1M Extra High",
+    "name" : "Claude Sonnet 5 1M Extra High",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2146,6 +2146,66 @@
     ],
     "maxTokens" : 64000,
     "name" : "Gemini 3.6 Flash Minimal",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gemini-3.7-flash-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Gemini 3.7 Flash",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gemini-3.7-flash-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Gemini 3.7 Flash Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "gemini-3.7-flash-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Gemini 3.7 Flash Medium",
     "provider" : "cursor",
     "reasoning" : false
   },

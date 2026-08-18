@@ -233,9 +233,10 @@ struct MultiProviderAuthTests {
             #expect(resolved?.model.api == "openai-completions")
             #expect(resolved?.model.baseURL == "https://api.x.ai/v1")
             let resolvedModel = try #require(resolved?.model)
-            #expect(resolvedModel.compat?.supportsDeveloperRole == false)
-            #expect(resolvedModel.compat?.supportsReasoningEffort == false)
-            #expect(resolvedModel.compat?.supportsStore == false)
+            // pi-mono now catalogs Grok on the Responses wire. The stored
+            // subscription still uses completions, whose provider detects the
+            // Grok request-shape defaults when these fields are omitted.
+            #expect(resolvedModel.compat?.supportsLongCacheRetention == false)
             #expect(resolved?.modelLabel == "grok-4.3 · xAI Grok")
             // The OAuth resolver supplies a bearer token per request.
             let auth = try await resolved?.authResolver?(resolvedModel, nil)
