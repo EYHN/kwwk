@@ -133,8 +133,23 @@ struct MaxTaskTimeoutTests {
             bashEnvironment: testBashEnvironment,
             maxTaskTimeoutSeconds: 45
         )
-        #expect(capped.description.contains("more than 45s"))
+        #expect(capped.description.contains("longer than 45s"))
         #expect(capped.description.contains("moved to the background automatically"))
+        guard case .object(let schema) = capped.parameters,
+              case .object(let props) = schema["properties"] ?? .null,
+              case .object(let timeout) = props["timeout"] ?? .null else {
+            Issue.record("expected agent timeout schema")
+            return
+        }
+        #expect(timeout["maximum"] == .int(45))
+        if case .string(let text) = timeout["description"] ?? .null {
+            #expect(text.contains("Default 45, max 45"))
+        } else {
+            Issue.record("expected timeout description")
+        }
+
+        // Without a cap the limits' own foreground bounds stand (bash parity:
+        // default 120, max 600).
         let uncapped = createAgentTool(
             cwd: outputDir.path,
             subagents: [slowSubagent()],
@@ -142,7 +157,113 @@ struct MaxTaskTimeoutTests {
             parentTools: .readOnly,
             bashEnvironment: testBashEnvironment
         )
-        #expect(!uncapped.description.contains("more than"))
+        #expect(uncapped.description.contains("at most 600s"))
+        guard case .object(let schema2) = uncapped.parameters,
+              case .object(let props2) = schema2["properties"] ?? .null,
+              case .object(let timeout2) = props2["timeout"] ?? .null else {
+            Issue.record("expected agent timeout schema")
+            return
+        }
+        #expect(timeout2["maximum"] == .int(600))
+        if case .string(let text) = timeout2["description"] ?? .null {
+            #expect(text.contains("Default 120, max 600"))
+        } else {
+            Issue.record("expected timeout description")
+        }
+    }
+
+    @Test("agent: the model's own `timeout` is the foreground wait, and the cap bounds it")
+    func agentModelTimeoutDrivesTheFlip() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let releaseFile = outputDir.appendingPathComponent("release-child")
+        faux.setResponses([
+            .factory { _, _, _, _ in
+                while !FileManager.default.fileExists(atPath: releaseFile.path) {
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                }
+                return yieldMessage("late answer")
+            },
+        ])
+        let manager = BackgroundTaskManager(outputDir: outputDir)
+        // No runtime cap: a 1s `timeout` from the model flips at 1s.
+        let tool = createAgentTool(
+            cwd: outputDir.path,
+            subagents: [slowSubagent()],
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            backgroundManager: manager,
+            sessionId: "parent-timeout",
+            bashEnvironment: testBashEnvironment
+        )
+        let started = Date()
+        let result = try await tool.execute(
+            "call-timeout",
+            .object([
+                "description": .string("slow child"),
+                "prompt": .string("take your time"),
+                "subagent_type": .string("slow"),
+                "timeout": .int(1),
+            ]),
+            nil, nil
+        )
+        #expect(Date().timeIntervalSince(started) < 10)
+        #expect(detail(result, "status") == .string("auto_backgrounded"))
+        #expect(detail(result, "softTimeoutSeconds") == .int(1))
+        FileManager.default.createFile(atPath: releaseFile.path, contents: Data())
+        guard case .string(let taskId) = detail(result, "task_id") ?? .null else {
+            Issue.record("expected task_id")
+            return
+        }
+        #expect(await awaitUntil(10_000) {
+            await manager.get(taskId)?.status == .completed
+        })
+
+        // With a 1s cap, a `timeout` of 300 is lowered to 1, not rejected.
+        try? FileManager.default.removeItem(at: releaseFile)
+        faux.setResponses([
+            .factory { _, _, _, _ in
+                while !FileManager.default.fileExists(atPath: releaseFile.path) {
+                    try await Task.sleep(nanoseconds: 50_000_000)
+                }
+                return yieldMessage("late answer 2")
+            },
+        ])
+        let capped = createAgentTool(
+            cwd: outputDir.path,
+            subagents: [slowSubagent()],
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            backgroundManager: manager,
+            sessionId: "parent-timeout-capped",
+            bashEnvironment: testBashEnvironment,
+            maxTaskTimeoutSeconds: 1
+        )
+        let started2 = Date()
+        let result2 = try await capped.execute(
+            "call-timeout-capped",
+            .object([
+                "description": .string("slow child"),
+                "prompt": .string("take your time"),
+                "subagent_type": .string("slow"),
+                "timeout": .int(300),
+                "run_in_background": .bool(false),
+            ]),
+            nil, nil
+        )
+        #expect(Date().timeIntervalSince(started2) < 10)
+        #expect(detail(result2, "status") == .string("auto_backgrounded"))
+        #expect(detail(result2, "softTimeoutSeconds") == .int(1))
+        FileManager.default.createFile(atPath: releaseFile.path, contents: Data())
+        guard case .string(let taskId2) = detail(result2, "task_id") ?? .null else {
+            Issue.record("expected task_id")
+            return
+        }
+        #expect(await awaitUntil(10_000) {
+            await manager.get(taskId2)?.status == .completed
+        })
     }
 
     @Test("agent: a child that finishes inside the cap returns a normal foreground result")
@@ -222,7 +343,7 @@ struct MaxTaskTimeoutTests {
         )
         #expect(Date().timeIntervalSince(started) < 10)
         #expect(detail(result, "status") == .string("auto_backgrounded"))
-        #expect(detail(result, "wait_cap_seconds") == .int(1))
+        #expect(detail(result, "softTimeoutSeconds") == .int(1))
         #expect(detail(result, "subagent_type") == .string("slow"))
         #expect(text(of: result).contains("moved to the background"))
         guard case .string(let taskId) = detail(result, "task_id") ?? .null else {

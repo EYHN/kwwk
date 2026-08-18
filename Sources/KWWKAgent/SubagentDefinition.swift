@@ -65,20 +65,48 @@ public struct SubagentLimits: Sendable, Equatable {
     public var maxConcurrentMutating: Int
     public var maxTotal: Int
     public var maxTurns: Int?
+    /// Optional hard ceiling on a child's own runtime, foreground or
+    /// background: a child still running at this point is cancelled and
+    /// fails with `failure_kind=timeout`. `nil` (the default) leaves a child
+    /// unbounded except for the background manager's last-resort watchdog —
+    /// how long a caller *waits* for it is `foregroundTimeoutSeconds`, not
+    /// this.
     public var timeoutSeconds: Int?
+    /// Default foreground wait for one `agent` call (seconds) — the model's
+    /// `timeout` when it passes none. Mirrors bash's soft timeout: with a
+    /// background manager the child moves to the background at this point;
+    /// without one it is cancelled as a timeout.
+    public var foregroundTimeoutSeconds: Int
+    /// Upper bound on the model's `timeout`; a larger value is lowered, not
+    /// rejected. This is the longest any one `agent` call can keep the
+    /// caller waiting.
+    public var maxForegroundTimeoutSeconds: Int
 
     public init(
         maxConcurrent: Int = 4,
         maxConcurrentMutating: Int = 1,
         maxTotal: Int = 64,
         maxTurns: Int? = 16,
-        timeoutSeconds: Int? = 600
+        timeoutSeconds: Int? = nil,
+        foregroundTimeoutSeconds: Int = 120,
+        maxForegroundTimeoutSeconds: Int = 600
     ) {
         self.maxConcurrent = max(1, maxConcurrent)
         self.maxConcurrentMutating = max(1, min(maxConcurrentMutating, self.maxConcurrent))
         self.maxTotal = max(1, maxTotal)
         self.maxTurns = maxTurns.map { max(1, $0) }
         self.timeoutSeconds = timeoutSeconds.map { max(1, $0) }
+        self.maxForegroundTimeoutSeconds = max(1, maxForegroundTimeoutSeconds)
+        self.foregroundTimeoutSeconds = min(max(1, foregroundTimeoutSeconds), self.maxForegroundTimeoutSeconds)
+    }
+
+    /// The same limits with every foreground wait bounded by `cap`.
+    func cappingForegroundWait(at cap: Int?) -> SubagentLimits {
+        guard let cap else { return self }
+        var copy = self
+        copy.maxForegroundTimeoutSeconds = min(maxForegroundTimeoutSeconds, max(1, cap))
+        copy.foregroundTimeoutSeconds = min(foregroundTimeoutSeconds, copy.maxForegroundTimeoutSeconds)
+        return copy
     }
 }
 

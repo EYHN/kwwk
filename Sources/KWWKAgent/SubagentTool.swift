@@ -351,7 +351,14 @@ internal func _createAgentTool(
     bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let registry = SubagentRegistry(subagents)
+    // The runtime wait cap folds into the foreground-wait bounds, exactly as
+    // it folds into bash's soft timeout: no call waits longer than the cap,
+    // whatever `timeout` the model asks for.
+    let limits = limits.cappingForegroundWait(at: maxTaskTimeoutSeconds)
     let limiter = SubagentLimiter(limits: limits)
+    let waitNote = backgroundManager != nil
+        ? "At that point the subagent moves to the background (it keeps running; you are notified on completion and get a task id)."
+        : "At that point the subagent is cancelled and the call fails with a timeout."
     let parameters: JSONValue = .object([
         "type": .string("object"),
         "properties": .object([
@@ -372,6 +379,12 @@ internal func _createAgentTool(
                 "type": .string("string"),
                 "description": .string("Optional model id override. Omit to use the subagent definition's model or inherit the parent model."),
             ]),
+            "timeout": .object([
+                "type": .string("number"),
+                "description": .string("Seconds to wait for the subagent in the foreground before this call returns. \(waitNote) Default \(limits.foregroundTimeoutSeconds), max \(limits.maxForegroundTimeoutSeconds) (a larger value is lowered to \(limits.maxForegroundTimeoutSeconds), not rejected)."),
+                "minimum": .int(1),
+                "maximum": .int(limits.maxForegroundTimeoutSeconds),
+            ]),
             "run_in_background": .object([
                 "type": .string("boolean"),
                 "description": .string("Run this independent subagent in the background. You will be notified when it completes."),
@@ -391,13 +404,13 @@ internal func _createAgentTool(
         description: buildAgentToolDescription(
             registry: registry,
             backgroundTasksAvailable: backgroundManager != nil,
-            foregroundWaitCapSeconds: maxTaskTimeoutSeconds
+            maxForegroundTimeoutSeconds: limits.maxForegroundTimeoutSeconds
         ),
         parameters: parameters,
         execute: { toolCallId, args, cancellation, onUpdate in
             try cancellation?.throwIfCancelled()
             try registry.validate()
-            let input = try parseAgentToolInput(args)
+            let input = try parseAgentToolInput(args, limits: limits)
             let requestedType = input.subagentType
             guard let definition = registry.definition(named: requestedType) else {
                 throw CodingToolError.invalidArgument(
@@ -519,32 +532,30 @@ internal func _createAgentTool(
                 ],
                 uiDisplay: ["agent \(definition.name) starting · 0 tokens"]
             ))
-            if let waitSeconds = maxTaskTimeoutSeconds {
-                if let backgroundManager {
-                    // The runtime caps foreground waits: run the child in the
-                    // foreground for `waitSeconds`, then hand a still-running
-                    // child to the background manager instead of blocking.
-                    return try await runSubagentForegroundWithFlip(
-                        runner: runner,
-                        definition: definition,
-                        input: input,
-                        childSessionId: childSessionId,
-                        toolCallId: toolCallId,
-                        waitSeconds: waitSeconds,
-                        manager: backgroundManager,
-                        sessionId: sessionId,
-                        historyStore: historyStore,
-                        cancellation: cancellation,
-                        onUpdate: onUpdate
-                    )
-                }
-                // No manager to hand the child to: the cap becomes the child's
-                // deadline, and overrunning it fails as an ordinary timeout.
-                runner.limits.timeoutSeconds = min(
-                    runner.limits.timeoutSeconds ?? waitSeconds,
-                    waitSeconds
+            if let backgroundManager {
+                // Same contract as bash: wait `timeout` in the foreground, then
+                // hand a still-running child to the background manager
+                // instead of blocking or killing it.
+                return try await runSubagentForegroundWithFlip(
+                    runner: runner,
+                    definition: definition,
+                    input: input,
+                    childSessionId: childSessionId,
+                    toolCallId: toolCallId,
+                    waitSeconds: input.timeoutSeconds,
+                    manager: backgroundManager,
+                    sessionId: sessionId,
+                    historyStore: historyStore,
+                    cancellation: cancellation,
+                    onUpdate: onUpdate
                 )
             }
+            // No manager to hand the child to: the wait becomes the child's
+            // deadline, and overrunning it fails as an ordinary timeout.
+            runner.limits.timeoutSeconds = min(
+                runner.limits.timeoutSeconds ?? input.timeoutSeconds,
+                input.timeoutSeconds
+            )
             let result: SubagentResult
             do {
                 result = try await runner.run(
@@ -618,13 +629,14 @@ private func completedSubagentToolResult(
     )
 }
 
-// MARK: - Foreground with auto-flip-to-background at the runtime wait cap
+// MARK: - Foreground with auto-flip-to-background at the foreground timeout
 
-/// Run the child in the foreground for at most `waitSeconds`. A child that is
-/// still running at the deadline is adopted by the background manager — it
-/// keeps running with its transcript intact, its progress keeps landing in
-/// the same output file, and the manager fires the completion notification —
-/// while the tool returns an `auto_backgrounded` result right away.
+/// Run the child in the foreground for at most `waitSeconds` (the call's
+/// `timeout`). A child that is still running at the deadline is adopted by
+/// the background manager — it keeps running with its transcript intact, its
+/// progress keeps landing in the same output file, and the manager fires the
+/// completion notification — while the tool returns an `auto_backgrounded`
+/// result right away. The bash foreground path does the same for processes.
 private func runSubagentForegroundWithFlip(
     runner: SubagentInvocationRunner,
     definition: SubagentDefinition,
@@ -737,10 +749,10 @@ private func runSubagentForegroundWithFlip(
     )
     historyStore.attachTask(taskId, childSessionId: childSessionId)
     let body = """
-    Subagent \(definition.name) exceeded the foreground wait cap of \(waitSeconds)s and has been moved to the background with task id \(taskId). It is still running — no work was lost — and you will receive an internal runtime completion notification when it finishes.
+    Subagent \(definition.name) exceeded the foreground timeout of \(waitSeconds)s and has been moved to the background with task id \(taskId). It is still running — no work was lost — and you will receive an internal runtime completion notification when it finishes.
     task_id: \(taskId)
     output_file: \(adoptedFile.path)
-    While parent work remains, inspect live progress with agent_history({"task_id":"\(taskId)"}). Use task_list({}) for bounded status; call task_poll only when otherwise blocked. For subagents you expect to outlast the cap, set run_in_background=true from the start.
+    While parent work remains, inspect live progress with agent_history({"task_id":"\(taskId)"}). Use task_list({}) for bounded status; call task_poll only when otherwise blocked. For subagents you expect to take long, set run_in_background=true from the start.
     """
     let display = "agent \(definition.name) auto-backgrounded · \(taskId) · \(adoptedFile.path)"
     return AgentToolResult(
@@ -753,7 +765,7 @@ private func runSubagentForegroundWithFlip(
             "subagent_type": .string(definition.name),
             "child_session_id": .string(childSessionId),
             "description": .string(input.description),
-            "wait_cap_seconds": .int(waitSeconds),
+            "softTimeoutSeconds": .int(waitSeconds),
         ]),
         runtimeEvents: [
             .subagent(SubagentLifecycleEvent(
@@ -764,7 +776,7 @@ private func runSubagentForegroundWithFlip(
                 description: input.description,
                 backgroundTaskId: taskId,
                 outputFile: adoptedFile.path,
-                message: "moved to background after \(waitSeconds)s wait cap"
+                message: "moved to background after \(waitSeconds)s foreground timeout"
             )),
         ],
         uiDisplay: [display]
@@ -844,14 +856,19 @@ private struct AgentToolInput {
     var subagentType: String
     var modelOverride: String?
     var runInBackground: Bool?
+    /// Foreground wait, already clamped to `[1, maxForegroundTimeoutSeconds]`.
+    var timeoutSeconds: Int
 }
 
-private func parseAgentToolInput(_ args: JSONValue) throws -> AgentToolInput {
+private func parseAgentToolInput(
+    _ args: JSONValue,
+    limits: SubagentLimits
+) throws -> AgentToolInput {
     guard case .object(let obj) = args else {
         throw CodingToolError.invalidArgument("agent: expected object input")
     }
     let allowedKeys: Set<String> = [
-        "description", "prompt", "subagent_type", "model", "run_in_background",
+        "description", "prompt", "subagent_type", "model", "run_in_background", "timeout",
     ]
     if let unknown = obj.keys.filter({ !allowedKeys.contains($0) }).sorted().first {
         throw CodingToolError.invalidArgument("agent: unknown argument `\(unknown)`")
@@ -891,12 +908,24 @@ private func parseAgentToolInput(_ args: JSONValue) throws -> AgentToolInput {
     } else {
         runInBackground = nil
     }
+    let timeoutSeconds: Int
+    switch obj["timeout"] ?? .null {
+    case .null:
+        timeoutSeconds = limits.foregroundTimeoutSeconds
+    case .int(let raw):
+        timeoutSeconds = min(max(raw, 1), limits.maxForegroundTimeoutSeconds)
+    case .double(let raw):
+        timeoutSeconds = min(max(Int(raw), 1), limits.maxForegroundTimeoutSeconds)
+    default:
+        throw CodingToolError.invalidArgument("agent: `timeout` must be a number when provided")
+    }
     return AgentToolInput(
         description: description,
         prompt: prompt,
         subagentType: subagentType,
         modelOverride: modelOverride,
-        runInBackground: runInBackground
+        runInBackground: runInBackground,
+        timeoutSeconds: timeoutSeconds
     )
 }
 
@@ -904,17 +933,15 @@ private enum SubagentPromptBuilder {
     static func agentToolDescription(
         registry: SubagentRegistry,
         backgroundTasksAvailable: Bool,
-        foregroundWaitCapSeconds: Int? = nil
+        maxForegroundTimeoutSeconds: Int
     ) -> String {
         let agents = registry.names.map { name -> String in
             guard let definition = registry.definition(named: name) else { return "- \(name)" }
             return "- \(name): \(definition.description) (Tools: \(subagentToolsDescription(definition.tools, backgroundTasksAvailable: backgroundTasksAvailable)))"
         }.joined(separator: "\n")
-        let waitCapNote = foregroundWaitCapSeconds.map { seconds in
-            backgroundTasksAvailable
-                ? "\n- This runtime never blocks on a subagent for more than \(seconds)s: a foreground subagent still running at that point is moved to the background automatically (its work continues; you get the completion notification and a task id), even if you passed `run_in_background: false`. Expect anything non-trivial to arrive as a background result."
-                : "\n- This runtime never blocks on a subagent for more than \(seconds)s: a subagent still running at that point fails with a timeout, so keep delegated tasks small."
-        } ?? ""
+        let waitCapNote = backgroundTasksAvailable
+            ? "\n- `timeout` is how long this call waits, not how long the subagent may run: a foreground subagent still running when `timeout` elapses is moved to the background automatically (its work continues; you get the completion notification and a task id), even if you passed `run_in_background: false`. No call waits longer than \(maxForegroundTimeoutSeconds)s, whatever `timeout` says, so expect anything slower to arrive as a background result."
+            : "\n- `timeout` bounds how long a subagent may run here (at most \(maxForegroundTimeoutSeconds)s, whatever you pass): one still running at that point fails with a timeout, so keep delegated tasks small."
         let backgroundNotes = backgroundTasksAvailable ? """
         - Background tasks started by the subagent's own tools are scoped to the subagent and are killed when that subagent ends.
         - Omit `run_in_background` to use the selected subagent's configured default.
@@ -979,12 +1006,12 @@ private enum SubagentPromptBuilder {
 private func buildAgentToolDescription(
     registry: SubagentRegistry,
     backgroundTasksAvailable: Bool,
-    foregroundWaitCapSeconds: Int?
+    maxForegroundTimeoutSeconds: Int
 ) -> String {
     SubagentPromptBuilder.agentToolDescription(
         registry: registry,
         backgroundTasksAvailable: backgroundTasksAvailable,
-        foregroundWaitCapSeconds: foregroundWaitCapSeconds
+        maxForegroundTimeoutSeconds: maxForegroundTimeoutSeconds
     )
 }
 
@@ -2588,7 +2615,7 @@ private func subagentToolArgumentSummary(toolName: String, args: JSONValue) -> S
     case "agent":
         // The child prompt can contain arbitrary repository text; description
         // and type convey intent without copying that prompt into the tail.
-        keys = ["description", "subagent_type", "run_in_background"]
+        keys = ["description", "subagent_type", "timeout", "run_in_background"]
     default:
         let keyList = object.keys.sorted().prefix(6).joined(separator: ",")
         return keyList.isEmpty
