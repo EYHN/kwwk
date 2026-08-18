@@ -11,15 +11,21 @@ import Testing
 struct MaxTaskTimeoutTests {
     // MARK: - bash
 
-    @Test("bash: cap lowers the schema maximum and the default")
-    func bashSchemaReflectsCap() {
-        let tool = createBashTool(cwd: "/", options: BashToolOptions(
-            environment: testBashEnvironment,
-            defaultTimeoutSeconds: 120,
-            maxTimeoutSeconds: 600,
-            manager: BackgroundTaskManager(outputDir: makeTempDir()),
-            maxTaskTimeoutSeconds: 45
-        ))
+    @Test("bash: the cap folds into the soft-timeout bounds and the schema")
+    func bashSchemaReflectsCap() throws {
+        let outputDir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: outputDir) }
+        let tools = buildCodingToolList(
+            cwd: "/",
+            selected: [.bash],
+            backgroundManager: BackgroundTaskManager(outputDir: outputDir),
+            sessionId: "s",
+            bashDefaultTimeoutSeconds: 120,
+            bashMaxTimeoutSeconds: 600,
+            maxTaskTimeoutSeconds: 45,
+            bashEnvironment: testBashEnvironment
+        )
+        let tool = try #require(tools.first { $0.name == "bash" })
         guard case .object(let schema) = tool.parameters,
               case .object(let props) = schema["properties"] ?? .null,
               case .object(let timeout) = props["timeout"] ?? .null else {
@@ -32,22 +38,33 @@ struct MaxTaskTimeoutTests {
         } else {
             Issue.record("expected timeout description")
         }
-        #expect(tool.description.contains("45s"))
+        #expect(tool.description.contains("longer than 45s"))
     }
 
-    @Test("bash: cap without a manager leaves the schema at the cap too")
-    func bashSchemaWithoutManager() {
-        let options = BashToolOptions(
-            environment: testBashEnvironment,
-            defaultTimeoutSeconds: 10,
-            maxTimeoutSeconds: 600,
-            maxTaskTimeoutSeconds: 45
+    @Test("bash: without a cap the configured bounds stand")
+    func bashBoundsWithoutCap() throws {
+        let tools = buildCodingToolList(
+            cwd: "/",
+            selected: [.bash],
+            backgroundManager: nil,
+            sessionId: "s",
+            bashDefaultTimeoutSeconds: 10,
+            bashMaxTimeoutSeconds: 600,
+            bashEnvironment: testBashEnvironment
         )
-        #expect(options.effectiveMaxTimeoutSeconds == 45)
-        #expect(options.effectiveDefaultTimeoutSeconds == 10)
-        let uncapped = BashToolOptions(environment: testBashEnvironment)
-        #expect(uncapped.effectiveMaxTimeoutSeconds == 600)
-        #expect(uncapped.effectiveDefaultTimeoutSeconds == 120)
+        let tool = try #require(tools.first { $0.name == "bash" })
+        guard case .object(let schema) = tool.parameters,
+              case .object(let props) = schema["properties"] ?? .null,
+              case .object(let timeout) = props["timeout"] ?? .null else {
+            Issue.record("expected timeout schema")
+            return
+        }
+        #expect(timeout["maximum"] == .int(600))
+        if case .string(let text) = timeout["description"] ?? .null {
+            #expect(text.contains("Default 10, max 600"))
+        } else {
+            Issue.record("expected timeout description")
+        }
     }
 
     @Test("bash: a model timeout above the cap still flips at the cap")
@@ -58,15 +75,17 @@ struct MaxTaskTimeoutTests {
         defer { try? FileManager.default.removeItem(at: outputDir) }
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let releaseFile = cwdDir.appendingPathComponent("release-cap")
-        let tool = createBashTool(cwd: cwdDir.path, options: BashToolOptions(
-            environment: testBashEnvironment,
-            defaultTimeoutSeconds: 120,
-            maxTimeoutSeconds: 600,
-            manager: manager,
+        let tools = buildCodingToolList(
+            cwd: cwdDir.path,
+            selected: [.bash],
+            backgroundManager: manager,
             sessionId: "cap-session",
-            autoBackgroundOnTimeout: true,
-            maxTaskTimeoutSeconds: 1
-        ))
+            bashDefaultTimeoutSeconds: 120,
+            bashMaxTimeoutSeconds: 600,
+            maxTaskTimeoutSeconds: 1,
+            bashEnvironment: testBashEnvironment
+        )
+        let tool = try #require(tools.first { $0.name == "bash" })
         let started = Date()
         let result = try await tool.execute(
             "call-1",

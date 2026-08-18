@@ -327,16 +327,19 @@ internal func buildCodingToolList(
         tools.append(createEditTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
     }
     if selected.contains(.bash) {
+        // The runtime wait cap folds into bash's soft-timeout bounds: no call
+        // may wait longer than the cap, whatever `timeout` the model asks for.
+        let cappedMax = maxTaskTimeoutSeconds.map { min(bashMaxTimeoutSeconds, max(1, $0)) }
+            ?? bashMaxTimeoutSeconds
         tools.append(createBashTool(cwd: cwd, options: BashToolOptions(
             environment: bashEnvironment,
-            defaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-            maxTimeoutSeconds: bashMaxTimeoutSeconds,
+            defaultTimeoutSeconds: min(bashDefaultTimeoutSeconds, cappedMax),
+            maxTimeoutSeconds: cappedMax,
             manager: backgroundManager,
             sessionId: sessionId,
             autoBackgroundOnTimeout: true,
             shellPath: bashShellPath,
-            commandPolicy: bashCommandPolicy,
-            maxTaskTimeoutSeconds: maxTaskTimeoutSeconds
+            commandPolicy: bashCommandPolicy
         )))
     }
     if selected.contains(.grep) {

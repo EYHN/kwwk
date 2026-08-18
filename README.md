@@ -160,9 +160,10 @@ try await coding.agent.prompt("Use the reviewer subagent to review Sources/KWWKA
 // `backgroundManager: nil` to disable background execution entirely.
 ```
 
-`CodingAgentConfig.maxTaskTimeoutSeconds` (also on `BashToolOptions`,
-`createAgentTool`, `createSubagentToolset`, and `SubagentRunner`) caps how long
-any single `bash` or `agent` call may keep the model waiting. It overrides the
+`CodingAgentConfig.maxTaskTimeoutSeconds` (also on `createAgentTool`,
+`createSubagentToolset`, and `SubagentRunner`) caps how long any single
+`bash` or `agent` call may keep the model waiting; for bash it folds into
+`bashDefaultTimeoutSeconds`/`bashMaxTimeoutSeconds`. It overrides the
 model's own `timeout` and its `run_in_background: false`: a command or
 subagent still running at the cap is moved to the background — the work
 continues, the tool returns `auto_backgrounded` with a task id, and the
