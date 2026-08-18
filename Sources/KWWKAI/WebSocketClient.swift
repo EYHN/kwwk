@@ -27,6 +27,29 @@ public struct WebSocketKeepaliveError: Error, CustomStringConvertible, Sendable 
 }
 
 public struct URLSessionWebSocketClient: WebSocketClient {
+    /// The WebSocket transport a Responses provider gets when the caller
+    /// names none: URLSession's on Apple platforms, nothing elsewhere.
+    ///
+    /// swift-corelibs-foundation's `URLSessionWebSocketTask` (Linux, on
+    /// libcurl) hands each TCP read out as its own message: any frame over
+    /// a few KB — a `response.completed` carrying reasoning
+    /// `encrypted_content`, say — arrives as several `.string` fragments,
+    /// none of them valid JSON, and the event is lost. The stream then
+    /// waits for a terminal event that never comes until the keepalive
+    /// tears it down, retries, and only reaches HTTP after
+    /// `maxWebSocketFailures` such rounds. Measured with the 6.3.3 static
+    /// musl SDK against an echo server: 1 KB intact, 15 KB in 7 pieces.
+    /// The upstream fix (swift-corelibs-foundation#5255) is unmerged, so
+    /// off Darwin the default is no WebSocket and the SSE path from the
+    /// start. Pass a client explicitly to opt in anyway.
+    public static var platformDefault: WebSocketClient? {
+        #if canImport(Darwin)
+            URLSessionWebSocketClient()
+        #else
+            nil
+        #endif
+    }
+
     public let session: URLSession
     /// Seconds between keepalive pings. `0` disables the heartbeat.
     public var pingIntervalSeconds: TimeInterval

@@ -40,7 +40,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     public init(
         api: String = "openai-responses",
         client: HTTPClient = URLSessionHTTPClient(),
-        webSocketClient: WebSocketClient? = URLSessionWebSocketClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient.platformDefault,
         defaultBaseURL: URL = URL(string: "https://api.openai.com")!,
         defaultAPIKey: String? = nil,
         extraHeaders: [String: String] = [:],

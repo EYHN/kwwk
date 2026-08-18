@@ -84,6 +84,27 @@ struct OpenAIResponsesTests {
 
     """
 
+    /// The default transport follows the platform: URLSession's WebSocket
+    /// on Darwin, none elsewhere — swift-corelibs-foundation splits large
+    /// frames into fragments (see `URLSessionWebSocketClient.platformDefault`),
+    /// so a Linux provider must start on SSE rather than lose three rounds
+    /// to keepalive timeouts first.
+    @Test("the default WebSocket transport is Darwin-only")
+    func defaultWebSocketTransportFollowsPlatform() {
+        let provider = OpenAIResponsesProvider()
+        let codex = ProviderVariants.chatgptCodex()
+        #if canImport(Darwin)
+            #expect(provider.webSocketClient != nil)
+            #expect(codex.webSocketClient != nil)
+        #else
+            #expect(provider.webSocketClient == nil)
+            #expect(codex.webSocketClient == nil)
+        #endif
+        // An explicit client is always honoured.
+        let explicit = OpenAIResponsesProvider(webSocketClient: URLSessionWebSocketClient())
+        #expect(explicit.webSocketClient != nil)
+    }
+
     @Test("streams text + completes with usage")
     func basicText() async throws {
         let client = StubSSEClient(body: Self.textSSE)
