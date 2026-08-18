@@ -160,6 +160,27 @@ try await coding.agent.prompt("Use the reviewer subagent to review Sources/KWWKA
 // `backgroundManager: nil` to disable background execution entirely.
 ```
 
+The `agent` tool follows the same timing contract as `bash`: its `timeout`
+is how long the call waits in the foreground (default
+`SubagentLimits.foregroundTimeoutSeconds` = 120, at most
+`maxForegroundTimeoutSeconds` = 600), not how long the child may run. A
+foreground child still running when `timeout` elapses is moved to the
+background — the work continues, the tool returns `auto_backgrounded` with a
+task id, and completion arrives as the usual notification — or, without a
+background manager, is cancelled as a timeout. A child's own runtime is
+unbounded by default (`SubagentLimits.timeoutSeconds` is nil; the background
+manager's last-resort watchdog still applies), so foreground and background
+children behave identically once launched.
+
+`CodingAgentConfig.maxTaskTimeoutSeconds` (also on `createAgentTool`,
+`createSubagentToolset`, and `SubagentRunner`) is a runtime-wide ceiling on
+how long any single `bash` or `agent` call may keep the model waiting: it
+folds into bash's `bashDefaultTimeoutSeconds`/`bashMaxTimeoutSeconds` and the
+agent tool's foreground-wait bounds, overriding whatever `timeout` the model
+asks for (a larger value is lowered, not rejected) and its
+`run_in_background: false`. Both tool descriptions state the effective bound
+so the model plans around it.
+
 SDK users can enable the same built-ins that the CLI uses without copying
 prompts:
 

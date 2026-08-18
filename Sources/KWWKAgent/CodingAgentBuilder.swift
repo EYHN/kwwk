@@ -82,6 +82,12 @@ public struct CodingAgentConfig: Sendable {
     /// the background on this deadline when a `backgroundManager` is attached.
     public var bashDefaultTimeoutSeconds: Int
     public var bashMaxTimeoutSeconds: Int
+    /// Hard ceiling on how long any single `bash` or `agent` call may keep the
+    /// model waiting (seconds). It overrides the model's own `timeout` and its
+    /// choice of `run_in_background: false`: work still running at the
+    /// deadline is moved to the background when a `backgroundManager` is
+    /// attached (and fails as a timeout otherwise). `nil` disables the cap.
+    public var maxTaskTimeoutSeconds: Int?
     /// Exact environment passed to bash tool processes. Empty by default so
     /// SDK callers do not expose host process environment variables.
     public var bashEnvironment: [String: String]
@@ -109,6 +115,7 @@ public struct CodingAgentConfig: Sendable {
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
+        maxTaskTimeoutSeconds: Int? = nil,
         bashShellPath: String = kwwkDefaultShellPath
     ) {
         self.model = model
@@ -130,6 +137,7 @@ public struct CodingAgentConfig: Sendable {
         self.compactionModel = compactionModel
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.maxTaskTimeoutSeconds = maxTaskTimeoutSeconds
         self.bashEnvironment = bashEnvironment
         self.bashShellPath = bashShellPath
     }
@@ -215,6 +223,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
         fileAccessPolicy: config.fileAccessPolicy,
         bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
+        maxTaskTimeoutSeconds: config.maxTaskTimeoutSeconds,
         bashEnvironment: config.bashEnvironment,
         bashShellPath: config.bashShellPath
     )
@@ -249,6 +258,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
             bashEnvironment: config.bashEnvironment,
             bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
+            maxTaskTimeoutSeconds: config.maxTaskTimeoutSeconds,
             bashShellPath: config.bashShellPath
         ))
         if bgManager != nil {
@@ -301,6 +311,7 @@ internal func buildCodingToolList(
     fileAccessPolicy: FileAccessPolicy = .unrestricted,
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
+    maxTaskTimeoutSeconds: Int? = nil,
     bashEnvironment: [String: String],
     bashShellPath: String = kwwkDefaultShellPath,
     bashCommandPolicy: BashCommandPolicy = .unrestricted
@@ -316,10 +327,14 @@ internal func buildCodingToolList(
         tools.append(createEditTool(cwd: cwd, fileAccessPolicy: fileAccessPolicy))
     }
     if selected.contains(.bash) {
+        // The runtime wait cap folds into bash's soft-timeout bounds: no call
+        // may wait longer than the cap, whatever `timeout` the model asks for.
+        let cappedMax = maxTaskTimeoutSeconds.map { min(bashMaxTimeoutSeconds, max(1, $0)) }
+            ?? bashMaxTimeoutSeconds
         tools.append(createBashTool(cwd: cwd, options: BashToolOptions(
             environment: bashEnvironment,
-            defaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-            maxTimeoutSeconds: bashMaxTimeoutSeconds,
+            defaultTimeoutSeconds: min(bashDefaultTimeoutSeconds, cappedMax),
+            maxTimeoutSeconds: cappedMax,
             manager: backgroundManager,
             sessionId: sessionId,
             autoBackgroundOnTimeout: true,

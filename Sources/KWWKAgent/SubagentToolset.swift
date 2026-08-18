@@ -37,7 +37,11 @@ public func createSubagentToolset(
     bashEnvironment: [String: String],
     fileAccessPolicy: FileAccessPolicy = .unrestricted,
     contextFiles: [(path: String, content: String)] = [],
-    authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil
+    authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil,
+    bashDefaultTimeoutSeconds: Int = 120,
+    bashMaxTimeoutSeconds: Int = 600,
+    maxTaskTimeoutSeconds: Int? = nil,
+    bashShellPath: String = kwwkDefaultShellPath
 ) -> SubagentToolset {
     let parent = SubagentParentBox(
         childCwd: cwd,
@@ -68,7 +72,11 @@ public func createSubagentToolset(
             historyStore: historyStore,
             parentSnapshot: { parent.snapshot() },
             limits: limits,
-            bashEnvironment: bashEnvironment
+            bashEnvironment: bashEnvironment,
+            bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
+            bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+            maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
+            bashShellPath: bashShellPath
         ),
     ]
     if backgroundManager != nil {

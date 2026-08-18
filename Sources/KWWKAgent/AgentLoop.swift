@@ -1864,7 +1864,7 @@ public enum AgentLoop {
         switch statusRaw {
         case "completed":
             status = .completed
-        case "background_started":
+        case "background_started", "auto_backgrounded":
             status = .backgroundStarted
         case "failed":
             status = .failed
