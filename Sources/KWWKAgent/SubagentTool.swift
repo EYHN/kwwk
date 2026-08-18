@@ -29,6 +29,7 @@ public func createAgentTool(
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
+    maxTaskTimeoutSeconds: Int? = nil,
     bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let effectiveSessionId = sessionId ?? "subagent-parent:\(UUID().uuidString)"
@@ -60,6 +61,7 @@ public func createAgentTool(
         bashEnvironment: bashEnvironment,
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+        maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
         bashShellPath: bashShellPath
     )
 }
@@ -81,6 +83,7 @@ public func createAgentTool(
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
+    maxTaskTimeoutSeconds: Int? = nil,
     bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let effectiveSessionId = sessionId ?? parentAgent.sessionId
@@ -114,6 +117,7 @@ public func createAgentTool(
         bashEnvironment: bashEnvironment,
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+        maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
         bashShellPath: bashShellPath
     )
 }
@@ -343,6 +347,7 @@ internal func _createAgentTool(
     bashEnvironment: [String: String],
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
+    maxTaskTimeoutSeconds: Int? = nil,
     bashShellPath: String = kwwkDefaultShellPath
 ) -> AgentTool {
     let registry = SubagentRegistry(subagents)
@@ -385,7 +390,8 @@ internal func _createAgentTool(
         label: "agent",
         description: buildAgentToolDescription(
             registry: registry,
-            backgroundTasksAvailable: backgroundManager != nil
+            backgroundTasksAvailable: backgroundManager != nil,
+            foregroundWaitCapSeconds: maxTaskTimeoutSeconds
         ),
         parameters: parameters,
         execute: { toolCallId, args, cancellation, onUpdate in
@@ -414,6 +420,7 @@ internal func _createAgentTool(
                 childSessionId: childSessionId,
                 bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
                 bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+                maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
                 bashEnvironment: bashEnvironment,
                 bashShellPath: bashShellPath
             )
@@ -512,6 +519,32 @@ internal func _createAgentTool(
                 ],
                 uiDisplay: ["agent \(definition.name) starting · 0 tokens"]
             ))
+            if let waitSeconds = maxTaskTimeoutSeconds {
+                if let backgroundManager {
+                    // The runtime caps foreground waits: run the child in the
+                    // foreground for `waitSeconds`, then hand a still-running
+                    // child to the background manager instead of blocking.
+                    return try await runSubagentForegroundWithFlip(
+                        runner: runner,
+                        definition: definition,
+                        input: input,
+                        childSessionId: childSessionId,
+                        toolCallId: toolCallId,
+                        waitSeconds: waitSeconds,
+                        manager: backgroundManager,
+                        sessionId: sessionId,
+                        historyStore: historyStore,
+                        cancellation: cancellation,
+                        onUpdate: onUpdate
+                    )
+                }
+                // No manager to hand the child to: the cap becomes the child's
+                // deadline, and overrunning it fails as an ordinary timeout.
+                runner.limits.timeoutSeconds = min(
+                    runner.limits.timeoutSeconds ?? waitSeconds,
+                    waitSeconds
+                )
+            }
             let result: SubagentResult
             do {
                 result = try await runner.run(
@@ -528,44 +561,213 @@ internal func _createAgentTool(
                     toolCallId: toolCallId
                 )
             }
-            let body = modelFacingSubagentSuccess(
-                subagentType: definition.name,
-                result: result.text
-            )
-            return AgentToolResult(
-                content: [.text(TextContent(text: body))],
-                details: .object([
-                    "status": .string("completed"),
-                    "subagent_type": .string(definition.name),
-                    "description": .string(input.description),
-                    "child_session_id": .string(childSessionId),
-                    "model": .string(result.model.id),
-                    "stop_reason": .string(result.stopReason.rawValue),
-                    "usage": usageDetails(result.usage),
-                    "turns": .int(result.turns),
-                    "cost": costDetails(result.cost),
-                    "duration_ms": .int(result.durationMs),
-                    "history_available": .bool(true),
-                ]),
-                runtimeEvents: [
-                    .subagent(SubagentLifecycleEvent(
-                        kind: .completed,
-                        toolCallId: toolCallId,
-                        subagentType: definition.name,
-                        childSessionId: childSessionId,
-                        description: input.description,
-                        model: result.model.id,
-                        stopReason: result.stopReason,
-                        usage: result.usage,
-                        turns: result.turns,
-                        cost: result.cost,
-                        durationMs: result.durationMs,
-                        message: shortSubagentSummary(result.text)
-                    )),
-                ],
-                uiDisplay: ["agent \(definition.name) completed · \(formatUsage(result.usage))"]
+            return completedSubagentToolResult(
+                definition: definition,
+                input: input,
+                childSessionId: childSessionId,
+                toolCallId: toolCallId,
+                result: result
             )
         }
+    )
+}
+
+private func completedSubagentToolResult(
+    definition: SubagentDefinition,
+    input: AgentToolInput,
+    childSessionId: String,
+    toolCallId: String,
+    result: SubagentResult
+) -> AgentToolResult {
+    let body = modelFacingSubagentSuccess(
+        subagentType: definition.name,
+        result: result.text
+    )
+    return AgentToolResult(
+        content: [.text(TextContent(text: body))],
+        details: .object([
+            "status": .string("completed"),
+            "subagent_type": .string(definition.name),
+            "description": .string(input.description),
+            "child_session_id": .string(childSessionId),
+            "model": .string(result.model.id),
+            "stop_reason": .string(result.stopReason.rawValue),
+            "usage": usageDetails(result.usage),
+            "turns": .int(result.turns),
+            "cost": costDetails(result.cost),
+            "duration_ms": .int(result.durationMs),
+            "history_available": .bool(true),
+        ]),
+        runtimeEvents: [
+            .subagent(SubagentLifecycleEvent(
+                kind: .completed,
+                toolCallId: toolCallId,
+                subagentType: definition.name,
+                childSessionId: childSessionId,
+                description: input.description,
+                model: result.model.id,
+                stopReason: result.stopReason,
+                usage: result.usage,
+                turns: result.turns,
+                cost: result.cost,
+                durationMs: result.durationMs,
+                message: shortSubagentSummary(result.text)
+            )),
+        ],
+        uiDisplay: ["agent \(definition.name) completed · \(formatUsage(result.usage))"]
+    )
+}
+
+// MARK: - Foreground with auto-flip-to-background at the runtime wait cap
+
+/// Run the child in the foreground for at most `waitSeconds`. A child that is
+/// still running at the deadline is adopted by the background manager — it
+/// keeps running with its transcript intact, its progress keeps landing in
+/// the same output file, and the manager fires the completion notification —
+/// while the tool returns an `auto_backgrounded` result right away.
+private func runSubagentForegroundWithFlip(
+    runner: SubagentInvocationRunner,
+    definition: SubagentDefinition,
+    input: AgentToolInput,
+    childSessionId: String,
+    toolCallId: String,
+    waitSeconds: Int,
+    manager: BackgroundTaskManager,
+    sessionId: String?,
+    historyStore: SubagentHistoryStore,
+    cancellation: CancellationHandle?,
+    onUpdate: AgentToolUpdate?
+) async throws -> AgentToolResult {
+    let outputFile = await manager.allocateForegroundOutputFile()
+    let progressWriter = BackgroundSubagentProgressWriter(outputFile: outputFile)
+    // Streams child progress to the parent only while the call is still in
+    // the foreground; closed at the flip so a detached child cannot keep
+    // pushing updates into a tool call that already returned.
+    let relay = SubagentUpdateGate(onUpdate)
+    // The child's cancellation is owned by whoever currently waits on it: the
+    // parent tool call before the flip, the background manager after it.
+    let runCancellation = CancellationHandle()
+    let parentRegistration = cancellation?.onCancel { reason in
+        runCancellation.cancel(reason: reason ?? "aborted")
+    }
+    let completion = SubagentRunCompletion()
+    Task.detached {
+        do {
+            let result = try await runner.run(
+                cancellation: runCancellation,
+                onUpdate: { update in
+                    progressWriter.record(update)
+                    relay.emit(update)
+                },
+                toolCallId: toolCallId
+            )
+            completion.resolve(.success(result))
+        } catch {
+            completion.resolve(.failure(error))
+        }
+    }
+
+    if let outcome = await completion.wait(upToSeconds: waitSeconds) {
+        // Settled within the cap: an ordinary foreground result.
+        parentRegistration?.cancel()
+        try? FileManager.default.removeItem(at: outputFile)
+        switch outcome {
+        case .success(let result):
+            return completedSubagentToolResult(
+                definition: definition,
+                input: input,
+                childSessionId: childSessionId,
+                toolCallId: toolCallId,
+                result: result
+            )
+        case .failure(let error):
+            throw structuredSubagentFailure(
+                error: error,
+                definition: definition,
+                input: input,
+                childSessionId: childSessionId,
+                toolCallId: toolCallId
+            )
+        }
+    }
+
+    // Deadline: flip. From here the manager owns the child's lifecycle.
+    relay.close()
+    parentRegistration?.cancel()
+    let (watchdogTimeout, overflow) = runner.timeoutSeconds.addingReportingOverflow(2)
+    let spec = BackgroundTaskSpec(
+        kind: "agent",
+        label: "agent:\(definition.name)",
+        description: input.description,
+        metadata: .object([
+            "subagent_type": .string(definition.name),
+            "child_session_id": .string(childSessionId),
+        ]),
+        hardTimeoutSeconds: overflow ? Int.max : watchdogTimeout
+    )
+    let subagentType = definition.name
+    let (taskId, adoptedFile) = await manager.adopt(
+        spec: spec,
+        outputFile: outputFile,
+        sessionId: sessionId,
+        waitForCompletion: { managerCancellation in
+            let registration = managerCancellation.onCancel { reason in
+                runCancellation.cancel(reason: reason ?? "aborted")
+            }
+            defer { registration.cancel() }
+            switch await completion.wait() {
+            case .success(let result):
+                return subagentBackgroundSuccess(
+                    result: result,
+                    subagentType: subagentType,
+                    childSessionId: childSessionId,
+                    progressWriter: progressWriter
+                )
+            case .failure(let error):
+                return subagentBackgroundFailure(
+                    error: error,
+                    subagentType: subagentType,
+                    childSessionId: childSessionId,
+                    progressWriter: progressWriter,
+                    historyStore: historyStore,
+                    cancelled: managerCancellation.isCancelled
+                )
+            }
+        }
+    )
+    historyStore.attachTask(taskId, childSessionId: childSessionId)
+    let body = """
+    Subagent \(definition.name) exceeded the foreground wait cap of \(waitSeconds)s and has been moved to the background with task id \(taskId). It is still running — no work was lost — and you will receive an internal runtime completion notification when it finishes.
+    task_id: \(taskId)
+    output_file: \(adoptedFile.path)
+    While parent work remains, inspect live progress with agent_history({"task_id":"\(taskId)"}). Use task_list({}) for bounded status; call task_poll only when otherwise blocked. For subagents you expect to outlast the cap, set run_in_background=true from the start.
+    """
+    let display = "agent \(definition.name) auto-backgrounded · \(taskId) · \(adoptedFile.path)"
+    return AgentToolResult(
+        content: [.text(TextContent(text: body))],
+        details: .object([
+            "status": .string("auto_backgrounded"),
+            "runner_state": .string(BackgroundTaskStatus.running.rawValue),
+            "task_id": .string(taskId),
+            "output_file": .string(adoptedFile.path),
+            "subagent_type": .string(definition.name),
+            "child_session_id": .string(childSessionId),
+            "description": .string(input.description),
+            "wait_cap_seconds": .int(waitSeconds),
+        ]),
+        runtimeEvents: [
+            .subagent(SubagentLifecycleEvent(
+                kind: .backgroundStarted,
+                toolCallId: toolCallId,
+                subagentType: definition.name,
+                childSessionId: childSessionId,
+                description: input.description,
+                backgroundTaskId: taskId,
+                outputFile: adoptedFile.path,
+                message: "moved to background after \(waitSeconds)s wait cap"
+            )),
+        ],
+        uiDisplay: [display]
     )
 }
 
@@ -701,21 +903,27 @@ private func parseAgentToolInput(_ args: JSONValue) throws -> AgentToolInput {
 private enum SubagentPromptBuilder {
     static func agentToolDescription(
         registry: SubagentRegistry,
-        backgroundTasksAvailable: Bool
+        backgroundTasksAvailable: Bool,
+        foregroundWaitCapSeconds: Int? = nil
     ) -> String {
         let agents = registry.names.map { name -> String in
             guard let definition = registry.definition(named: name) else { return "- \(name)" }
             return "- \(name): \(definition.description) (Tools: \(subagentToolsDescription(definition.tools, backgroundTasksAvailable: backgroundTasksAvailable)))"
         }.joined(separator: "\n")
+        let waitCapNote = foregroundWaitCapSeconds.map { seconds in
+            backgroundTasksAvailable
+                ? "\n- This runtime never blocks on a subagent for more than \(seconds)s: a foreground subagent still running at that point is moved to the background automatically (its work continues; you get the completion notification and a task id), even if you passed `run_in_background: false`. Expect anything non-trivial to arrive as a background result."
+                : "\n- This runtime never blocks on a subagent for more than \(seconds)s: a subagent still running at that point fails with a timeout, so keep delegated tasks small."
+        } ?? ""
         let backgroundNotes = backgroundTasksAvailable ? """
         - Background tasks started by the subagent's own tools are scoped to the subagent and are killed when that subagent ends.
         - Omit `run_in_background` to use the selected subagent's configured default.
         - Pass `run_in_background: false` when you must block for the result before continuing.
         - Use background mode for independent fan-out. You will be notified when work completes. To inspect live progress, call `agent_history` with `{"task_id":"..."}`. For bounded task status call `task_list` with `{}`; call `task_poll` only when otherwise blocked.
         """ : ""
-        let finalNotes = backgroundNotes.isEmpty
+        let finalNotes = (backgroundNotes.isEmpty
             ? "- Subagents cannot spawn other subagents."
-            : "\(backgroundNotes)\n- Subagents cannot spawn other subagents."
+            : "\(backgroundNotes)\n- Subagents cannot spawn other subagents.") + waitCapNote
 
         return """
         Launch a fresh-context subagent for a specialized task.
@@ -770,11 +978,13 @@ private enum SubagentPromptBuilder {
 
 private func buildAgentToolDescription(
     registry: SubagentRegistry,
-    backgroundTasksAvailable: Bool
+    backgroundTasksAvailable: Bool,
+    foregroundWaitCapSeconds: Int?
 ) -> String {
     SubagentPromptBuilder.agentToolDescription(
         registry: registry,
-        backgroundTasksAvailable: backgroundTasksAvailable
+        backgroundTasksAvailable: backgroundTasksAvailable,
+        foregroundWaitCapSeconds: foregroundWaitCapSeconds
     )
 }
 
@@ -950,6 +1160,7 @@ public struct SubagentRunner: Sendable {
     private var parentSnapshot: @Sendable () -> SubagentParentSnapshot
     private var bashDefaultTimeoutSeconds: Int
     private var bashMaxTimeoutSeconds: Int
+    private var maxTaskTimeoutSeconds: Int?
     private var bashEnvironment: [String: String]
     private var bashShellPath: String
     private var limiter: SubagentLimiter
@@ -980,6 +1191,7 @@ public struct SubagentRunner: Sendable {
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
+        maxTaskTimeoutSeconds: Int? = nil,
         bashShellPath: String = kwwkDefaultShellPath
     ) {
         let snapshot = SubagentParentSnapshot(
@@ -1007,6 +1219,7 @@ public struct SubagentRunner: Sendable {
         self.parentSnapshot = { snapshot }
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.maxTaskTimeoutSeconds = maxTaskTimeoutSeconds
         self.bashEnvironment = bashEnvironment
         self.bashShellPath = bashShellPath
         self.limits = limits
@@ -1030,6 +1243,7 @@ public struct SubagentRunner: Sendable {
         bashEnvironment: [String: String],
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
+        maxTaskTimeoutSeconds: Int? = nil,
         bashShellPath: String = kwwkDefaultShellPath
     ) {
         let parentBox = SubagentParentBox(
@@ -1059,6 +1273,7 @@ public struct SubagentRunner: Sendable {
         self.parentSnapshot = { parentBox.snapshot() }
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.maxTaskTimeoutSeconds = maxTaskTimeoutSeconds
         self.bashEnvironment = bashEnvironment
         self.bashShellPath = bashShellPath
         self.limits = limits
@@ -1146,6 +1361,7 @@ public struct SubagentRunner: Sendable {
             childSessionId: makeSubagentSessionId(parent: parentSessionId, name: definition.name),
             bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+            maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
             bashEnvironment: bashEnvironment,
             bashShellPath: bashShellPath
         )
@@ -1283,6 +1499,7 @@ private struct SubagentInvocationRunner: Sendable {
     var childSessionId: String
     var bashDefaultTimeoutSeconds: Int
     var bashMaxTimeoutSeconds: Int
+    var maxTaskTimeoutSeconds: Int?
     var bashEnvironment: [String: String]
     var bashShellPath: String
     var reservedPermit: SubagentPermit?
@@ -1303,6 +1520,7 @@ private struct SubagentInvocationRunner: Sendable {
         childSessionId: String,
         bashDefaultTimeoutSeconds: Int,
         bashMaxTimeoutSeconds: Int,
+        maxTaskTimeoutSeconds: Int?,
         bashEnvironment: [String: String],
         bashShellPath: String,
         reservedPermit: SubagentPermit? = nil,
@@ -1322,6 +1540,7 @@ private struct SubagentInvocationRunner: Sendable {
         self.childSessionId = childSessionId
         self.bashDefaultTimeoutSeconds = bashDefaultTimeoutSeconds
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
+        self.maxTaskTimeoutSeconds = maxTaskTimeoutSeconds
         self.bashEnvironment = bashEnvironment
         self.bashShellPath = bashShellPath
         self.reservedPermit = reservedPermit
@@ -1495,6 +1714,7 @@ private struct SubagentInvocationRunner: Sendable {
             fileAccessPolicy: fileAccessPolicy,
             bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+            maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
             bashEnvironment: bashEnvironment,
             bashShellPath: bashShellPath,
             bashCommandPolicy: definition.bashCommandPolicy
@@ -1634,6 +1854,7 @@ private final class SubagentRunCompletion: @unchecked Sendable {
     private let lock = NSLock()
     private var outcome: Outcome?
     private var waiter: CheckedContinuation<Outcome, Never>?
+    private var waiters: [SubagentSettleSignal] = []
 
     func wait() async -> Outcome {
         await withCheckedContinuation { continuation in
@@ -1646,17 +1867,75 @@ private final class SubagentRunCompletion: @unchecked Sendable {
         }
     }
 
+    /// Wait at most `seconds` for the outcome; `nil` when the deadline passes
+    /// first. The outcome stays available for a later unbounded `wait()`.
+    func wait(upToSeconds seconds: Int) async -> Outcome? {
+        if let ready = lock.withLock({ outcome }) { return ready }
+        let signal = SubagentSettleSignal()
+        let deadline = Task {
+            try? await Task.sleep(nanoseconds: UInt64(max(0, seconds)) * 1_000_000_000)
+            signal.fire()
+        }
+        let observer = lock.withLock { () -> Outcome? in
+            if let outcome { return outcome }
+            waiters.append(signal)
+            return nil
+        }
+        if let observer {
+            deadline.cancel()
+            return observer
+        }
+        await signal.wait()
+        deadline.cancel()
+        return lock.withLock {
+            waiters.removeAll { $0 === signal }
+            return outcome
+        }
+    }
+
     @discardableResult
     func resolve(_ result: Outcome) -> Bool {
-        let resolution = lock.withLock { () -> (Bool, CheckedContinuation<Outcome, Never>?) in
-            guard outcome == nil else { return (false, nil) }
+        let resolution = lock.withLock { () -> (Bool, CheckedContinuation<Outcome, Never>?, [SubagentSettleSignal]) in
+            guard outcome == nil else { return (false, nil, []) }
             outcome = result
             let pending = waiter
             waiter = nil
-            return (true, pending)
+            let signals = waiters
+            waiters.removeAll()
+            return (true, pending, signals)
         }
         resolution.1?.resume(returning: result)
+        for signal in resolution.2 { signal.fire() }
         return resolution.0
+    }
+}
+
+/// One-shot latch: `wait()` returns once `fire()` has been called, whichever
+/// order the two happen in. Backs the timed wait on `SubagentRunCompletion`.
+private final class SubagentSettleSignal: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fired = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func fire() {
+        let pending = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            fired = true
+            let pending = continuation
+            continuation = nil
+            return pending
+        }
+        pending?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let ready = lock.withLock { () -> Bool in
+                if fired { return true }
+                self.continuation = continuation
+                return false
+            }
+            if ready { continuation.resume() }
+        }
     }
 }
 
@@ -1969,72 +2248,109 @@ private struct SubagentBackgroundRunner: CapacityQueuedBackgroundTaskRunner {
                         progressWriter.record(update)
                     }
                 )
-                let outputBytes = try progressWriter.finish(
-                    section: "final",
-                    text: result.text
-                )
-                onDone(BackgroundTaskOutcome(
-                    success: true,
-                    summary: "completed",
-                    details: .object([
-                        "status": .string("completed"),
-                        "subagent_type": .string(subagentType),
-                        "child_session_id": .string(runner.childSessionId),
-                        "model": .string(result.model.id),
-                        "stop_reason": .string(result.stopReason.rawValue),
-                        "usage": usageDetails(result.usage),
-                        "turns": .int(result.turns),
-                        "cost": costDetails(result.cost),
-                        "duration_ms": .int(result.durationMs),
-                        "output_bytes": .int(outputBytes),
-                        "history_available": .bool(true),
-                    ])
+                onDone(subagentBackgroundSuccess(
+                    result: result,
+                    subagentType: subagentType,
+                    childSessionId: runner.childSessionId,
+                    progressWriter: progressWriter
                 ))
             } catch {
-                let message = subagentErrorMessage(error)
-                let failureKind = subagentFailureKind(error)
-                let isIncomplete = failureKind == "incomplete"
-                runner.historyStore.finish(
+                onDone(subagentBackgroundFailure(
+                    error: error,
+                    subagentType: subagentType,
                     childSessionId: runner.childSessionId,
-                    status: subagentHistoryStatus(for: error),
-                    errorMessage: message
-                )
-                let terminal = normalizedSubagentError(error) as? SubagentTerminalFailure
-                let report = [
-                    terminal?.partialOutput.map { "Partial output:\n\($0)" },
-                    "Subagent \(subagentType) \(isIncomplete ? "incomplete" : "failed"): \(message)",
-                ].compactMap { $0 }.joined(separator: "\n\n")
-                let outputBytes = try? progressWriter.finish(
-                    section: isIncomplete ? "incomplete" : "error",
-                    text: report
-                )
-                var details: [String: JSONValue] = [
-                    "status": .string(isIncomplete ? "incomplete" : "failed"),
-                    "subagent_type": .string(subagentType),
-                    "child_session_id": .string(runner.childSessionId),
-                    "failure_kind": .string(failureKind),
-                    "error_message": .string(message),
-                    "output_bytes": .int(outputBytes ?? 0),
-                    "history_available": .bool(true),
-                ]
-                if failureKind == "timeout" || failureKind == "aborted" {
-                    details["capacity_retained_until_runner_exit"] = .bool(true)
-                }
-                details.merge(
-                    subagentFailureTelemetry(error),
-                    uniquingKeysWith: { _, telemetry in telemetry }
-                )
-                onDone(BackgroundTaskOutcome(
-                    success: false,
-                    summary: cancellation.isCancelled
-                        ? "aborted"
-                        : isIncomplete ? "incomplete" : "failed",
-                    details: .object(details),
-                    errorMessage: isIncomplete ? nil : message
+                    progressWriter: progressWriter,
+                    historyStore: runner.historyStore,
+                    cancelled: cancellation.isCancelled
                 ))
             }
         }
     }
+}
+
+/// Terminal outcome of a background-owned child that finished: seals the
+/// output file with the final text and reports the run's telemetry.
+private func subagentBackgroundSuccess(
+    result: SubagentResult,
+    subagentType: String,
+    childSessionId: String,
+    progressWriter: BackgroundSubagentProgressWriter
+) -> BackgroundTaskOutcome {
+    let outputBytes = (try? progressWriter.finish(
+        section: "final",
+        text: result.text
+    )) ?? 0
+    return BackgroundTaskOutcome(
+        success: true,
+        summary: "completed",
+        details: .object([
+            "status": .string("completed"),
+            "subagent_type": .string(subagentType),
+            "child_session_id": .string(childSessionId),
+            "model": .string(result.model.id),
+            "stop_reason": .string(result.stopReason.rawValue),
+            "usage": usageDetails(result.usage),
+            "turns": .int(result.turns),
+            "cost": costDetails(result.cost),
+            "duration_ms": .int(result.durationMs),
+            "output_bytes": .int(outputBytes),
+            "history_available": .bool(true),
+        ])
+    )
+}
+
+/// Terminal outcome of a background-owned child that failed, timed out, was
+/// aborted, or yielded incomplete: closes the history entry, seals the output
+/// file with the report, and keeps the structured failure telemetry.
+private func subagentBackgroundFailure(
+    error: Error,
+    subagentType: String,
+    childSessionId: String,
+    progressWriter: BackgroundSubagentProgressWriter,
+    historyStore: SubagentHistoryStore,
+    cancelled: Bool
+) -> BackgroundTaskOutcome {
+    let message = subagentErrorMessage(error)
+    let failureKind = subagentFailureKind(error)
+    let isIncomplete = failureKind == "incomplete"
+    historyStore.finish(
+        childSessionId: childSessionId,
+        status: subagentHistoryStatus(for: error),
+        errorMessage: message
+    )
+    let terminal = normalizedSubagentError(error) as? SubagentTerminalFailure
+    let report = [
+        terminal?.partialOutput.map { "Partial output:\n\($0)" },
+        "Subagent \(subagentType) \(isIncomplete ? "incomplete" : "failed"): \(message)",
+    ].compactMap { $0 }.joined(separator: "\n\n")
+    let outputBytes = try? progressWriter.finish(
+        section: isIncomplete ? "incomplete" : "error",
+        text: report
+    )
+    var details: [String: JSONValue] = [
+        "status": .string(isIncomplete ? "incomplete" : "failed"),
+        "subagent_type": .string(subagentType),
+        "child_session_id": .string(childSessionId),
+        "failure_kind": .string(failureKind),
+        "error_message": .string(message),
+        "output_bytes": .int(outputBytes ?? 0),
+        "history_available": .bool(true),
+    ]
+    if failureKind == "timeout" || failureKind == "aborted" {
+        details["capacity_retained_until_runner_exit"] = .bool(true)
+    }
+    details.merge(
+        subagentFailureTelemetry(error),
+        uniquingKeysWith: { _, telemetry in telemetry }
+    )
+    return BackgroundTaskOutcome(
+        success: false,
+        summary: cancelled
+            ? "aborted"
+            : isIncomplete ? "incomplete" : "failed",
+        details: .object(details),
+        errorMessage: isIncomplete ? nil : message
+    )
 }
 
 private func buildSubagentSystemPrompt(

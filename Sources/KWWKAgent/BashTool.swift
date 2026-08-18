@@ -28,6 +28,15 @@ public struct BashToolOptions: Sendable {
     public var defaultTimeoutSeconds: Int
     /// Maximum allowed user-supplied `timeout` (seconds).
     public var maxTimeoutSeconds: Int
+    /// Hard ceiling on how long one `bash` call may keep the model waiting
+    /// (seconds). When set it caps both `defaultTimeoutSeconds` and any
+    /// model-supplied `timeout` — a `timeout` above it is silently lowered,
+    /// not rejected. With a `BackgroundTaskManager` attached the command
+    /// flips to the background at this deadline even though the model asked
+    /// for a foreground run; without one it fails as an ordinary timeout.
+    /// `nil` leaves the model's `timeout` (bounded by `maxTimeoutSeconds`) in
+    /// charge.
+    public var maxTaskTimeoutSeconds: Int?
     /// Opt-in background support. When set, the tool exposes
     /// `run_in_background` + auto-backgrounds foreground runs that exceed
     /// `timeout`.
@@ -56,7 +65,8 @@ public struct BashToolOptions: Sendable {
         autoBackgroundOnTimeout: Bool = true,
         hardTimeoutSeconds: Int = 1800,
         shellPath: String = kwwkDefaultShellPath,
-        commandPolicy: BashCommandPolicy = .unrestricted
+        commandPolicy: BashCommandPolicy = .unrestricted,
+        maxTaskTimeoutSeconds: Int? = nil
     ) {
         self.operations = operations ?? LocalBashOperations(
             shellPath: shellPath,
@@ -71,6 +81,23 @@ public struct BashToolOptions: Sendable {
         self.shellPath = shellPath
         self.environment = environment
         self.commandPolicy = commandPolicy
+        self.maxTaskTimeoutSeconds = maxTaskTimeoutSeconds
+    }
+
+    /// `maxTimeoutSeconds` after `maxTaskTimeoutSeconds` is applied: the
+    /// largest soft timeout any single call can end up with.
+    public var effectiveMaxTimeoutSeconds: Int {
+        clampToMaxTaskTimeout(max(1, maxTimeoutSeconds))
+    }
+
+    /// `defaultTimeoutSeconds` after both caps are applied.
+    public var effectiveDefaultTimeoutSeconds: Int {
+        min(max(1, defaultTimeoutSeconds), effectiveMaxTimeoutSeconds)
+    }
+
+    private func clampToMaxTaskTimeout(_ seconds: Int) -> Int {
+        guard let cap = maxTaskTimeoutSeconds else { return seconds }
+        return min(seconds, max(1, cap))
     }
 }
 
@@ -218,8 +245,9 @@ public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
         return options.operations
     }()
 
-    let defaultTimeoutSec = options.defaultTimeoutSeconds
-    let maxTimeoutSec = options.maxTimeoutSeconds
+    let defaultTimeoutSec = options.effectiveDefaultTimeoutSeconds
+    let maxTimeoutSec = options.effectiveMaxTimeoutSeconds
+    let taskTimeoutCapped = options.maxTaskTimeoutSeconds != nil
     let manager = options.manager
     let sessionId = options.sessionId
     let autoBg = options.autoBackgroundOnTimeout
@@ -231,11 +259,16 @@ public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
     var tool = AgentTool(
         name: "bash",
         label: "bash",
-        description: bashToolDescription(hasManager: hasManager, cwd: cwd),
+        description: bashToolDescription(
+            hasManager: hasManager,
+            cwd: cwd,
+            taskTimeoutCapSeconds: taskTimeoutCapped ? maxTimeoutSec : nil
+        ),
         parameters: bashToolParameters(
             hasManager: hasManager,
             defaultTimeoutSec: defaultTimeoutSec,
-            maxTimeoutSec: maxTimeoutSec
+            maxTimeoutSec: maxTimeoutSec,
+            taskTimeoutCapped: taskTimeoutCapped
         ),
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
@@ -286,9 +319,16 @@ public func createBashTool(cwd: String, options: BashToolOptions) -> AgentTool {
 
 // MARK: - Schema
 
-private func bashToolDescription(hasManager: Bool, cwd: String) -> String {
+private func bashToolDescription(
+    hasManager: Bool,
+    cwd: String,
+    taskTimeoutCapSeconds: Int?
+) -> String {
     let outputGuidance = "Inline output is already bounded. Do not append `head` or `tail` merely to truncate output; use them only when they are part of the command's actual intent."
     if hasManager {
+        let capNote = taskTimeoutCapSeconds.map {
+            " No foreground command waits longer than \($0)s here, whatever `timeout` says; anything slower is moved to the background at that point, so start commands you expect to outlast it with run_in_background=true."
+        } ?? ""
         return """
         Execute a shell command. Runs in \(cwd) by default. Stdout and stderr are returned on completion.
 
@@ -296,22 +336,29 @@ private func bashToolDescription(hasManager: Bool, cwd: String) -> String {
 
         Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task_list({}) for bounded live status and task_read({"task_id":"...","offset":0,"limit":8192}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
 
-        Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.
+        Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.\(capNote)
         """
     }
-    return "Execute a shell command and return its output. \(outputGuidance)"
+    let capNote = taskTimeoutCapSeconds.map {
+        " Commands are limited to \($0)s of runtime here, whatever `timeout` says; slower ones fail with a timeout, so keep each invocation short."
+    } ?? ""
+    return "Execute a shell command and return its output. \(outputGuidance)\(capNote)"
 }
 
 private func bashToolParameters(
     hasManager: Bool,
     defaultTimeoutSec: Int,
-    maxTimeoutSec: Int
+    maxTimeoutSec: Int,
+    taskTimeoutCapped: Bool
 ) -> JSONValue {
+    let capNote = taskTimeoutCapped
+        ? " This runtime caps every foreground wait at \(maxTimeoutSec)s: a larger value is lowered to \(maxTimeoutSec), it is not rejected."
+        : ""
     var props: [String: JSONValue] = [
         "command": ["type": "string"],
         "timeout": .object([
             "type": .string("number"),
-            "description": .string("Seconds before the foreground soft timeout. When a background manager is attached, the command auto-moves to background at this point. Default \(defaultTimeoutSec), max \(maxTimeoutSec)."),
+            "description": .string("Seconds before the foreground soft timeout. When a background manager is attached, the command auto-moves to background at this point. Default \(defaultTimeoutSec), max \(maxTimeoutSec).\(capNote)"),
             "minimum": .int(1),
             "maximum": .int(maxTimeoutSec),
         ]),
@@ -927,9 +974,10 @@ private final class OneShotContinuation<Value: Sendable>: @unchecked Sendable {
 
 extension BackgroundTaskManager {
     /// Allocate an output file inside the manager's output dir without
-    /// registering a task. Used by the foreground-with-flip path so the
-    /// adopted file lives under the same directory as spawned ones.
-    fileprivate func allocateForegroundOutputFile() -> URL {
+    /// registering a task. Used by the foreground-with-flip paths (bash and
+    /// agent) so the adopted file lives under the same directory as spawned
+    /// ones.
+    func allocateForegroundOutputFile() -> URL {
         try? FileManager.default.createDirectory(
             at: outputDir,
             withIntermediateDirectories: true,
