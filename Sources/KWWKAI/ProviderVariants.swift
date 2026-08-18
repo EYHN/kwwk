@@ -23,7 +23,7 @@ public enum ProviderVariants {
         apiVersion: String = "2024-10-01-preview",
         apiKey: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
-        webSocketClient: WebSocketClient? = URLSessionWebSocketClient()
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient.platformDefault
     ) -> OpenAIResponsesProvider {
         let endpointString = endpoint.absoluteString.trimmedSlashes
         return OpenAIResponsesProvider(
@@ -63,7 +63,7 @@ public enum ProviderVariants {
         apiKey: String? = nil,
         api: String = "azure-openai-responses",
         client: HTTPClient = URLSessionHTTPClient(),
-        webSocketClient: WebSocketClient? = URLSessionWebSocketClient()
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient.platformDefault
     ) -> OpenAIResponsesProvider {
         let base = endpoint.absoluteString.trimmedSlashes
         return OpenAIResponsesProvider(
@@ -245,7 +245,7 @@ public enum ProviderVariants {
         accessToken: String? = nil,
         accountId: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
-        webSocketClient: WebSocketClient? = URLSessionWebSocketClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient.platformDefault,
         originator: String = "kw-cli"
     ) -> OpenAIResponsesProvider {
         var extra: [String: String] = [
@@ -341,7 +341,7 @@ public enum ProviderVariants {
     public static func githubCopilotResponses(
         sessionToken: String? = nil,
         client: HTTPClient = URLSessionHTTPClient(),
-        webSocketClient: WebSocketClient? = URLSessionWebSocketClient(),
+        webSocketClient: WebSocketClient? = URLSessionWebSocketClient.platformDefault,
         integrationID: String = "vscode-chat",
         api: String = "openai-responses",
         baseURL: URL = URL(string: "https://api.individual.githubcopilot.com")!
