@@ -310,7 +310,7 @@ private func bashToolDescription(
 
         \(outputGuidance)
 
-        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task_list({}) for bounded live status and task_read({"task_id":"...","offset":0,"limit":8192}) for manager-authorized stdout/stderr inspection — do NOT poll or sleep merely to retrieve output.
+        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task_list({}) for bounded live status and task_read({"task_id":"...","offset":0,"limit":8192}) for manager-authorized stdout/stderr inspection; for searching a large log, grep the raw output file whose path the tool reports. Do NOT poll or sleep merely to retrieve output.
 
         Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.\(capNote)
         """
@@ -653,7 +653,7 @@ private func runBashInBackground(
         runner: runner,
         sessionId: sessionId
     )
-    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. Use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}) to inspect stdout/stderr in the meantime; do NOT poll or sleep. (Raw output file, outside the workspace: \(outputFile.path).)"
+    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. To inspect stdout/stderr in the meantime, use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}); do NOT poll or sleep. The complete raw output lives at \(outputFile.path) (outside the workspace) — grepping that file directly also works, e.g. grep -n \"error:\" \(bashShellQuote(outputFile.path))."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
@@ -716,23 +716,34 @@ private func runBashForegroundWithFlip(
     let exit = await bundle.waitUpTo(seconds: input.timeoutSeconds)
 
     if let status = exit {
-        // Completed within soft timeout.
-        let text = bundle.readOutput()
-        try? FileManager.default.removeItem(at: outputFile)
+        // Completed within soft timeout. If the inline output had to be
+        // truncated, keep the raw artifact (manager-bounded GC) so the model
+        // can grep/page the omitted middle — a build's first compile error
+        // routinely lands there. Untruncated output needs no artifact.
+        let output = bundle.readOutput(fullOutputPath: outputFile.path)
+        if output.truncated {
+            await manager.retainForegroundOutputFile(outputFile)
+        } else {
+            try? FileManager.default.removeItem(at: outputFile)
+        }
         if cancellation?.isCancelled == true {
             throw CodingToolError.aborted
         }
         let code = status.code
         if code != 0 {
-            throw CodingToolError.commandFailed(stderr: text.isEmpty ? "command exited with code \(code)" : text, exitCode: code)
+            throw CodingToolError.commandFailed(stderr: output.text.isEmpty ? "command exited with code \(code)" : output.text, exitCode: code)
         }
         let durationMs = Int(Date().timeIntervalSince(start) * 1000)
+        var details: [String: JSONValue] = [
+            "exitCode": .int(Int(code)),
+            "durationMs": .int(durationMs),
+        ]
+        if output.truncated {
+            details["outputFile"] = .string(outputFile.path)
+        }
         return AgentToolResult(
-            content: [.text(TextContent(text: text))],
-            details: .object([
-                "exitCode": .int(Int(code)),
-                "durationMs": .int(durationMs),
-            ])
+            content: [.text(TextContent(text: output.text))],
+            details: .object(details)
         )
     }
 
@@ -752,7 +763,7 @@ private func runBashForegroundWithFlip(
             await bundle.awaitAdoptedCompletion(cancellation: bgCancel)
         }
     )
-    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. Use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}) to inspect stdout/stderr; do NOT poll or sleep. For commands you know will take long, set run_in_background=true from the start. (Raw output file, outside the workspace: \(adoptedFile.path).)"
+    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. To inspect stdout/stderr, use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}); do NOT poll or sleep. The complete raw output lives at \(adoptedFile.path) (outside the workspace) — grepping that file directly also works, e.g. grep -n \"error:\" \(bashShellQuote(adoptedFile.path)). For commands you know will take long, set run_in_background=true from the start."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
@@ -794,13 +805,29 @@ private func runBashLegacy(
 /// disk (the flip/background paths) still expose it via the output file; this
 /// only bounds what the model sees inline, and is not duplicated into `details`.
 func boundBashOutput(_ text: String) -> String {
+    boundBashOutputDetailed(text).text
+}
+
+/// `boundBashOutput` plus the truncation verdict, so callers holding the raw
+/// artifact on disk can decide whether to keep it. When `fullOutputPath` is
+/// given, the truncation notice points the model at that file — a first
+/// compile error buried mid-log is one `grep` away instead of unreachable.
+func boundBashOutputDetailed(
+    _ text: String,
+    fullOutputPath: String? = nil
+) -> (text: String, truncated: Bool) {
     let result = Truncate.truncateTail(text)
-    guard result.truncated else { return result.content }
+    guard result.truncated else { return (result.content, false) }
     let omitted = result.totalLines - result.outputLines
-    let notice = "[output truncated: \(omitted) earlier line(s) omitted; showing last "
+    var notice = "[output truncated: \(omitted) earlier line(s) omitted; showing last "
         + "\(result.outputLines) of \(result.totalLines) lines, "
-        + "\(Truncate.formatSize(result.totalBytes)) total]\n"
-    return notice + result.content
+        + "\(Truncate.formatSize(result.totalBytes)) total"
+    if let fullOutputPath {
+        notice += "; full output kept at \(fullOutputPath) — grep that file to reach "
+            + "the omitted middle, e.g. grep -n \"error:\" \(bashShellQuote(fullOutputPath))"
+    }
+    notice += "]\n"
+    return (notice + result.content, true)
 }
 
 // MARK: - Foreground/adopted process wrapper
@@ -858,20 +885,27 @@ private final class ForegroundBashExecution: @unchecked Sendable {
 
     /// Read the completed command's output, bounded to the read tool's budget.
     /// Reads only the tail window of the file so a multi-GB log never lands in
-    /// memory; the full output stays on disk at `outputFile`.
-    func readOutput() -> String {
-        guard let handle = try? FileHandle(forReadingFrom: outputFile) else { return "" }
+    /// memory; the full output stays on disk at `outputFile`. When the output
+    /// was truncated, the returned notice points at `fullOutputPath` (if given)
+    /// so the model can grep the artifact for the omitted middle.
+    func readOutput(fullOutputPath: String? = nil) -> (text: String, truncated: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: outputFile) else {
+            return ("", false)
+        }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
-        if size == 0 { return "" }
+        if size == 0 { return ("", false) }
         // Read a generous tail window, then apply the line/byte budget on top.
         let window: UInt64 = 4 * 1024 * 1024
         let startOffset = size > window ? size - window : 0
         guard (try? handle.seek(toOffset: startOffset)) != nil,
               let data = try? handle.read(upToCount: Int(size - startOffset)) else {
-            return ""
+            return ("", false)
         }
-        return boundBashOutput(String(decoding: data, as: UTF8.self))
+        return boundBashOutputDetailed(
+            String(decoding: data, as: UTF8.self),
+            fullOutputPath: fullOutputPath
+        )
     }
 
     private func awaitExitStatus() async -> SpawnedBashProcess.ExitStatus {

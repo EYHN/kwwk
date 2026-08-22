@@ -122,6 +122,14 @@ public actor BackgroundTaskManager {
     /// slow-but-silent work is not flagged prematurely.
     public var silentStallThresholdSeconds: Double = 180
     public var tailBytes: Int = 4096
+    /// Bounds for raw output artifacts of already-completed foreground
+    /// commands (`retainForegroundOutputFile`). Oldest artifacts are deleted
+    /// first once either bound is exceeded; the newest artifact always
+    /// survives even when it alone exceeds the byte bound.
+    public var retainedForegroundOutputLimit: Int = 16
+    public var retainedForegroundOutputByteLimit: Int = 64 * 1024 * 1024
+    /// Retained foreground artifacts, oldest first.
+    private var retainedForegroundOutputs: [URL] = []
 
     // MARK: - Init
 
@@ -512,6 +520,7 @@ public actor BackgroundTaskManager {
         )
     }
 
+
     /// Drain completion/stall notifications queued since the last drain.
     public func drainNotifications(sessionId: String? = nil) -> [BackgroundTaskNotification] {
         var matched: [BackgroundTaskNotification] = []
@@ -588,6 +597,39 @@ public actor BackgroundTaskManager {
             terminalTaskIsHeld(id, queuedForListener: queuedForListener) ? nil : id
         }
         for id in stale { removeTerminalTask(id) }
+        retainedForegroundOutputs.removeAll { url in
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            guard let modified = attrs?[.modificationDate] as? Date else {
+                return true  // already gone; drop the tracking entry
+            }
+            guard modified < cutoff else { return false }
+            try? FileManager.default.removeItem(at: url)
+            return true
+        }
+    }
+
+    /// Keep a completed foreground command's raw output artifact around so the
+    /// model can grep/page content the inline truncation dropped. Retained
+    /// artifacts are bounded by `retainedForegroundOutputLimit` /
+    /// `retainedForegroundOutputByteLimit` (oldest deleted first) and also age
+    /// out through `cleanup(olderThanSeconds:)`.
+    public func retainForegroundOutputFile(_ url: URL) {
+        retainedForegroundOutputs.removeAll { $0.path == url.path }
+        retainedForegroundOutputs.append(url)
+        pruneRetainedForegroundOutputs()
+    }
+
+    private func pruneRetainedForegroundOutputs() {
+        var totalBytes = retainedForegroundOutputs.reduce(0) {
+            $0 + Int(fileSize($1))
+        }
+        while retainedForegroundOutputs.count > max(1, retainedForegroundOutputLimit)
+            || (totalBytes > retainedForegroundOutputByteLimit
+                && retainedForegroundOutputs.count > 1) {
+            let oldest = retainedForegroundOutputs.removeFirst()
+            totalBytes -= Int(fileSize(oldest))
+            try? FileManager.default.removeItem(at: oldest)
+        }
     }
 
     private func pruneTerminalTasksIfNeeded() {
@@ -1077,6 +1119,7 @@ public actor BackgroundTaskManager {
             return Data()
         }
     }
+
 
     private func utf8SafeOutputPage(
         _ url: URL,
