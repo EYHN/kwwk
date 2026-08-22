@@ -154,42 +154,6 @@ public struct BackgroundTaskOutputChunk: Sendable {
     public let eof: Bool
 }
 
-/// One matching line from a pattern search over a task's output artifact.
-public struct BackgroundTaskOutputMatch: Sendable {
-    /// Byte offset of the first byte of the matching line. Pass it as
-    /// `task_read`'s `offset` to page the artifact from exactly here.
-    public let offset: Int
-    /// 1-based line number counted from the byte the scan started at.
-    public let lineNumber: Int
-    /// Display text of the matching line, capped for transcript budget.
-    public let line: String
-    /// True when `line` was shortened for display.
-    public let lineTruncated: Bool
-    /// Up to `contextLines` display lines immediately before the match.
-    public let contextBefore: [String]
-    /// Up to `contextLines` display lines immediately after the match.
-    public let contextAfter: [String]
-}
-
-/// Result of a bounded pattern search over a task's output artifact.
-public struct BackgroundTaskOutputSearchResult: Sendable {
-    public let taskId: String
-    public let pattern: String
-    /// True when `pattern` compiled as a regular expression; false when it was
-    /// matched as a literal substring instead.
-    public let isRegex: Bool
-    /// Byte offset the scan started at.
-    public let offset: Int
-    public let totalBytes: Int
-    public let matches: [BackgroundTaskOutputMatch]
-    /// True when the match/byte cap stopped the scan before the end of the
-    /// artifact. Continue with `offset` = `nextOffset`.
-    public let limitReached: Bool
-    /// Byte offset just past the last fully scanned line (== `totalBytes` when
-    /// the whole artifact was scanned).
-    public let nextOffset: Int
-}
-
 /// Bounded page returned by manager-owned list queries.
 public struct BackgroundTaskListPage: Sendable {
     public let tasks: [BackgroundTaskSnapshot]

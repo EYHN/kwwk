@@ -24,12 +24,6 @@ private func optionalTaskParameter(
     ])
 }
 
-/// Bounds for `task_read`'s `pattern` search. Matches carry byte offsets, so a
-/// capped search continues from the reported next offset instead of re-reading.
-let taskReadSearchMaxMatches = 20
-let taskReadSearchContextLines = 2
-let taskReadSearchMaxPatternLength = 512
-
 /// Creates the four background-task tools with one shared delivery consumer.
 /// Filter this array when exposing a subset so the selected tools keep that shared consumer.
 public func createTaskTools(
@@ -164,7 +158,7 @@ private func makeTaskReadTool(
             ]),
             "offset": optionalTaskParameter(
                 ["type": .string("integer"), "minimum": .int(0)],
-                description: "Byte offset. With `pattern`, the byte the search starts at."
+                description: "Byte offset."
             ),
             "limit": optionalTaskParameter(
                 [
@@ -172,15 +166,7 @@ private func makeTaskReadTool(
                     "minimum": .int(1),
                     "maximum": .int(32_768),
                 ],
-                description: "Maximum bytes to return. Ignored when `pattern` is set."
-            ),
-            "pattern": optionalTaskParameter(
-                [
-                    "type": .string("string"),
-                    "minLength": .int(1),
-                    "maxLength": .int(512),
-                ],
-                description: "Search the output for lines matching this regex (matched as a literal substring when it is not a valid regex) instead of reading a byte range. Returns up to \(taskReadSearchMaxMatches) matching lines with their byte offsets and \(taskReadSearchContextLines) context lines each; continue past a reported limit by re-calling with the returned next offset."
+                description: "Maximum bytes to return."
             ),
         ]),
         "required": .array([.string("task_id")]),
@@ -189,14 +175,14 @@ private func makeTaskReadTool(
     let tool = AgentTool(
         name: "task_read",
         label: "task_read",
-        description: "Read a byte range from a background task's output, or search it for lines matching a pattern.",
+        description: "Read a byte range from a background task's output.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
             let object = try taskObject(
                 args,
                 toolName: "task_read",
-                allowedKeys: ["task_id", "offset", "limit", "pattern"]
+                allowedKeys: ["task_id", "offset", "limit"]
             )
             let taskId = try parsedTaskId(object["task_id"], toolName: "task_read")
             let offset = try taskBoundedInteger(
@@ -213,19 +199,7 @@ private func makeTaskReadTool(
                 defaultValue: 8_192,
                 range: 1...32_768
             )
-            let pattern = try taskSearchPattern(object["pattern"], toolName: "task_read")
             do {
-                if let pattern {
-                    let search = try await manager.searchOutput(
-                        taskId: taskId,
-                        sessionId: sessionId,
-                        pattern: pattern,
-                        offset: offset,
-                        maxMatches: taskReadSearchMaxMatches,
-                        contextLines: taskReadSearchContextLines
-                    )
-                    return taskOutputSearchResult(search)
-                }
                 let chunk = try await manager.readOutput(
                     taskId: taskId,
                     sessionId: sessionId,
@@ -562,28 +536,6 @@ private func parsedTaskId(_ value: JSONValue?, toolName: String) throws -> Strin
     return trimmed
 }
 
-private func taskSearchPattern(
-    _ value: JSONValue?,
-    toolName: String
-) throws -> String? {
-    guard let value else { return nil }
-    if case .null = value { return nil }
-    guard case .string(let pattern) = value else {
-        throw CodingToolError.invalidArgument("\(toolName): `pattern` must be a string")
-    }
-    // No trimming: leading/trailing whitespace is often load-bearing in a
-    // pattern (indented stack frames, "error: " prefixes).
-    guard !pattern.isEmpty else {
-        throw CodingToolError.invalidArgument("\(toolName): `pattern` must not be empty")
-    }
-    guard pattern.count <= taskReadSearchMaxPatternLength else {
-        throw CodingToolError.invalidArgument(
-            "\(toolName): `pattern` must be at most \(taskReadSearchMaxPatternLength) characters"
-        )
-    }
-    return pattern
-}
-
 private func taskStringArray(
     _ value: JSONValue?,
     field: String,
@@ -806,67 +758,6 @@ private func taskOutputReadResult(_ chunk: BackgroundTaskOutputChunk) -> AgentTo
             "encoding": .string(chunk.encoding.rawValue),
             "bytes_base64": .string(chunk.bytesBase64),
             "output": .string(chunk.text),
-        ])
-    )
-}
-
-private func taskOutputSearchResult(
-    _ result: BackgroundTaskOutputSearchResult
-) -> AgentToolResult {
-    let mode = result.isRegex ? "regex" : "literal substring (not a valid regex)"
-    var lines: [String] = []
-    lines.append(
-        "task \(result.taskId) output search: \(result.matches.count) match(es) for "
-            + "\(mode) pattern in bytes \(result.offset)..<\(result.nextOffset) "
-            + "of \(result.totalBytes)"
-    )
-    if result.matches.isEmpty, !result.limitReached {
-        lines.append("No matching lines in the scanned range.")
-    }
-    for match in result.matches {
-        let position = result.offset == 0
-            ? "line \(match.lineNumber)"
-            : "line \(match.lineNumber) counted from byte \(result.offset)"
-        lines.append("match at byte \(match.offset) (\(position)):")
-        var block: [String] = []
-        block.append(contentsOf: match.contextBefore.map { "  " + taskEscapeUntrustedOutput($0) })
-        var matched = "> " + taskEscapeUntrustedOutput(match.line)
-        if match.lineTruncated { matched += " [line truncated]" }
-        block.append(matched)
-        block.append(contentsOf: match.contextAfter.map { "  " + taskEscapeUntrustedOutput($0) })
-        lines.append("<untrusted-output>\n\(block.joined(separator: "\n"))\n</untrusted-output>")
-    }
-    if !result.matches.isEmpty {
-        lines.append(
-            "hint: task_read({\"task_id\":\"\(result.taskId)\",\"offset\":<match byte offset>}) pages the raw output from a match."
-        )
-    }
-    if result.limitReached {
-        lines.append(
-            "Match limit reached before the end of the output. Continue with "
-                + "task_read({\"task_id\":\"\(result.taskId)\",\"pattern\":<same pattern>,\"offset\":\(result.nextOffset)})."
-        )
-    }
-    return AgentToolResult(
-        content: [.text(TextContent(text: lines.joined(separator: "\n")))],
-        details: .object([
-            "task_id": .string(result.taskId),
-            "pattern": .string(result.pattern),
-            "is_regex": .bool(result.isRegex),
-            "offset": .int(result.offset),
-            "next_offset": .int(result.nextOffset),
-            "total_bytes": .int(result.totalBytes),
-            "limit_reached": .bool(result.limitReached),
-            "matches": .array(result.matches.map { match in
-                .object([
-                    "offset": .int(match.offset),
-                    "line_number": .int(match.lineNumber),
-                    "line": .string(match.line),
-                    "line_truncated": .bool(match.lineTruncated),
-                    "context_before": .array(match.contextBefore.map(JSONValue.string)),
-                    "context_after": .array(match.contextAfter.map(JSONValue.string)),
-                ])
-            }),
         ])
     )
 }

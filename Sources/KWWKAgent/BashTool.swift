@@ -310,7 +310,7 @@ private func bashToolDescription(
 
         \(outputGuidance)
 
-        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task_list({}) for bounded live status and task_read({"task_id":"...","offset":0,"limit":8192}) for manager-authorized stdout/stderr inspection; task_read({"task_id":"...","pattern":"error:"}) searches a large log and returns matching lines with byte offsets. Do NOT poll or sleep merely to retrieve output.
+        Long-running commands (installs, builds, test suites) should be started with run_in_background=true so the agent isn't blocked. The tool returns a task ID immediately; you will receive an internal runtime completion notification when the task finishes. Use task_list({}) for bounded live status and task_read({"task_id":"...","offset":0,"limit":8192}) for manager-authorized stdout/stderr inspection; for searching a large log, grep the raw output file whose path the tool reports. Do NOT poll or sleep merely to retrieve output.
 
         Foreground commands that exceed the `timeout` are automatically moved to the background (the process keeps running — no work is lost) and you are notified on completion.\(capNote)
         """
@@ -653,7 +653,7 @@ private func runBashInBackground(
         runner: runner,
         sessionId: sessionId
     )
-    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. To inspect stdout/stderr in the meantime, use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}), or search it with task_read({\"task_id\":\"\(taskId)\",\"pattern\":\"error:\"}); do NOT poll or sleep. The complete raw output lives at \(outputFile.path) (outside the workspace) — grepping that file directly also works, e.g. grep -n \"error:\" \(bashShellQuote(outputFile.path))."
+    let msg = "Command started in background with task id \(taskId). You will receive an internal runtime completion notification when it completes. To inspect stdout/stderr in the meantime, use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}); do NOT poll or sleep. The complete raw output lives at \(outputFile.path) (outside the workspace) — grepping that file directly also works, e.g. grep -n \"error:\" \(bashShellQuote(outputFile.path))."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
@@ -763,7 +763,7 @@ private func runBashForegroundWithFlip(
             await bundle.awaitAdoptedCompletion(cancellation: bgCancel)
         }
     )
-    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. To inspect stdout/stderr, use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}), or search it with task_read({\"task_id\":\"\(taskId)\",\"pattern\":\"error:\"}); do NOT poll or sleep. The complete raw output lives at \(adoptedFile.path) (outside the workspace) — grepping that file directly also works, e.g. grep -n \"error:\" \(bashShellQuote(adoptedFile.path)). For commands you know will take long, set run_in_background=true from the start."
+    let msg = "Command exceeded the foreground soft timeout of \(input.timeoutSeconds)s and has been moved to the background with task id \(taskId). The process is still running — no work was lost. You will receive an internal runtime completion notification when it completes. To inspect stdout/stderr, use task_read({\"task_id\":\"\(taskId)\",\"offset\":0,\"limit\":8192}); do NOT poll or sleep. The complete raw output lives at \(adoptedFile.path) (outside the workspace) — grepping that file directly also works, e.g. grep -n \"error:\" \(bashShellQuote(adoptedFile.path)). For commands you know will take long, set run_in_background=true from the start."
     return AgentToolResult(
         content: [.text(TextContent(text: msg))],
         details: .object([
