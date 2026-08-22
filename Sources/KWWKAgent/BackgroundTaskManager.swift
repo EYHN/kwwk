@@ -122,6 +122,14 @@ public actor BackgroundTaskManager {
     /// slow-but-silent work is not flagged prematurely.
     public var silentStallThresholdSeconds: Double = 180
     public var tailBytes: Int = 4096
+    /// Bounds for raw output artifacts of already-completed foreground
+    /// commands (`retainForegroundOutputFile`). Oldest artifacts are deleted
+    /// first once either bound is exceeded; the newest artifact always
+    /// survives even when it alone exceeds the byte bound.
+    public var retainedForegroundOutputLimit: Int = 16
+    public var retainedForegroundOutputByteLimit: Int = 64 * 1024 * 1024
+    /// Retained foreground artifacts, oldest first.
+    private var retainedForegroundOutputs: [URL] = []
 
     // MARK: - Init
 
@@ -512,6 +520,54 @@ public actor BackgroundTaskManager {
         )
     }
 
+    /// Search a task's output artifact for lines matching `pattern`, compiled
+    /// as a regular expression when possible and matched as a literal
+    /// substring otherwise. Scanning is chunked so a multi-GB log never lands
+    /// in memory, and each match carries the byte offset of its line so
+    /// `readOutput` can page the artifact from exactly there. Session-checked
+    /// like `readOutput`.
+    public func searchOutput(
+        taskId: String,
+        sessionId: String? = nil,
+        pattern: String,
+        offset: Int = 0,
+        maxMatches: Int = 20,
+        contextLines: Int = 2
+    ) throws -> BackgroundTaskOutputSearchResult {
+        guard let entry = tasks[taskId],
+              sessionId == nil || entry.sessionId == sessionId else {
+            throw BackgroundTaskError.notFound(taskId)
+        }
+        let compiled = try? Regex(pattern)
+        let lineMatches: (String) -> Bool = {
+            if let compiled { return { $0.contains(compiled) } }
+            return { $0.contains(pattern) }
+        }()
+
+        let total = max(0, Int(fileSize(entry.outputFile)))
+        let start = min(max(0, offset), total)
+        let boundedMatches = max(1, min(maxMatches, 100))
+        let boundedContext = max(0, min(contextLines, 5))
+        let scan = scanOutputForMatches(
+            entry.outputFile,
+            from: start,
+            total: total,
+            maxMatches: boundedMatches,
+            contextLines: boundedContext,
+            lineMatches: lineMatches
+        )
+        return BackgroundTaskOutputSearchResult(
+            taskId: taskId,
+            pattern: pattern,
+            isRegex: compiled != nil,
+            offset: start,
+            totalBytes: total,
+            matches: scan.matches,
+            limitReached: scan.limitReached,
+            nextOffset: scan.nextOffset
+        )
+    }
+
     /// Drain completion/stall notifications queued since the last drain.
     public func drainNotifications(sessionId: String? = nil) -> [BackgroundTaskNotification] {
         var matched: [BackgroundTaskNotification] = []
@@ -588,6 +644,39 @@ public actor BackgroundTaskManager {
             terminalTaskIsHeld(id, queuedForListener: queuedForListener) ? nil : id
         }
         for id in stale { removeTerminalTask(id) }
+        retainedForegroundOutputs.removeAll { url in
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            guard let modified = attrs?[.modificationDate] as? Date else {
+                return true  // already gone; drop the tracking entry
+            }
+            guard modified < cutoff else { return false }
+            try? FileManager.default.removeItem(at: url)
+            return true
+        }
+    }
+
+    /// Keep a completed foreground command's raw output artifact around so the
+    /// model can grep/page content the inline truncation dropped. Retained
+    /// artifacts are bounded by `retainedForegroundOutputLimit` /
+    /// `retainedForegroundOutputByteLimit` (oldest deleted first) and also age
+    /// out through `cleanup(olderThanSeconds:)`.
+    public func retainForegroundOutputFile(_ url: URL) {
+        retainedForegroundOutputs.removeAll { $0.path == url.path }
+        retainedForegroundOutputs.append(url)
+        pruneRetainedForegroundOutputs()
+    }
+
+    private func pruneRetainedForegroundOutputs() {
+        var totalBytes = retainedForegroundOutputs.reduce(0) {
+            $0 + Int(fileSize($1))
+        }
+        while retainedForegroundOutputs.count > max(1, retainedForegroundOutputLimit)
+            || (totalBytes > retainedForegroundOutputByteLimit
+                && retainedForegroundOutputs.count > 1) {
+            let oldest = retainedForegroundOutputs.removeFirst()
+            totalBytes -= Int(fileSize(oldest))
+            try? FileManager.default.removeItem(at: oldest)
+        }
     }
 
     private func pruneTerminalTasksIfNeeded() {
@@ -1076,6 +1165,150 @@ public actor BackgroundTaskManager {
         } catch {
             return Data()
         }
+    }
+
+    /// Chunked line scan behind `searchOutput`. Reads fixed-size chunks and
+    /// carries partial lines across chunk boundaries, so memory stays bounded
+    /// regardless of artifact size; a pathological line (binary output with no
+    /// newline) is matched against its first `maxLineBytes` and then skipped
+    /// byte-accurately to the next newline.
+    private func scanOutputForMatches(
+        _ url: URL,
+        from start: Int,
+        total: Int,
+        maxMatches: Int,
+        contextLines: Int,
+        lineMatches: (String) -> Bool
+    ) -> (matches: [BackgroundTaskOutputMatch], limitReached: Bool, nextOffset: Int) {
+        guard total > start, let handle = try? FileHandle(forReadingFrom: url) else {
+            return ([], false, start)
+        }
+        defer { try? handle.close() }
+        guard (try? handle.seek(toOffset: UInt64(start))) != nil else {
+            return ([], false, start)
+        }
+
+        struct MatchBuilder {
+            var offset: Int
+            var lineNumber: Int
+            var line: String
+            var lineTruncated: Bool
+            var contextBefore: [String]
+            var contextAfter: [String]
+            var afterRemaining: Int
+        }
+
+        let chunkSize = 256 * 1024
+        let maxLineBytes = 64 * 1024
+        // Keep the rendered payload comfortably inside the read tool's byte
+        // budget even when every match drags full-width context along.
+        let maxPayloadBytes = 24 * 1024
+
+        var builders: [MatchBuilder] = []
+        var limitReached = false
+        // Byte offset of the first unreported match when a cap stops the scan,
+        // so a continuation from `nextOffset` re-finds that exact match.
+        var stopOffset: Int?
+        var payloadBytes = 0
+        var lineNumber = 0
+        var lineAbsStart = start
+        var lineBytesSoFar = 0
+        var carry = Data()
+        var skippingOversizedTail = false
+        var contextRing: [String] = []
+        var scannedThrough = start
+
+        func processLine(_ data: Data, at absOffset: Int, oversized: Bool) -> Bool {
+            lineNumber += 1
+            let raw = String(decoding: data, as: UTF8.self)
+            let display = Truncate.truncateLine(raw)
+            for index in builders.indices where builders[index].afterRemaining > 0 {
+                builders[index].contextAfter.append(display.text)
+                builders[index].afterRemaining -= 1
+                payloadBytes += display.text.utf8.count
+            }
+            if lineMatches(raw) {
+                if builders.count >= maxMatches || payloadBytes >= maxPayloadBytes {
+                    limitReached = true
+                    stopOffset = absOffset
+                    return false
+                }
+                builders.append(MatchBuilder(
+                    offset: absOffset,
+                    lineNumber: lineNumber,
+                    line: display.text,
+                    lineTruncated: display.wasTruncated || oversized,
+                    contextBefore: contextRing,
+                    contextAfter: [],
+                    afterRemaining: contextLines
+                ))
+                payloadBytes += display.text.utf8.count
+                    + contextRing.reduce(0) { $0 + $1.utf8.count }
+            }
+            contextRing.append(display.text)
+            if contextRing.count > contextLines {
+                contextRing.removeFirst(contextRing.count - contextLines)
+            }
+            return true
+        }
+
+        scanning: while stopOffset == nil {
+            guard let chunk = try? handle.read(upToCount: chunkSize),
+                  !chunk.isEmpty else { break }
+            var searchStart = chunk.startIndex
+            while let newlineIndex = chunk[searchStart...].firstIndex(of: 0x0A) {
+                let sliceBytes = chunk.distance(from: searchStart, to: newlineIndex)
+                let contentBytes = lineBytesSoFar + sliceBytes
+                if !skippingOversizedTail {
+                    let lineData = carry + chunk[searchStart..<newlineIndex]
+                    if !processLine(lineData, at: lineAbsStart, oversized: false) {
+                        break scanning
+                    }
+                }
+                lineAbsStart += contentBytes + 1
+                scannedThrough = lineAbsStart
+                lineBytesSoFar = 0
+                carry = Data()
+                skippingOversizedTail = false
+                searchStart = chunk.index(after: newlineIndex)
+            }
+            let trailing = chunk[searchStart...]
+            lineBytesSoFar += trailing.count
+            if !skippingOversizedTail {
+                carry.append(trailing)
+                if carry.count > maxLineBytes {
+                    // Match against the bounded prefix now, then skip the rest
+                    // of this line while keeping byte accounting exact.
+                    let prefix = Data(carry.prefix(maxLineBytes))
+                    if !processLine(prefix, at: lineAbsStart, oversized: true) {
+                        break scanning
+                    }
+                    carry = Data()
+                    skippingOversizedTail = true
+                }
+            }
+        }
+
+        // Trailing bytes without a final newline form the last line.
+        if stopOffset == nil, !skippingOversizedTail, !carry.isEmpty {
+            if processLine(carry, at: lineAbsStart, oversized: false) {
+                scannedThrough = lineAbsStart + carry.count
+            }
+        } else if stopOffset == nil, skippingOversizedTail {
+            scannedThrough = lineAbsStart + lineBytesSoFar
+        }
+
+        let matches = builders.map {
+            BackgroundTaskOutputMatch(
+                offset: $0.offset,
+                lineNumber: $0.lineNumber,
+                line: $0.line,
+                lineTruncated: $0.lineTruncated,
+                contextBefore: $0.contextBefore,
+                contextAfter: $0.contextAfter
+            )
+        }
+        return (matches, limitReached, stopOffset ?? max(scannedThrough, start))
     }
 
     private func utf8SafeOutputPage(
