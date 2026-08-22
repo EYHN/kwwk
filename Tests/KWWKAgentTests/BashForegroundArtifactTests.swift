@@ -6,9 +6,9 @@ import Testing
 /// A foreground command whose inline output was truncated used to have its raw
 /// output file deleted on completion, permanently losing the middle of the log
 /// — exactly where a build's first compile error lands. These tests pin the
-/// replacement contract: truncated output keeps a manager-tracked artifact and
-/// the truncation notice points at it, untruncated output leaves nothing
-/// behind, and retained artifacts are garbage-collected oldest first.
+/// replacement contract: truncated output keeps its raw artifact on disk and
+/// the truncation notice points at it; untruncated output leaves nothing
+/// behind.
 @Suite("Bash foreground output artifacts", .serialized)
 struct BashForegroundArtifactTests {
     private func makeTool(manager: BackgroundTaskManager, cwd: URL) -> AgentTool {
@@ -98,45 +98,5 @@ struct BashForegroundArtifactTests {
                 .contentsOfDirectory(atPath: outputDir.path)) ?? []
             #expect(leftovers.contains { $0.hasPrefix("fg_") })
         }
-    }
-
-    @Test("retained artifacts are garbage-collected oldest first")
-    func retainedArtifactsPruneOldestFirst() async throws {
-        let outputDir = makeTempDir()
-        defer { try? FileManager.default.removeItem(at: outputDir) }
-        let cwdDir = makeTempDir()
-        defer { try? FileManager.default.removeItem(at: cwdDir) }
-        let manager = BackgroundTaskManager(outputDir: outputDir)
-        await manager.setRetainedForegroundOutputLimits(
-            count: 2,
-            bytes: 64 * 1024 * 1024
-        )
-        let tool = makeTool(manager: manager, cwd: cwdDir)
-
-        var paths: [String] = []
-        for call in 0..<3 {
-            let result = try await tool.execute(
-                "gc-fg-\(call)",
-                ["command": .string("seq 1 100000")],
-                nil, nil
-            )
-            guard case .object(let details) = result.details ?? .null,
-                  case .string(let path) = details["outputFile"] ?? .null else {
-                Issue.record("expected details.outputFile for truncated output")
-                return
-            }
-            paths.append(path)
-        }
-        #expect(!FileManager.default.fileExists(atPath: paths[0]))
-        #expect(FileManager.default.fileExists(atPath: paths[1]))
-        #expect(FileManager.default.fileExists(atPath: paths[2]))
-    }
-}
-
-/// Expose the retention bounds so the GC test can squeeze them.
-extension BackgroundTaskManager {
-    func setRetainedForegroundOutputLimits(count: Int, bytes: Int) {
-        retainedForegroundOutputLimit = count
-        retainedForegroundOutputByteLimit = bytes
     }
 }

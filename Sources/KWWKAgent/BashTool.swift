@@ -717,13 +717,11 @@ private func runBashForegroundWithFlip(
 
     if let status = exit {
         // Completed within soft timeout. If the inline output had to be
-        // truncated, keep the raw artifact (manager-bounded GC) so the model
-        // can grep/page the omitted middle — a build's first compile error
+        // truncated, the raw artifact stays on disk so the model can
+        // grep/page the omitted middle — a build's first compile error
         // routinely lands there. Untruncated output needs no artifact.
         let output = bundle.readOutput(fullOutputPath: outputFile.path)
-        if output.truncated {
-            await manager.retainForegroundOutputFile(outputFile)
-        } else {
+        if !output.truncated {
             try? FileManager.default.removeItem(at: outputFile)
         }
         if cancellation?.isCancelled == true {
