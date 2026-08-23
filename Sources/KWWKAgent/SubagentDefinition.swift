@@ -245,8 +245,7 @@ public extension SubagentDefinition {
             - Use line references when they are available and useful.
             - Mention uncertainty when evidence is incomplete.
             """,
-            tools: tools.intersection(.readOnly),
-            fileAccessPolicy: .workspaceOnly
+            tools: tools.intersection(.readOnly)
         )
     }
 
