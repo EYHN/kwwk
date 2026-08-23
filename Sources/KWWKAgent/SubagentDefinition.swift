@@ -245,8 +245,7 @@ public extension SubagentDefinition {
             - Use line references when they are available and useful.
             - Mention uncertainty when evidence is incomplete.
             """,
-            tools: tools.intersection(.readOnly),
-            fileAccessPolicy: .workspaceOnly
+            tools: tools.intersection(.readOnly)
         )
     }
 
@@ -272,8 +271,7 @@ public extension SubagentDefinition {
             - Rollback or compatibility risks when relevant.
             - Open questions only if they block execution.
             """,
-            tools: tools.intersection(.readOnly),
-            fileAccessPolicy: .workspaceOnly
+            tools: tools.intersection(.readOnly)
         )
     }
 
@@ -297,8 +295,7 @@ public extension SubagentDefinition {
             - Explain the user-visible impact for each real bug.
             - If no issues are found, say so and call out residual risk or test gaps.
             """,
-            tools: tools.intersection(.readOnly),
-            fileAccessPolicy: .workspaceOnly
+            tools: tools.intersection(.readOnly)
         )
     }
 
@@ -330,8 +327,7 @@ public extension SubagentDefinition {
             - Recommended next steps.
             """,
             tools: safeTools,
-            bashCommandPolicy: .buildAndTestOnly,
-            fileAccessPolicy: .workspaceOnly
+            bashCommandPolicy: .buildAndTestOnly
         )
     }
 
