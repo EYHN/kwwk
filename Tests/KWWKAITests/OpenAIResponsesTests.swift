@@ -524,6 +524,53 @@ struct OpenAIResponsesTests {
         #expect(input?[2]["call_id"] as? String == "call_1")
     }
 
+    @Test("forwards tool_result images on a user message after function_call_output")
+    func toolResultImageEncoding() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let assistant = AssistantMessage(
+            content: [.toolCall(ToolCall(id: "call_1", name: "read", arguments: ["path": "a.png"]))],
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5",
+            stopReason: .toolUse
+        )
+        let context = Context(messages: [
+            .user(UserMessage(text: "look")),
+            .assistant(assistant),
+            .toolResult(ToolResultMessage(
+                toolCallId: "call_1",
+                toolName: "read",
+                content: [
+                    .text(TextContent(text: "Read image file [image/png, 1x1, 3 bytes]")),
+                    .image(ImageContent(data: "QUJD", mimeType: "image/png")),
+                ]
+            )),
+        ])
+        let s1 = provider.stream(model: Self.model, context: context, options: nil)
+        for await _ in s1 {}
+        let req = try #require(client.lastRequest?.body)
+        let json = try JSONSerialization.jsonObject(with: req) as? [String: Any]
+        let input = json?["input"] as? [[String: Any]]
+        #expect(input?.count == 4)
+        #expect(input?[2]["type"] as? String == "function_call_output")
+        #expect(input?[2]["output"] as? String == "Read image file [image/png, 1x1, 3 bytes]")
+        #expect(input?[3]["role"] as? String == "user")
+        let parts = input?[3]["content"] as? [[String: Any]]
+        #expect(parts?.count == 2)
+        #expect(parts?[1]["type"] as? String == "input_image")
+        #expect(parts?[1]["image_url"] as? String == "data:image/png;base64,QUJD")
+
+        // A model without image input keeps the plain function_call_output only.
+        var textOnly = Self.model
+        textOnly.input = [.text]
+        let s2 = provider.stream(model: textOnly, context: context, options: nil)
+        for await _ in s2 {}
+        let req2 = try #require(client.lastRequest?.body)
+        let json2 = try JSONSerialization.jsonObject(with: req2) as? [String: Any]
+        #expect((json2?["input"] as? [[String: Any]])?.count == 3)
+    }
+
     @Test("reports upstream error event as terminal stream error")
     func providerError() async throws {
         let errorSSE = """

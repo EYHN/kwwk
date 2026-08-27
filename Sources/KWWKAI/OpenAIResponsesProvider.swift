@@ -941,11 +941,37 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 let text = tr.content.compactMap { block -> String? in
                     if case .text(let t) = block { return t.text } else { return nil }
                 }.joined(separator: "\n")
+                let imageParts: [JSONValue] = model.input.contains(.image)
+                    ? tr.content.compactMap { block in
+                        guard case .image(let i) = block else { return nil }
+                        return .object([
+                            "type": .string("input_image"),
+                            "image_url": .string("data:\(i.mimeType);base64,\(i.data)"),
+                        ])
+                    }
+                    : []
                 out.append(.object([
                     "type": .string("function_call_output"),
                     "call_id": .string(tr.toolCallId),
-                    "output": .string(text),
+                    "output": .string(text.isEmpty && !imageParts.isEmpty ? "(see attached image)" : text),
                 ]))
+                // `function_call_output.output` is a plain string on every
+                // Responses-compatible endpoint we speak to (OpenAI, Codex,
+                // OpenRouter), so tool-result images ride on a user message
+                // right after the output — the same carrier the Completions
+                // provider uses. Without this the model only ever saw the
+                // "[image/webp, 1254x1254, ...]" note and went looking for OCR.
+                if !imageParts.isEmpty {
+                    var carrier: [JSONValue] = [
+                        .object(["type": .string("input_text"), "text": .string("Attached image(s) from tool result:")]),
+                    ]
+                    carrier.append(contentsOf: imageParts)
+                    out.append(.object([
+                        "type": .string("message"),
+                        "role": .string("user"),
+                        "content": .array(carrier),
+                    ]))
+                }
             }
         }
         return out
