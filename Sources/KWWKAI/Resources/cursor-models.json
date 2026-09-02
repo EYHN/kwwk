@@ -189,6 +189,206 @@
       "input" : 0,
       "output" : 0
     },
+    "id" : "claude-fable-5-1-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Low (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-max",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Max (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Medium (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-thinking-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Thinking (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-thinking-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Low Thinking (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-thinking-max",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Max Thinking (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-thinking-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Medium Thinking (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-thinking-xhigh",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Extra High Thinking (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-1-xhigh",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.1 1M Extra High (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
     "id" : "claude-fable-5-high",
     "input" : [
       "text",
