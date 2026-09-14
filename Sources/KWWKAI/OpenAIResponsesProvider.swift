@@ -17,7 +17,7 @@ import FoundationNetworking
 ///  - Output items are typed (`message`, `function_call`, `reasoning`) and
 ///    carry `output_index` + `content_index` for nested content.
 ///  - `parallel_tool_calls` is a top-level boolean.
-public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifecycle, @unchecked Sendable {
+public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifecycle, NativeCompactionProvider, @unchecked Sendable {
     public typealias URLBuilder = @Sendable (Model, StreamOptions?, URL) -> URL
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
     public typealias WebSocketURLBuilder = @Sendable (URL) -> URL
@@ -86,6 +86,47 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
 
     public func closeSession(sessionId: String) async {
         sessions.closeSession(sessionId: sessionId)
+    }
+
+    public func compact(model: Model, context: Context, instructions: String,
+                        options: StreamOptions?) async throws -> NativeCompactionResult? {
+        guard model.compat?.supportsServerCompaction != false,
+              model.provider == "openai-codex" || model.compat?.supportsServerCompaction == true else { return nil }
+        let url = urlBuilder(model, options, defaultBaseURL).appendingPathComponent("compact")
+        var nativeContext = context
+        nativeContext.messages = TransformMessages.normalize(context.messages, model: model)
+        let body: [String: JSONValue] = [
+            "model": .string(model.id),
+            "input": .array(Self.encodeInput(context: nativeContext, model: model)),
+            "instructions": .string(context.systemPrompt ?? ""),
+        ]
+        var headers = model.headers ?? [:]
+        for (key, value) in makeHeaders(options: options, accept: "application/json") {
+            mergeHeader(&headers, name: key, value: value, append: false)
+        }
+        if let sessionId = options?.sessionId { headers["session_id"] = sessionId }
+        let json = try await client.compactionJSON(url: url, headers: headers,
+            body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+        guard case .array(let output) = json["output"], output.contains(where: {
+            guard case .object(let item) = $0 else { return false }
+            if item["type"] == .string("compaction"), case .string(let data) = item["encrypted_content"] {
+                return !data.isEmpty
+            }
+            if item["type"] == .string("compaction_summary"), case .string(let text) = item["summary"] {
+                return !text.isEmpty
+            }
+            return false
+        }) else { throw NativeCompactionError(message: "Codex compaction returned no compaction item") }
+        // Response-only statuses must not be replayed as input fields.
+        let items = output.map { item -> JSONValue in
+            guard case .object(var object) = item else { return item }
+            object.removeValue(forKey: "status")
+            return .object(object)
+        }
+        return NativeCompactionResult(
+            summary: "Earlier conversation is preserved in provider-native compacted context.",
+            payload: NativeCompactionPayload(model: model, items: items,
+                fallbackMessages: TransformMessages.expandNativeCompaction(context.messages)))
     }
 
     private func run(
@@ -913,6 +954,9 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         for message in context.messages {
             switch message {
             case .user(let u):
+                if let native = u.nativeCompaction, native.canReplay(with: model) {
+                    out.append(contentsOf: native.items)
+                }
                 var parts: [JSONValue] = []
                 for block in u.content {
                     switch block {

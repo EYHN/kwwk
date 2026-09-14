@@ -18,12 +18,28 @@ public enum TransformMessages {
     /// text; the error-skip + orphan-synthesis pass then reshapes the message
     /// sequence so tool calls and tool results stay balanced.
     public static func normalize(_ messages: [Message], model: Model) -> [Message] {
-        var result = downgradeUnsupportedImages(messages, model: model)
+        var result = downgradeUnsupportedImages(expandNativeCompaction(messages, model: model), model: model)
         result = stripCrossModelThinking(result, model: model)
         result = normalizeToolCallIds(result, model: model)
         result = sanitizeSurrogates(result)
         result = repairToolFlow(result)
         return result
+    }
+
+    /// A foreign provider cannot read Codex's encrypted summary. Restore its
+    /// source prefix so normal context management can summarize it for that model.
+    public static func expandNativeCompaction(_ messages: [Message], model: Model? = nil) -> [Message] {
+        messages.flatMap { message -> [Message] in
+            guard case .user(var user) = message, let native = user.nativeCompaction,
+                  model.map({ !native.canReplay(with: $0) }) ?? true else { return [message] }
+            if let fallback = native.fallbackMessages { return expandNativeCompaction(fallback) }
+            if let summary = native.textSummary {
+                // The UI recap can be shorter than the provider's full summary.
+                user.content = [.text(TextContent(text: summary))] + user.content
+            }
+            user.nativeCompaction = nil
+            return [.user(user)]
+        }
     }
 
     // MARK: - (a) Image downgrade

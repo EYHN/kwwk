@@ -20,13 +20,15 @@ enum ContextTokenEstimator {
     static func estimate(messages: [Message], model: Model? = nil) -> ContextTokenEstimate {
         ContextTokenEstimate(
             providerReported: latestValidProviderUsage(in: messages, model: model),
-            locallyEstimated: messages.reduce(0) { $0 + estimate(message: $1) }
+            locallyEstimated: model.map { model in
+                TransformMessages.expandNativeCompaction(messages, model: model).reduce(0) { $0 + estimate(message: $1) }
+            } ?? messages.reduce(0) { $0 + estimate(message: $1) }
         )
     }
 
     static func estimate(context: AgentContext, model: Model? = nil) -> ContextTokenEstimate {
         var local = estimate(text: context.systemPrompt) + 8
-        local += context.messages.reduce(0) { $0 + estimate(message: $1) }
+        local += estimate(messages: context.messages, model: model).locallyEstimated
         for tool in context.tools {
             local += 12
             local += estimate(text: tool.name)
@@ -43,6 +45,9 @@ enum ContextTokenEstimator {
         var tokens = 6 // role and message framing
         switch message {
         case .user(let user):
+            if let native = user.nativeCompaction {
+                tokens += native.items.reduce(0) { $0 + estimate(json: $1) }
+            }
             for block in user.content {
                 switch block {
                 case .text(let text):

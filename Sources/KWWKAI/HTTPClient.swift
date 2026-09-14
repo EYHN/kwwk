@@ -24,6 +24,17 @@ public protocol HTTPClient: Sendable {
         body: Data?,
         cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>)
+    func stream(url: URL, method: String, headers: [String: String], body: Data?,
+                cancellation: CancellationHandle?, timeoutSeconds: TimeInterval)
+        async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>)
+}
+
+extension HTTPClient {
+    public func stream(url: URL, method: String, headers: [String: String], body: Data?,
+                       cancellation: CancellationHandle?, timeoutSeconds: TimeInterval)
+        async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+        try await stream(url: url, method: method, headers: headers, body: body, cancellation: cancellation)
+    }
 }
 
 public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
@@ -56,7 +67,15 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
         body: Data?,
         cancellation: CancellationHandle?
     ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+        try await stream(url: url, method: method, headers: headers, body: body,
+                         cancellation: cancellation, timeoutSeconds: session.configuration.timeoutIntervalForRequest)
+    }
+
+    public func stream(url: URL, method: String, headers: [String: String], body: Data?,
+                       cancellation: CancellationHandle?, timeoutSeconds: TimeInterval)
+        async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
         var request = URLRequest(url: url)
+        request.timeoutInterval = timeoutSeconds
         request.httpMethod = method
         for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
         request.httpBody = body
