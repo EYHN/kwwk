@@ -49,9 +49,9 @@ struct AnthropicEmptyTextTests {
         }
     }
 
-    @Test("blank tool output still answers its call", arguments: [false, true])
-    func emptyToolResult(isError: Bool) async throws {
-        let model = model("kimi-coding")
+    @Test("blank tool output explicitly answers its call", arguments: [false, true], ["anthropic", "kimi-coding"])
+    func emptyToolResult(isError: Bool, provider: String) async throws {
+        let model = model(provider)
         let messages = try await body([
             .user(UserMessage(text: "run command")),
             .assistant(AssistantMessage(
@@ -72,7 +72,8 @@ struct AnthropicEmptyTextTests {
         #expect(call["type"] as? String == "tool_use")
         #expect(result["type"] as? String == "tool_result")
         #expect(result["tool_use_id"] as? String == call["id"] as? String)
-        #expect(result["content"] == nil)
+        let content = try #require(result["content"] as? [[String: Any]])
+        #expect(content.isEmpty)
         #expect((result["is_error"] as? Bool ?? false) == isError)
         #expect(result["cache_control"] != nil)
     }
