@@ -410,7 +410,11 @@ private func registerAnthropicOAuth(
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: contextWindow,
-        maxTokens: maxTokens
+        maxTokens: maxTokens,
+        // OAuth changes auth and token ceilings, not the model's wire format.
+        // Preserve adaptive thinking and effort mappings just as pi does.
+        compat: catalog?.compat,
+        thinkingLevelMap: catalog?.thinkingLevelMap
     )
 
     let suffix = context1m ? " · Anthropic OAuth (1M ctx)" : " · Anthropic OAuth"

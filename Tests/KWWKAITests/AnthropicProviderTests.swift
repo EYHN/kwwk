@@ -764,14 +764,13 @@ struct AnthropicProviderTests {
         var model = Self.sampleModel
         model.contextWindow = 1_000_000
         model.maxTokens = 128_000
-        _ = provider.stream(
+        _ = await provider.stream(
             model: model,
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
-        )
-        try? await Task.sleep(nanoseconds: 300_000_000)
+        ).result()
         let headers = client.lastRequest?.headers ?? [:]
-        #expect(headers["user-agent"] == "claude-cli/2.1.75")
+        #expect(headers["user-agent"] == "claude-cli/2.1.251")
         #expect(headers["x-app"] == "cli")
         #expect(headers["anthropic-beta"]?.contains("claude-code-20250219") == true)
         #expect(headers["anthropic-beta"]?.contains("oauth-2025-04-20") == true)
