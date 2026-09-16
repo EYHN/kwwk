@@ -676,10 +676,11 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             var entry: [String: Any] = [
                 "type": "tool_result",
                 "tool_use_id": tr.toolCallId,
+                "content": inner,
             ]
             // An empty tool result is valid and must still answer its tool
-            // call. Omit the optional content instead of sending empty text.
-            if !inner.isEmpty { entry["content"] = inner }
+            // call. Kimi rejects omitted content with "Invalid request Error"
+            // but accepts an explicit empty array. Do not send empty text.
             if tr.isError { entry["is_error"] = true }
             return ["role": "user", "content": [entry]]
         }
