@@ -590,9 +590,11 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
     private static func encodeMessage(_ message: Message, allowEmptySignature: Bool) -> [String: Any]? {
         switch message {
         case .user(let u):
-            let content = u.content.map { block -> [String: Any] in
+            let content = u.content.compactMap { block -> [String: Any]? in
                 switch block {
-                case .text(let t): return ["type": "text", "text": t.text]
+                case .text(let t):
+                    guard !t.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return ["type": "text", "text": t.text]
                 case .image(let i):
                     return [
                         "type": "image",
@@ -604,6 +606,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                     ]
                 }
             }
+            guard !content.isEmpty else { return nil }
             return ["role": "user", "content": content]
 
         case .assistant(let a):
@@ -611,6 +614,9 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             for block in a.content {
                 switch block {
                 case .text(let t):
+                    // Cross-provider history and tool-only turns can contain
+                    // empty text. Kimi rejects these even beside valid blocks.
+                    guard !t.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
                     blocks.append(["type": "text", "text": t.text])
                 case .thinking(let th):
                     // pi parity (anthropic-messages.ts:1072-1104).
@@ -647,12 +653,15 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                     blocks.append(entry)
                 }
             }
+            guard !blocks.isEmpty else { return nil }
             return ["role": "assistant", "content": blocks]
 
         case .toolResult(let tr):
-            let inner = tr.content.map { block -> [String: Any] in
+            let inner = tr.content.compactMap { block -> [String: Any]? in
                 switch block {
-                case .text(let t): return ["type": "text", "text": t.text]
+                case .text(let t):
+                    guard !t.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+                    return ["type": "text", "text": t.text]
                 case .image(let i):
                     return [
                         "type": "image",
@@ -667,8 +676,10 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             var entry: [String: Any] = [
                 "type": "tool_result",
                 "tool_use_id": tr.toolCallId,
-                "content": inner,
             ]
+            // An empty tool result is valid and must still answer its tool
+            // call. Omit the optional content instead of sending empty text.
+            if !inner.isEmpty { entry["content"] = inner }
             if tr.isError { entry["is_error"] = true }
             return ["role": "user", "content": [entry]]
         }
