@@ -326,7 +326,8 @@ public enum AgentContextCompactor {
         if cancellation?.isCancelled == true || Task.isCancelled {
             return .failure(.failed(AgentContextCompactionError.cancelled.localizedDescription))
         }
-        if respectMinimumMessages, context.messages.count < config.minMessages {
+        if respectMinimumMessages,
+           TransformMessages.expandNativeCompaction(context.messages, model: model).count < config.minMessages {
             return .failure(.tooFewMessages(count: context.messages.count))
         }
 

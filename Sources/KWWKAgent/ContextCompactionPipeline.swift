@@ -72,7 +72,7 @@ enum ContextCompactionPipeline {
             guard let plan = CompactionPlanner.plan(
                 messages: request.context.messages,
                 keepRecentTokens: keepRecentTokens
-            ) else {
+            ) ?? portableRecapPlan(for: request) else {
                 throw ContextCompactionPipelineError.noCompressibleMessages
             }
             guard previousCut != plan.firstKeptMessageIndex else { break }
@@ -141,6 +141,22 @@ enum ContextCompactionPipeline {
         )
     }
 
+    /// A foreign opaque recap still owns compressible history even when the
+    /// visible transcript contains only that recap and an unanswered prompt.
+    /// Summarize the whole fallback prefix, keeping cut indices in the original
+    /// transcript rather than in the expanded history persisted inside it.
+    private static func portableRecapPlan(for request: ContextCompactionPipelineRequest) -> CompactionPlan? {
+        guard case .user(let recap)? = request.context.messages.first,
+              let native = recap.nativeCompaction, !native.canReplay(with: request.contextModel),
+              let fallback = native.fallbackMessages, !fallback.isEmpty else { return nil }
+        let tail = Array(request.context.messages.dropFirst())
+        return CompactionPlan(previousSummary: nil, previousTurnPrefixSummary: nil,
+            previousRecapForFacts: CompactionPlanner.summaryText(from: .user(recap)),
+            messagesToSummarize: [], turnPrefixToSummarize: [], recentTail: tail,
+            firstKeptMessageIndex: 1,
+            estimatedRecentTokens: tail.reduce(0) { $0 + ContextTokenEstimator.estimate(message: $1) })
+    }
+
     private static func summarizeHistory(
         plan: CompactionPlan,
         request: ContextCompactionPipelineRequest
@@ -189,6 +205,7 @@ enum ContextCompactionPipeline {
             : Array(request.context.messages.prefix(plan.firstKeptMessageIndex))
         if let transform = request.transformContext { messages = await transform(messages, request.cancellation) }
         if let convert = request.convertToLlm { messages = await convert(messages) }
+        messages = messages.map(redactedForPersistence)
         let context = Context(systemPrompt: request.context.systemPrompt, messages: messages,
                               tools: request.context.tools.map { $0.toKWWKAITool() })
         let instructions = """
@@ -199,7 +216,9 @@ enum ContextCompactionPipeline {
         The final \(plan.recentTail.count) transcript records are retained verbatim after
         this summary; summarize only the history preceding that retained tail.
         """
-        let options = StreamOptions(apiKey: auth?.token, sessionId: request.sessionId,
+        let maxTokens = anthropic ? min(recapTokenBudget, CompactionSummaryGenerator.outputTokenReserve(
+            model: model, config: request.config)) : nil
+        let options = StreamOptions(maxTokens: maxTokens, apiKey: auth?.token, sessionId: request.sessionId,
                                     metadata: auth?.metadata, resolvedAuth: auth,
                                     reasoning: request.summaryReasoning, cancellation: request.cancellation)
         guard let native = try await CompactionRetry.run(config: request.config, cancellation: request.cancellation,

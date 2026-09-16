@@ -46,7 +46,7 @@ enum ContextTokenEstimator {
         switch message {
         case .user(let user):
             if let native = user.nativeCompaction {
-                tokens += native.items.reduce(0) { $0 + estimate(json: $1) }
+                tokens += native.items.reduce(0) { $0 + estimateNativeItem($1) }
             }
             for block in user.content {
                 switch block {
@@ -165,6 +165,20 @@ enum ContextTokenEstimator {
             }
         }
         return nil
+    }
+
+    private static func estimateNativeItem(_ value: JSONValue) -> Int {
+        switch value {
+        case .array(let values):
+            return values.reduce(0) { $0 + estimateNativeItem($1) }
+        case .object(let fields):
+            if fields["type"] == .string("input_image") || fields["type"] == .string("image") {
+                return imageTokenAllowance
+            }
+            return fields.reduce(2) { $0 + estimate(text: $1.key) + estimateNativeItem($1.value) }
+        default:
+            return estimate(json: value)
+        }
     }
 
     private static func estimate(json: JSONValue) -> Int {

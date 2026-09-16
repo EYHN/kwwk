@@ -164,6 +164,110 @@ struct CompactionRequestTests {
         _ = try result.get()
     }
 
+    @Test("foreign native history compacts with only a recap and unanswered tail", arguments: [0, 1, 3])
+    func foreignRecap(tailCount: Int) async throws {
+        let original = history().map { message -> Message in
+            guard case .user(var user) = message else { return message }
+            user.content.append(.text(TextContent(text: String(repeating: "A", count: 32_000))))
+            return .user(user)
+        }
+        var recap = UserMessage(text: "<previous-session-summary>Native history</previous-session-summary>", source: .compaction)
+        recap.nativeCompaction = .init(model: Self.model,
+            items: [["type": "compaction", "encrypted_content": "opaque"]], fallbackMessages: original)
+        var model = Self.model
+        model.provider = "different"
+        model.contextWindow = 16_000
+        let tail = (0..<tailCount).map { Message.user(UserMessage(text: "unanswered \($0)")) }
+        #expect(ContextTokenEstimator.estimate(messages: [.user(recap)] + tail, model: model).effective > model.contextWindow)
+        let attempts = CompactionAttempts()
+        let result = try await AgentContextCompactor.compactMessages(
+            messages: [.user(recap)] + tail, model: model, sessionId: nil,
+            config: .init(keepRecentTokens: 40, useNativeCompaction: false), targetTokens: 4_000,
+            streamFn: { model, context, _ in
+                _ = await attempts.next()
+                let transcript = String(decoding: try JSONEncoder().encode(context.messages), as: UTF8.self)
+                #expect(transcript.contains("request 0"))
+                let stream = AssistantMessageStream()
+                stream.end(AssistantMessage(content: [.text(TextContent(text: "portable history"))],
+                    api: model.api, provider: model.provider, model: model.id))
+                return stream
+            }).get()
+        #expect(await attempts.count == 1)
+        #expect(result.firstKeptMessageIndex == 1)
+        #expect(result.messagesCompacted == 1)
+        #expect(Array(result.messages.dropFirst()) == tail)
+        #expect(result.tokensAfter! <= 4_000)
+        guard case .user(let saved) = result.messages[0] else { Issue.record("missing recap"); return }
+        #expect(saved.nativeCompaction == nil)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SessionStore(directory: directory)
+        try await store.appendCompaction(id: "foreign", cwd: "/tmp", replacementMessages: result.messages,
+            messagesCompacted: result.messagesCompacted, firstKeptMessageIndex: result.firstKeptMessageIndex, reason: .compact)
+        let restored = try await store.load(id: "foreign")
+        #expect(restored.messages == result.messages)
+    }
+
+    @Test("native image estimates do not depend on base64 length")
+    func nativeImageEstimate() {
+        func estimate(_ count: Int) -> Int {
+            var recap = UserMessage(text: "summary", source: .compaction)
+            recap.nativeCompaction = .init(model: Self.model, items: [
+                ["type": "message", "role": "user", "content": [
+                    ["type": "input_image", "image_url": .string("data:image/png;base64," + String(repeating: "A", count: count))]
+                ]], ["type": "compaction", "encrypted_content": "opaque"]
+            ])
+            return ContextTokenEstimator.estimate(message: .user(recap))
+        }
+        #expect(estimate(10) == estimate(1_000_000))
+        #expect(estimate(1_000_000) < 2_000)
+    }
+
+    @Test("fallback persistence recursively redacts hidden goal continuations")
+    func redactNativeFallback() throws {
+        let hidden = Message.user(UserMessage(text: goalContinuationMarker + " PRIVATE_OBJECTIVE"))
+        var inner = UserMessage(text: "inner", source: .compaction)
+        inner.nativeCompaction = .init(model: Self.model, items: [], fallbackMessages: [hidden])
+        var outer = UserMessage(text: "outer", source: .compaction)
+        outer.nativeCompaction = .init(model: Self.model,
+            items: [["type": "compaction", "encrypted_content": "opaque"]], fallbackMessages: [.user(inner)])
+        let redacted = redactedForPersistence(.user(outer))
+        let json = String(decoding: try JSONEncoder().encode(redacted), as: UTF8.self)
+        #expect(!json.contains("PRIVATE_OBJECTIVE"))
+        #expect(json.contains("redacted goal continuation"))
+        #expect(json.contains("opaque"))
+        #expect(String(decoding: try JSONEncoder().encode(outer), as: UTF8.self).contains("PRIVATE_OBJECTIVE"))
+    }
+
+    @Test("Anthropic native requests honor summary budget and redact hidden inputs", arguments: [0, 1_024])
+    func nativeSummaryBudget(cap: Int) async throws {
+        let model = Model(id: "claude-sonnet-4-6", api: "anthropic-messages", provider: "anthropic",
+            contextWindow: 200_000, maxTokens: 64_000)
+        let attempts = CompactionAttempts()
+        let config = AgentContextCompactionConfig(keepRecentTokens: 40, summaryMaxTokens: cap,
+            nativeCompaction: { model, context, _, options in
+                _ = await attempts.next()
+                let expected = cap > 0 ? cap : 1_800
+                #expect(options?.maxTokens == expected)
+                let encoded = try AnthropicProvider.encodeBody(model: model, context: context, options: options)
+                let body = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
+                #expect(body["max_tokens"] == .int(expected))
+                #expect(!String(decoding: encoded, as: UTF8.self).contains("PRIVATE_OBJECTIVE"))
+                return NativeCompactionResult(summary: "summary", payload: .init(model: model,
+                    items: [["type": "compaction", "content": "summary"]]))
+            })
+        let messages: [Message] = [
+            .user(UserMessage(text: String(repeating: "A", count: 240_000))),
+            .assistant(AssistantMessage(content: [.text(TextContent(text: "done"))],
+                api: model.api, provider: model.provider, model: model.id)),
+            .user(UserMessage(text: goalContinuationMarker + " PRIVATE_OBJECTIVE")),
+            .user(UserMessage(text: "next"))
+        ]
+        _ = try await AgentContextCompactor.compactMessages(messages: messages, model: model,
+            sessionId: nil, config: config).get()
+        #expect(await attempts.count == 1)
+    }
+
     private func history() -> [Message] {
         (0..<3).flatMap { index in
             [Message.user(UserMessage(text: "request \(index) " + String(repeating: "data ", count: 100))),
