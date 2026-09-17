@@ -452,14 +452,17 @@ the summary stream cap automatic; set a positive value only when an explicit
 hard output limit is required.
 
 Compaction requests retry transient network, rate-limit, and provider-overload
-failures twice by default, with 1s/2s backoff. Set
-`AgentContextCompactionConfig.maxRequestRetries` and `retryBaseDelayMs` to tune
-this separately from `maxSummaryAttempts` (context-reduction attempts).
-Cancellation, invalid requests, truncated summaries, and context overflow do
-not retry the same request.
+failures through `AgentContextCompactionConfig.summaryRetryPolicy` (five total
+attempts by default, exponential backoff with jitter and Retry-After support).
+Native requests and local summaries each have one retry owner, separate from
+`maxSummaryAttempts` (context-reduction attempts). Cancellation, HTTP 402,
+invalid requests, output-limit truncation, and context overflow do not retry
+the same request. Premature transport EOF remains a transient failure.
 
-Native compaction is enabled when available: Codex uses its authenticated
-`responses/compact` endpoint; supported Anthropic models on the official route
+Native compaction is enabled when available: ChatGPT Codex uses an authenticated
+Responses V2 stream with `compaction_trigger` (its subscription endpoint does
+not expose `/responses/compact`); explicitly opted-in Responses routes retain
+the V1 `/responses/compact` protocol. Supported Anthropic models on the official route
 use the compaction beta once context reaches 55k tokens. Compatible routes can
 opt in with `ModelCompat.supportsServerCompaction = true`; `false` disables the
 capability. Unsupported routes, smaller Anthropic contexts, or a separate

@@ -4,13 +4,14 @@ import Testing
 
 @Suite("Native compaction providers")
 struct NativeCompactionTests {
-    static let codex = Model(id: "gpt-5.6", api: "chatgpt-codex", provider: "openai-codex")
+    static let codexSSE = "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\",\"status\":\"completed\"}}\n\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\n"
+    static let codex = Model(id: "gpt-5.6", api: "chatgpt-codex", provider: "chatgpt-codex")
     static let claude = Model(id: "claude-sonnet-4-6", api: "anthropic-messages",
                               provider: "anthropic", baseURL: "https://api.anthropic.com")
 
     @Test("Codex compact uses subscription route and replays all replacement items")
     func codexRoundTrip() async throws {
-        let client = StubSSEClient(body: #"{"output":[{"type":"message","role":"user","content":[{"type":"input_text","text":"goal"}]},{"type":"compaction","encrypted_content":"opaque","status":"completed"}]}"#)
+        let client = StubSSEClient(body: Self.codexSSE)
         let provider = ProviderVariants.chatgptCodex(accessToken: "token", accountId: "account",
                                                     client: client, webSocketClient: nil)
         let source: [Message] = [.user(UserMessage(text: "goal"))]
@@ -18,11 +19,13 @@ struct NativeCompactionTests {
             context: Context(systemPrompt: "system", messages: source), instructions: "summary",
             options: StreamOptions(sessionId: "session")))
         let request = try #require(client.lastRequest)
-        #expect(request.url.absoluteString == "https://chatgpt.com/backend-api/codex/responses/compact")
+        #expect(request.url.absoluteString == "https://chatgpt.com/backend-api/codex/responses")
         #expect(request.headers["chatgpt-account-id"] == "account")
         #expect(request.headers["session_id"] == "session")
         let body = try JSONDecoder().decode([String: JSONValue].self, from: #require(request.body))
-        #expect(Set(body.keys) == ["model", "input", "instructions"])
+        #expect(body["stream"] == true)
+        #expect(body["store"] == false)
+        #expect(body["input"]?.arrayValue?.last == ["type": "compaction_trigger"])
         #expect(body["instructions"] == "system")
         var recap = UserMessage(text: compacted.summary, source: .compaction)
         recap.nativeCompaction = compacted.payload
@@ -39,7 +42,7 @@ struct NativeCompactionTests {
 
     @Test("Anthropic compact keeps tools and auth, then replays encrypted compaction")
     func anthropicRoundTrip() async throws {
-        let client = StubSSEClient(body: #"{"content":[{"type":"compaction","content":"Keep working on the SDK","encrypted_content":"signed"}]}"#)
+        let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"Keep working on the SDK","encrypted_content":"signed"}]}"#)
         let provider = AnthropicProvider(client: client, defaultAPIKey: "token",
             extraHeaders: ["anthropic-beta": "oauth-2025-04-20"],
             authHeaderBuilder: { ["authorization": "Bearer \($0)"] })
@@ -81,14 +84,70 @@ struct NativeCompactionTests {
     @Test("missing native payload and HTTP failures remain errors")
     func nativeFailures() async throws {
         let malformed = ProviderVariants.chatgptCodex(client: StubSSEClient(body: #"{"output":[{"type":"compaction"}]}"#))
-        await #expect(throws: NativeCompactionError.self) {
+        await #expect(throws: ProviderFailure.self) {
             try await malformed.compact(model: Self.codex, context: Context(messages: []), instructions: "", options: nil)
         }
         let failing = ProviderVariants.chatgptCodex(client: StubSSEClient(body: "overloaded", statusCode: 529))
         do {
             _ = try await failing.compact(model: Self.codex, context: Context(messages: []), instructions: "", options: nil)
             Issue.record("expected HTTP failure")
-        } catch let error as NativeCompactionError { #expect(error.status == 529) }
+        } catch let error as ProviderFailure { #expect(error.httpStatus == 529) }
+    }
+
+    // Adapted from omp compaction-v2-streaming.ts/remote-compaction.test.ts:
+    // completion alone or an unfinished native item must not replace history.
+    @Test(arguments: ["", "data: {\"type\":\"response.completed\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}}\n\n"])
+    func codexRejectsIncompleteNativePayload(body: String) async {
+        let provider = ProviderVariants.chatgptCodex(client: StubSSEClient(body: body))
+        await #expect(throws: ProviderFailure.self) {
+            try await provider.compact(model: Self.codex, context: Context(messages: []), instructions: "", options: nil)
+        }
+    }
+
+    @Test func nativePaymentFailureRemainsTerminal() async {
+        let provider = ProviderVariants.chatgptCodex(client: StubSSEClient(body: "temporarily unavailable", statusCode: 402))
+        do {
+            _ = try await provider.compact(model: Self.codex, context: Context(messages: []), instructions: "", options: nil)
+            Issue.record("Expected payment failure")
+        } catch {
+            let failure = ProviderFailure.capture(error)
+            #expect(failure.httpStatus == 402)
+            #expect(!failure.isRetryable)
+        }
+    }
+
+    @Test func anthropicAssistantFinalIsNotAPrefill() async throws {
+        let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}]}"#)
+        _ = try await AnthropicProvider(client: client).compact(model: Self.claude,
+            context: Context(messages: [.assistant(AssistantMessage(content: [.text(TextContent(text: "notes\n"))],
+                api: Self.claude.api, provider: Self.claude.provider, model: Self.claude.id))]), instructions: "", options: nil)
+        let body = try JSONDecoder().decode([String: JSONValue].self, from: #require(client.lastRequest?.body))
+        #expect(body["messages"]?.arrayValue?.last?["role"] == "user")
+    }
+
+    @Test func explicitResponsesV1RouteStillWorks() async throws {
+        var model = Self.codex
+        model.api = "openai-responses"
+        model.provider = "openai"
+        var compat = ModelCompat()
+        compat.supportsServerCompaction = true
+        model.compat = compat
+        let client = StubSSEClient(body: #"{"output":[{"type":"compaction","encrypted_content":"opaque"}]}"#)
+        let result = try await OpenAIResponsesProvider(client: client).compact(model: model,
+            context: Context(messages: []), instructions: "", options: nil)
+        #expect(result != nil)
+        #expect(client.lastRequest?.url.path.hasSuffix("/responses/compact") == true)
+    }
+
+    // pi #7048's no-truncated-summary invariant also applies to native payloads.
+    @Test(arguments: ["max_tokens", "end_turn", "refusal"])
+    func anthropicPartialSummaryIsNotAccepted(stop: String) async {
+        let body = "{\"stop_reason\":\"\(stop)\",\"content\":[{\"type\":\"compaction\",\"content\":\"partial summary\"}]}"
+        let provider = AnthropicProvider(client: StubSSEClient(body: body))
+        await #expect(throws: ProviderFailure.self) {
+            try await provider.compact(model: Self.claude, context: Context(messages: []), instructions: "", options: nil)
+        }
     }
 }
 

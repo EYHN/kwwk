@@ -37,6 +37,26 @@ is claimed to cover all these combinations. In particular, pi allows positive
 retry hints to override some permanent statuses; our HTTP 402 veto intentionally
 does not. `ProviderAuditRegressionTests` documents these combinations.
 
+## Native compaction references
+
+Native compaction follow-up references pi at
+`1283afd0d0685d1ffe88aa56a725c0e4ad3cfc7b`, specifically regressions
+`6647-compaction-retries-transient-stream-drop.test.ts` and
+`7048-compaction-truncated-summary.test.ts` under
+`packages/coding-agent/test/suite/regressions/`. Native routing/replay and
+test scenarios reference omp at `116190d317ca319ae17ab624cb479c76a1ca4704`:
+`packages/agent/src/compaction/{anthropic,openai,compaction-v2-streaming}.ts`,
+`packages/agent/test/{anthropic-native-compaction,remote-compaction,compaction-oneshot-retry}.test.ts`.
+The Swift adaptations cover retry opt-out/exhaustion without nested loops,
+unchanged history on failure, below-trigger local summarization, opaque-payload
+persistence and replay, assistant-final padding, and complete V2 output.
+Pi's inspected compaction paths implement local summaries; native protocol
+parity is with omp, not a claim that both projects implement these endpoints.
+Unlike omp, this PR does not add WebSocket compaction, V2-to-V1 fallback on the
+subscription route, custom remote-summary endpoints, or speculative compaction.
+Retained Codex user messages are preserved rather than silently truncated; the
+existing post-compaction budget check rejects insufficient reduction.
+
 ## MIT License (pi and oh-my-pi)
 
 Copyright (c) 2025 Mario Zechner

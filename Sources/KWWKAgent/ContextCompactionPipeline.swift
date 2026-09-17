@@ -221,7 +221,7 @@ enum ContextCompactionPipeline {
         let options = StreamOptions(maxTokens: maxTokens, apiKey: auth?.token, sessionId: request.sessionId,
                                     metadata: auth?.metadata, resolvedAuth: auth,
                                     reasoning: request.summaryReasoning, cancellation: request.cancellation)
-        guard let native = try await CompactionRetry.run(config: request.config, cancellation: request.cancellation,
+        guard let native = try await request.config.summaryRetryPolicy.run(cancellation: request.cancellation,
             operation: { try await compact(model, context, instructions, options) }) else { return nil }
         var replacement = await makeReplacement(plan: plan, historySummary: native.summary,
             turnPrefixSummary: nil, recapTokenBudget: recapTokenBudget, request: request)

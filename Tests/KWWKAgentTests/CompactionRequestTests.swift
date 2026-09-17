@@ -5,6 +5,48 @@ import Testing
 
 @Suite("Compaction request policy")
 struct CompactionRequestTests {
+    // pi #6647 / omp oneshot retry: callers can disable retries, and an
+    // exhausted logical call never multiplies attempts through nested loops.
+    @Test(arguments: [1, 3], [false, true])
+    func oneRetryOwner(maxAttempts: Int, native: Bool) async throws {
+        let attempts = CompactionAttempts()
+        let original = history()
+        let agent = Agent(options: AgentOptions(initialState: AgentInitialState(model: Self.model, messages: original),
+            streamFn: { _, _, _ in
+                _ = await attempts.next()
+                throw ProviderFailure(message: "terminated")
+            }))
+        var config = AgentContextCompactionConfig(keepRecentTokens: 40,
+            summaryRetryPolicy: .init(maxAttempts: maxAttempts, baseDelayMs: 0))
+        if native {
+            config.nativeCompaction = { _, _, _, _ in
+                _ = await attempts.next()
+                throw ProviderFailure(message: "terminated", httpStatus: 503)
+            }
+        }
+        let outcome = await AgentContextCompactor.compactAgent(agent: agent, sessionId: nil, config: config)
+        guard case .failed = outcome else { Issue.record("Expected exhausted compaction"); return }
+        #expect(await attempts.count == maxAttempts)
+        #expect(agent.state.messages == original)
+    }
+
+    @Test func anthropicBelowTriggerUsesLocalSummary() async throws {
+        var model = Self.model
+        model.api = "anthropic-messages"
+        model.provider = "anthropic"
+        model.id = "claude-opus-4-8"
+        let config = AgentContextCompactionConfig(keepRecentTokens: 40,
+            nativeCompaction: { _, _, _, _ in Issue.record("Native request below trigger floor"); return nil })
+        let result = await AgentContextCompactor.compactMessages(messages: history(), model: model,
+            sessionId: nil, config: config, streamFn: { model, _, _ in
+                let stream = AssistantMessageStream()
+                stream.end(AssistantMessage(content: [.text(TextContent(text: "local summary"))],
+                    api: model.api, provider: model.provider, model: model.id))
+                return stream
+            })
+        _ = try result.get()
+    }
+
     static let model = Model(id: "compaction-test", api: "test", provider: "test",
                              contextWindow: 100_000, maxTokens: 4_000)
 
@@ -13,9 +55,9 @@ struct CompactionRequestTests {
         let attempts = CompactionAttempts()
         let summary = try await AgentContextCompactor.summarizeTranscript(
             messages: [.user(UserMessage(text: "work"))], model: Self.model, sessionId: nil,
-            config: .init(retryBaseDelayMs: 0), streamFn: { model, _, _ in
+            config: .init(summaryRetryPolicy: .init(baseDelayMs: 0)), streamFn: { model, _, _ in
                 let count = await attempts.next()
-                if count == 1 { throw NativeCompactionError(status: 503, message: "HTTP 503 unavailable") }
+                if count == 1 { throw ProviderFailure(message: "HTTP 503 unavailable", httpStatus: 503) }
                 let stream = AssistantMessageStream()
                 stream.end(AssistantMessage(content: count == 2 ? [] : [.text(TextContent(text: "summary"))],
                     api: model.api, provider: model.provider, model: model.id,
@@ -32,16 +74,16 @@ struct CompactionRequestTests {
         for reason in ["HTTP 400 invalid input with artifact 503", "HTTP 401 connection unauthorized", "context length exceeded"] {
             let attempts = CompactionAttempts()
             await #expect(throws: (any Error).self) {
-                try await CompactionRetry.run(config: .init(retryBaseDelayMs: 0), cancellation: nil) { () async throws -> String in
+                try await ProviderRetryPolicy(baseDelayMs: 0).run(cancellation: nil) { () async throws -> String in
                     _ = await attempts.next()
-                    throw NativeCompactionError(message: reason)
+                    throw ProviderFailure(message: reason)
                 }
             }
             #expect(await attempts.count == 1)
         }
         let attempts = CompactionAttempts()
         await #expect(throws: (any Error).self) {
-            try await CompactionRetry.run(config: .init(retryBaseDelayMs: 0), cancellation: nil) { () async throws -> String in
+            try await ProviderRetryPolicy(baseDelayMs: 0).run(cancellation: nil) { () async throws -> String in
                 _ = await attempts.next()
                 throw AgentContextCompactionError.summaryTruncated
             }
@@ -54,9 +96,9 @@ struct CompactionRequestTests {
         let cancellation = CancellationHandle()
         let attempts = CompactionAttempts()
         let task = Task {
-            try await CompactionRetry.run(config: .init(retryBaseDelayMs: 1_000), cancellation: cancellation) { () async throws -> String in
+            try await ProviderRetryPolicy(baseDelayMs: 1_000).run(cancellation: cancellation) { () async throws -> String in
                 _ = await attempts.next()
-                throw NativeCompactionError(status: 529, message: "overloaded")
+                throw ProviderFailure(message: "overloaded", httpStatus: 529)
             }
         }
         while await attempts.count == 0 { await Task.yield() }
@@ -69,9 +111,9 @@ struct CompactionRequestTests {
     func nativePersistence() async throws {
         let attempts = CompactionAttempts()
         let messages = history()
-        let config = AgentContextCompactionConfig(keepRecentTokens: 40, retryBaseDelayMs: 0,
+        let config = AgentContextCompactionConfig(keepRecentTokens: 40, summaryRetryPolicy: .init(baseDelayMs: 0),
             nativeCompaction: { model, context, _, _ in
-                if await attempts.next() == 1 { throw NativeCompactionError(status: 503, message: "unavailable") }
+                if await attempts.next() == 1 { throw ProviderFailure(message: "unavailable", httpStatus: 503) }
                 #expect(context.messages.count < messages.count)
                 return NativeCompactionResult(summary: "native summary", payload: .init(model: model,
                     items: [["type": "compaction", "encrypted_content": "opaque"]], fallbackMessages: context.messages))
@@ -79,7 +121,7 @@ struct CompactionRequestTests {
         let result = try await AgentContextCompactor.compactMessages(messages: messages, model: Self.model,
             sessionId: nil, config: config, streamFn: { _, _, _ in
                 Issue.record("local summary must not run")
-                throw NativeCompactionError(message: "unexpected local call")
+                throw ProviderFailure(message: "unexpected local call")
             }).get()
         #expect(await attempts.count == 2)
         #expect(result.messages.last == messages.last)
@@ -122,7 +164,7 @@ struct CompactionRequestTests {
         await APIRegistry.shared.register(provider, scope: model.provider)
         let agent = Agent(initialState: AgentInitialState(model: model, messages: history()))
         let outcome = await AgentContextCompactor.compactAgent(agent: agent, sessionId: nil,
-            config: .init(keepRecentTokens: 40, retryBaseDelayMs: 0))
+            config: .init(keepRecentTokens: 40, summaryRetryPolicy: .init(baseDelayMs: 0)))
         await APIRegistry.shared.unregisterScope(model.provider)
         guard case .compacted = outcome else { Issue.record("native compaction failed: \(outcome)"); return }
         #expect(await provider.calls.count == 1)
@@ -135,14 +177,14 @@ struct CompactionRequestTests {
         let attempts = CompactionAttempts()
         let original = history()
         let agent = Agent(initialState: AgentInitialState(model: Self.model, messages: original))
-        let config = AgentContextCompactionConfig(keepRecentTokens: 40, retryBaseDelayMs: 0,
+        let config = AgentContextCompactionConfig(keepRecentTokens: 40, summaryRetryPolicy: .init(baseDelayMs: 0),
             nativeCompaction: { _, _, _, _ in
                 _ = await attempts.next()
-                throw NativeCompactionError(status: 529, message: "overloaded")
+                throw ProviderFailure(message: "overloaded", httpStatus: 529)
             })
         let outcome = await AgentContextCompactor.compactAgent(agent: agent, sessionId: nil, config: config)
         guard case .failed = outcome else { Issue.record("expected failure"); return }
-        #expect(await attempts.count == 3)
+        #expect(await attempts.count == config.summaryRetryPolicy.maxAttempts)
         #expect(agent.state.messages == original)
     }
 

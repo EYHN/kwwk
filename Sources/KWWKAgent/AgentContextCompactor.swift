@@ -37,9 +37,6 @@ public struct AgentContextCompactionConfig: Sendable {
     /// Transient retries per self-contained summary call, separate from the
     /// compaction planner's attempts to reduce the resulting context size.
     public var summaryRetryPolicy: ProviderRetryPolicy
-    /// Transient request retries, independent of attempts to reduce context size.
-    public var maxRequestRetries: Int
-    public var retryBaseDelayMs: UInt64
     public var useNativeCompaction: Bool
     /// Custom transports may supply native compaction. With no custom stream,
     /// nil resolves the registered provider automatically.
@@ -58,8 +55,6 @@ public struct AgentContextCompactionConfig: Sendable {
         recoveryRatio: Double = 0.8,
         maxSummaryAttempts: Int = 2,
         summaryRetryPolicy: ProviderRetryPolicy = .init(),
-        maxRequestRetries: Int = 2,
-        retryBaseDelayMs: UInt64 = 1_000,
         useNativeCompaction: Bool = true,
         nativeCompaction: NativeCompactionFn? = nil
     ) {
@@ -75,8 +70,6 @@ public struct AgentContextCompactionConfig: Sendable {
         self.recoveryRatio = recoveryRatio
         self.maxSummaryAttempts = maxSummaryAttempts
         self.summaryRetryPolicy = summaryRetryPolicy
-        self.maxRequestRetries = maxRequestRetries
-        self.retryBaseDelayMs = retryBaseDelayMs
         self.nativeCompaction = nativeCompaction
         self.useNativeCompaction = useNativeCompaction
     }

@@ -53,3 +53,14 @@ LiveStoredOAuthSmokeTests`. This uses existing ChatGPT and Claude OAuth logins,
 may refresh them normally, and sends one fixed tiny prompt per provider, without
 tools or project context. It prints only model/status/event counts, never tokens
 or raw provider errors. Normal test runs do not access the credential store.
+
+Native compaction uses `summaryRetryPolicy.run` for throwing requests, sharing
+the same classifier and delays as local summaries without a nested retry loop.
+Native HTTP failures retain status, bounded body diagnostics and retry headers.
+Codex V2 requires both terminal completion and exactly one nonempty compaction
+item; Anthropic requires a compaction stop reason and nonempty summary. Neither
+partial native output nor a failed request replaces the source transcript.
+`KWWK_LIVE_NATIVE_COMPACTION=1 swift test --filter LiveNativeCompactionTests`
+explicitly opts into synthetic native-compaction and persisted-payload replay
+checks with existing logins. Claude's synthetic input exceeds its 50k trigger;
+no project data or tools are sent. Error messages are bounded and redacted.

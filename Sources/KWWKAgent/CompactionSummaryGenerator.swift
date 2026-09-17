@@ -28,12 +28,6 @@ struct CompactionSummaryRequest: Sendable {
 
 enum CompactionSummaryGenerator {
     static func generate(_ request: CompactionSummaryRequest) async throws -> String {
-        try await CompactionRetry.run(config: request.config, cancellation: request.cancellation) {
-            try await generateOnce(request)
-        }
-    }
-
-    private static func generateOnce(_ request: CompactionSummaryRequest) async throws -> String {
         try checkCancellation(request.cancellation)
 
         let prompt = makePrompt(

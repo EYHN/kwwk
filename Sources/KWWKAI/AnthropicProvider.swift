@@ -73,7 +73,13 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         let base = model.baseURL.isEmpty ? defaultBaseURL.absoluteString : model.baseURL
         let url = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/v1/messages")!
         guard Self.supportsNativeCompaction(model: model, baseURL: base) else { return nil }
-        let encoded = try Self.encodeBody(model: model, context: context, options: options,
+        var nativeContext = context
+        if case .assistant? = nativeContext.messages.last {
+            // Do not let an assistant-final transcript become an unsupported
+            // prefill. This synthetic control message is not persisted.
+            nativeContext.messages.append(.user(UserMessage(text: "Compact the preceding conversation; do not continue the task.")))
+        }
+        let encoded = try Self.encodeBody(model: model, context: nativeContext, options: options,
             systemPromptPrefix: systemPromptPrefix, maximumOutputTokens: maximumOutputTokens)
         var body = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
         body["stream"] = false
@@ -87,6 +93,12 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         headers["anthropic-beta"] = beta + "compact-2026-01-12"
         let json = try await client.compactionJSON(url: url, headers: headers,
             body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+        guard json["stop_reason"] == "compaction" else {
+            throw ProviderFailure(message: "Invalid Anthropic compaction completion: expected compaction stop reason",
+                                  rawStopReason: json["stop_reason"].flatMap { value in
+                                      if case .string(let reason) = value { return reason }; return nil
+                                  })
+        }
         guard case .array(let content) = json["content"],
               let block = content.first(where: {
                   guard case .object(let item) = $0 else { return false }
@@ -94,7 +106,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
               }), case .object(let item) = block,
               case .string(let summary) = item["content"],
               !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw NativeCompactionError(message: "Anthropic compaction returned no summary")
+            throw ProviderFailure(message: "Anthropic compaction returned no summary")
         }
         return NativeCompactionResult(summary: summary,
             payload: NativeCompactionPayload(model: model, items: [block]))

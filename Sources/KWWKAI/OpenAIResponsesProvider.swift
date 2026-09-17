@@ -91,22 +91,45 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     public func compact(model: Model, context: Context, instructions: String,
                         options: StreamOptions?) async throws -> NativeCompactionResult? {
         guard model.compat?.supportsServerCompaction != false,
-              model.provider == "openai-codex" || model.compat?.supportsServerCompaction == true else { return nil }
-        let url = urlBuilder(model, options, defaultBaseURL).appendingPathComponent("compact")
+              model.api == "chatgpt-codex" || model.compat?.supportsServerCompaction == true else { return nil }
+        let codex = model.api == "chatgpt-codex"
+        let responsesURL = urlBuilder(model, options, defaultBaseURL)
+        let url = codex ? responsesURL : responsesURL.appendingPathComponent("compact")
         var nativeContext = context
         nativeContext.messages = TransformMessages.normalize(context.messages, model: model)
-        let body: [String: JSONValue] = [
+        let input = Self.encodeInput(context: nativeContext, model: model)
+        var body: [String: JSONValue] = [
             "model": .string(model.id),
-            "input": .array(Self.encodeInput(context: nativeContext, model: model)),
+            "input": .array(input),
             "instructions": .string(context.systemPrompt ?? ""),
         ]
+        if codex {
+            // ChatGPT subscriptions expose V2 on /responses, not V1's
+            // /responses/compact. Reuse the live request serializer.
+            let request = try Self.makeRequest(model: model, context: nativeContext,
+                                               options: options, bodyOverrides: bodyOverrides)
+            body = request.fields
+            body["input"] = .array(input + [["type": "compaction_trigger"]])
+            body["store"] = false
+            body["stream"] = true
+        }
         var headers = model.headers ?? [:]
-        for (key, value) in makeHeaders(options: options, accept: "application/json") {
+        for (key, value) in makeHeaders(options: options, accept: codex ? "text/event-stream" : "application/json") {
             mergeHeader(&headers, name: key, value: value, append: false)
         }
         if let sessionId = options?.sessionId { headers["session_id"] = sessionId }
-        let json = try await client.compactionJSON(url: url, headers: headers,
-            body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+        let json: [String: JSONValue]
+        if codex {
+            let compacted = try await client.compactionSSE(url: url, headers: headers,
+                body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+            // V2 compacts assistant history; original user messages remain
+            // part of the replacement input, as in omp/Codex.
+            let retained = input.filter { $0["role"] == .string("user") }
+            json = ["output": .array(retained + [compacted])]
+        } else {
+            json = try await client.compactionJSON(url: url, headers: headers,
+                body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+        }
         guard case .array(let output) = json["output"], output.contains(where: {
             guard case .object(let item) = $0 else { return false }
             if item["type"] == .string("compaction"), case .string(let data) = item["encrypted_content"] {
@@ -116,7 +139,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 return !text.isEmpty
             }
             return false
-        }) else { throw NativeCompactionError(message: "Codex compaction returned no compaction item") }
+        }) else { throw ProviderFailure(message: "Codex compaction returned no compaction item") }
         // Response-only statuses must not be replayed as input fields.
         let items = output.map { item -> JSONValue in
             guard case .object(var object) = item else { return item }
