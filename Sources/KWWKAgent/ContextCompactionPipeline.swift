@@ -193,13 +193,17 @@ enum ContextCompactionPipeline {
         // without Array.removeFirst()/front insertion shifting every pending
         // chunk on long histories.
         var pending = [transformed]
+        var providerBudget: Int?
+        let minimumBudget = min(16_384, max(1_024, request.summaryModel.contextWindow / 8))
         while !pending.isEmpty {
-            let transcriptBudget = try CompactionSummaryGenerator.availableTranscriptTokens(
+            try checkCancellation(request.cancellation)
+            let plannedBudget = try CompactionSummaryGenerator.availableTranscriptTokens(
                 model: request.summaryModel,
                 config: summaryConfig,
                 previousSummary: accumulator,
                 kind: kind
             )
+            let transcriptBudget = min(plannedBudget, providerBudget ?? plannedBudget)
             let candidate = pending.removeLast()
             let refined = CompactionSummaryChunker.chunks(
                 candidate,
@@ -211,20 +215,37 @@ enum ContextCompactionPipeline {
                 pending.append(contentsOf: refined.reversed())
                 continue
             }
-            accumulator = try await CompactionSummaryGenerator.generate(
-                CompactionSummaryRequest(
-                    messages: chunk,
-                    model: request.summaryModel,
-                    sessionId: request.sessionId,
-                    config: summaryConfig,
-                    previousSummary: accumulator,
-                    kind: kind,
-                    reasoning: request.summaryReasoning,
-                    authResolver: request.authResolver,
-                    stream: request.stream,
-                    cancellation: request.cancellation
+            do {
+                accumulator = try await CompactionSummaryGenerator.generate(
+                    CompactionSummaryRequest(
+                        messages: chunk,
+                        model: request.summaryModel,
+                        sessionId: request.sessionId,
+                        config: summaryConfig,
+                        previousSummary: accumulator,
+                        kind: kind,
+                        reasoning: request.summaryReasoning,
+                        authResolver: request.authResolver,
+                        stream: request.stream,
+                        cancellation: request.cancellation,
+                        transcriptTokenLimit: transcriptBudget
+                    )
                 )
-            )
+            } catch {
+                try checkCancellation(request.cancellation)
+                guard !(error is CancellationError),
+                      ContextLimitClassifier.isInputOverflow(error.localizedDescription) else { throw error }
+                // Halve the serialized input actually sent, not an inflated
+                // catalog allowance. Only the failed chunk is replayed; keep
+                // the accumulator from all successfully summarized chunks.
+                let sent = CompactionTranscriptSerializer.serialize(
+                    chunk, limits: summaryConfig.transcriptLimits, maxTokens: transcriptBudget
+                )
+                let reduced = min(transcriptBudget, ContextTokenEstimator.estimate(text: sent)) / 2
+                guard reduced >= minimumBudget else { throw error }
+                providerBudget = reduced
+                pending.append(chunk)
+            }
         }
         return accumulator
     }

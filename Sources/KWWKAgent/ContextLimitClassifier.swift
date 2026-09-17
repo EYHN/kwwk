@@ -42,6 +42,14 @@ enum ContextLimitClassifier {
             return true
         }
 
+        // xAI's OpenAI-compatible endpoint reports both limits this way.
+        if normalized.range(
+            of: #"maximum prompt length is \d+.*request contains \d+ tokens"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
         // Anthropic reports this before "prompt is too long" when the
         // requested output allowance and input cannot coexist in the window:
         // "input length and max_tokens exceed context limit: X + Y > Z".

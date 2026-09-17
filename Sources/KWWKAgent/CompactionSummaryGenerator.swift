@@ -22,6 +22,8 @@ struct CompactionSummaryRequest: Sendable {
     let authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     let stream: StreamFn?
     let cancellation: CancellationHandle?
+    /// A provider-rejected window can impose a tighter bound than the catalog.
+    var transcriptTokenLimit: Int? = nil
 }
 
 enum CompactionSummaryGenerator {
@@ -37,11 +39,12 @@ enum CompactionSummaryGenerator {
             model: request.model,
             config: request.config
         )
-        let transcriptBudget = try transcriptTokenBudget(
+        let plannedBudget = try transcriptTokenBudget(
             prompt: prompt,
             model: request.model,
             outputTokens: outputReserveTokens
         )
+        let transcriptBudget = min(plannedBudget, request.transcriptTokenLimit ?? plannedBudget)
         let transcript = CompactionTranscriptSerializer.serialize(
             request.messages,
             limits: request.config.transcriptLimits,
