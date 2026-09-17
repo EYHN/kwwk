@@ -304,6 +304,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 Self.finishAborted(out: out, state: state)
                 return .completed
             }
+            if !Self.permitsWebSocketFallback(error) {
+                session.resetWebSocketState()
+                Self.finishWebSocketFailure(error, out: out, state: state)
+                return .failedWithoutFallback
+            }
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             await options?.emitVerbose(
                 source: verboseSource,
@@ -407,6 +412,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 )
                 Self.finishAborted(out: out, state: state)
                 return .completed
+            }
+            if !Self.permitsWebSocketFallback(error) {
+                session.resetWebSocketState()
+                Self.finishWebSocketFailure(error, out: out, state: state)
+                return .failedWithoutFallback
             }
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             if !progress.hasReceivedEvent {
@@ -730,11 +740,12 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 endedWithoutTerminalEvent: true
             )
         }
-        let final = state.finalize()
+        let final: AssistantMessage
         if finishOnStreamEnd {
-            out.push(.done(reason: final.stopReason, message: final))
+            final = state.asError(text: "OpenAI Responses stream ended before a terminal response event")
+            out.push(.error(reason: .error, error: final))
             out.end(final)
-        }
+        } else { final = state.finalize() }
         return OpenAIResponsesDriveResult(
             message: final,
             completed: false,
@@ -743,6 +754,32 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     }
 
     // MARK: - Encoding
+
+    /// A transport switch is not a second chance at a rejected API request.
+    /// Explicit HTTP/provider failures go to the shared policy, which also
+    /// honors Retry-After. Only pre-output transport/setup failures may fall back.
+    private static func permitsWebSocketFallback(_ error: any Error) -> Bool {
+        let failure = ProviderFailure.capture(error)
+        guard failure.httpStatus == nil, failure.providerCode == nil, failure.shouldRetry != false else { return false }
+        switch failure.category {
+        case .transport, .timeout, .unknown: return true
+        default: return false
+        }
+    }
+
+    private static func finishWebSocketFailure(
+        _ error: any Error, out: AssistantMessageStream, state: OpenAIResponsesState
+    ) {
+        let failure = ProviderFailure.capture(error)
+        if failure.category == .cancelled {
+            finishAborted(out: out, state: state)
+            return
+        }
+        var message = state.asError(text: failure.message)
+        message.failure = failure
+        out.push(.error(reason: .error, error: message))
+        out.end(message)
+    }
 
     private static func makeRequest(
         model: Model, context: Context, options: StreamOptions?,

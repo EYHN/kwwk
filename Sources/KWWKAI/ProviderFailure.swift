@@ -20,12 +20,15 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
     public var shouldRetry: Bool?
     public var rawStopReason: String?
     public var stopDetails: JSONValue?
+    /// Bounded provider-owned diagnostic (e.g. OpenRouter metadata.raw), kept
+    /// separate from display copy so a wrapper cannot hide the actual cause.
+    public var upstreamMessage: String?
     public var errorDescription: String? { message }
 
     public init(message: String, httpStatus: Int? = nil, providerCode: String? = nil,
                 transportDomain: String? = nil, transportCode: Int? = nil,
                 requestId: String? = nil, retryAfterMs: Double? = nil, shouldRetry: Bool? = nil,
-                rawStopReason: String? = nil, stopDetails: JSONValue? = nil) {
+                rawStopReason: String? = nil, stopDetails: JSONValue? = nil, upstreamMessage: String? = nil) {
         self.message = message
         self.httpStatus = httpStatus
         self.providerCode = providerCode
@@ -36,6 +39,7 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         self.shouldRetry = shouldRetry
         self.rawStopReason = rawStopReason
         self.stopDetails = stopDetails
+        self.upstreamMessage = upstreamMessage.map(Self.boundedDiagnostic)
     }
 
     public static func capture(_ error: any Error) -> Self {
@@ -47,7 +51,7 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
                 var failure = parseJSONObject(body).map { payload($0, fallback: message) } ?? Self(message: message)
                 failure.httpStatus = status
                 return failure
-            case .grpc(let code, _): return Self(message: message, providerCode: code)
+            case .grpc(let code, _): return Self(message: message, providerCode: Self.grpcCode(code))
             case .tlsSetupFailed: return Self(message: message, transportDomain: NSURLErrorDomain, transportCode: -1200)
             default: return Self(message: message)
             }
@@ -74,7 +78,6 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
     /// unrestricted response dump. A body's code/type is not the HTTP status.
     public static func payload(_ value: JSONValue, fallback: String = "Provider error") -> Self {
         guard case .object(let root) = value else { return Self(message: fallback) }
-        if case .string(let message) = root["error"] { return Self(message: String(message.prefix(4096))) }
         let error: [String: JSONValue]
         if case .object(let nested) = root["error"] { error = nested } else { error = root }
         func string(_ value: JSONValue?) -> String? {
@@ -86,9 +89,17 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         for key in ["status_code", "status", "code"] {
             if case .int(let number) = error[key] ?? root[key], number >= 400, number <= 599 { status = number; break }
         }
-        return Self(message: String((string(error["message"]) ?? string(root["message"]) ?? fallback).prefix(4096)),
+        let metadata: [String: JSONValue]
+        if case .object(let value) = error["metadata"] ?? root["metadata"] { metadata = value } else { metadata = [:] }
+        let upstream: String?
+        if let raw = metadata["raw"] {
+            if case .string(let text) = raw { upstream = text }
+            else if let data = try? JSONEncoder().encode(raw) { upstream = String(decoding: data, as: UTF8.self) }
+            else { upstream = nil }
+        } else { upstream = nil }
+        return Self(message: String((string(root["error"]) ?? string(error["message"]) ?? string(root["message"]) ?? fallback).prefix(4096)),
                     httpStatus: status, providerCode: code,
-                    requestId: string(root["request_id"]) ?? string(error["request_id"]))
+                    requestId: string(root["request_id"]) ?? string(error["request_id"]), upstreamMessage: upstream)
     }
 
     static func http(_ response: HTTPURLResponse, body: AsyncThrowingStream<Data, Error>) async -> Self {
@@ -134,37 +145,85 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         // Payment/account failures cannot be repaired by replay, even when a
         // proxy includes transient transport prose or an explicit retry hint.
         if status == 402 { return .quota }
-        let text = [providerCode, rawStopReason, message].compactMap { $0 }.joined(separator: " ").lowercased()
+        let text = [providerCode, rawStopReason, message, upstreamMessage].compactMap { $0 }.joined(separator: " ").lowercased()
+        // The outer HTTP response governs nested transport prose. Overflow is
+        // a distinct recovery only for an input rejection, never auth/limits.
+        if status == 401 || status == 403 { return .authentication }
+        if status == nil || status == 400 || status == 413,
+           ProviderContextLimit.isInputOverflow(text) { return .contextOverflow }
+        if let status, (400..<500).contains(status), status != 408, status != 429 { return .invalidRequest }
+        switch providerCode?.lowercased() {
+        case "canceled", "cancelled": return .cancelled
+        case "permission_denied", "unauthenticated": return .authentication
+        case "invalid_argument", "not_found", "already_exists", "failed_precondition", "aborted", "out_of_range", "unimplemented", "data_loss": return .invalidRequest
+        default: break
+        }
         let domain = transportDomain ?? Self.match(#"\bdomain\s*=\s*(NSURLErrorDomain|NSPOSIXErrorDomain)\s+code"#, in: message)
         let code = transportCode ?? Self.match(#"\bdomain\s*=\s*(?:NSURLErrorDomain|NSPOSIXErrorDomain)\s+code\s*=\s*(-?\d+)\b"#, in: message).flatMap(Int.init)
+        if ["refusal", "content_filter", "sensitive", "safety", "guardrail_intervened", "prohibited_content", "blocklist", "recitation", "spii"].contains(where: text.contains) { return .refusal }
+        if ["insufficient_quota", "out of budget", "available balance", "billing", "monthly quota", "daily quota", "insufficient credits", "credits exhausted",
+            "monthly usage limit", "usage limit reached", "usage_limit_reached", "gousagelimiterror", "freeusagelimiterror"].contains(where: text.contains) { return .quota }
+        // An actual concurrency/short-window cap is backpressure, not spent
+        // account credit. Match cap signals, not benign concurrency wording.
+        if Self.isTransientLimit(text) { return .rateLimit }
+        if text.contains("quota exceeded") { return .quota }
+        if status == 408 { return .timeout }
+        if status == 429 { return .rateLimit }
+        if let status, (500..<600).contains(status) { return .server }
         if domain?.lowercased() == NSURLErrorDomain.lowercased(), let code {
             if code == -999 { return .cancelled }
             if code == -1001 { return .timeout }
             return [-1003, -1004, -1005, -1006, -1009].contains(code) ? .transport : .invalidRequest
         }
-        if httpStatus != 429, ProviderContextLimit.isInputOverflow(text) { return .contextOverflow }
-        if ["refusal", "content_filter", "sensitive", "safety", "guardrail_intervened", "prohibited_content", "blocklist", "recitation", "spii"].contains(where: text.contains) { return .refusal }
-        if ["insufficient_quota", "quota exceeded", "out of budget", "available balance", "billing",
-            "monthly usage limit", "usage limit reached", "usage_limit_reached", "gousagelimiterror", "freeusagelimiterror"].contains(where: text.contains) { return .quota }
-        if status == 401 || status == 403 { return .authentication }
-        if let status, (400..<500).contains(status), status != 408, status != 429 { return .invalidRequest }
-        if status == 408 { return .timeout }
-        if status == 429 { return .rateLimit }
-        if let status, (500..<600).contains(status) { return .server }
         if domain?.lowercased() == NSPOSIXErrorDomain.lowercased(), let code {
             return [Int(ECONNRESET), Int(ECONNABORTED), Int(ENOTCONN), Int(EPIPE), Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH)].contains(code) ? .transport : .invalidRequest
+        }
+        switch providerCode?.lowercased() {
+        case "deadline_exceeded": return .timeout
+        case "resource_exhausted": return .rateLimit
+        case "unavailable", "internal": return .server
+        default: break
         }
         if ["unauthorized", "forbidden", "invalid api key", "authentication_error", "permission_denied", "unauthenticated"].contains(where: text.contains) { return .authentication }
         if ["invalid", "validation", "bad request", "unsupported", "schema", "missing required", "not found"].contains(where: text.contains) { return .invalidRequest }
         if text.contains("timeout") || text.contains("timed out") || text.contains("deadline_exceeded") { return .timeout }
         if ["rate limit", "rate_limit", "throttlingexception", "too many requests", "resourceexhausted", "resource_exhausted", "resource exhausted"].contains(where: text.contains) { return .rateLimit }
-        if ["overloaded", "internal error", "server error", "service unavailable", "bad gateway", "temporarily",
+        if ["overloaded", "internal error", "internal_error", "server error", "service unavailable", "service_unavailable", "bad gateway", "temporarily",
             "server_error", "internalserverexception", "serviceunavailableexception", "no_capacity", "at capacity", "insufficient capacity", "capacity exhausted",
-            "you can retry your request", "try your request again", "exceeded request buffer limit"].contains(where: text.contains) { return .server }
+            "you can retry your request", "please retry your request", "try your request again", "exceeded request buffer limit"].contains(where: text.contains) { return .server }
         if ["network", "connection", "disconnect", "econnreset", "enotconn", "epipe", "broken pipe", "reset by peer",
-            "socket closed", "socket error", "closed before", "closed unexpectedly", "stream stall", "fetch failed",
+            "socket closed", "socket error", "socket hang up", "other side closed", "reset before headers", "http2 request did not get a response", "closed before", "closed unexpectedly", "stream stall", "fetch failed",
             "enotfound", "eai_again", "getaddrinfo", "ended without", "stream ended before", "terminated"].contains(where: text.contains) { return .transport }
         return .unknown
+    }
+
+    // gRPC trailers use numbers; Connect end-streams use the equivalent names.
+    // Normalize only at the gRPC boundary, never arbitrary provider/HTTP codes.
+    private static func grpcCode(_ raw: String) -> String {
+        let names = ["ok", "cancelled", "unknown", "invalid_argument", "deadline_exceeded", "not_found",
+                     "already_exists", "permission_denied", "resource_exhausted", "failed_precondition",
+                     "aborted", "out_of_range", "unimplemented", "internal", "unavailable", "data_loss", "unauthenticated"]
+        if let index = Int(raw), names.indices.contains(index) { return names[index] }
+        return raw.lowercased()
+    }
+
+    private static func isTransientLimit(_ text: String) -> Bool {
+        let patterns = [
+            #"\bconcurren\w*\b[^\n]{0,60}\b(?:limit|quota|exceed\w*|reach\w*)\b"#,
+            #"\b(?:limit|quota|exceed\w*|reach\w*)\b[^\n]{0,60}\bconcurren\w*\b"#,
+            #"\btoo many\s+concurren\w*\s+(?:requests?|invocations?)\b"#,
+            #"\b(?:rate|quota|limit)\b[^\n]{0,80}\bper (?:second|minute)\b"#,
+        ]
+        return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func boundedDiagnostic(_ input: String) -> String {
+        var text = String(input.prefix(4096))
+        for pattern in [#"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*"#,
+                        #"(?i)\"(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token)\"\s*:\s*\"[^\"]*(?:\"|$)"#] {
+            text = text.replacingOccurrences(of: pattern, with: "[redacted]", options: .regularExpression)
+        }
+        return text
     }
 
     public var isRetryable: Bool {

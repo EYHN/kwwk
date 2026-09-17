@@ -46,7 +46,7 @@ enum CursorConnectResponse {
         guard let error = obj["error"] as? [String: Any] else { return nil }
         let code = error["code"] as? String ?? "unknown"
         let message = error["message"] as? String ?? "Unknown error"
-        return CursorConnectError.endStream("\(code): \(message)")
+        return CursorConnectError.grpc(status: code, message: message)
     }
 }
 

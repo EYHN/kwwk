@@ -37,3 +37,19 @@ No retry UI, automatic model switching, credential rotation, or unlimited retry
 was introduced. Existing stream retry events remain available to internal
 subscribers. See `THIRD_PARTY_NOTICES.md` for the pi/omp test provenance and the
 intentional differences from upstream.
+
+Audit follow-up: Responses EOF without a terminal event is a failure, including
+when partial text arrived. OpenRouter `metadata.raw` is retained separately as
+bounded, credential-redacted upstream diagnostics, so nested context overflow
+can enter input shrinking. String-valued SSE errors still retain outer status.
+WebSocket transport fallback never bypasses a known provider HTTP rejection or
+retry veto; URLSession upgrade responses contribute status and retry headers.
+Cursor numeric gRPC trailers and named Connect errors share structured codes.
+Concurrent-request quotas are backpressure; exhausted account credit is terminal.
+HTTP 402 is always terminal, including with explicit positive retry hints.
+
+Opt-in smoke check: `KWWK_LIVE_STORED_OAUTH=1 swift test --filter
+LiveStoredOAuthSmokeTests`. This uses existing ChatGPT and Claude OAuth logins,
+may refresh them normally, and sends one fixed tiny prompt per provider, without
+tools or project context. It prints only model/status/event counts, never tokens
+or raw provider errors. Normal test runs do not access the credential store.

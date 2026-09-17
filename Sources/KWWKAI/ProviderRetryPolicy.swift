@@ -3,7 +3,9 @@ import Foundation
 /// A single retry owner per logical call: providers report evidence, the Agent
 /// or one-shot caller schedules attempts. This avoids nested retry multiplication.
 public struct ProviderRetryPolicy: Sendable {
-    public var maxAttempts: Int
+    public var maxAttempts: Int {
+        didSet { maxAttempts = max(1, maxAttempts) }
+    }
     public var baseDelayMs: UInt64
     public var maxRetryDelayMs: Int?
     public init(maxAttempts: Int = 5, baseDelayMs: UInt64 = 1_000, maxRetryDelayMs: Int? = nil) {

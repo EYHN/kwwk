@@ -24,6 +24,19 @@ rotation or model fallback; permanent account limits do not retry the same
 credential; no automatic replay after committed text or tools. JavaScript SDK
 class names and timers are adapted to Swift errors and cancellation.
 
+Audit follow-up at the same pinned revisions: pi's
+`packages/ai/test/provider-error-body-regression.test.ts` and
+`packages/ai/src/api/openai-completions.ts` inform the OpenRouter nested-error
+cases; omp's `packages/ai/test/rate-limit-utils.test.ts` informs concurrent-quota
+versus account-quota cases. Both Responses implementations reject premature EOF.
+The Codex WebSocket implementations distinguish transport fallback from provider
+rejection; our URLSession handshake-response cases are native regressions, not
+literal upstream test ports. Numeric gRPC normalization, string SSE outer-status
+retention, and mutable attempt-count clamping are local fixes. Neither upstream
+is claimed to cover all these combinations. In particular, pi allows positive
+retry hints to override some permanent statuses; our HTTP 402 veto intentionally
+does not. `ProviderAuditRegressionTests` documents these combinations.
+
 ## MIT License (pi and oh-my-pi)
 
 Copyright (c) 2025 Mario Zechner
