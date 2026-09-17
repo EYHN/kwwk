@@ -111,20 +111,8 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
-                // Surface the JSON error body like the other providers.
-                var bodyBytes = Data()
-                for try await chunk in stream {
-                    bodyBytes.append(chunk)
-                    if bodyBytes.count > 4096 { break }
-                }
-                let bodyText = String(data: bodyBytes, encoding: .utf8) ?? ""
-                let preview = bodyText.isEmpty
-                    ? ""
-                    : ": " + bodyText.replacingOccurrences(of: "\n", with: " ").prefix(500)
-                let msg = Self.makeError(
-                    api: api, model: model,
-                    text: "Gemini returned status \(response.statusCode)\(preview)"
-                )
+                let failure = await ProviderFailure.http(response, body: stream)
+                let msg = Self.makeError(api: api, model: model, text: failure.message, failure: failure)
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
                 return
@@ -143,7 +131,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
             } else {
-                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                let msg = Self.makeError(api: api, model: model, text: "\(error)", failure: .capture(error))
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
             }
@@ -156,6 +144,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         state: GoogleGeminiState
     ) async throws {
         var emittedStart = false
+        var hasFinishReason = false
         for try await sse in events {
             if state.signal?.isCancelled == true {
                 let aborted = state.asAborted()
@@ -164,6 +153,27 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 return
             }
             guard case .object(let obj)? = parseJSONObject(sse.data) else { continue }
+            if case .object(let feedback) = obj["promptFeedback"],
+               case .string(let reason) = feedback["blockReason"], reason != "BLOCK_REASON_UNSPECIFIED" {
+                var message = state.snapshot()
+                message.stopReason = .error
+                message.failure = ProviderFailure(message: "Gemini prompt blocked: \(reason)",
+                                                   providerCode: "refusal", rawStopReason: reason)
+                message.errorMessage = message.failure?.message
+                out.push(.error(reason: .error, error: message))
+                out.end(message)
+                return
+            }
+            if let payload = obj["error"], payload != .null {
+                let failure = ProviderFailure.payload(.object(obj))
+                var message = state.snapshot()
+                message.stopReason = .error
+                message.errorMessage = failure.message
+                message.failure = failure
+                out.push(.error(reason: .error, error: message))
+                out.end(message)
+                return
+            }
 
             // Usage appears on most chunks; record the latest.
             if case .object(let metadata) = obj["usageMetadata"] ?? .null {
@@ -180,6 +190,10 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             if case .string(let finishReason) = candidate["finishReason"] ?? .null,
                finishReason != "FINISH_REASON_UNSPECIFIED", finishReason != "NULL" {
                 state.stopReason = Self.mapFinishReason(finishReason)
+                hasFinishReason = true
+                if state.stopReason == .error {
+                    state.failure = ProviderFailure(message: "Gemini finish reason: \(finishReason)", rawStopReason: finishReason)
+                }
             }
 
             if case .object(let content) = candidate["content"] ?? .null,
@@ -266,11 +280,16 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         // Finalize any streamed text/thinking blocks.
         state.finalizeStreamingBlocks(emit: { event in out.push(event) })
         // If tool calls are present, Gemini expects `toolUse` semantics.
-        if state.hasToolCalls() {
+        if state.hasToolCalls(), state.stopReason != .error {
             state.stopReason = .toolUse
         }
-        let final = state.finalize()
-        out.push(.done(reason: final.stopReason, message: final))
+        var final = state.finalize()
+        if !hasFinishReason {
+            final.stopReason = .error
+            final.errorMessage = "Gemini stream ended without a finish reason"
+        }
+        if final.stopReason == .error { out.push(.error(reason: .error, error: final)) }
+        else { out.push(.done(reason: final.stopReason, message: final)) }
         out.end(final)
     }
 
@@ -598,7 +617,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         }
     }
 
-    private static func makeError(api: String, model: Model, text: String) -> AssistantMessage {
+    private static func makeError(api: String, model: Model, text: String, failure: ProviderFailure? = nil) -> AssistantMessage {
         AssistantMessage(
             content: [],
             api: api,
@@ -607,6 +626,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            failure: failure ?? ProviderFailure(message: text),
             timestamp: Timestamp.now()
         )
     }
@@ -649,6 +669,7 @@ final class GoogleGeminiState: @unchecked Sendable {
     var responseId: String?
     var usage = Usage()
     var stopReason: StopReason = .stop
+    var failure: ProviderFailure?
 
     enum Block {
         case text(TextContent)
@@ -792,6 +813,8 @@ final class GoogleGeminiState: @unchecked Sendable {
                 responseId: responseId,
                 usage: usage,
                 stopReason: stopReason,
+                errorMessage: failure?.message,
+                failure: failure,
                 timestamp: Timestamp.now()
             )
         }

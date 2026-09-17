@@ -19,8 +19,8 @@ public protocol WebSocketClient: Sendable {
 }
 
 /// Surfaced when the keepalive heartbeat declares a connection dead. The
-/// description deliberately contains "connection" so `isRetryableError`
-/// classifies it as transient and the agent loop replays the turn.
+/// description is recognized as a transport failure by `ProviderFailure`.
+/// The caller's retry policy and replay-safety checks decide whether to retry.
 public struct WebSocketKeepaliveError: Error, CustomStringConvertible, Sendable {
     public let reason: String
     public var description: String { "WebSocket connection keepalive failed: \(reason)" }
@@ -81,6 +81,23 @@ public struct URLSessionWebSocketClient: WebSocketClient {
             idleTimeoutSeconds: idleTimeoutSeconds
         )
     }
+
+    /// URLSession can wrap a rejected upgrade in an opaque URLError. Preserve
+    /// the actual HTTP response before the provider considers an SSE fallback.
+    static func captureFailure(_ error: any Error, response: URLResponse?) -> ProviderFailure {
+        var failure = ProviderFailure.capture(error)
+        guard let http = response as? HTTPURLResponse, http.statusCode >= 400 else { return failure }
+        failure.httpStatus = http.statusCode
+        failure.requestId = http.value(forHTTPHeaderField: "x-request-id") ?? http.value(forHTTPHeaderField: "request-id")
+        failure.retryAfterMs = ProviderFailure.retryDelay(headers: http.allHeaderFields.reduce(into: [:]) { headers, entry in
+            if let key = entry.key as? String { headers[key] = String(describing: entry.value) }
+        })
+        if let hint = http.value(forHTTPHeaderField: "x-should-retry")?.lowercased() {
+            if hint == "true" { failure.shouldRetry = true }
+            if hint == "false" { failure.shouldRetry = false }
+        }
+        return failure
+    }
 }
 
 private extension URLSessionWebSocketClient {
@@ -127,7 +144,7 @@ private final class URLSessionWebSocketConnection: WebSocketConnection, @uncheck
                 try await task.send(.data(data))
             }
         } catch {
-            throw recordedKeepaliveFailure() ?? error
+            throw URLSessionWebSocketClient.captureFailure(recordedKeepaliveFailure() ?? error, response: task.response)
         }
     }
 
@@ -144,7 +161,7 @@ private final class URLSessionWebSocketConnection: WebSocketConnection, @uncheck
                 return nil
             }
         } catch {
-            throw recordedKeepaliveFailure() ?? error
+            throw URLSessionWebSocketClient.captureFailure(recordedKeepaliveFailure() ?? error, response: task.response)
         }
     }
 

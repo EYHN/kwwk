@@ -1,8 +1,7 @@
 import Foundation
-import KWWKAI
 
-enum ContextLimitClassifier {
-    static func isInputOverflow(_ message: String) -> Bool {
+public enum ProviderContextLimit {
+    public static func isInputOverflow(_ message: String) -> Bool {
         let normalized = message.lowercased()
 
         // Rate-limit errors often describe their quota in input tokens (for
@@ -69,9 +68,4 @@ enum ContextLimitClassifier {
             && normalized.contains("exceed")
             && describesTokenCount
     }
-}
-
-struct ProviderContextOverflow: Error, Sendable {
-    let assistant: AssistantMessage
-    let emittedStart: Bool
 }

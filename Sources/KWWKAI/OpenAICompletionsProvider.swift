@@ -146,11 +146,8 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
-                let bodyText = await Self.errorBodyPreview(from: stream)
-                let msg = Self.makeError(
-                    api: api, model: model,
-                    text: "OpenAI returned status \(response.statusCode)\(bodyText)"
-                )
+                let failure = await ProviderFailure.http(response, body: stream)
+                let msg = Self.makeError(api: api, model: model, text: failure.message, failure: failure)
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
                 return
@@ -169,7 +166,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
             } else {
-                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                let msg = Self.makeError(api: api, model: model, text: "\(error)", failure: .capture(error))
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
             }
@@ -200,6 +197,16 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 return
             }
             guard case .object(let obj)? = parseJSONObject(sse.data) else { continue }
+            if let payload = obj["error"], payload != .null {
+                let failure = ProviderFailure.payload(.object(obj))
+                var message = state.snapshot()
+                message.stopReason = .error
+                message.errorMessage = failure.message
+                message.failure = failure
+                out.push(.error(reason: .error, error: message))
+                out.end(message)
+                return
+            }
 
             // Usage is sent on the final chunk of some providers.
             if case .object(let usage) = obj["usage"] ?? .null {
@@ -315,6 +322,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 state.stopReason = Self.mapStopReason(reason)
                 if state.stopReason == .error, state.errorMessage == nil {
                     state.errorMessage = "Provider finish_reason: \(reason)"
+                    state.failure = ProviderFailure(message: state.errorMessage!, rawStopReason: reason)
                 }
                 hasFinishReason = true
                 state.finalizeStreamingBlocks(emit: { event in out.push(event) })
@@ -345,6 +353,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             var m = state.finalize()
             m.stopReason = .error
             m.errorMessage = state.errorMessage ?? "Provider returned an error stop reason"
+            m.failure = state.failure
             out.push(.error(reason: .error, error: m))
             out.end(m)
             return true
@@ -946,7 +955,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         }
     }
 
-    private static func makeError(api: String, model: Model, text: String) -> AssistantMessage {
+    private static func makeError(api: String, model: Model, text: String, failure: ProviderFailure? = nil) -> AssistantMessage {
         AssistantMessage(
             content: [],
             api: api,
@@ -955,6 +964,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            failure: failure ?? ProviderFailure(message: text),
             timestamp: Timestamp.now()
         )
     }
@@ -972,27 +982,6 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
         )
     }
 
-    private static func errorBodyPreview(
-        from stream: AsyncThrowingStream<Data, Error>,
-        limit: Int = 4096
-    ) async -> String {
-        var data = Data()
-        do {
-            for try await chunk in stream {
-                data.append(chunk)
-                if data.count >= limit {
-                    break
-                }
-            }
-        } catch {
-            return ": failed to read error body: \(error)"
-        }
-        guard !data.isEmpty else { return "" }
-        let text = String(decoding: data, as: UTF8.self)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return "" }
-        return ": \(text)"
-    }
 }
 
 /// Mutable state for OpenAI Completions stream. Tracks content block order
@@ -1008,6 +997,7 @@ final class OpenAICompletionsState: @unchecked Sendable {
     var usage = Usage()
     var stopReason: StopReason = .stop
     var errorMessage: String?
+    var failure: ProviderFailure?
 
     enum Block {
         case text(TextContent)

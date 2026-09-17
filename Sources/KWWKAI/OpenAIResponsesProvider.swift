@@ -179,20 +179,8 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
-                // Collect whatever the server wrote (usually a small JSON
-                // error body). Surface it so debugging doesn't require
-                // network captures.
-                var body = Data()
-                do {
-                    for try await chunk in stream { body.append(chunk) }
-                } catch {
-                    // ignore — best effort
-                }
-                let bodyText = String(data: body, encoding: .utf8) ?? ""
-                let msg = Self.makeError(
-                    api: api, model: model,
-                    text: "OpenAI Responses returned status \(response.statusCode): \(bodyText)"
-                )
+                let failure = await ProviderFailure.http(response, body: stream)
+                let msg = Self.makeError(api: api, model: model, text: failure.message, failure: failure)
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
                 return
@@ -211,7 +199,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
             } else {
-                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                let msg = Self.makeError(api: api, model: model, text: "\(error)", failure: .capture(error))
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
             }
@@ -315,6 +303,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 )
                 Self.finishAborted(out: out, state: state)
                 return .completed
+            }
+            if !Self.permitsWebSocketFallback(error) {
+                session.resetWebSocketState()
+                Self.finishWebSocketFailure(error, out: out, state: state)
+                return .failedWithoutFallback
             }
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             await options?.emitVerbose(
@@ -420,6 +413,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 Self.finishAborted(out: out, state: state)
                 return .completed
             }
+            if !Self.permitsWebSocketFallback(error) {
+                session.resetWebSocketState()
+                Self.finishWebSocketFailure(error, out: out, state: state)
+                return .failedWithoutFallback
+            }
             let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
             if !progress.hasReceivedEvent {
                 await options?.emitVerbose(
@@ -442,7 +440,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     "failure_count": .int(failure.count),
                 ]
             )
-            let err = Self.makeError(api: api, model: model, text: "WebSocket stream failed: \(error)")
+            let err = Self.makeError(api: api, model: model, text: "WebSocket stream failed: \(error)", failure: .capture(error))
             out.push(.error(reason: .error, error: err))
             out.end(err)
             return .failedWithoutFallback
@@ -681,6 +679,15 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     if case .object(let usage) = response["usage"] ?? .null {
                         state.applyUsage(usage)
                     }
+                    if case .object(let details) = response["incomplete_details"],
+                       case .string(let reason) = details["reason"], reason != "max_output_tokens" {
+                        var error = state.asError(text: "OpenAI Responses incomplete: \(reason)")
+                        error.failure = ProviderFailure(message: error.errorMessage!, rawStopReason: reason,
+                                                        stopDetails: .object(details))
+                        out.push(.error(reason: .error, error: error))
+                        out.end(error)
+                        return OpenAIResponsesDriveResult(message: error, completed: false)
+                    }
                 }
                 state.stopReason = .length
                 let incomplete = state.finalize()
@@ -697,7 +704,8 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                        case .string(let m) = err["message"] ?? .null { return m }
                     return "OpenAI Responses error"
                 }()
-                let err = state.asError(text: text)
+                var err = state.asError(text: text)
+                err.failure = ProviderFailure.payload(obj["response"] ?? .object(obj), fallback: text)
                 out.push(.error(reason: .error, error: err))
                 out.end(err)
                 return OpenAIResponsesDriveResult(message: err, completed: false)
@@ -708,7 +716,8 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                        case .string(let m) = err["message"] ?? .null { return m }
                     return "OpenAI Responses WebSocket error"
                 }()
-                let err = state.asError(text: text)
+                var err = state.asError(text: text)
+                err.failure = ProviderFailure.payload(obj["response"] ?? .object(obj), fallback: text)
                 out.push(.error(reason: .error, error: err))
                 out.end(err)
                 return OpenAIResponsesDriveResult(message: err, completed: false)
@@ -731,11 +740,12 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                 endedWithoutTerminalEvent: true
             )
         }
-        let final = state.finalize()
+        let final: AssistantMessage
         if finishOnStreamEnd {
-            out.push(.done(reason: final.stopReason, message: final))
+            final = state.asError(text: "OpenAI Responses stream ended before a terminal response event")
+            out.push(.error(reason: .error, error: final))
             out.end(final)
-        }
+        } else { final = state.finalize() }
         return OpenAIResponsesDriveResult(
             message: final,
             completed: false,
@@ -744,6 +754,32 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     }
 
     // MARK: - Encoding
+
+    /// A transport switch is not a second chance at a rejected API request.
+    /// Explicit HTTP/provider failures go to the shared policy, which also
+    /// honors Retry-After. Only pre-output transport/setup failures may fall back.
+    private static func permitsWebSocketFallback(_ error: any Error) -> Bool {
+        let failure = ProviderFailure.capture(error)
+        guard failure.httpStatus == nil, failure.providerCode == nil, failure.shouldRetry != false else { return false }
+        switch failure.category {
+        case .transport, .timeout, .unknown: return true
+        default: return false
+        }
+    }
+
+    private static func finishWebSocketFailure(
+        _ error: any Error, out: AssistantMessageStream, state: OpenAIResponsesState
+    ) {
+        let failure = ProviderFailure.capture(error)
+        if failure.category == .cancelled {
+            finishAborted(out: out, state: state)
+            return
+        }
+        var message = state.asError(text: failure.message)
+        message.failure = failure
+        out.push(.error(reason: .error, error: message))
+        out.end(message)
+    }
 
     private static func makeRequest(
         model: Model, context: Context, options: StreamOptions?,
@@ -1047,7 +1083,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         }
     }
 
-    private static func makeError(api: String, model: Model, text: String) -> AssistantMessage {
+    private static func makeError(api: String, model: Model, text: String, failure: ProviderFailure? = nil) -> AssistantMessage {
         AssistantMessage(
             content: [],
             api: api,
@@ -1056,6 +1092,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            failure: failure ?? ProviderFailure(message: text),
             timestamp: Timestamp.now()
         )
     }

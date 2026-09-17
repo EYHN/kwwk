@@ -8,8 +8,8 @@ import FoundationNetworking
 /// (via `authHeaderBuilder`), `anthropic-beta` opt-in headers, prompt-cache
 /// breakpoints, and extended/adaptive thinking.
 ///
-/// Non-goals for this implementation:
-///  - Rate-limit retry with `retry-after` parsing (handled by the agent loop)
+/// Reports structured failures and retry hints; the Agent/one-shot caller owns
+/// retry scheduling so provider and caller budgets cannot multiply.
 ///
 /// The provider is testable via a stub `HTTPClient` and produces the standard
 /// AssistantMessageEvent stream.
@@ -151,25 +151,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
-                // Drain the stream to surface the real error body — without
-                // this the user just sees "status 400" and has no signal
-                // whether it's the `thinking` field, max_tokens, or the
-                // Copilot proxy rejecting a shape. Trim to keep the
-                // notification readable; full body is still captured below.
-                var bodyBytes = Data()
-                for try await chunk in stream {
-                    bodyBytes.append(chunk)
-                    if bodyBytes.count > 4096 { break }
-                }
-                let bodyText = String(data: bodyBytes, encoding: .utf8) ?? ""
-                let preview = bodyText.isEmpty
-                    ? ""
-                    : " — " + bodyText.replacingOccurrences(of: "\n", with: " ").prefix(500)
-                let msg = Self.makeError(
-                    model: model,
-                    api: api,
-                    text: "Anthropic returned status \(response.statusCode)\(preview)"
-                )
+                let failure = await ProviderFailure.http(response, body: stream)
+                let msg = Self.makeError(model: model, api: api, text: failure.message, failure: failure)
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
                 return
@@ -194,7 +177,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
             } else {
-                let msg = Self.makeError(model: model, api: api, text: "\(error)")
+                let msg = Self.makeError(model: model, api: api, text: "\(error)", failure: .capture(error))
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
             }
@@ -308,6 +291,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                     // completion — record it so `message_stop` surfaces `.error`.
                     if mapped == .error {
                         state.errorMessage = "Anthropic stop reason: \(reason)"
+                        state.failure = ProviderFailure(message: state.errorMessage!, rawStopReason: reason,
+                                                        stopDetails: delta["stop_details"] ?? obj["stop_details"])
                     }
                 }
                 if case .object(let usage) = obj["usage"] ?? .null {
@@ -330,7 +315,8 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
                        case .string(let m) = err["message"] ?? .null { return m }
                     return "Unknown Anthropic error"
                 }()
-                let err = state.asError(text: text)
+                var err = state.asError(text: text)
+                err.failure = ProviderFailure.payload(.object(obj), fallback: text)
                 out.push(.error(reason: .error, error: err))
                 out.end(err)
                 return
@@ -686,7 +672,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         }
     }
 
-    private static func makeError(model: Model, api: String, text: String) -> AssistantMessage {
+    private static func makeError(model: Model, api: String, text: String, failure: ProviderFailure? = nil) -> AssistantMessage {
         AssistantMessage(
             content: [],
             api: api,
@@ -695,6 +681,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            failure: failure ?? ProviderFailure(message: text),
             timestamp: Timestamp.now()
         )
     }
@@ -746,6 +733,7 @@ final class AnthropicStreamState: @unchecked Sendable {
     var usage = Usage()
     var stopReason: StopReason = .stop
     var errorMessage: String?
+    var failure: ProviderFailure?
 
     /// Content blocks. For text/thinking we accumulate a running string; for
     /// tool calls we keep an in-progress JSON buffer.
@@ -894,6 +882,7 @@ final class AnthropicStreamState: @unchecked Sendable {
                 usage: usage,
                 stopReason: stopReason,
                 errorMessage: errorMessage,
+                failure: failure,
                 timestamp: Timestamp.now()
             )
         }

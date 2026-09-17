@@ -1,0 +1,278 @@
+import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
+
+/// Wire/transport evidence, independent of UI copy. Optional on persisted messages
+/// so transcripts written before structured failures remain decodable.
+public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashable {
+    public enum Category: String, Codable, Sendable {
+        case cancelled, contextOverflow, refusal, quota, authentication, invalidRequest
+        case timeout, transport, rateLimit, server, unknown
+    }
+    public var message: String
+    public var httpStatus: Int?
+    public var providerCode: String?
+    public var transportDomain: String?
+    public var transportCode: Int?
+    public var requestId: String?
+    public var retryAfterMs: Double?
+    public var shouldRetry: Bool?
+    public var rawStopReason: String?
+    public var stopDetails: JSONValue?
+    /// Bounded provider-owned diagnostic (e.g. OpenRouter metadata.raw), kept
+    /// separate from display copy so a wrapper cannot hide the actual cause.
+    public var upstreamMessage: String?
+    public var errorDescription: String? { message }
+
+    public init(message: String, httpStatus: Int? = nil, providerCode: String? = nil,
+                transportDomain: String? = nil, transportCode: Int? = nil,
+                requestId: String? = nil, retryAfterMs: Double? = nil, shouldRetry: Bool? = nil,
+                rawStopReason: String? = nil, stopDetails: JSONValue? = nil, upstreamMessage: String? = nil) {
+        self.message = message
+        self.httpStatus = httpStatus
+        self.providerCode = providerCode
+        self.transportDomain = transportDomain
+        self.transportCode = transportCode
+        self.requestId = requestId
+        self.retryAfterMs = retryAfterMs
+        self.shouldRetry = shouldRetry
+        self.rawStopReason = rawStopReason
+        self.stopDetails = stopDetails
+        self.upstreamMessage = upstreamMessage.map(Self.boundedDiagnostic)
+    }
+
+    public static func capture(_ error: any Error) -> Self {
+        if let failure = error as? Self { return failure }
+        if let cursor = error as? CursorConnectError {
+            let message = cursor.localizedDescription
+            switch cursor {
+            case .httpStatus(let status, let body):
+                var failure = parseJSONObject(body).map { payload($0, fallback: message) } ?? Self(message: message)
+                failure.httpStatus = status
+                return failure
+            case .grpc(let code, _): return Self(message: message, providerCode: Self.grpcCode(code))
+            case .tlsSetupFailed: return Self(message: message, transportDomain: NSURLErrorDomain, transportCode: -1200)
+            default: return Self(message: message)
+            }
+        }
+        if error is CancellationError { return Self(message: "Request was aborted", transportDomain: NSURLErrorDomain, transportCode: -999) }
+        if case HTTPClientError.unexpectedStatus(let status, let body) = error {
+            return Self(message: body, httpStatus: status)
+        }
+        let ns = error as NSError
+        // Preserve the governing outer transport error. Only unwrap unknown
+        // wrappers; a permanent TLS/cancellation error must not become retryable.
+        if ns.domain != NSURLErrorDomain && ns.domain != NSPOSIXErrorDomain,
+           let cause = ns.userInfo[NSUnderlyingErrorKey] as? NSError,
+           cause !== ns, cause.domain == NSURLErrorDomain || cause.domain == NSPOSIXErrorDomain {
+            var failure = capture(cause)
+            failure.message = String(describing: error)
+            return failure
+        }
+        return Self(message: (error as? LocalizedError)?.errorDescription ?? String(describing: error),
+                    transportDomain: ns.domain, transportCode: ns.code)
+    }
+
+    /// Parse only recognized fields; never persist headers, credentials or an
+    /// unrestricted response dump. A body's code/type is not the HTTP status.
+    public static func payload(_ value: JSONValue, fallback: String = "Provider error") -> Self {
+        guard case .object(let root) = value else { return Self(message: fallback) }
+        let error: [String: JSONValue]
+        if case .object(let nested) = root["error"] { error = nested } else { error = root }
+        func string(_ value: JSONValue?) -> String? {
+            if case .string(let text) = value { return text }
+            return nil
+        }
+        let code = string(error["code"]) ?? string(error["type"]) ?? string(error["status"])
+        var status: Int?
+        for key in ["status_code", "status", "code"] {
+            if case .int(let number) = error[key] ?? root[key], number >= 400, number <= 599 { status = number; break }
+        }
+        let metadata: [String: JSONValue]
+        if case .object(let value) = error["metadata"] ?? root["metadata"] { metadata = value } else { metadata = [:] }
+        let upstream: String?
+        if let raw = metadata["raw"] {
+            if case .string(let text) = raw { upstream = text }
+            else if let data = try? JSONEncoder().encode(raw) { upstream = String(decoding: data, as: UTF8.self) }
+            else { upstream = nil }
+        } else { upstream = nil }
+        return Self(message: String((string(root["error"]) ?? string(error["message"]) ?? string(root["message"]) ?? fallback).prefix(4096)),
+                    httpStatus: status, providerCode: code,
+                    requestId: string(root["request_id"]) ?? string(error["request_id"]), upstreamMessage: upstream)
+    }
+
+    static func http(_ response: HTTPURLResponse, body: AsyncThrowingStream<Data, Error>) async -> Self {
+        var bytes = Data()
+        // A truncated/broken error body must never erase an already received status.
+        do {
+            for try await chunk in body {
+                bytes.append(contentsOf: chunk.prefix(max(0, 4096 - bytes.count)))
+                if bytes.count >= 4096 { break }
+            }
+        } catch { /* status and headers remain authoritative */ }
+        let text = String(decoding: bytes, as: UTF8.self)
+        var failure = parseJSONObject(text).map { payload($0, fallback: text) }
+            ?? Self(message: text.isEmpty ? "HTTP \(response.statusCode)" : text)
+        failure.httpStatus = response.statusCode
+        failure.requestId = response.value(forHTTPHeaderField: "x-request-id")
+            ?? response.value(forHTTPHeaderField: "request-id") ?? failure.requestId
+        failure.retryAfterMs = retryDelay(headers: response.allHeaderFields.reduce(into: [:]) { result, entry in
+            if let key = entry.key as? String { result[key.lowercased()] = String(describing: entry.value) }
+        })
+        switch response.value(forHTTPHeaderField: "x-should-retry")?.lowercased() {
+        case "true": failure.shouldRetry = true
+        case "false": failure.shouldRetry = false
+        default: break
+        }
+        return failure
+    }
+
+    public static func retryDelay(headers: [String: String], now: Date = Date()) -> Double? {
+        let headers = headers.reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value }
+        if let value = headers["retry-after-ms"], let number = Double(value), number.isFinite, number >= 0 { return number }
+        guard let value = headers["retry-after"] else { return nil }
+        if let seconds = Double(value), seconds.isFinite, seconds >= 0, (seconds * 1000).isFinite { return seconds * 1000 }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: value).map { max(0, $0.timeIntervalSince(now) * 1000) }
+    }
+
+    public var category: Category {
+        let status = httpStatus ?? Self.legacyStatus(message)
+        // Payment/account failures cannot be repaired by replay, even when a
+        // proxy includes transient transport prose or an explicit retry hint.
+        if status == 402 { return .quota }
+        let text = [providerCode, rawStopReason, message, upstreamMessage].compactMap { $0 }.joined(separator: " ").lowercased()
+        // The outer HTTP response governs nested transport prose. Overflow is
+        // a distinct recovery only for an input rejection, never auth/limits.
+        if status == 401 || status == 403 { return .authentication }
+        if status == nil || status == 400 || status == 413,
+           ProviderContextLimit.isInputOverflow(text) { return .contextOverflow }
+        if let status, (400..<500).contains(status), status != 408, status != 429 { return .invalidRequest }
+        switch providerCode?.lowercased() {
+        case "canceled", "cancelled": return .cancelled
+        case "permission_denied", "unauthenticated": return .authentication
+        case "invalid_argument", "not_found", "already_exists", "failed_precondition", "aborted", "out_of_range", "unimplemented", "data_loss": return .invalidRequest
+        default: break
+        }
+        let domain = transportDomain ?? Self.match(#"\bdomain\s*=\s*(NSURLErrorDomain|NSPOSIXErrorDomain)\s+code"#, in: message)
+        let code = transportCode ?? Self.match(#"\bdomain\s*=\s*(?:NSURLErrorDomain|NSPOSIXErrorDomain)\s+code\s*=\s*(-?\d+)\b"#, in: message).flatMap(Int.init)
+        if ["refusal", "content_filter", "sensitive", "safety", "guardrail_intervened", "prohibited_content", "blocklist", "recitation", "spii"].contains(where: text.contains) { return .refusal }
+        if ["insufficient_quota", "out of budget", "available balance", "billing", "monthly quota", "daily quota", "insufficient credits", "credits exhausted",
+            "monthly usage limit", "usage limit reached", "usage_limit_reached", "gousagelimiterror", "freeusagelimiterror"].contains(where: text.contains) { return .quota }
+        // An actual concurrency/short-window cap is backpressure, not spent
+        // account credit. Match cap signals, not benign concurrency wording.
+        if Self.isTransientLimit(text) { return .rateLimit }
+        if text.contains("quota exceeded") { return .quota }
+        if status == 408 { return .timeout }
+        if status == 429 { return .rateLimit }
+        if let status, (500..<600).contains(status) { return .server }
+        if domain?.lowercased() == NSURLErrorDomain.lowercased(), let code {
+            if code == -999 { return .cancelled }
+            if code == -1001 { return .timeout }
+            return [-1003, -1004, -1005, -1006, -1009].contains(code) ? .transport : .invalidRequest
+        }
+        if domain?.lowercased() == NSPOSIXErrorDomain.lowercased() {
+            if transportDomain?.lowercased() == NSPOSIXErrorDomain.lowercased(), let code = transportCode {
+                // Structured transport evidence uses the producer's native
+                // errno constants. Never interpret a legacy text's number as
+                // local errno: Darwin and Linux assign different values.
+                return [Int(ECONNRESET), Int(ECONNABORTED), Int(ENOTCONN), Int(EPIPE), Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH)].contains(code) ? .transport : .invalidRequest
+            }
+            // Legacy diagnostics can cross platform boundaries. Require a
+            // specific socket failure, not a bare number or generic "network".
+            if ["permission denied", "operation not permitted", "invalid", "unsupported", "not supported", "not found"].contains(where: text.contains) { return .invalidRequest }
+            if ["connection reset", "connection aborted", "socket is not connected", "transport endpoint is not connected",
+                "broken pipe", "connection timed out", "operation timed out", "connection refused", "network is unreachable",
+                "host is unreachable", "no route to host"].contains(where: text.contains) { return .transport }
+            return .unknown
+        }
+        switch providerCode?.lowercased() {
+        case "deadline_exceeded": return .timeout
+        case "resource_exhausted": return .rateLimit
+        case "unavailable", "internal": return .server
+        default: break
+        }
+        if ["unauthorized", "forbidden", "invalid api key", "authentication_error", "permission_denied", "unauthenticated"].contains(where: text.contains) { return .authentication }
+        if ["invalid", "validation", "bad request", "unsupported", "schema", "missing required", "not found"].contains(where: text.contains) { return .invalidRequest }
+        if text.contains("timeout") || text.contains("timed out") || text.contains("deadline_exceeded") { return .timeout }
+        if ["rate limit", "rate_limit", "throttlingexception", "too many requests", "resourceexhausted", "resource_exhausted", "resource exhausted"].contains(where: text.contains) { return .rateLimit }
+        if ["overloaded", "internal error", "internal_error", "server error", "service unavailable", "service_unavailable", "bad gateway", "temporarily",
+            "server_error", "internalserverexception", "serviceunavailableexception", "no_capacity", "at capacity", "insufficient capacity", "capacity exhausted",
+            "you can retry your request", "please retry your request", "try your request again", "exceeded request buffer limit"].contains(where: text.contains) { return .server }
+        if ["network", "connection", "disconnect", "econnreset", "enotconn", "epipe", "broken pipe", "reset by peer",
+            "socket closed", "socket error", "socket hang up", "other side closed", "reset before headers", "http2 request did not get a response", "closed before", "closed unexpectedly", "stream stall", "fetch failed",
+            "enotfound", "eai_again", "getaddrinfo", "ended without", "stream ended before", "terminated"].contains(where: text.contains) { return .transport }
+        return .unknown
+    }
+
+    // gRPC trailers use numbers; Connect end-streams use the equivalent names.
+    // Normalize only at the gRPC boundary, never arbitrary provider/HTTP codes.
+    private static func grpcCode(_ raw: String) -> String {
+        let names = ["ok", "cancelled", "unknown", "invalid_argument", "deadline_exceeded", "not_found",
+                     "already_exists", "permission_denied", "resource_exhausted", "failed_precondition",
+                     "aborted", "out_of_range", "unimplemented", "internal", "unavailable", "data_loss", "unauthenticated"]
+        if let index = Int(raw), names.indices.contains(index) { return names[index] }
+        return raw.lowercased()
+    }
+
+    private static func isTransientLimit(_ text: String) -> Bool {
+        let patterns = [
+            #"\bconcurren\w*\b[^\n]{0,60}\b(?:limit|quota|exceed\w*|reach\w*)\b"#,
+            #"\b(?:limit|quota|exceed\w*|reach\w*)\b[^\n]{0,60}\bconcurren\w*\b"#,
+            #"\btoo many\s+concurren\w*\s+(?:requests?|invocations?)\b"#,
+            #"\b(?:rate|quota|limit)\b[^\n]{0,80}\bper (?:second|minute)\b"#,
+        ]
+        return patterns.contains { text.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func boundedDiagnostic(_ input: String) -> String {
+        var text = String(input.prefix(4096))
+        for pattern in [#"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*"#,
+                        #"(?i)\"(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token)\"\s*:\s*\"[^\"]*(?:\"|$)"#] {
+            text = text.replacingOccurrences(of: pattern, with: "[redacted]", options: .regularExpression)
+        }
+        return text
+    }
+
+    public var isRetryable: Bool {
+        if shouldRetry == false { return false }
+        switch category {
+        case .timeout, .transport, .rateLimit, .server: return true
+        case .unknown: return shouldRetry == true
+        default: return false
+        }
+    }
+
+    private static func legacyStatus(_ text: String) -> Int? {
+        // Anchored/contextual statuses, never arbitrary digits in request IDs.
+        match(#"(?:^\s*|\bhttp\s+|\bstatus(?:\s+code)?\s*[:=]?\s*|\breturned\s+|\bauth-gateway\s+|\bsummarization failed:\s*)([45]\d\d)\b"#, in: text).flatMap(Int.init)
+    }
+    private static func match(_ pattern: String, in text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+              let result = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(result.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+}
+
+public extension AssistantMessage {
+    /// Thinking-only attempts can be replayed. Once text or tool calls escape,
+    /// do not assume rewinding in-memory state reverses external effects.
+    var hasReplayUnsafeContent: Bool {
+        content.contains { block in
+            switch block {
+            case .text(let text): return !text.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            case .thinking: return false
+            default: return true
+            }
+        }
+    }
+
+    var providerFailure: ProviderFailure? {
+        failure ?? (stopReason == .error ? ProviderFailure(message: errorMessage ?? "Unknown provider error") : nil)
+    }
+}

@@ -23,7 +23,7 @@ struct AgentRetryTests {
 
         let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
         // Shrink the 1-second base delay so the test runs fast. With
-        // base=10ms the two retries sleep 10ms and 20ms.
+        // base=10ms the two retries sleep 7–10ms and 15–20ms with jitter.
         agent.retryBaseDelayMs = 10
 
         let recorder = RetryEventRecorder()
@@ -38,10 +38,10 @@ struct AgentRetryTests {
         let entries = await recorder.snapshot()
         #expect(entries.count == 2)
         #expect(entries[0].attempt == 0)
-        #expect(entries[0].delayMs == 10)
+        #expect((7...10).contains(entries[0].delayMs))
         #expect(entries[0].reason.contains("429"))
         #expect(entries[1].attempt == 1)
-        #expect(entries[1].delayMs == 20)
+        #expect((15...20).contains(entries[1].delayMs))
         #expect(entries[1].reason.contains("503"))
 
         // Agent should have recovered — final assistant message is the success.
@@ -137,7 +137,10 @@ struct AgentRetryTests {
         let entries = await recorder.snapshot()
         #expect(entries.count == 4)
         #expect(entries.map(\.attempt) == [0, 1, 2, 3])
-        #expect(entries.map(\.delayMs) == [5, 10, 20, 40])
+        for (entry, upperBound) in zip(entries, [UInt64(5), 10, 20, 40]) {
+            #expect(entry.delayMs >= UInt64(Double(upperBound) * 0.75))
+            #expect(entry.delayMs <= upperBound)
+        }
 
         if case .assistant(let msg) = agent.state.messages.last {
             #expect(msg.stopReason == .error)
@@ -188,55 +191,6 @@ struct AgentRetryTests {
     }
 }
 
-@Suite("Retry error classification")
-struct RetryClassificationTests {
-    @Test("POSIX socket deaths are retryable")
-    func posixSocketErrors() {
-        // The exact shape of the user-reported subagent failure.
-        #expect(AgentLoop.isRetryableError(
-            "WebSocket stream failed: Error Domain=NSPOSIXErrorDomain Code=57 \"Socket is not connected\""
-        ))
-        #expect(AgentLoop.isRetryableError(
-            "Error Domain=NSPOSIXErrorDomain Code=54 \"Connection reset by peer\""
-        ))
-        #expect(AgentLoop.isRetryableError("The network connection was lost."))
-        #expect(AgentLoop.isRetryableError("WebSocket stream closed before response.completed"))
-        #expect(AgentLoop.isRetryableError(
-            "WebSocket connection keepalive failed: no inbound traffic for 60s"
-        ))
-    }
-
-    @Test("timeouts and retryable statuses are retryable")
-    func transientStatuses() {
-        #expect(AgentLoop.isRetryableError("The request timed out."))
-        #expect(AgentLoop.isRetryableError("HTTP 429: rate limit exceeded"))
-        #expect(AgentLoop.isRetryableError("HTTP 503: service unavailable"))
-        #expect(AgentLoop.isRetryableError("HTTP 529: overloaded"))
-        // gRPC-based providers (e.g. NVIDIA NIM) report quota pressure as
-        // ResourceExhausted (pi #6449).
-        #expect(AgentLoop.isRetryableError("ResourceExhausted: quota exceeded"))
-        #expect(AgentLoop.isRetryableError("gRPC status RESOURCE_EXHAUSTED"))
-    }
-
-    @Test("validation and auth failures are not retryable")
-    func permanentFailures() {
-        #expect(!AgentLoop.isRetryableError("HTTP 400: invalid request body"))
-        #expect(!AgentLoop.isRetryableError("HTTP 401: unauthorized"))
-        #expect(!AgentLoop.isRetryableError("model not found"))
-        // Validation short-circuit wins even when the message also
-        // mentions a transport-ish word.
-        #expect(!AgentLoop.isRetryableError("invalid connection parameters"))
-        // ...but a timeout wins over everything.
-        #expect(AgentLoop.isRetryableError("invalid state: request timed out"))
-    }
-
-    @Test("in-flight session conflict is not retryable")
-    func busySessionNotRetryable() {
-        #expect(!AgentLoop.isRetryableError(
-            "OpenAI Responses WebSocket session already has an in-flight response for this sessionId. Use a distinct sessionId for parallel runs."
-        ))
-    }
-}
 
 actor RetryEventRecorder {
     struct Entry: Sendable {

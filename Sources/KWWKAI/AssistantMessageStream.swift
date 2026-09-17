@@ -84,12 +84,39 @@ public final class StreamState: @unchecked Sendable {
     private var resultWaiters: [(id: UUID, cont: CheckedContinuation<AssistantMessage, Never>)] = []
     private var ended = false
     private var finalMessage: AssistantMessage?
+    private var latestPartial: AssistantMessage?
+
+    // Called under the state lock. A thrown error must not erase prior output.
+    private func settleFailure(_ input: AssistantMessage) -> AssistantMessage {
+        guard input.stopReason == .error || input.stopReason == .aborted else { return input }
+        var message = input
+        if message.content.isEmpty, let partial = latestPartial {
+            message.content = partial.content
+            message.usage = partial.usage
+            message.responseId = message.responseId ?? partial.responseId
+        }
+        if message.stopReason == .error, message.failure == nil {
+            message.failure = ProviderFailure(message: message.errorMessage ?? "Unknown provider error")
+        }
+        message.errorMessage = message.errorMessage ?? message.failure?.message
+        return message
+    }
 
     func push(_ event: AssistantMessageEvent) {
         lock.lock()
         if ended {
             lock.unlock()
             return
+        }
+        var event = event
+        switch event {
+        case .start(let partial), .textStart(_, let partial), .textDelta(_, _, let partial),
+             .textEnd(_, _, let partial), .thinkingStart(_, let partial), .thinkingDelta(_, _, let partial),
+             .thinkingEnd(_, _, let partial), .toolCallStart(_, let partial), .toolCallDelta(_, _, let partial),
+             .toolCallEnd(_, _, let partial):
+            latestPartial = partial
+        case .error(let reason, let message): event = .error(reason: reason, error: settleFailure(message))
+        case .done: break
         }
         if let waiter = eventWaiters.first {
             eventWaiters.removeFirst()
@@ -110,6 +137,7 @@ public final class StreamState: @unchecked Sendable {
             return
         }
         ended = true
+        let message = settleFailure(message)
         finalMessage = message
         eventWaitersToNotify = eventWaiters
         eventWaiters.removeAll()

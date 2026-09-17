@@ -160,21 +160,8 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 cancellation: options?.cancellation
             )
             if response.statusCode >= 400 {
-                // Surface the error body (a JSON `{message}` on 4xx/5xx) like the
-                // other providers instead of a bare status code.
-                var bodyBytes = Data()
-                for try await chunk in stream {
-                    bodyBytes.append(chunk)
-                    if bodyBytes.count > 4096 { break }
-                }
-                let bodyText = String(data: bodyBytes, encoding: .utf8) ?? ""
-                let preview = bodyText.isEmpty
-                    ? ""
-                    : ": " + bodyText.replacingOccurrences(of: "\n", with: " ").prefix(500)
-                let msg = Self.makeError(
-                    api: api, model: model,
-                    text: "Bedrock returned status \(response.statusCode)\(preview)"
-                )
+                let failure = await ProviderFailure.http(response, body: stream)
+                let msg = Self.makeError(api: api, model: model, text: failure.message, failure: failure)
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
                 return
@@ -193,7 +180,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
             } else {
-                let msg = Self.makeError(api: api, model: model, text: "\(error)")
+                let msg = Self.makeError(api: api, model: model, text: "\(error)", failure: .capture(error))
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
             }
@@ -206,6 +193,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         state: BedrockStreamState
     ) async throws {
         var emittedStart = false
+        var hasMessageStop = false
         for try await event in events {
             if state.signal?.isCancelled == true {
                 let aborted = state.asAborted()
@@ -225,7 +213,8 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                     }
                     return msg
                 }()
-                let err = state.asError(text: text)
+                var err = state.asError(text: text)
+                err.failure = ProviderFailure(message: text, providerCode: type)
                 out.push(.error(reason: .error, error: err))
                 out.end(err)
                 return
@@ -312,6 +301,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 }()
                 state.finishBlock(at: blockIndex) { event in out.push(event) }
             case "messageStop":
+                hasMessageStop = true
                 if case .string(let reason) = payload["stopReason"] ?? .null {
                     let mapped = Self.mapStopReason(reason)
                     state.stopReason = mapped.stopReason
@@ -335,8 +325,13 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             return
         }
         state.finalizePending { event in out.push(event) }
-        let final = state.finalize()
-        out.push(.done(reason: final.stopReason, message: final))
+        var final = state.finalize()
+        if !hasMessageStop {
+            final.stopReason = .error
+            final.errorMessage = "Bedrock stream ended without messageStop"
+        }
+        if final.stopReason == .error { out.push(.error(reason: .error, error: final)) }
+        else { out.push(.done(reason: final.stopReason, message: final)) }
         out.end(final)
     }
 
@@ -705,7 +700,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         }
     }
 
-    private static func makeError(api: String, model: Model, text: String) -> AssistantMessage {
+    private static func makeError(api: String, model: Model, text: String, failure: ProviderFailure? = nil) -> AssistantMessage {
         AssistantMessage(
             content: [],
             api: api,
@@ -714,6 +709,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             usage: Usage(),
             stopReason: .error,
             errorMessage: text,
+            failure: failure ?? ProviderFailure(message: text),
             timestamp: Timestamp.now()
         )
     }

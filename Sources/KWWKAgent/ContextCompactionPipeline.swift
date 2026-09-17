@@ -234,7 +234,7 @@ enum ContextCompactionPipeline {
             } catch {
                 try checkCancellation(request.cancellation)
                 guard !(error is CancellationError),
-                      ContextLimitClassifier.isInputOverflow(error.localizedDescription) else { throw error }
+                      ProviderFailure.capture(error).category == .contextOverflow else { throw error }
                 // Halve the serialized input actually sent, not an inflated
                 // catalog allowance. Only the failed chunk is replayed; keep
                 // the accumulator from all successfully summarized chunks.

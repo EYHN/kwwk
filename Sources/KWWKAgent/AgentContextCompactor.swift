@@ -34,6 +34,9 @@ public struct AgentContextCompactionConfig: Sendable {
     public var summaryMaxTokens: Int
     public var recoveryRatio: Double
     public var maxSummaryAttempts: Int
+    /// Transient retries per self-contained summary call, separate from the
+    /// compaction planner's attempts to reduce the resulting context size.
+    public var summaryRetryPolicy: ProviderRetryPolicy
 
     public init(
         minMessages: Int = agentCompactMinMessages,
@@ -46,7 +49,8 @@ public struct AgentContextCompactionConfig: Sendable {
         toolDetailsByteLimit: Int = 2_000,
         summaryMaxTokens: Int = 0,
         recoveryRatio: Double = 0.8,
-        maxSummaryAttempts: Int = 2
+        maxSummaryAttempts: Int = 2,
+        summaryRetryPolicy: ProviderRetryPolicy = .init()
     ) {
         self.minMessages = minMessages
         self.toolOutputCharacterLimit = toolOutputCharacterLimit
@@ -59,6 +63,7 @@ public struct AgentContextCompactionConfig: Sendable {
         self.summaryMaxTokens = summaryMaxTokens
         self.recoveryRatio = recoveryRatio
         self.maxSummaryAttempts = maxSummaryAttempts
+        self.summaryRetryPolicy = summaryRetryPolicy
     }
 }
 

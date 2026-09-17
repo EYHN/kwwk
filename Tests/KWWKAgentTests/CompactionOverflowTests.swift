@@ -9,17 +9,18 @@ struct CompactionOverflowTests {
                               contextWindow: 40_000, maxTokens: 1_000)
 
     private var config: AgentContextCompactionConfig {
-        .init(minMessages: 1, keepRecentTokens: 1, messageTextByteLimit: 200_000)
+        .init(minMessages: 1, keepRecentTokens: 1, messageTextByteLimit: 200_000,
+              summaryRetryPolicy: .init(baseDelayMs: 0))
     }
 
-    @Test("rejected summaries shrink and preserve ordered history", arguments: [false, true])
-    func shrinksRejectedWindow(thrown: Bool) async {
+    @Test("rejected summaries shrink and preserve ordered history", arguments: [false, true], [false, true])
+    func shrinksRejectedWindow(thrown: Bool, nested: Bool) async {
         let markers = (0..<12).map { "HISTORY-\($0)-END" }
         let messages = markers.map {
             Message.user(UserMessage(text: $0 + String(repeating: " payload", count: 1_000)))
         } + [.user(UserMessage(text: "retained tail"))]
         let log = OverflowLog()
-        let result = await compact(messages, log: log, limit: 9_000, thrown: thrown)
+        let result = await compact(messages, log: log, limit: 9_000, thrown: thrown, nested: nested)
         guard case .success = result else {
             Issue.record("Expected recovery, got \(result)")
             return
@@ -65,7 +66,9 @@ struct CompactionOverflowTests {
             .user(UserMessage(text: "tail")),
         ], log: log, limit: 0, reason: reason)
         guard case .failure = result else { Issue.record("Expected failure"); return }
-        #expect(await log.calls.count == 1)
+        let calls = await log.calls
+        #expect(calls.count == (reason.contains("refusal") ? 1 : 5))
+        #expect(calls.allSatisfy { $0.text == calls.first?.text })
     }
 
     @Test("persistent overflow stops at the minimum budget")
@@ -96,7 +99,7 @@ struct CompactionOverflowTests {
     }
 
     private func compact(
-        _ messages: [Message], log: OverflowLog, limit: Int, thrown: Bool = false,
+        _ messages: [Message], log: OverflowLog, limit: Int, thrown: Bool = false, nested: Bool = false,
         reason: String = "This model's maximum prompt length is 500000 but the request contains 536700 tokens.",
         cancelOnResponse: CancellationHandle? = nil
     ) async -> Result<AgentContextCompactionResult, AgentContextCompactionFailure> {
@@ -122,13 +125,21 @@ struct CompactionOverflowTests {
                 let accepted = tokens <= limit
                 await log.append(text: text, tokens: tokens, accepted: accepted)
                 cancelOnResponse?.cancel()
-                if !accepted && thrown { throw OverflowError(reason: reason) }
+                let failure: ProviderFailure? = !accepted && nested ? ProviderFailure.payload(.object([
+                    "error": .object(["message": .string("Provider returned error"), "code": .int(400),
+                                      "metadata": .object(["raw": .string(reason)])]),
+                ])) : nil
+                if !accepted && thrown {
+                    if let failure { throw failure }
+                    throw OverflowError(reason: reason)
+                }
                 let pair = AssistantMessageStream.makeStream()
                 pair.continuation.end(AssistantMessage(
                     content: accepted ? [.text(TextContent(text: "durable-summary"))] : [],
                     api: model.api, provider: model.provider, model: model.id,
                     stopReason: accepted ? .stop : .error,
-                    errorMessage: accepted ? nil : reason
+                    errorMessage: accepted ? nil : (failure?.message ?? reason),
+                    failure: failure
                 ))
                 return pair.stream
             },

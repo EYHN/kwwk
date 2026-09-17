@@ -239,8 +239,8 @@ struct AgentLoopPolicyTests {
         }
     }
 
-    @Test("Cursor retry rejects repeated ids but executes a new call")
-    func cursorRetryRejectsRepeatedIdsAndExecutesNewCall() async throws {
+    @Test("Cursor failure after inline execution retains results without replay")
+    func cursorFailureDoesNotReplayExecutedCalls() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         let attempts = RetryAttemptCounter()
@@ -304,24 +304,16 @@ struct AgentLoopPolicyTests {
 
         try await agent.prompt("retry inline calls")
 
-        #expect(await attempts.snapshot() == 2)
-        #expect(await executions.snapshot() == ["a", "b", "c", "d", "e"])
+        #expect(await attempts.snapshot() == 1)
+        #expect(await executions.snapshot() == ["a", "b", "c", "d"])
         let retained = agent.state.messages.compactMap { message -> ToolResultMessage? in
             guard case .toolResult(let result) = message else { return nil }
             return result
         }
-        #expect(retained.count == 5)
-        for repeatedId in ["a", "b", "c", "d"] {
-            let result = retained.first { $0.toolCallId == repeatedId }
-            guard case .object(let details) = result?.details ?? .null else {
-                Issue.record("expected duplicate-id details for \(repeatedId)")
-                continue
-            }
-            #expect(details["error"] == .string("duplicate_tool_call_id"))
-        }
-        let newResult = retained.first { $0.toolCallId == "e" }
-        #expect(newResult?.isError == false)
-        #expect(toolResultText(newResult) == "e")
+        #expect(retained.map(\.toolCallId) == ["a", "b", "c", "d"])
+        #expect(retained.allSatisfy { !$0.isError })
+        for result in retained { #expect(toolResultText(result) == result.toolCallId) }
+        #expect(!retained.contains { $0.toolCallId == "e" })
     }
 
     @Test("a blocking task_poll mixed with another tool rejects the entire batch")

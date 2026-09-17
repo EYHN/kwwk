@@ -115,8 +115,17 @@ enum CompactionSummaryGenerator {
         }
         let result: AssistantMessage
         do {
-            let response = try await streamRequest(requestModel, context, options)
-            result = await response.result()
+            result = try await request.config.summaryRetryPolicy.complete(cancellation: request.cancellation) {
+                do {
+                    let response = try await streamRequest(requestModel, context, options)
+                    let message = await response.result()
+                    await closeProviderSession(sessionId: providerSessionId)
+                    return message
+                } catch {
+                    await closeProviderSession(sessionId: providerSessionId)
+                    throw error
+                }
+            }
         } catch {
             await closeProviderSession(sessionId: providerSessionId)
             throw error
@@ -296,9 +305,7 @@ enum CompactionSummaryGenerator {
             case .length:
                 throw AgentContextCompactionError.summaryTruncated
             case .error:
-                throw AgentContextCompactionError.summarizationFailed(
-                    result.errorMessage ?? "unknown"
-                )
+                throw result.providerFailure ?? ProviderFailure(message: "unknown summary failure")
             case .toolUse:
                 throw AgentContextCompactionError.summarizationFailed(
                     "summary model attempted a tool call"

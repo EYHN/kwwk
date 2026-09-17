@@ -268,6 +268,7 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
     public var usage: Usage
     public var stopReason: StopReason
     public var errorMessage: String?
+    public var failure: ProviderFailure?
     public var timestamp: Int64
 
     public init(
@@ -279,6 +280,7 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
         usage: Usage = .init(),
         stopReason: StopReason = .stop,
         errorMessage: String? = nil,
+        failure: ProviderFailure? = nil,
         timestamp: Int64 = Timestamp.now()
     ) {
         self.role = .assistant
@@ -290,6 +292,7 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
         self.usage = usage
         self.stopReason = stopReason
         self.errorMessage = errorMessage
+        self.failure = failure
         self.timestamp = timestamp
     }
 }
