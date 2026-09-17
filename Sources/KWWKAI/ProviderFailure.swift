@@ -175,8 +175,20 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
             if code == -1001 { return .timeout }
             return [-1003, -1004, -1005, -1006, -1009].contains(code) ? .transport : .invalidRequest
         }
-        if domain?.lowercased() == NSPOSIXErrorDomain.lowercased(), let code {
-            return [Int(ECONNRESET), Int(ECONNABORTED), Int(ENOTCONN), Int(EPIPE), Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH)].contains(code) ? .transport : .invalidRequest
+        if domain?.lowercased() == NSPOSIXErrorDomain.lowercased() {
+            if transportDomain?.lowercased() == NSPOSIXErrorDomain.lowercased(), let code = transportCode {
+                // Structured transport evidence uses the producer's native
+                // errno constants. Never interpret a legacy text's number as
+                // local errno: Darwin and Linux assign different values.
+                return [Int(ECONNRESET), Int(ECONNABORTED), Int(ENOTCONN), Int(EPIPE), Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH)].contains(code) ? .transport : .invalidRequest
+            }
+            // Legacy diagnostics can cross platform boundaries. Require a
+            // specific socket failure, not a bare number or generic "network".
+            if ["permission denied", "operation not permitted", "invalid", "unsupported", "not supported", "not found"].contains(where: text.contains) { return .invalidRequest }
+            if ["connection reset", "connection aborted", "socket is not connected", "transport endpoint is not connected",
+                "broken pipe", "connection timed out", "operation timed out", "connection refused", "network is unreachable",
+                "host is unreachable", "no route to host"].contains(where: text.contains) { return .transport }
+            return .unknown
         }
         switch providerCode?.lowercased() {
         case "deadline_exceeded": return .timeout

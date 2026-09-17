@@ -9,6 +9,28 @@ import Testing
 
 @Suite("Provider audit regressions")
 struct ProviderAuditRegressionTests {
+    @Test(arguments: [Int(ECONNRESET), Int(ECONNABORTED), Int(ENOTCONN), Int(EPIPE), Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH)])
+    func nativePOSIXUsesPlatformConstants(code: Int) {
+        #expect(ProviderFailure.capture(NSError(domain: NSPOSIXErrorDomain, code: code)).isRetryable)
+    }
+
+    @Test func nativePermanentPOSIXOverridesTransportProse() {
+        let error = NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES),
+                            userInfo: [NSLocalizedDescriptionKey: "connection reset by peer"])
+        #expect(!ProviderFailure.capture(error).isRetryable)
+    }
+
+    @Test(arguments: [54, 57, 104, 107])
+    func serializedPOSIXDoesNotAssumeLocalNumbering(code: Int) {
+        let prefix = "Error Domain=NSPOSIXErrorDomain Code=\(code)"
+        #expect(!ProviderFailure(message: prefix).isRetryable)
+        #expect(!ProviderFailure(message: prefix + " network operation not supported").isRetryable)
+        #expect(!ProviderFailure(message: prefix + " permission denied: connection reset").isRetryable)
+        #expect(ProviderFailure(message: prefix + " Connection reset by peer").isRetryable)
+        #expect(ProviderFailure(message: prefix + " Socket is not connected").isRetryable)
+        #expect(!ProviderFailure(message: prefix + " Connection reset by peer", httpStatus: 402).isRetryable)
+    }
+
     @Test(arguments: [400, 401, 403, 404, 422])
     func permanentStatusDominatesNestedTimeout(status: Int) {
         for failure in [
