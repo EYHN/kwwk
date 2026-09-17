@@ -20,7 +20,7 @@ the entirety of either upstream's test suite.
 
 Deliberate differences: one retry owner above the provider (no nested retries);
 five total attempts by default; 30-second exponential backoff cap with jitter; no credential
-rotation or model fallback; permanent account limits do not retry the same
+rotation or client-side model fallback; permanent account limits do not retry the same
 credential; no automatic replay after committed text or tools. JavaScript SDK
 class names and timers are adapted to Swift errors and cancellation.
 
@@ -58,6 +58,12 @@ Retained Codex user messages are preserved rather than silently truncated; the
 existing post-compaction budget check rejects insufficient reduction.
 
 ## MIT License (pi and oh-my-pi)
+
+Anthropic fallback handling and `AnthropicFallbackTests` additionally adapt
+protocol behavior and scenarios from oh-my-pi's
+`packages/ai/src/providers/anthropic.ts` and
+`packages/ai/test/anthropic-server-side-fallback.test.ts` (main, inspected
+2026-09-17): positional replay, tool-use ordering, and iteration billing.
 
 Copyright (c) 2025 Mario Zechner
 Copyright (c) 2025-2026 Can Bölük

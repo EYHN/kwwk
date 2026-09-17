@@ -451,6 +451,8 @@ public final class FauxProvider: APIProvider, @unchecked Sendable {
                 return
             }
             switch block {
+            case .fallback:
+                partial.content.append(block)
             case .thinking(let t):
                 partial.content.append(.thinking(ThinkingContent(thinking: "")))
                 stream.push(.thinkingStart(contentIndex: index, partial: partial))
@@ -542,6 +544,8 @@ public final class FauxProvider: APIProvider, @unchecked Sendable {
                 return
             }
             switch block {
+            case .fallback:
+                partial.content.append(block)
             case .thinking(let t):
                 partial.content.append(.thinking(ThinkingContent(thinking: "")))
                 stream.push(.thinkingStart(contentIndex: index, partial: partial))
@@ -723,6 +727,7 @@ public final class FauxProvider: APIProvider, @unchecked Sendable {
     static func assistantContentToText(_ blocks: [AssistantBlock]) -> String {
         blocks.map { block in
             switch block {
+            case .fallback: return ""
             case .text(let t): return t.text
             case .thinking(let th): return th.thinking
             case .toolCall(let tc):

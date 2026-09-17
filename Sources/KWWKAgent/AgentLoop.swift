@@ -299,14 +299,24 @@ public enum AgentLoop {
         // can report wall-clock duration without keeping a Date around.
         let runStartMs = Timestamp.now()
         var summary = AgentRunSummary()
+        var hasServedModelChange = false
+        var perTurnCost = Cost()
         func finalize(_ reason: StopReason?) -> AgentRunSummary {
             var s = summary
             s.durationMs = Int(Timestamp.now() - runStartMs)
             s.finalStopReason = reason ?? s.finalStopReason
-            s.cost = calculateCost(model: config.model, usage: s.usage)
+            s.cost = hasServedModelChange ? perTurnCost : calculateCost(model: config.model, usage: s.usage)
             return s
         }
         func accumulate(_ assistant: AssistantMessage) {
+            let servedChanged = assistant.responseModel != nil && assistant.responseModel != assistant.model
+            hasServedModelChange = hasServedModelChange || servedChanged
+            let cost = servedChanged ? assistant.usage.cost : calculateCost(model: config.model, usage: assistant.usage)
+            perTurnCost.input += cost.input
+            perTurnCost.output += cost.output
+            perTurnCost.cacheRead += cost.cacheRead
+            perTurnCost.cacheWrite += cost.cacheWrite
+            perTurnCost.total += cost.total
             summary.turns += 1
             summary.usage.input += assistant.usage.input
             summary.usage.output += assistant.usage.output

@@ -506,6 +506,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
                 var parts: [[String: Any]] = []
                 for block in a.content {
                     switch block {
+                    case .fallback: break
                     case .text(let t):
                         if !t.text.isEmpty {
                             var part: [String: Any] = ["text": t.text]

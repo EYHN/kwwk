@@ -320,6 +320,10 @@ final class TranscriptRenderer {
                 }
                 ingestAssistantText(a, flushAll: true)
                 var tail: [String] = []
+                if a.api == "anthropic-messages", let served = a.responseModel,
+                   served != a.model {
+                    tail.append(Style.dimmed("↳ \(a.model) → \(served) · served model"))
+                }
                 if a.stopReason == .aborted {
                     tail.append(Style.dimmed("⋯ aborted"))
                 }
@@ -732,7 +736,7 @@ final class TranscriptRenderer {
                 }
                 out += t.text
                 renderedAny = true
-            case .thinking, .toolCall:
+            case .thinking, .toolCall, .fallback:
                 // Tool calls render via toolExecutionStart so the `⎿` result
                 // lines attach to the same `●` header. Skip here to avoid a
                 // duplicate line during streaming.
