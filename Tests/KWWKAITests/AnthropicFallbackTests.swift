@@ -4,6 +4,25 @@ import Testing
 
 @Suite("Anthropic server-side fallback")
 struct AnthropicFallbackTests {
+    @Test func nativeCompactionPreservesFallbackHistoryAndBeta() async throws {
+        let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}]}"#)
+        let history = AssistantMessage(content: [
+            .fallback(AnthropicFallbackContent(from: "claude-fable-5", to: "claude-opus-4-8")),
+            .thinking(ThinkingContent(thinking: "reasoning", thinkingSignature: "opus-sig")),
+            .text(TextContent(text: "done")),
+        ], api: "anthropic-messages", provider: "anthropic", model: "claude-fable-5", responseModel: "claude-opus-4-8")
+        _ = try await AnthropicProvider(client: client).compact(model: model(), context: Context(messages: [.assistant(history)]), instructions: "summarize", options: nil)
+        let request = try #require(client.lastRequest)
+        let data = try #require(request.body)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let messages = try #require(body["messages"] as? [[String: Any]])
+        let content = try #require(messages.first?["content"] as? [[String: Any]])
+        #expect(content.compactMap { $0["type"] as? String } == ["fallback", "thinking", "text"])
+        #expect(content[1]["signature"] as? String == "opus-sig")
+        #expect(body["fallbacks"] != nil)
+        #expect(request.headers["anthropic-beta"]?.contains("server-side-fallback-2026-06-01") == true)
+        #expect(request.headers["anthropic-beta"]?.contains("compact-2026-01-12") == true)
+    }
     private func model(_ id: String = "claude-fable-5") -> Model {
         var model = AnthropicProviderTests.sampleModel
         model.id = id

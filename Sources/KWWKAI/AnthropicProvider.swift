@@ -73,6 +73,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         let base = model.baseURL.isEmpty ? defaultBaseURL.absoluteString : model.baseURL
         let url = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/v1/messages")!
         guard Self.supportsNativeCompaction(model: model, baseURL: base) else { return nil }
+        let fallbackEnabled = Self.usesServerSideFallback(model: model, url: url, options: options)
         var nativeContext = context
         if case .assistant? = nativeContext.messages.last {
             // Do not let an assistant-final transcript become an unsupported
@@ -80,14 +81,15 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             nativeContext.messages.append(.user(UserMessage(text: "Compact the preceding conversation; do not continue the task.")))
         }
         let encoded = try Self.encodeBody(model: model, context: nativeContext, options: options,
-            systemPromptPrefix: systemPromptPrefix, maximumOutputTokens: maximumOutputTokens)
+            systemPromptPrefix: systemPromptPrefix, maximumOutputTokens: maximumOutputTokens,
+            fallbackEnabled: fallbackEnabled)
         var body = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
         body["stream"] = false
         body["context_management"] = ["edits": [[
             "type": "compact_20260112", "trigger": ["type": "input_tokens", "value": 50_000],
             "pause_after_compaction": true, "instructions": .string(instructions),
         ]]]
-        var headers = makeHeaders(model: model, context: context, options: options)
+        var headers = makeHeaders(model: model, context: context, options: options, fallbackEnabled: fallbackEnabled)
         headers["accept"] = "application/json"
         let beta = headers["anthropic-beta"].map { $0 + "," } ?? ""
         headers["anthropic-beta"] = beta + "compact-2026-01-12"
@@ -183,6 +185,13 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
 
     // MARK: - Driver
 
+    private static func usesServerSideFallback(model: Model, url: URL, options: StreamOptions?) -> Bool {
+        options?.anthropicServerSideFallback != false
+            && url.scheme == "https" && url.host?.lowercased() == "api.anthropic.com"
+            && model.provider == "anthropic" && model.api == "anthropic-messages"
+            && (model.id == "claude-fable-5" || model.id == "claude-fable-5-1")
+    }
+
     private func run(
         out: AssistantMessageStream,
         model: Model,
@@ -195,10 +204,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             return URL(string: "\(base)/v1/messages") ?? defaultBaseURL.appendingPathComponent("v1/messages")
         }()
 
-        let fallbackEnabled = options?.anthropicServerSideFallback != false
-            && url.scheme == "https" && url.host?.lowercased() == "api.anthropic.com"
-            && model.provider == "anthropic" && model.api == "anthropic-messages"
-            && (model.id == "claude-fable-5" || model.id == "claude-fable-5-1")
+        let fallbackEnabled = Self.usesServerSideFallback(model: model, url: url, options: options)
 
         let body: Data
         do {
