@@ -5,6 +5,67 @@ import Testing
 
 @Suite("Agent stream retry")
 struct AgentRetryTests {
+    @Test("a serialized URLSession connection loss recovers on the next attempt")
+    func urlSessionRecovers() async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+        registration.setResponses([
+            .message(fauxAssistantMessage("", stopReason: .error,
+                errorMessage: "Error Domain=NSURLErrorDomain Code=-1005 \"(null)\"")),
+            .message(fauxAssistantMessage("recovered")),
+        ])
+        let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
+        agent.retryBaseDelayMs = 1
+        let recorder = RetryEventRecorder()
+        _ = agent.subscribe { event, _ in
+            if case .streamRetry(let attempt, let delayMs, let reason) = event {
+                await recorder.record(attempt: attempt, delayMs: delayMs, reason: reason)
+            }
+        }
+        try await agent.prompt("hi")
+        #expect(await recorder.snapshot().count == 1)
+        guard case .assistant(let final) = agent.state.messages.last else {
+            Issue.record("expected recovered assistant message")
+            return
+        }
+        #expect(final.stopReason == .stop)
+        #expect(final.errorMessage == nil)
+    }
+
+    @Test("URLSession failures retry through both thrown and stream-error paths", arguments: [true, false])
+    func urlSessionRetryBudget(thrown: Bool) async throws {
+        let registration = await registerFauxProvider()
+        defer { registration.unregister() }
+        let message = "Error Domain=NSURLErrorDomain Code=-1001 \"(null)\""
+        registration.setResponses(Array(repeating: .message(fauxAssistantMessage(
+            "", stopReason: .error, errorMessage: message
+        )), count: 5))
+        let streamFn: StreamFn? = thrown ? { @Sendable _, _, _ in
+            throw NSError(domain: NSURLErrorDomain, code: URLError.timedOut.rawValue,
+                          userInfo: [NSLocalizedDescriptionKey: "(null)"])
+        } : nil
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(model: registration.getModel()),
+            streamFn: streamFn
+        ))
+        agent.retryBaseDelayMs = 1
+        let recorder = RetryEventRecorder()
+        _ = agent.subscribe { event, _ in
+            if case .streamRetry(let attempt, let delayMs, let reason) = event {
+                await recorder.record(attempt: attempt, delayMs: delayMs, reason: reason)
+            }
+        }
+        try await agent.prompt("hi")
+        let entries = await recorder.snapshot()
+        #expect(entries.map(\.attempt) == [0, 1, 2, 3])
+        #expect(entries.map(\.delayMs) == [1, 2, 4, 8])
+        guard case .assistant(let final) = agent.state.messages.last else {
+            Issue.record("expected terminal error after bounded retries")
+            return
+        }
+        #expect(final.stopReason == .error)
+    }
+
     @Test("emits streamRetry events with exponential backoff before the retry attempt")
     func emitsRetryEvents() async throws {
         let registration = await registerFauxProvider()
@@ -190,6 +251,39 @@ struct AgentRetryTests {
 
 @Suite("Retry error classification")
 struct RetryClassificationTests {
+    @Test("URLSession transient codes work without English descriptions",
+          arguments: [-1001, -1003, -1004, -1005, -1006, -1009])
+    func urlSessionTransientCodes(code: Int) {
+        #expect(AgentLoop.isRetryableError("Error Domain=NSURLErrorDomain Code=\(code) \"(null)\""))
+        #expect(AgentLoop.isRetryableError("Stream failed: Error Domain=NSURLErrorDomain Code=\(code) \"网络错误\""))
+        #expect(AgentLoop.isRetryableError(NSError(
+            domain: NSURLErrorDomain, code: code,
+            userInfo: [NSLocalizedDescriptionKey: "(null)"]
+        )))
+        #expect(AgentLoop.isRetryableError(URLError(URLError.Code(rawValue: code))))
+    }
+
+    @Test("URLSession permanent codes override misleading transport prose",
+          arguments: [-999, -1000, -1002, -1012, -1013, -1022,
+                      -1200, -1201, -1202, -1203, -1204, -1205, -1206, -9999])
+    func urlSessionPermanentCodes(code: Int) {
+        let description = "network connection timeout 503"
+        #expect(!AgentLoop.isRetryableError("Error Domain=NSURLErrorDomain Code=\(code) \"\(description)\""))
+        #expect(!AgentLoop.isRetryableError(NSError(
+            domain: NSURLErrorDomain, code: code,
+            userInfo: [NSLocalizedDescriptionKey: description]
+        )))
+    }
+
+    @Test("URLSession codes require the exact domain and a complete number")
+    func urlSessionDomainBoundaries() {
+        #expect(!AgentLoop.isRetryableError("Error Domain=OtherDomain Code=-1001 \"(null)\""))
+        #expect(!AgentLoop.isRetryableError("Error Domain=NSURLErrorDomainExtra Code=-1001"))
+        #expect(!AgentLoop.isRetryableError("Error Domain=NSURLErrorDomain Code=-10010"))
+        #expect(!AgentLoop.isRetryableError("request id -1001"))
+        #expect(!AgentLoop.isRetryableError("context_length_exceeded: Error Domain=NSURLErrorDomain Code=-1001"))
+    }
+
     @Test("POSIX socket deaths are retryable")
     func posixSocketErrors() {
         // The exact shape of the user-reported subagent failure.

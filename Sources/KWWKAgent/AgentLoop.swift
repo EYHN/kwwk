@@ -686,13 +686,17 @@ public enum AgentLoop {
     private static let maxRetries = 5
 
     /// Whether a stream error looks transient enough to replay the turn.
-    /// Ordered like omp's classifier: timeouts always win, then retryable
-    /// HTTP statuses, then a validation short-circuit (a permanent 4xx-style
+    /// Recognized URLSession codes take precedence over descriptive prose.
+    /// Otherwise ordered like omp's classifier: timeouts, retryable HTTP
+    /// statuses, then a validation short-circuit (a permanent 4xx-style
     /// failure must not retry even if it also mentions "connection"), then
     /// transport/overload patterns.
     static func isRetryableError(_ message: String) -> Bool {
         if ContextLimitClassifier.isInputOverflow(message) {
             return false
+        }
+        if let retryable = URLSessionRetryClassifier.classify(message) {
+            return retryable
         }
         let lower = message.lowercased()
 
@@ -730,6 +734,13 @@ public enum AgentLoop {
         }
 
         return false
+    }
+
+    static func isRetryableError(_ error: any Error) -> Bool {
+        if let retryable = URLSessionRetryClassifier.classify(error) {
+            return retryable
+        }
+        return isRetryableError((error as? LocalizedError)?.errorDescription ?? "\(error)")
     }
 
     private static func streamAssistantResponse(
@@ -963,7 +974,7 @@ public enum AgentLoop {
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                     throw error
                 }
-                if isRetryableError(reason), attemptIndex < maxRetries - 1 {
+                if isRetryableError(error), attemptIndex < maxRetries - 1 {
                     let discarded = cursorResults.drain()
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                     turnToolState.resetPollGateForRetry()
