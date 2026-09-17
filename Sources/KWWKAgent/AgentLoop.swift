@@ -683,16 +683,6 @@ public enum AgentLoop {
 
     // MARK: - Stream assistant response
 
-    private static let maxRetries = 5
-
-    static func isRetryableError(_ message: String) -> Bool {
-        ProviderFailure(message: message).isRetryable
-    }
-
-    static func isRetryableError(_ error: any Error) -> Bool {
-        ProviderFailure.capture(error).isRetryable
-    }
-
     private static func streamAssistantResponse(
         context: inout AgentContext,
         config: AgentLoopConfig,
@@ -744,10 +734,10 @@ public enum AgentLoop {
             return authMetadata
         }()
         var lastError: Error?
-        let retryPolicy = ProviderRetryPolicy(maxAttempts: maxRetries, baseDelayMs: config.retryBaseDelayMs,
+        let retryPolicy = ProviderRetryPolicy(baseDelayMs: config.retryBaseDelayMs,
                                               maxRetryDelayMs: config.maxRetryDelayMs)
 
-        for attemptIndex in 0..<maxRetries {
+        for attemptIndex in 0..<retryPolicy.maxAttempts {
             if cancellation?.isCancelled == true {
                 throw AgentError.aborted
             }

@@ -19,8 +19,8 @@ public protocol WebSocketClient: Sendable {
 }
 
 /// Surfaced when the keepalive heartbeat declares a connection dead. The
-/// description deliberately contains "connection" so `isRetryableError`
-/// classifies it as transient and the agent loop replays the turn.
+/// description is recognized as a transport failure by `ProviderFailure`.
+/// The caller's retry policy and replay-safety checks decide whether to retry.
 public struct WebSocketKeepaliveError: Error, CustomStringConvertible, Sendable {
     public let reason: String
     public var description: String { "WebSocket connection keepalive failed: \(reason)" }

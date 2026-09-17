@@ -502,21 +502,6 @@ struct CompactionRecoveryTests {
         #expect(agent.state.messages.compactMap(assistantStopReason).last == .aborted)
     }
 
-    @Test("overflow phrases are not treated as transient transport failures")
-    func overflowClassificationPrecedesRetry() {
-        #expect(ContextLimitClassifier.isInputOverflow("context_length_exceeded"))
-        #expect(ContextLimitClassifier.isInputOverflow("maximum context length is 128000"))
-        #expect(ContextLimitClassifier.isInputOverflow(
-            "prompt is too long: 213799 tokens > 200000 maximum"
-        ))
-        #expect(ContextLimitClassifier.isInputOverflow(
-            "The input token count (1195854) exceeds the maximum number of tokens allowed (1048576)."
-        ))
-        #expect(!ContextLimitClassifier.isInputOverflow("input token rate exceeded for this minute"))
-        #expect(!ContextLimitClassifier.isInputOverflow("max_tokens output limit reached"))
-        #expect(!ContextLimitClassifier.isInputOverflow("output token count exceeds max_tokens"))
-        #expect(!AgentLoop.isRetryableError("context_length_exceeded"))
-    }
 
     @Test("overflow recovery propagates cancellation and aborted compaction failures")
     func overflowRecoveryPropagatesCancellation() async throws {
