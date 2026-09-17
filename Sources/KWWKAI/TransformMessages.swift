@@ -17,9 +17,9 @@ public enum TransformMessages {
     /// per-message content first; surrogate sanitization cleans the resulting
     /// text; the error-skip + orphan-synthesis pass then reshapes the message
     /// sequence so tool calls and tool results stay balanced.
-    public static func normalize(_ messages: [Message], model: Model) -> [Message] {
+    public static func normalize(_ messages: [Message], model: Model, preserveAnthropicFallback: Bool = false) -> [Message] {
         var result = downgradeUnsupportedImages(expandNativeCompaction(messages, model: model), model: model)
-        result = stripCrossModelThinking(result, model: model)
+        result = stripCrossModelThinking(result, model: model, preserveAnthropicFallback: preserveAnthropicFallback)
         result = normalizeToolCallIds(result, model: model)
         result = sanitizeSurrogates(result)
         result = repairToolFlow(result)
@@ -111,11 +111,18 @@ public enum TransformMessages {
     /// - Cross model: redacted thinking is opaque encrypted content and is
     ///   dropped entirely; non-empty thinking is downgraded to plain text;
     ///   empty thinking is dropped.
-    public static func stripCrossModelThinking(_ messages: [Message], model: Model) -> [Message] {
+    public static func stripCrossModelThinking(_ messages: [Message], model: Model, preserveAnthropicFallback: Bool = false) -> [Message] {
         messages.map { message in
             guard case .assistant(var a) = message else { return message }
-            let isSameModel = a.provider == model.provider && a.api == model.api && a.model == model.id
-            if isSameModel { return message }
+            let isSameModel = a.provider == model.provider && a.api == model.api
+                && (a.responseModel ?? a.model) == model.id
+            let preserveFallback = preserveAnthropicFallback && a.provider == model.provider
+                && a.api == "anthropic-messages" && model.api == a.api
+            if preserveFallback { return message }
+            if isSameModel {
+                a.content.removeAll { if case .fallback = $0 { return true }; return false }
+                return .assistant(a)
+            }
 
             var newContent: [AssistantBlock] = []
             for block in a.content {
@@ -142,6 +149,7 @@ public enum TransformMessages {
                     }
                 case .text(let t):
                     newContent.append(.text(t))
+                case .fallback: break
                 }
             }
             a.content = newContent
@@ -232,7 +240,7 @@ public enum TransformMessages {
                     case .thinking(var th):
                         th.thinking = sanitize(th.thinking)
                         return .thinking(th)
-                    case .toolCall:
+                    case .toolCall, .fallback:
                         return block
                     }
                 }

@@ -2126,7 +2126,26 @@ private func salvagedSubagentSummary(
     }
     salvaged.turns = max(salvaged.turns, observedTurns)
     salvaged.durationMs = max(salvaged.durationMs, max(0, fallbackDurationMs))
-    salvaged.cost = calculateCost(model: model, usage: salvaged.usage)
+    let assistants = messages.compactMap { message -> AssistantMessage? in
+        if case .assistant(let assistant) = message { return assistant }; return nil
+    }
+    if assistants.contains(where: { $0.responseModel != nil && $0.responseModel != $0.model }) {
+        // A completed run summary already contains per-attempt provider prices.
+        // If the run failed before emitting it, recover those costs from history.
+        if summary == nil {
+            salvaged.cost = assistants.reduce(into: Cost()) { total, assistant in
+                let cost = assistant.responseModel != nil && assistant.responseModel != assistant.model
+                    ? assistant.usage.cost : calculateCost(model: model, usage: assistant.usage)
+                total.input += cost.input
+                total.output += cost.output
+                total.cacheRead += cost.cacheRead
+                total.cacheWrite += cost.cacheWrite
+                total.total += cost.total
+            }
+        }
+    } else {
+        salvaged.cost = calculateCost(model: model, usage: salvaged.usage)
+    }
     return salvaged
 }
 
@@ -2748,6 +2767,7 @@ private func addUsage(_ lhs: Usage, _ rhs: Usage) -> Usage {
 private func assistantOutputText(_ assistant: AssistantMessage) -> String {
     assistant.content.compactMap { block -> String? in
         switch block {
+        case .fallback: return nil
         case .text(let text):
             return text.text
         case .thinking(let thinking):

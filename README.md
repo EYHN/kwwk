@@ -67,6 +67,13 @@ Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,
 LS, and background-task tools out of the box.
 
+Official Anthropic Fable 5/5.1 requests automatically allow server-side fallback
+to Opus 4.8. Replies show the requested → served model when they differ, also
+when resuming history. Handoff blocks are preserved for Anthropic's continued
+Opus routing on follow-up turns; this does not switch the configured model.
+See [fallback behavior and tests](Documents/AnthropicFallback.md) for replay,
+billing estimates, and the SDK opt-out.
+
 Image inputs are resized and recompressed before entering the conversation.
 
 ---

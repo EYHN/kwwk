@@ -98,14 +98,30 @@ public enum UserBlock: Sendable, Hashable, Codable {
     }
 }
 
+/// Anthropic's positional handoff marker. Must survive session persistence and
+/// be echoed to the official endpoint to preserve server-side sticky routing.
+public struct AnthropicFallbackContent: Codable, Sendable, Hashable {
+    public struct ModelReference: Codable, Sendable, Hashable {
+        public var model: String
+        public init(model: String) { self.model = model }
+    }
+    public var from: ModelReference
+    public var to: ModelReference
+    public init(from: String, to: String) {
+        self.from = ModelReference(model: from)
+        self.to = ModelReference(model: to)
+    }
+}
+
 /// Content blocks allowed in an assistant message.
 public enum AssistantBlock: Sendable, Hashable, Codable {
     case text(TextContent)
     case thinking(ThinkingContent)
     case toolCall(ToolCall)
+    case fallback(AnthropicFallbackContent)
 
     private enum CodingKeys: String, CodingKey { case type }
-    private enum BlockType: String, Codable { case text, thinking, toolCall }
+    private enum BlockType: String, Codable { case text, thinking, toolCall, fallback }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -113,6 +129,7 @@ public enum AssistantBlock: Sendable, Hashable, Codable {
         case .text: self = .text(try TextContent(from: decoder))
         case .thinking: self = .thinking(try ThinkingContent(from: decoder))
         case .toolCall: self = .toolCall(try ToolCall(from: decoder))
+        case .fallback: self = .fallback(try AnthropicFallbackContent(from: decoder))
         }
     }
 
@@ -128,6 +145,9 @@ public enum AssistantBlock: Sendable, Hashable, Codable {
         case .toolCall(let tc):
             try c.encode(BlockType.toolCall, forKey: .type)
             try tc.encode(to: encoder)
+        case .fallback(let fallback):
+            try c.encode(BlockType.fallback, forKey: .type)
+            try fallback.encode(to: encoder)
         }
     }
 }
@@ -179,6 +199,8 @@ public struct Cost: Codable, Sendable, Hashable {
 }
 
 public struct Usage: Codable, Sendable, Hashable {
+    /// Raw Anthropic per-attempt accounting, retained for persisted fallback turns.
+    public var anthropicIterations: [JSONValue]?
     public var input: Int
     public var output: Int
     public var cacheRead: Int
@@ -202,7 +224,7 @@ public struct Usage: Codable, Sendable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case input, output, cacheRead, cacheWrite, cacheWrite1h, reasoning, totalTokens, cost
+        case input, output, cacheRead, cacheWrite, cacheWrite1h, reasoning, totalTokens, cost, anthropicIterations
     }
 
     public init(from decoder: Decoder) throws {
@@ -215,6 +237,7 @@ public struct Usage: Codable, Sendable, Hashable {
         self.reasoning = try c.decodeIfPresent(Int.self, forKey: .reasoning) ?? 0
         self.totalTokens = try c.decodeIfPresent(Int.self, forKey: .totalTokens) ?? 0
         self.cost = try c.decodeIfPresent(Cost.self, forKey: .cost) ?? .init()
+        self.anthropicIterations = try c.decodeIfPresent([JSONValue].self, forKey: .anthropicIterations)
     }
 }
 
@@ -266,6 +289,8 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
     public var provider: String
     public var model: String
     public var responseId: String?
+    /// Actual server-selected model, when different from the requested model.
+    public var responseModel: String?
     public var usage: Usage
     public var stopReason: StopReason
     public var errorMessage: String?
@@ -278,6 +303,7 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
         provider: String,
         model: String,
         responseId: String? = nil,
+        responseModel: String? = nil,
         usage: Usage = .init(),
         stopReason: StopReason = .stop,
         errorMessage: String? = nil,
@@ -290,6 +316,7 @@ public struct AssistantMessage: Codable, Sendable, Hashable {
         self.provider = provider
         self.model = model
         self.responseId = responseId
+        self.responseModel = responseModel
         self.usage = usage
         self.stopReason = stopReason
         self.errorMessage = errorMessage

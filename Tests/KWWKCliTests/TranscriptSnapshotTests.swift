@@ -14,6 +14,22 @@ import Testing
 @MainActor
 struct TranscriptSnapshotTests {
 
+    @Test("served fallback model is visible live and after history replay")
+    func fallbackNoticeSurvivesReplay() {
+        let reply = Message.assistant(AssistantMessage(content: [
+            .fallback(AnthropicFallbackContent(from: "claude-fable-5", to: "claude-opus-4-8")),
+            .text(TextContent(text: "done")),
+        ], api: "anthropic-messages", provider: "anthropic", model: "claude-fable-5", responseModel: "claude-opus-4-8"))
+        let live = TranscriptRenderer()
+        live.displayWidth = 160
+        live.apply(.messageStart(message: reply))
+        live.apply(.messageEnd(message: reply))
+        let liveLines = live.drainCommits()
+        let recap = TranscriptSnapshot.render([reply], width: 160)
+        #expect(liveLines == recap)
+        #expect(recap.contains { $0.contains("claude-fable-5") && $0.contains("claude-opus-4-8") })
+    }
+
     private func assistant(_ blocks: [AssistantBlock]) -> Message {
         .assistant(AssistantMessage(
             content: blocks,

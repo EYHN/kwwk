@@ -177,6 +177,10 @@ public struct StreamOptions: Sendable {
     /// analog ignore this.
     public var interleavedThinking: Bool?
 
+    /// Official Anthropic Fable 5/5.1 requests default to server-side Opus
+    /// fallback. Set false to opt out; other endpoints/models are unaffected.
+    public var anthropicServerSideFallback: Bool?
+
     /// Bedrock reasoning display mode (`thinking.display`). `nil` ⇒ provider
     /// default (`summarized`). Suppressed on GovCloud targets. Providers without
     /// an analog ignore this.
@@ -220,6 +224,7 @@ public struct StreamOptions: Sendable {
         reasoningSummary: ReasoningSummary? = nil,
         serviceTier: ServiceTier? = nil,
         interleavedThinking: Bool? = nil,
+        anthropicServerSideFallback: Bool? = nil,
         thinkingDisplay: BedrockThinkingDisplay? = nil,
         toolChoice: ToolChoice? = nil,
         parallelToolCalls: Bool? = nil,
@@ -243,6 +248,7 @@ public struct StreamOptions: Sendable {
         self.reasoningSummary = reasoningSummary
         self.serviceTier = serviceTier
         self.interleavedThinking = interleavedThinking
+        self.anthropicServerSideFallback = anthropicServerSideFallback
         self.thinkingDisplay = thinkingDisplay
         self.toolChoice = toolChoice
         self.parallelToolCalls = parallelToolCalls

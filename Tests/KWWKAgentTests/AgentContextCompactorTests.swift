@@ -1220,7 +1220,7 @@ private func rewriteText(in messages: [Message], replacing old: String, with new
                 case .text(var text):
                     text.text = text.text.replacingOccurrences(of: old, with: new)
                     return .text(text)
-                case .thinking, .toolCall:
+                case .thinking, .toolCall, .fallback:
                     return block
                 }
             }

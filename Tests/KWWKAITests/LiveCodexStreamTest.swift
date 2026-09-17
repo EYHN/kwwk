@@ -196,6 +196,7 @@ struct LiveCodexStreamTests {
         print("final blocks:")
         for (i, block) in final.content.enumerated() {
             switch block {
+            case .fallback: break
             case .text(let t):
                 print("  [\(i)] text: \(t.text.prefix(200))")
             case .thinking(let th):

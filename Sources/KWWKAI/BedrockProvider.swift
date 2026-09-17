@@ -521,6 +521,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
                 var parts: [[String: Any]] = []
                 for block in a.content {
                     switch block {
+                    case .fallback: break
                     case .text(let t):
                         if let text = nonBlankText(t.text) { parts.append(text) }
                     case .thinking(let th):

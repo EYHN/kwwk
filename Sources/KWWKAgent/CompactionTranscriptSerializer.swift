@@ -172,6 +172,7 @@ enum CompactionTranscriptSerializer {
             var calls: [ToolCallRecord] = []
             for block in assistant.content {
                 switch block {
+                case .fallback: break
                 case .text(let content):
                     if !content.text.isEmpty {
                         text.append(bounded(content.text, byteLimit: limits.messageTextBytes))

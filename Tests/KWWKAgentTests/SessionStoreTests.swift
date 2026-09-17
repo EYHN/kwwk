@@ -6,6 +6,24 @@ import Testing
 @Suite("SessionStore")
 struct SessionStoreTests {
 
+    @Test("fallback boundary and served identity survive reopening the session store")
+    func fallbackSurvivesSessionRestore() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let message = AssistantMessage(content: [
+            .thinking(ThinkingContent(thinking: "before", thinkingSignature: "fable-sig")),
+            .fallback(AnthropicFallbackContent(from: "claude-fable-5-1", to: "claude-opus-4-8")),
+            .thinking(ThinkingContent(thinking: "after", thinkingSignature: "opus-sig")),
+            .text(TextContent(text: "done")),
+        ], api: "anthropic-messages", provider: "anthropic", model: "claude-fable-5-1", responseModel: "claude-opus-4-8")
+        try await store.append(id: "fallback", cwd: "/tmp", message: .assistant(message), model: message.model, provider: message.provider)
+        let reopened = SessionStore(directory: dir)
+        let restored = try await reopened.load(id: "fallback")
+        #expect(restored.messages == [.assistant(message)])
+        let model = try #require(ModelsCatalog.model(provider: "anthropic", id: "claude-fable-5-1"))
+        #expect(TransformMessages.normalize(restored.messages, model: model, preserveAnthropicFallback: true) == restored.messages)
+    }
+
     /// Each test gets its own throwaway sessions directory.
     private func tempStore() -> (SessionStore, URL) {
         let dir = FileManager.default.temporaryDirectory

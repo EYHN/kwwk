@@ -120,7 +120,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             options: .regularExpression) != nil
     }
 
-    private func makeHeaders(model: Model, context: Context, options: StreamOptions?) -> [String: String] {
+    private func makeHeaders(model: Model, context: Context, options: StreamOptions?, fallbackEnabled: Bool = false) -> [String: String] {
         var headers: [String: String] = [
             "content-type": "application/json",
             "accept": "text/event-stream",
@@ -140,12 +140,17 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         // OAuth `claude-code-20250219,oauth-2025-04-20` seed) rather than
         // clobbering it. Anthropic treats `anthropic-beta` as an unordered set.
         func appendBeta(_ name: String) {
-            if let existing = headers["anthropic-beta"], !existing.isEmpty {
-                if !existing.contains(name) { headers["anthropic-beta"] = existing + "," + name }
-            } else {
-                headers["anthropic-beta"] = name
+            var betas: [String] = []
+            for key in headers.keys.sorted() where key.lowercased() == "anthropic-beta" {
+                for value in (headers.removeValue(forKey: key) ?? "").split(separator: ",") {
+                    let value = value.trimmingCharacters(in: .whitespaces)
+                    if !value.isEmpty && !betas.contains(value) { betas.append(value) }
+                }
             }
+            if !betas.contains(name) { betas.append(name) }
+            headers["anthropic-beta"] = betas.joined(separator: ",")
         }
+        if fallbackEnabled { appendBeta("server-side-fallback-2026-06-01") }
         if context.messages.contains(where: {
             if case .user(let user) = $0, let native = user.nativeCompaction {
                 return native.api == api && native.canReplay(with: model)
@@ -190,6 +195,11 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             return URL(string: "\(base)/v1/messages") ?? defaultBaseURL.appendingPathComponent("v1/messages")
         }()
 
+        let fallbackEnabled = options?.anthropicServerSideFallback != false
+            && url.scheme == "https" && url.host?.lowercased() == "api.anthropic.com"
+            && model.provider == "anthropic" && model.api == "anthropic-messages"
+            && (model.id == "claude-fable-5" || model.id == "claude-fable-5-1")
+
         let body: Data
         do {
             body = try Self.encodeBody(
@@ -197,7 +207,8 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                 context: context,
                 options: options,
                 systemPromptPrefix: systemPromptPrefix,
-                maximumOutputTokens: maximumOutputTokens
+                maximumOutputTokens: maximumOutputTokens,
+                fallbackEnabled: fallbackEnabled
             )
         } catch {
             out.push(.error(reason: .error, error: Self.makeError(
@@ -207,7 +218,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             return
         }
 
-        let headers = makeHeaders(model: model, context: context, options: options)
+        let headers = makeHeaders(model: model, context: context, options: options, fallbackEnabled: fallbackEnabled)
 
         do {
             let (response, stream) = try await client.stream(
@@ -228,6 +239,8 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                 modelId: model.id
             )
             state.signal = options?.cancellation
+            state.requestModel = model
+            state.fallbackEnabled = fallbackEnabled
             // Bridge external cancellation to the in-flight request: cancelling
             // the drive task tears down the SSE/byte streams, which aborts the
             // underlying URLSession task even during a silent stream gap.
@@ -279,7 +292,18 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                 if case .int(let index) = obj["index"] ?? .null,
                    case .object(let block) = obj["content_block"] ?? .null,
                    case .string(let blockType) = block["type"] ?? .null {
+                    if blockType == "fallback" {
+                        guard state.fallbackEnabled,
+                              case .object(let from) = block["from"],
+                              case .string(let source) = from["model"], !source.isEmpty,
+                              case .object(let to) = block["to"],
+                              case .string(let target) = to["model"], !target.isEmpty else { continue }
+                        state.startFallback(index: index, from: source, to: target)
+                        state.responseModel = target
+                        continue
+                    }
                     state.startBlock(index: index, type: blockType, raw: block)
+                    let index = state.contentIndex(for: index)
                     switch blockType {
                     case "text":
                         out.push(.textStart(contentIndex: index, partial: state.snapshot()))
@@ -300,7 +324,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                         if case .string(let text) = delta["text"] ?? .null {
                             state.appendText(index: index, text: text)
                             out.push(.textDelta(
-                                contentIndex: index,
+                                contentIndex: state.contentIndex(for: index),
                                 delta: text,
                                 partial: state.snapshot()
                             ))
@@ -309,7 +333,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                         if case .string(let thinking) = delta["thinking"] ?? .null {
                             state.appendThinking(index: index, text: thinking)
                             out.push(.thinkingDelta(
-                                contentIndex: index,
+                                contentIndex: state.contentIndex(for: index),
                                 delta: thinking,
                                 partial: state.snapshot()
                             ))
@@ -322,7 +346,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                         if case .string(let partial) = delta["partial_json"] ?? .null {
                             state.appendToolJSON(index: index, chunk: partial)
                             out.push(.toolCallDelta(
-                                contentIndex: index,
+                                contentIndex: state.contentIndex(for: index),
                                 delta: partial,
                                 partial: state.snapshot()
                             ))
@@ -334,6 +358,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             case "content_block_stop":
                 if case .int(let index) = obj["index"] ?? .null {
                     let finalized = state.finishBlock(index: index)
+                    let index = state.contentIndex(for: index)
                     switch finalized {
                     case .text(let text):
                         out.push(.textEnd(contentIndex: index, content: text, partial: state.snapshot()))
@@ -411,10 +436,11 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         context: Context,
         options: StreamOptions?,
         systemPromptPrefix: String? = nil,
-        maximumOutputTokens: Int? = nil
+        maximumOutputTokens: Int? = nil,
+        fallbackEnabled: Bool = false
     ) throws -> Data {
         var context = context
-        context.messages = TransformMessages.normalize(context.messages, model: model)
+        context.messages = TransformMessages.normalize(context.messages, model: model, preserveAnthropicFallback: fallbackEnabled)
         let modelCeiling = OutputTokenPolicy.maximumAllowedLimit(for: model)
         let routeCeiling = maximumOutputTokens.map { min(modelCeiling, $0) }
             ?? modelCeiling
@@ -429,6 +455,9 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             "model": model.id,
             "stream": true,
         ]
+        if fallbackEnabled {
+            root["fallbacks"] = [["model": "claude-opus-4-8"]]
+        }
         // Extended thinking: Claude only returns `thinking` content blocks
         // when the request body opts in via `thinking: {type, budget_tokens}`.
         // When the caller requested a reasoning level, translate it to a
@@ -562,7 +591,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         }
         // pi default for `allowEmptySignature` is `false`.
         let allowEmptySig = model.compat?.allowEmptySignature == true
-        var messages = context.messages.compactMap { Self.encodeMessage($0, allowEmptySignature: allowEmptySig) }
+        var messages = context.messages.compactMap { Self.encodeMessage($0, allowEmptySignature: allowEmptySig, fallbackEnabled: fallbackEnabled) }
         if context.messages.contains(where: {
             if case .user(let user) = $0 { return user.nativeCompaction?.api == "anthropic-messages" }
             return false
@@ -586,7 +615,8 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
     /// closing the cached prefix at the end of the conversation.
     private static func applyCacheControl(_ cc: [String: Any], toLastBlockOf message: inout [String: Any]) {
         guard var content = message["content"] as? [[String: Any]], !content.isEmpty else { return }
-        content[content.count - 1]["cache_control"] = cc
+        guard let index = content.lastIndex(where: { !["fallback", "thinking", "redacted_thinking"].contains($0["type"] as? String ?? "") }) else { return }
+        content[index]["cache_control"] = cc
         message["content"] = content
     }
 
@@ -649,7 +679,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         return out
     }
 
-    private static func encodeMessage(_ message: Message, allowEmptySignature: Bool) -> [String: Any]? {
+    private static func encodeMessage(_ message: Message, allowEmptySignature: Bool, fallbackEnabled: Bool) -> [String: Any]? {
         switch message {
         case .user(let u):
             if let native = u.nativeCompaction, native.api == "anthropic-messages" {
@@ -684,6 +714,10 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             var blocks: [[String: Any]] = []
             for block in a.content {
                 switch block {
+                case .fallback(let fallback):
+                    if fallbackEnabled {
+                        blocks.append(["type": "fallback", "from": ["model": fallback.from.model], "to": ["model": fallback.to.model]])
+                    }
                 case .text(let t):
                     // Cross-provider history and tool-only turns can contain
                     // empty text. Kimi rejects these even beside valid blocks.
@@ -725,6 +759,10 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
                 }
             }
             guard !blocks.isEmpty else { return nil }
+            // Anthropic requires tool_use blocks at the end. Preserve the
+            // signed thinking/fallback boundary order within the non-tool part.
+            blocks = blocks.filter { $0["type"] as? String != "tool_use" }
+                + blocks.filter { $0["type"] as? String == "tool_use" }
             return ["role": "assistant", "content": blocks]
 
         case .toolResult(let tr):
@@ -815,6 +853,9 @@ final class AnthropicStreamState: @unchecked Sendable {
     var signal: CancellationHandle?
 
     var responseId: String?
+    var responseModel: String? { didSet { updateCost() } }
+    var requestModel: Model?
+    var fallbackEnabled = false
     var usage = Usage()
     var stopReason: StopReason = .stop
     var errorMessage: String?
@@ -826,6 +867,7 @@ final class AnthropicStreamState: @unchecked Sendable {
         case text(TextContent)
         case thinking(ThinkingContent)
         case toolUse(id: String, name: String, json: String)
+        case fallback(AnthropicFallbackContent)
     }
     private var blocks: [Int: Block] = [:]
     private var orderedIndices: [Int] = []
@@ -838,10 +880,22 @@ final class AnthropicStreamState: @unchecked Sendable {
 
     func applyMessageStart(_ obj: [String: JSONValue]) {
         if case .string(let id) = obj["id"] ?? .null { responseId = id }
+        if case .string(let model) = obj["model"], !model.isEmpty, model != modelId {
+            responseModel = model
+        }
         if case .object(let u) = obj["usage"] ?? .null { applyUsageDelta(u) }
     }
 
     func applyUsageDelta(_ obj: [String: JSONValue]) {
+        if fallbackEnabled, case .array(let iterations) = obj["iterations"] {
+            usage.anthropicIterations = iterations
+            for case .object(let iteration) in iterations {
+                if iteration["type"] == .string("fallback_message"),
+                   case .string(let model) = iteration["model"], !model.isEmpty {
+                    responseModel = model
+                }
+            }
+        }
         if case .int(let v) = obj["input_tokens"] ?? .null { usage.input = v }
         if case .int(let v) = obj["output_tokens"] ?? .null { usage.output = v }
         if case .int(let v) = obj["cache_read_input_tokens"] ?? .null { usage.cacheRead = v }
@@ -853,6 +907,52 @@ final class AnthropicStreamState: @unchecked Sendable {
         if case .object(let d) = obj["output_tokens_details"] ?? .null,
            case .int(let v) = d["thinking_tokens"] ?? .null { usage.reasoning = v }
         usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
+        updateCost()
+    }
+
+    private func updateCost() {
+        guard let requestModel else { return }
+        func pricedModel(_ id: String?) -> Model {
+            guard fallbackEnabled, let id, id != requestModel.id else { return requestModel }
+            return ModelsCatalog.model(provider: requestModel.provider, id: id) ?? requestModel
+        }
+        guard fallbackEnabled, let iterations = usage.anthropicIterations, !iterations.isEmpty else {
+            usage.cost = calculateCost(model: pricedModel(responseModel), usage: usage)
+            return
+        }
+        let entries = iterations.compactMap { value -> [String: JSONValue]? in
+            if case .object(let entry) = value { return entry }; return nil
+        }
+        let hasFallback = entries.contains { $0["type"] == .string("fallback_message") }
+        var total = Cost()
+        var applied = false
+        for entry in entries {
+            func count(_ key: String) -> Int {
+                if case .int(let value) = entry[key] { return max(0, value) }; return 0
+            }
+            let input = count("input_tokens"), output = count("output_tokens")
+            let cacheWrite = count("cache_creation_input_tokens")
+            let isFallback = entry["type"] == .string("fallback_message")
+            // Classifier-blocked attempts before any output/cache write are waived.
+            if hasFallback && !isFallback && output == 0 && cacheWrite == 0 { continue }
+            let attempt = Usage(input: isFallback ? 0 : input, output: output,
+                                cacheRead: count("cache_read_input_tokens") + (isFallback ? input : 0),
+                                cacheWrite: cacheWrite)
+            let id: String? = { if case .string(let id) = entry["model"] { return id }; return nil }()
+            let cost = calculateCost(model: pricedModel(id), usage: attempt)
+            total.input += cost.input
+            total.output += cost.output
+            total.cacheRead += cost.cacheRead
+            total.cacheWrite += cost.cacheWrite
+            total.total += cost.total
+            applied = true
+        }
+        if applied { usage.cost = total }
+    }
+
+    /// SSE indices include ignored protocol blocks; public indices address content.
+    func contentIndex(for wireIndex: Int) -> Int {
+        orderedIndices.sorted().filter { blocks[$0] != nil }.firstIndex(of: wireIndex) ?? 0
     }
 
     func startBlock(index: Int, type: String, raw: [String: JSONValue]) {
@@ -879,6 +979,13 @@ final class AnthropicStreamState: @unchecked Sendable {
                 blocks[index] = .toolUse(id: id, name: name, json: "")
             default: break
             }
+        }
+    }
+
+    func startFallback(index: Int, from: String, to: String) {
+        lock.withLock {
+            if !orderedIndices.contains(index) { orderedIndices.append(index) }
+            blocks[index] = .fallback(AnthropicFallbackContent(from: from, to: to))
         }
     }
 
@@ -923,6 +1030,7 @@ final class AnthropicStreamState: @unchecked Sendable {
         lock.withLock {
             guard let block = blocks[index] else { return .none }
             switch block {
+            case .fallback: return .none
             case .text(let t): return .text(t.text)
             case .thinking(let th): return .thinking(th.thinking)
             case .toolUse(let id, let name, let json):
@@ -951,6 +1059,7 @@ final class AnthropicStreamState: @unchecked Sendable {
             for i in orderedIndices.sorted() {
                 guard let block = blocks[i] else { continue }
                 switch block {
+                case .fallback(let fallback): content.append(.fallback(fallback))
                 case .text(let t): content.append(.text(t))
                 case .thinking(let th): content.append(.thinking(th))
                 case .toolUse(let id, let name, let json):
@@ -964,6 +1073,7 @@ final class AnthropicStreamState: @unchecked Sendable {
                 provider: provider,
                 model: modelId,
                 responseId: responseId,
+                responseModel: responseModel,
                 usage: usage,
                 stopReason: stopReason,
                 errorMessage: errorMessage,

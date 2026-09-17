@@ -61,6 +61,8 @@ enum ContextTokenEstimator {
         case .assistant(let assistant):
             for block in assistant.content {
                 switch block {
+                case .fallback(let fallback):
+                    tokens += 8 + estimate(text: fallback.from.model) + estimate(text: fallback.to.model)
                 case .text(let text):
                     tokens += estimate(text: text.text)
                     tokens += estimate(text: text.textSignature ?? "")
