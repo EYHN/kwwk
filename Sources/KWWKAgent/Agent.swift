@@ -170,6 +170,7 @@ public struct AgentOptions: Sendable {
 public final class Agent: @unchecked Sendable {
     public let state: AgentState
     private let streamFn: StreamFn
+    private let usesCustomStream: Bool
 
     private let lock = NSLock()
     private var listeners: [(id: UUID, handler: AgentListener)] = []
@@ -332,6 +333,7 @@ public final class Agent: @unchecked Sendable {
             tools: options.initialState.tools,
             messages: options.initialState.messages
         )
+        self.usesCustomStream = options.streamFn != nil
         self.streamFn = options.streamFn ?? { model, context, options in
             try await KWWKAI.stream(model: model, context: context, options: options)
         }
@@ -370,6 +372,16 @@ public final class Agent: @unchecked Sendable {
         options: StreamOptions?
     ) async throws -> AssistantMessageStream {
         try await streamFn(model, context, options)
+    }
+
+    internal func resolvedCompactionConfig(_ config: AgentContextCompactionConfig) -> AgentContextCompactionConfig {
+        var config = config
+        if !usesCustomStream && config.nativeCompaction == nil {
+            config.nativeCompaction = { model, context, instructions, options in
+                try await compactNative(model: model, context: context, instructions: instructions, options: options)
+            }
+        }
+        return config
     }
 
     /// Queue a message to inject after the current assistant turn finishes.

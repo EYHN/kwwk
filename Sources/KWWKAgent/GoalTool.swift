@@ -33,11 +33,17 @@ public func isHiddenGoalContinuation(_ message: Message) -> Bool {
 /// objective body so no goal state is written to disk. Non-continuation
 /// messages pass through unchanged.
 public func redactedForPersistence(_ message: Message) -> Message {
-    guard isHiddenGoalContinuation(message), case .user(let u) = message else { return message }
-    return .user(UserMessage(
-        content: [.text(TextContent(text: "\(goalContinuationMarker) (redacted goal continuation)"))],
-        timestamp: u.timestamp
-    ))
+    guard case .user(var u) = message else { return message }
+    if isHiddenGoalContinuation(message) {
+        return .user(UserMessage(
+            content: [.text(TextContent(text: "\(goalContinuationMarker) (redacted goal continuation)"))],
+            timestamp: u.timestamp
+        ))
+    }
+    if let fallback = u.nativeCompaction?.fallbackMessages {
+        u.nativeCompaction?.fallbackMessages = fallback.map(redactedForPersistence)
+    }
+    return .user(u)
 }
 
 /// Lifecycle of a session-scoped goal. `active` drives the autonomous loop;

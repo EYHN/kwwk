@@ -17,7 +17,7 @@ import FoundationNetworking
 ///  - Output items are typed (`message`, `function_call`, `reasoning`) and
 ///    carry `output_index` + `content_index` for nested content.
 ///  - `parallel_tool_calls` is a top-level boolean.
-public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifecycle, @unchecked Sendable {
+public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifecycle, NativeCompactionProvider, @unchecked Sendable {
     public typealias URLBuilder = @Sendable (Model, StreamOptions?, URL) -> URL
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
     public typealias WebSocketURLBuilder = @Sendable (URL) -> URL
@@ -86,6 +86,70 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
 
     public func closeSession(sessionId: String) async {
         sessions.closeSession(sessionId: sessionId)
+    }
+
+    public func compact(model: Model, context: Context, instructions: String,
+                        options: StreamOptions?) async throws -> NativeCompactionResult? {
+        guard model.compat?.supportsServerCompaction != false,
+              model.api == "chatgpt-codex" || model.compat?.supportsServerCompaction == true else { return nil }
+        let codex = model.api == "chatgpt-codex"
+        let responsesURL = urlBuilder(model, options, defaultBaseURL)
+        let url = codex ? responsesURL : responsesURL.appendingPathComponent("compact")
+        var nativeContext = context
+        nativeContext.messages = TransformMessages.normalize(context.messages, model: model)
+        let input = Self.encodeInput(context: nativeContext, model: model)
+        var body: [String: JSONValue] = [
+            "model": .string(model.id),
+            "input": .array(input),
+            "instructions": .string(context.systemPrompt ?? ""),
+        ]
+        if codex {
+            // ChatGPT subscriptions expose V2 on /responses, not V1's
+            // /responses/compact. Reuse the live request serializer.
+            let request = try Self.makeRequest(model: model, context: nativeContext,
+                                               options: options, bodyOverrides: bodyOverrides)
+            body = request.fields
+            body["input"] = .array(input + [["type": "compaction_trigger"]])
+            body["store"] = false
+            body["stream"] = true
+        }
+        var headers = model.headers ?? [:]
+        for (key, value) in makeHeaders(options: options, accept: codex ? "text/event-stream" : "application/json") {
+            mergeHeader(&headers, name: key, value: value, append: false)
+        }
+        if let sessionId = options?.sessionId { headers["session_id"] = sessionId }
+        let json: [String: JSONValue]
+        if codex {
+            let compacted = try await client.compactionSSE(url: url, headers: headers,
+                body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+            // V2 compacts assistant history; original user messages remain
+            // part of the replacement input, as in omp/Codex.
+            let retained = input.filter { $0["role"] == .string("user") }
+            json = ["output": .array(retained + [compacted])]
+        } else {
+            json = try await client.compactionJSON(url: url, headers: headers,
+                body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+        }
+        guard case .array(let output) = json["output"], output.contains(where: {
+            guard case .object(let item) = $0 else { return false }
+            if item["type"] == .string("compaction"), case .string(let data) = item["encrypted_content"] {
+                return !data.isEmpty
+            }
+            if item["type"] == .string("compaction_summary"), case .string(let text) = item["summary"] {
+                return !text.isEmpty
+            }
+            return false
+        }) else { throw ProviderFailure(message: "Codex compaction returned no compaction item") }
+        // Response-only statuses must not be replayed as input fields.
+        let items = output.map { item -> JSONValue in
+            guard case .object(var object) = item else { return item }
+            object.removeValue(forKey: "status")
+            return .object(object)
+        }
+        return NativeCompactionResult(
+            summary: "Earlier conversation is preserved in provider-native compacted context.",
+            payload: NativeCompactionPayload(model: model, items: items,
+                fallbackMessages: TransformMessages.expandNativeCompaction(context.messages)))
     }
 
     private func run(
@@ -913,6 +977,9 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         for message in context.messages {
             switch message {
             case .user(let u):
+                if let native = u.nativeCompaction, native.canReplay(with: model) {
+                    out.append(contentsOf: native.items)
+                }
                 var parts: [JSONValue] = []
                 for block in u.content {
                     switch block {

@@ -451,6 +451,35 @@ inspect it, or `/compact-model clear` to follow `/model` again. A custom
 the summary stream cap automatic; set a positive value only when an explicit
 hard output limit is required.
 
+Compaction requests retry transient network, rate-limit, and provider-overload
+failures through `AgentContextCompactionConfig.summaryRetryPolicy` (five total
+attempts by default, exponential backoff with jitter and Retry-After support).
+Native requests and local summaries each have one retry owner, separate from
+`maxSummaryAttempts` (context-reduction attempts). Cancellation, HTTP 402,
+invalid requests, output-limit truncation, and context overflow do not retry
+the same request. Premature transport EOF remains a transient failure.
+
+Native compaction is enabled when available: ChatGPT Codex uses an authenticated
+Responses V2 stream with `compaction_trigger` (its subscription endpoint does
+not expose `/responses/compact`); explicitly opted-in Responses routes retain
+the V1 `/responses/compact` protocol. Supported Anthropic models on the official route
+use the compaction beta once context reaches 55k tokens. Compatible routes can
+opt in with `ModelCompat.supportsServerCompaction = true`; `false` disables the
+capability. Unsupported routes, smaller Anthropic contexts, or a separate
+compaction model use the local summary pipeline. Native request failures remain
+visible after bounded retries and leave the existing context intact.
+Anthropic native summaries use the recap budget as their output cap (also
+bounded by `summaryMaxTokens` when set); Codex's compact endpoint manages its
+own output size.
+
+Native payloads are persisted and replayed on subsequent requests. Codex's
+encrypted context keeps its source prefix for switching providers, where normal
+context management can summarize it again. Anthropic also supplies readable
+summary text. Set `AgentContextCompactionConfig.useNativeCompaction = false`
+to use only local summaries. Custom `streamFn` hosts stay on their own local
+summary transport unless they also provide `config.nativeCompaction`.
+No background or speculative compaction runs are started.
+
 ### Steering a running agent
 
 Queue a message that will be injected at the next turn boundary —

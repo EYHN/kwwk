@@ -228,6 +228,7 @@ public struct UserMessage: Codable, Sendable, Hashable {
     /// user-role messages, while the agent can distinguish them from text the
     /// user actually submitted.
     public var source: UserMessageSource?
+    public var nativeCompaction: NativeCompactionPayload?
 
     public init(
         content: [UserBlock],

@@ -13,7 +13,7 @@ import FoundationNetworking
 ///
 /// The provider is testable via a stub `HTTPClient` and produces the standard
 /// AssistantMessageEvent stream.
-public final class AnthropicProvider: APIProvider, @unchecked Sendable {
+public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @unchecked Sendable {
     public typealias AuthHeaderBuilder = @Sendable (String) -> [String: String]
     public static let claudeCodeMaximumOutputTokens = 64_000
 
@@ -68,6 +68,114 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         return out
     }
 
+    public func compact(model: Model, context: Context, instructions: String,
+                        options: StreamOptions?) async throws -> NativeCompactionResult? {
+        let base = model.baseURL.isEmpty ? defaultBaseURL.absoluteString : model.baseURL
+        let url = URL(string: base.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/v1/messages")!
+        guard Self.supportsNativeCompaction(model: model, baseURL: base) else { return nil }
+        var nativeContext = context
+        if case .assistant? = nativeContext.messages.last {
+            // Do not let an assistant-final transcript become an unsupported
+            // prefill. This synthetic control message is not persisted.
+            nativeContext.messages.append(.user(UserMessage(text: "Compact the preceding conversation; do not continue the task.")))
+        }
+        let encoded = try Self.encodeBody(model: model, context: nativeContext, options: options,
+            systemPromptPrefix: systemPromptPrefix, maximumOutputTokens: maximumOutputTokens)
+        var body = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
+        body["stream"] = false
+        body["context_management"] = ["edits": [[
+            "type": "compact_20260112", "trigger": ["type": "input_tokens", "value": 50_000],
+            "pause_after_compaction": true, "instructions": .string(instructions),
+        ]]]
+        var headers = makeHeaders(model: model, context: context, options: options)
+        headers["accept"] = "application/json"
+        let beta = headers["anthropic-beta"].map { $0 + "," } ?? ""
+        headers["anthropic-beta"] = beta + "compact-2026-01-12"
+        let json = try await client.compactionJSON(url: url, headers: headers,
+            body: JSONEncoder().encode(body), cancellation: options?.cancellation)
+        guard json["stop_reason"] == "compaction" else {
+            throw ProviderFailure(message: "Invalid Anthropic compaction completion: expected compaction stop reason",
+                                  rawStopReason: json["stop_reason"].flatMap { value in
+                                      if case .string(let reason) = value { return reason }; return nil
+                                  })
+        }
+        guard case .array(let content) = json["content"],
+              let block = content.first(where: {
+                  guard case .object(let item) = $0 else { return false }
+                  return item["type"] == .string("compaction")
+              }), case .object(let item) = block,
+              case .string(let summary) = item["content"],
+              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ProviderFailure(message: "Anthropic compaction returned no summary")
+        }
+        return NativeCompactionResult(summary: summary,
+            payload: NativeCompactionPayload(model: model, items: [block]))
+    }
+
+    static func supportsNativeCompaction(model: Model, baseURL: String? = nil) -> Bool {
+        if let explicit = model.compat?.supportsServerCompaction { return explicit }
+        let base = baseURL ?? (model.baseURL.isEmpty ? "https://api.anthropic.com" : model.baseURL)
+        return URL(string: base)?.host == "api.anthropic.com" && model.id.range(
+            of: "claude-(opus|sonnet)-(4[.-][6-9]|[5-9])|claude-(fable|mythos)-[5-9]",
+            options: .regularExpression) != nil
+    }
+
+    private func makeHeaders(model: Model, context: Context, options: StreamOptions?) -> [String: String] {
+        var headers: [String: String] = [
+            "content-type": "application/json",
+            "accept": "text/event-stream",
+            "anthropic-version": apiVersion,
+        ]
+        for (k, v) in model.headers ?? [:] { headers[k] = v }
+        for (k, v) in extraHeaders { headers[k] = v }
+        if let auth = options?.resolvedAuth {
+            applyResolvedAuth(auth, to: &headers)
+        } else if let key = options?.apiKey ?? defaultAPIKey {
+            for (k, v) in authHeaderBuilder(key) { headers[k] = v }
+        }
+        if let extra = options?.headers {
+            for (k, v) in extra { headers[k] = v }
+        }
+        // Append a beta flag to any existing `anthropic-beta` value (e.g. the
+        // OAuth `claude-code-20250219,oauth-2025-04-20` seed) rather than
+        // clobbering it. Anthropic treats `anthropic-beta` as an unordered set.
+        func appendBeta(_ name: String) {
+            if let existing = headers["anthropic-beta"], !existing.isEmpty {
+                if !existing.contains(name) { headers["anthropic-beta"] = existing + "," + name }
+            } else {
+                headers["anthropic-beta"] = name
+            }
+        }
+        if context.messages.contains(where: {
+            if case .user(let user) = $0, let native = user.nativeCompaction {
+                return native.api == api && native.canReplay(with: model)
+            }
+            return false
+        }) { appendBeta("compact-2026-01-12") }
+        // 1h prompt-cache TTL requires the extended-cache-ttl beta.
+        if (options?.cacheRetention ?? .short) == .long,
+           model.compat?.supportsLongCacheRetention != false {
+            appendBeta("extended-cache-ttl-2025-04-11")
+        }
+        // Fine-grained tool streaming beta is required only when eager tool
+        // input streaming is NOT supported and tools are present (pi inversion,
+        // anthropic-messages.ts:1182-1184).
+        let hasTools = !(context.tools?.isEmpty ?? true)
+        let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
+        if hasTools && !supportsEager {
+            appendBeta("fine-grained-tool-streaming-2025-05-14")
+        }
+        // Interleaved thinking beta, unless the model forces adaptive thinking
+        // or the caller opts out. pi defaults `interleavedThinking` to true.
+        let adaptive = model.compat?.forceAdaptiveThinking == true
+        let interleaved = options?.interleavedThinking ?? true
+        if interleaved && !adaptive {
+            appendBeta("interleaved-thinking-2025-05-14")
+        }
+
+        return headers
+    }
+
     // MARK: - Driver
 
     private func run(
@@ -99,51 +207,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
             return
         }
 
-        var headers: [String: String] = [
-            "content-type": "application/json",
-            "accept": "text/event-stream",
-            "anthropic-version": apiVersion,
-        ]
-        for (k, v) in model.headers ?? [:] { headers[k] = v }
-        for (k, v) in extraHeaders { headers[k] = v }
-        if let auth = options?.resolvedAuth {
-            applyResolvedAuth(auth, to: &headers)
-        } else if let key = options?.apiKey ?? defaultAPIKey {
-            for (k, v) in authHeaderBuilder(key) { headers[k] = v }
-        }
-        if let extra = options?.headers {
-            for (k, v) in extra { headers[k] = v }
-        }
-        // Append a beta flag to any existing `anthropic-beta` value (e.g. the
-        // OAuth `claude-code-20250219,oauth-2025-04-20` seed) rather than
-        // clobbering it. Anthropic treats `anthropic-beta` as an unordered set.
-        func appendBeta(_ name: String) {
-            if let existing = headers["anthropic-beta"], !existing.isEmpty {
-                if !existing.contains(name) { headers["anthropic-beta"] = existing + "," + name }
-            } else {
-                headers["anthropic-beta"] = name
-            }
-        }
-        // 1h prompt-cache TTL requires the extended-cache-ttl beta.
-        if (options?.cacheRetention ?? .short) == .long,
-           model.compat?.supportsLongCacheRetention != false {
-            appendBeta("extended-cache-ttl-2025-04-11")
-        }
-        // Fine-grained tool streaming beta is required only when eager tool
-        // input streaming is NOT supported and tools are present (pi inversion,
-        // anthropic-messages.ts:1182-1184).
-        let hasTools = !(context.tools?.isEmpty ?? true)
-        let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
-        if hasTools && !supportsEager {
-            appendBeta("fine-grained-tool-streaming-2025-05-14")
-        }
-        // Interleaved thinking beta, unless the model forces adaptive thinking
-        // or the caller opts out. pi defaults `interleavedThinking` to true.
-        let adaptive = model.compat?.forceAdaptiveThinking == true
-        let interleaved = options?.interleavedThinking ?? true
-        if interleaved && !adaptive {
-            appendBeta("interleaved-thinking-2025-05-14")
-        }
+        let headers = makeHeaders(model: model, context: context, options: options)
 
         do {
             let (response, stream) = try await client.stream(
@@ -342,7 +406,7 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
 
     // MARK: - Helpers
 
-    private static func encodeBody(
+    static func encodeBody(
         model: Model,
         context: Context,
         options: StreamOptions?,
@@ -499,6 +563,18 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
         // pi default for `allowEmptySignature` is `false`.
         let allowEmptySig = model.compat?.allowEmptySignature == true
         var messages = context.messages.compactMap { Self.encodeMessage($0, allowEmptySignature: allowEmptySig) }
+        if context.messages.contains(where: {
+            if case .user(let user) = $0 { return user.nativeCompaction?.api == "anthropic-messages" }
+            return false
+        }) {
+            // Replaying a compaction block requires the strategy to remain
+            // present, but only the agent decides when to compact again.
+            root["context_management"] = ["edits": [[
+                "type": "compact_20260112",
+                "trigger": ["type": "input_tokens", "value": max(50_000, model.contextWindow)],
+                "pause_after_compaction": true,
+            ]]]
+        }
         if let cc = cacheControl, !messages.isEmpty {
             applyCacheControl(cc, toLastBlockOf: &messages[messages.count - 1])
         }
@@ -576,6 +652,15 @@ public final class AnthropicProvider: APIProvider, @unchecked Sendable {
     private static func encodeMessage(_ message: Message, allowEmptySignature: Bool) -> [String: Any]? {
         switch message {
         case .user(let u):
+            if let native = u.nativeCompaction, native.api == "anthropic-messages" {
+                var blocks = native.items.compactMap { anyFromJSONValue($0) as? [String: Any] }
+                // The host recap also carries current background-task/fact
+                // ledgers, which are not part of the provider's summary.
+                for case .text(let text) in u.content {
+                    blocks.append(["type": "text", "text": text.text])
+                }
+                return ["role": "assistant", "content": blocks]
+            }
             let content = u.content.compactMap { block -> [String: Any]? in
                 switch block {
                 case .text(let t):

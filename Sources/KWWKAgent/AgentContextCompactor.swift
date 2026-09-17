@@ -37,6 +37,10 @@ public struct AgentContextCompactionConfig: Sendable {
     /// Transient retries per self-contained summary call, separate from the
     /// compaction planner's attempts to reduce the resulting context size.
     public var summaryRetryPolicy: ProviderRetryPolicy
+    public var useNativeCompaction: Bool
+    /// Custom transports may supply native compaction. With no custom stream,
+    /// nil resolves the registered provider automatically.
+    public var nativeCompaction: NativeCompactionFn?
 
     public init(
         minMessages: Int = agentCompactMinMessages,
@@ -50,7 +54,9 @@ public struct AgentContextCompactionConfig: Sendable {
         summaryMaxTokens: Int = 0,
         recoveryRatio: Double = 0.8,
         maxSummaryAttempts: Int = 2,
-        summaryRetryPolicy: ProviderRetryPolicy = .init()
+        summaryRetryPolicy: ProviderRetryPolicy = .init(),
+        useNativeCompaction: Bool = true,
+        nativeCompaction: NativeCompactionFn? = nil
     ) {
         self.minMessages = minMessages
         self.toolOutputCharacterLimit = toolOutputCharacterLimit
@@ -64,6 +70,8 @@ public struct AgentContextCompactionConfig: Sendable {
         self.recoveryRatio = recoveryRatio
         self.maxSummaryAttempts = maxSummaryAttempts
         self.summaryRetryPolicy = summaryRetryPolicy
+        self.nativeCompaction = nativeCompaction
+        self.useNativeCompaction = useNativeCompaction
     }
 }
 
@@ -163,7 +171,7 @@ public enum AgentContextCompactor {
             compactionModel: summaryModel,
             backgroundManager: backgroundManager,
             sessionId: sessionId,
-            config: config,
+            config: agent.resolvedCompactionConfig(config),
             targetTokens: targetTokens,
             additionalMessages: additionalMessages,
             respectMinimumMessages: respectMinimumMessages,
@@ -311,7 +319,8 @@ public enum AgentContextCompactor {
         if cancellation?.isCancelled == true || Task.isCancelled {
             return .failure(.failed(AgentContextCompactionError.cancelled.localizedDescription))
         }
-        if respectMinimumMessages, context.messages.count < config.minMessages {
+        if respectMinimumMessages,
+           TransformMessages.expandNativeCompaction(context.messages, model: model).count < config.minMessages {
             return .failure(.tooFewMessages(count: context.messages.count))
         }
 

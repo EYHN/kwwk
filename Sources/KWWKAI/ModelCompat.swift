@@ -43,6 +43,8 @@ public struct ModelCompat: Codable, Sendable, Hashable {
 
     // MARK: anthropic-messages
     public var supportsEagerToolInputStreaming: Bool?
+    /// Override native compaction support, including compatible proxy routes.
+    public var supportsServerCompaction: Bool?
     public var supportsCacheControlOnTools: Bool?
     public var supportsTemperature: Bool?
     public var forceAdaptiveThinking: Bool?
