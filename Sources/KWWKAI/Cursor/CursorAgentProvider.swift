@@ -171,14 +171,19 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
                 out.end(aborted)
                 return
             }
-            finish(out: out, state: state)
+            var incomplete = state.snapshot()
+            incomplete.stopReason = .error
+            incomplete.errorMessage = "Cursor stream ended without turnEnded"
+            out.push(.error(reason: .error, error: incomplete))
+            out.end(incomplete)
         } catch {
             if options?.cancellation?.isCancelled == true {
                 let aborted = state.aborted()
                 out.push(.error(reason: .aborted, error: aborted))
                 out.end(aborted)
             } else {
-                let msg = errorMessage(model: model, text: "\(error)")
+                var msg = errorMessage(model: model, text: "\(error)")
+                msg.failure = .capture(error)
                 out.push(.error(reason: .error, error: msg))
                 out.end(msg)
             }

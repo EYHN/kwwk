@@ -685,51 +685,12 @@ public enum AgentLoop {
 
     private static let maxRetries = 5
 
-    /// Whether a stream error looks transient enough to replay the turn.
-    /// Ordered like omp's classifier: timeouts always win, then retryable
-    /// HTTP statuses, then a validation short-circuit (a permanent 4xx-style
-    /// failure must not retry even if it also mentions "connection"), then
-    /// transport/overload patterns.
     static func isRetryableError(_ message: String) -> Bool {
-        if ContextLimitClassifier.isInputOverflow(message) {
-            return false
-        }
-        let lower = message.lowercased()
+        ProviderFailure(message: message).isRetryable
+    }
 
-        if lower.contains("timeout") || lower.contains("timed out") {
-            return true
-        }
-
-        for status in ["408", "429", "502", "503", "504", "529"] where lower.contains(status) {
-            return true
-        }
-
-        for fatal in [
-            "invalid", "validation", "bad request", "unsupported", "schema",
-            "missing required", "not found", "unauthorized", "forbidden",
-        ] where lower.contains(fatal) {
-            return false
-        }
-
-        // "connect" covers connection/connected/disconnect — including
-        // POSIX ENOTCONN's "Socket is not connected", which URLSession
-        // surfaces as an NSPOSIXErrorDomain error. "closed before" covers
-        // a WebSocket the server dropped mid-response.
-        for transient in [
-            "network", "connect", "nsposixerrordomain",
-            "econnreset", "enotconn", "epipe", "broken pipe", "reset by peer",
-            "socket closed", "socket error", "closed before", "closed unexpectedly",
-            "rate limit", "too many requests", "overloaded",
-            // gRPC-based providers (e.g. NVIDIA NIM) report quota pressure
-            // as a ResourceExhausted / RESOURCE_EXHAUSTED status.
-            "resourceexhausted", "resource_exhausted", "resource exhausted",
-            "internal error", "server error", "service unavailable", "bad gateway",
-            "temporarily", "stream stall", "fetch failed",
-        ] where lower.contains(transient) {
-            return true
-        }
-
-        return false
+    static func isRetryableError(_ error: any Error) -> Bool {
+        ProviderFailure.capture(error).isRetryable
     }
 
     private static func streamAssistantResponse(
@@ -783,6 +744,8 @@ public enum AgentLoop {
             return authMetadata
         }()
         var lastError: Error?
+        let retryPolicy = ProviderRetryPolicy(maxAttempts: maxRetries, baseDelayMs: config.retryBaseDelayMs,
+                                              maxRetryDelayMs: config.maxRetryDelayMs)
 
         for attemptIndex in 0..<maxRetries {
             if cancellation?.isCancelled == true {
@@ -840,6 +803,7 @@ public enum AgentLoop {
             )
 
             var emittedStart = false
+            var replayUnsafe = false
             do {
                 let response = try await streamFn(requestModel, llmContext, options)
 
@@ -854,6 +818,7 @@ public enum AgentLoop {
                 for await event in response {
                     switch event {
                     case .start(let partial):
+                        replayUnsafe = replayUnsafe || partial.hasReplayUnsafeContent
                         if !emittedStart {
                             await emit(.messageStart(message: .assistant(partial)))
                             emittedStart = true
@@ -869,6 +834,7 @@ public enum AgentLoop {
                          .toolCallStart(_, let partial),
                          .toolCallDelta(_, _, let partial),
                          .toolCallEnd(_, _, let partial):
+                        replayUnsafe = replayUnsafe || partial.hasReplayUnsafeContent
                         if !emittedStart {
                             await emit(.messageStart(message: .assistant(partial)))
                             emittedStart = true
@@ -886,8 +852,7 @@ public enum AgentLoop {
 
                 if requestModel.api != "cursor-agent",
                    final.stopReason == .error,
-                   let message = final.errorMessage,
-                   ContextLimitClassifier.isInputOverflow(message) {
+                   final.providerFailure?.category == .contextOverflow {
                     await inlineAttempt.invalidateAndWait(reason: "context-overflow")
                     throw ProviderContextOverflow(
                         assistant: final,
@@ -895,13 +860,14 @@ public enum AgentLoop {
                     )
                 }
 
-                // Retry on stream-level errors that look transient. Ask the
-                // UI to drop the partial render first so the retried stream
-                // doesn't paint over a corrupted frame.
+                // Retry only before output/tool effects are committed. Close
+                // the inline invocation gate atomically with the safety check.
                 if final.stopReason == .error,
-                   let msg = final.errorMessage,
-                   isRetryableError(msg),
-                   attemptIndex < maxRetries - 1 {
+                   !replayUnsafe, !final.hasReplayUnsafeContent,
+                   let failure = final.providerFailure,
+                   let delayMs = retryPolicy.delay(for: failure, attempt: attemptIndex, jitter: .random(in: 0.75...1)),
+                   inlineAttempt.preventInvocationsForReplay() {
+                    let msg = failure.message
                     await inlineAttempt.invalidateAndWait(reason: "cursor-attempt-retry")
                     // Discard inline Cursor tool results from the rewound
                     // attempt — their toolCall blocks are gone with it, and the
@@ -912,7 +878,6 @@ public enum AgentLoop {
                     if emittedStart {
                         await emit(.streamRewind)
                     }
-                    let delayMs = min(config.retryBaseDelayMs * (1 << attemptIndex), 30_000)
                     await emit(.streamRetry(attempt: attemptIndex, delayMs: delayMs, reason: msg))
                     try await waitForRetryDelay(delayMs, cancellation: cancellation)
                     lastError = AgentError.maxRetriesExceeded
@@ -936,7 +901,7 @@ public enum AgentLoop {
                 lastError = error
                 let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
                 if requestModel.api != "cursor-agent",
-                   ContextLimitClassifier.isInputOverflow(reason) {
+                   ProviderFailure.capture(error).category == .contextOverflow {
                     let discarded = cursorResults.drain()
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                     let assistant = AssistantMessage(
@@ -946,6 +911,7 @@ public enum AgentLoop {
                         model: requestModel.id,
                         stopReason: .error,
                         errorMessage: reason,
+                        failure: .capture(error),
                         timestamp: Timestamp.now()
                     )
                     throw ProviderContextOverflow(
@@ -963,11 +929,11 @@ public enum AgentLoop {
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                     throw error
                 }
-                if isRetryableError(reason), attemptIndex < maxRetries - 1 {
+                if !replayUnsafe, !inlineAttempt.hasInvokedTools,
+                   let delayMs = retryPolicy.delay(for: .capture(error), attempt: attemptIndex, jitter: .random(in: 0.75...1)) {
                     let discarded = cursorResults.drain()
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                     turnToolState.resetPollGateForRetry()
-                    let delayMs = min(config.retryBaseDelayMs * (1 << attemptIndex), 30_000)
                     await emit(.streamRetry(attempt: attemptIndex, delayMs: delayMs, reason: reason))
                     try await waitForRetryDelay(delayMs, cancellation: cancellation)
                     continue
@@ -988,20 +954,8 @@ public enum AgentLoop {
         _ delayMs: UInt64,
         cancellation: CancellationHandle?
     ) async throws {
-        let tickMs: UInt64 = 100
-        var remainingMs = delayMs
-        while remainingMs > 0 {
-            if cancellation?.isCancelled == true || Task.isCancelled {
-                throw AgentError.aborted
-            }
-            let step = min(remainingMs, tickMs)
-            do {
-                try await Task.sleep(nanoseconds: step * 1_000_000)
-            } catch {
-                throw AgentError.aborted
-            }
-            remainingMs -= step
-        }
+        do { try await ProviderRetryPolicy.wait(delayMs, cancellation: cancellation) }
+        catch { throw AgentError.aborted }
     }
 
     private static func appendFinalTurnInstruction(
@@ -1976,6 +1930,15 @@ private final class CursorInlineExecutionAttempt: @unchecked Sendable {
     private var acceptingInvocations = true
     private var retainResults = true
     private var activeInvocations = 0
+    private var invokedTools = false
+    var hasInvokedTools: Bool { lock.withLock { invokedTools } }
+    func preventInvocationsForReplay() -> Bool {
+        lock.withLock {
+            guard !invokedTools else { return false }
+            acceptingInvocations = false
+            return true
+        }
+    }
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(parentCancellation: CancellationHandle?) {
@@ -1994,6 +1957,7 @@ private final class CursorInlineExecutionAttempt: @unchecked Sendable {
         lock.withLock {
             guard acceptingInvocations else { return nil }
             activeInvocations += 1
+            invokedTools = true
             return cancellation
         }
     }

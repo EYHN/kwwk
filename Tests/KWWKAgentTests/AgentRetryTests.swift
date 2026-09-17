@@ -23,7 +23,7 @@ struct AgentRetryTests {
 
         let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
         // Shrink the 1-second base delay so the test runs fast. With
-        // base=10ms the two retries sleep 10ms and 20ms.
+        // base=10ms the two retries sleep 7–10ms and 15–20ms with jitter.
         agent.retryBaseDelayMs = 10
 
         let recorder = RetryEventRecorder()
@@ -38,10 +38,10 @@ struct AgentRetryTests {
         let entries = await recorder.snapshot()
         #expect(entries.count == 2)
         #expect(entries[0].attempt == 0)
-        #expect(entries[0].delayMs == 10)
+        #expect((7...10).contains(entries[0].delayMs))
         #expect(entries[0].reason.contains("429"))
         #expect(entries[1].attempt == 1)
-        #expect(entries[1].delayMs == 20)
+        #expect((15...20).contains(entries[1].delayMs))
         #expect(entries[1].reason.contains("503"))
 
         // Agent should have recovered — final assistant message is the success.
@@ -137,7 +137,10 @@ struct AgentRetryTests {
         let entries = await recorder.snapshot()
         #expect(entries.count == 4)
         #expect(entries.map(\.attempt) == [0, 1, 2, 3])
-        #expect(entries.map(\.delayMs) == [5, 10, 20, 40])
+        for (entry, upperBound) in zip(entries, [UInt64(5), 10, 20, 40]) {
+            #expect(entry.delayMs >= UInt64(Double(upperBound) * 0.75))
+            #expect(entry.delayMs <= upperBound)
+        }
 
         if case .assistant(let msg) = agent.state.messages.last {
             #expect(msg.stopReason == .error)
@@ -214,7 +217,8 @@ struct RetryClassificationTests {
         #expect(AgentLoop.isRetryableError("HTTP 529: overloaded"))
         // gRPC-based providers (e.g. NVIDIA NIM) report quota pressure as
         // ResourceExhausted (pi #6449).
-        #expect(AgentLoop.isRetryableError("ResourceExhausted: quota exceeded"))
+        #expect(AgentLoop.isRetryableError("ResourceExhausted: Worker local total request limit reached"))
+        #expect(!AgentLoop.isRetryableError("ResourceExhausted: quota exceeded"))
         #expect(AgentLoop.isRetryableError("gRPC status RESOURCE_EXHAUSTED"))
     }
 
@@ -226,8 +230,8 @@ struct RetryClassificationTests {
         // Validation short-circuit wins even when the message also
         // mentions a transport-ish word.
         #expect(!AgentLoop.isRetryableError("invalid connection parameters"))
-        // ...but a timeout wins over everything.
-        #expect(AgentLoop.isRetryableError("invalid state: request timed out"))
+        // Permanent validation evidence is not overridden by timeout prose.
+        #expect(!AgentLoop.isRetryableError("invalid state: request timed out"))
     }
 
     @Test("in-flight session conflict is not retryable")

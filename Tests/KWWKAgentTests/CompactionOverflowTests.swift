@@ -9,7 +9,8 @@ struct CompactionOverflowTests {
                               contextWindow: 40_000, maxTokens: 1_000)
 
     private var config: AgentContextCompactionConfig {
-        .init(minMessages: 1, keepRecentTokens: 1, messageTextByteLimit: 200_000)
+        .init(minMessages: 1, keepRecentTokens: 1, messageTextByteLimit: 200_000,
+              summaryRetryPolicy: .init(baseDelayMs: 0))
     }
 
     @Test("rejected summaries shrink and preserve ordered history", arguments: [false, true])
@@ -65,7 +66,9 @@ struct CompactionOverflowTests {
             .user(UserMessage(text: "tail")),
         ], log: log, limit: 0, reason: reason)
         guard case .failure = result else { Issue.record("Expected failure"); return }
-        #expect(await log.calls.count == 1)
+        let calls = await log.calls
+        #expect(calls.count == (reason.contains("refusal") ? 1 : 5))
+        #expect(calls.allSatisfy { $0.text == calls.first?.text })
     }
 
     @Test("persistent overflow stops at the minimum budget")

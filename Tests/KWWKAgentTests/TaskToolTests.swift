@@ -1127,8 +1127,8 @@ struct TaskToolTests {
         })
     }
 
-    @Test("Cursor retry rolls back an unretained poll result into one runtime aside")
-    func cursorRetryRestoresAutomaticDelivery() async throws {
+    @Test("Cursor failure retains an in-flight poll result without replay or duplicate delivery")
+    func cursorFailureRetainsAutomaticDelivery() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         let manager = BackgroundTaskManager(outputDir: makeTaskTempDir())
@@ -1218,14 +1218,6 @@ struct TaskToolTests {
 
         try await agent.prompt("retry poll")
 
-        let delivered = await awaitUntil(3_000) {
-            agent.state.messages.contains { message in
-                guard case .user(let user) = message, user.source == .runtime,
-                      case .text(let text) = user.content.first else { return false }
-                return text.text.contains(taskId)
-            }
-        }
-        #expect(delivered)
         await agent.waitForIdle()
 
         let rewoundResults = agent.state.messages.filter { message in
@@ -1237,10 +1229,10 @@ struct TaskToolTests {
                   case .text(let text) = user.content.first else { return false }
             return text.text.contains(taskId)
         }
-        #expect(rewoundResults.isEmpty)
-        #expect(runtimeCopies.count == 1)
+        #expect(rewoundResults.count == 1)
+        #expect(runtimeCopies.isEmpty)
         #expect(!consumer.hasPendingMessages())
-        #expect(counter.value >= 3)
+        #expect(counter.value == 1)
     }
 
     @Test("standard catalog exposes the split task tools")

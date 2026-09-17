@@ -594,11 +594,7 @@ struct BedrockCacheAndAuthTests {
             context: Context(messages: [.user(UserMessage(text: "hi"))]),
             options: nil
         )
-        var final: AssistantMessage?
-        for await ev in out {
-            if case .done(_, let m) = ev { final = m }
-        }
-        return final
+        return await out.result()
     }
 
     @Test("unknown stopReason maps to .error and surfaces the raw reason")
