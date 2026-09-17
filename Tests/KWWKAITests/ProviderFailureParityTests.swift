@@ -25,13 +25,34 @@ struct ProviderFailureParityTests {
     }
 
     // omp error-aierr.test.ts: governing status wins over the cause's prose.
-    @Test(arguments: [400, 401, 403, 404, 413, 422])
+    @Test(arguments: [400, 401, 402, 403, 404, 413, 422])
     func governingTerminalStatus(status: Int) {
         #expect(!ProviderFailure(message: "unexpected EOF connection timeout", httpStatus: status).isRetryable)
     }
     @Test(arguments: [408, 429, 500, 502, 503, 504, 524, 529, 599])
     func governingTransientStatus(status: Int) {
         #expect(ProviderFailure(message: "opaque provider failure", httpStatus: status).isRetryable)
+    }
+
+    @Test(arguments: [false, true])
+    func paymentRequiredIsAlwaysTerminal(legacy: Bool) async throws {
+        let failure = ProviderFailure(
+            message: legacy ? "HTTP 402: connection timed out; Error Domain=NSURLErrorDomain Code=-1001" : "overloaded; retry this request",
+            httpStatus: legacy ? nil : 402,
+            transportDomain: legacy ? nil : NSURLErrorDomain,
+            transportCode: legacy ? nil : -1001,
+            retryAfterMs: 0, shouldRetry: true)
+        #expect(failure.category == .quota)
+        #expect(!failure.isRetryable)
+        #expect(ProviderRetryPolicy(baseDelayMs: 0).delay(for: failure, attempt: 0) == nil)
+        var attempts = 0
+        _ = try await ProviderRetryPolicy(baseDelayMs: 0).complete {
+            attempts += 1
+            var message = fauxAssistantMessage("", stopReason: .error)
+            message.failure = failure
+            return message
+        }
+        #expect(attempts == 1)
     }
 
     // pi retry.test.ts: guidance, DNS, stream termination, permanent limits.

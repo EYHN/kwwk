@@ -35,8 +35,8 @@ struct ProviderRecoveryTests {
         #expect(final.stopReason == .error)
     }
 
-    @Test("structured status and server veto override ambiguous message text")
-    func respectsStructuredVeto() async throws {
+    @Test("structured status and server veto override ambiguous message text", arguments: [402, 429])
+    func respectsStructuredVeto(status: Int) async throws {
         let attempts = RecoveryAttempts()
         let model = model
         let agent = Agent(initialState: .init(model: model), streamFn: { _, _, _ in
@@ -44,7 +44,7 @@ struct ProviderRecoveryTests {
             let pair = AssistantMessageStream.makeStream()
             let message = AssistantMessage(content: [], api: model.api, provider: model.provider, model: model.id,
                                            stopReason: .error, errorMessage: "503 connection timed out",
-                                           failure: .init(message: "busy", httpStatus: 429, shouldRetry: false))
+                                           failure: .init(message: "busy", httpStatus: status, shouldRetry: status == 402))
             pair.continuation.end(message)
             return pair.stream
         })

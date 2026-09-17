@@ -130,6 +130,10 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
     }
 
     public var category: Category {
+        let status = httpStatus ?? Self.legacyStatus(message)
+        // Payment/account failures cannot be repaired by replay, even when a
+        // proxy includes transient transport prose or an explicit retry hint.
+        if status == 402 { return .quota }
         let text = [providerCode, rawStopReason, message].compactMap { $0 }.joined(separator: " ").lowercased()
         let domain = transportDomain ?? Self.match(#"\bdomain\s*=\s*(NSURLErrorDomain|NSPOSIXErrorDomain)\s+code"#, in: message)
         let code = transportCode ?? Self.match(#"\bdomain\s*=\s*(?:NSURLErrorDomain|NSPOSIXErrorDomain)\s+code\s*=\s*(-?\d+)\b"#, in: message).flatMap(Int.init)
@@ -142,7 +146,6 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         if ["refusal", "content_filter", "sensitive", "safety", "guardrail_intervened", "prohibited_content", "blocklist", "recitation", "spii"].contains(where: text.contains) { return .refusal }
         if ["insufficient_quota", "quota exceeded", "out of budget", "available balance", "billing",
             "monthly usage limit", "usage limit reached", "usage_limit_reached", "gousagelimiterror", "freeusagelimiterror"].contains(where: text.contains) { return .quota }
-        let status = httpStatus ?? Self.legacyStatus(message)
         if status == 401 || status == 403 { return .authentication }
         if let status, (400..<500).contains(status), status != 408, status != 429 { return .invalidRequest }
         if status == 408 { return .timeout }
