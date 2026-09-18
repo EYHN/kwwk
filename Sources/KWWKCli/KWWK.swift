@@ -29,11 +29,20 @@ public enum KWWK {
     /// (system instructions, tools, and messages) crosses that ratio of the
     /// model context window. It also performs one recovery attempt for a
     /// provider-reported input-context overflow. Pass `nil` to disable.
+    ///
+    /// `idleCompact` additionally compacts a session left untouched for
+    /// `idleCompactDelaySeconds` (clamped to 60...3600) once its context
+    /// reaches `idleCompactThreshold` (a window ratio or an absolute token
+    /// count). Off by default; the
+    /// in-session `/idle-compact` command toggles and retunes it.
     public static func runCodingTUI(
         cwd: String? = nil,
         tools: CodingTools = .standard,
         builtinSubagents: BuiltinSubagentSelection = .all,
         autoCompactThreshold: Double? = 0.75,
+        idleCompact: Bool = false,
+        idleCompactThreshold: AgentIdleCompactThreshold = .ratio(0.5),
+        idleCompactDelaySeconds: Int = 300,
         thinkingLevel: ThinkingLevel = .medium,
         modelOverride: String? = nil,
         context1m: Bool = false,
@@ -70,6 +79,11 @@ public enum KWWK {
             providerSlots: resolved.providerSlots,
             authResolvers: resolved.authResolvers,
             autoCompactThreshold: autoCompactThreshold,
+            idleCompaction: IdleCompactionSettings(
+                enabled: idleCompact,
+                threshold: idleCompactThreshold,
+                delaySeconds: idleCompactDelaySeconds
+            ),
             thinkingLevel: thinkingLevel,
             context1m: context1m,
             resume: resume

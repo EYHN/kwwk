@@ -33,6 +33,9 @@ import KWWKCli
 ///                        general, explore, plan, test-runner, code-reviewer,
 ///                        read-only, all, none.
 ///   `--no-subagents`    — disable built-in CLI subagents.
+///   `--idle-compact`    — (TUI only) compact the conversation after the
+///                        session has been idle for a while; tune in-session
+///                        with `/idle-compact`.
 @main
 struct KwwkCLI {
     static func main() async {
@@ -47,6 +50,8 @@ struct KwwkCLI {
         (args, builtinSubagents) = extractBuiltinSubagents(args)
         let resume: SessionResume
         (args, resume) = extractResume(args)
+        let idleCompact: Bool
+        (args, idleCompact) = extractBoolFlag(args, "--idle-compact")
 
         let subcommand = args.first
 
@@ -54,6 +59,7 @@ struct KwwkCLI {
         case nil:
             await runOrExit { try await KWWK.runCodingTUI(
                 builtinSubagents: builtinSubagents,
+                idleCompact: idleCompact,
                 thinkingLevel: thinkingLevel,
                 modelOverride: modelOverride,
                 context1m: context1m,
@@ -101,6 +107,10 @@ struct KwwkCLI {
           --subagents <list>          built-in subagents to enable:
                                       \(BuiltinSubagentSelection.validNames)
           --no-subagents              disable built-in CLI subagents
+          --idle-compact              compact the conversation while the TUI
+                                      sits idle (default: after 5m at 50% of
+                                      the context window; tune in-session,
+                                      e.g. /idle-compact 150k 10m)
           --continue                  resume the latest session for this
                                       directory (replays its transcript)
           --resume                    interactively pick any session to resume

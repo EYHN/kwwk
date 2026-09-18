@@ -77,6 +77,62 @@ public struct AgentAutoCompactOptions: Sendable {
     }
 }
 
+/// Compact the transcript after the agent has sat idle for a while, so the
+/// next prompt starts from a small context instead of re-sending (and, once
+/// the provider's prompt cache has expired, re-billing) a large one.
+///
+/// The countdown starts whenever the agent becomes idle — a run or a
+/// maintenance window ends — and is cancelled by the next run. Hosts with
+/// their own notion of activity (keystrokes, an open dialog) push it back with
+/// `Agent.noteIdleActivity()` and veto a due compaction with `canCompact`.
+///
+/// An agent waiting on background tasks is not idle: if
+/// `autoCompact.backgroundManager` reports active tasks for the session, the
+/// compaction is skipped so their completion notifications continue from the
+/// full context. Idle compaction reuses `autoCompact`'s compaction config and
+/// reports through the same `compactStart` / `compactEnd` events.
+/// How full the context must be before an idle agent is compacted.
+public enum AgentIdleCompactThreshold: Sendable, Equatable {
+    /// Fraction of the current model's context window, e.g. `0.5`.
+    case ratio(Double)
+    /// Absolute estimated prompt tokens, independent of the model's window —
+    /// the natural unit when the concern is the cost of re-sending an uncached
+    /// prompt. A value above the window never triggers.
+    case tokens(Int)
+
+    func isReached(by usage: AgentContextUsage) -> Bool {
+        switch self {
+        case .ratio(let ratio):
+            guard ratio.isFinite, ratio > 0, usage.window > 0 else { return false }
+            return usage.ratio >= ratio
+        case .tokens(let tokens):
+            return tokens > 0 && usage.tokens >= tokens
+        }
+    }
+}
+
+public struct AgentIdleCompactOptions: Sendable {
+    /// Typically lower than `AgentAutoCompactOptions.threshold`: idle time is
+    /// free, a turn blocked on compaction is not.
+    public var threshold: AgentIdleCompactThreshold
+    /// Seconds of inactivity before compacting.
+    public var delay: TimeInterval
+    /// Host veto, consulted once the delay has elapsed and the built-in checks
+    /// passed. Return `false` to skip this idle period (for example while the
+    /// user has an unsent draft). The next activity re-arms the countdown.
+    public var canCompact: (@Sendable () async -> Bool)?
+
+    public init(
+        threshold: AgentIdleCompactThreshold = .ratio(0.5),
+        delay: TimeInterval = 300,
+        canCompact: (@Sendable () async -> Bool)? = nil
+    ) {
+        self.threshold = threshold
+        self.delay = delay
+        self.canCompact = canCompact
+    }
+}
+
 public struct AgentOptions: Sendable {
     public var initialState: AgentInitialState
     public var streamFn: StreamFn?
@@ -109,6 +165,8 @@ public struct AgentOptions: Sendable {
     /// context window; pass `nil` to opt out of proactive compaction and
     /// provider-overflow recovery.
     public var autoCompact: AgentAutoCompactOptions?
+    /// Idle-time context compaction. Off (`nil`) by default.
+    public var idleCompact: AgentIdleCompactOptions?
     /// Optional model used only to generate context-compaction summaries.
     /// `nil` follows the agent's current `state.model` dynamically. Trigger
     /// thresholds and recovery targets always use the current model, even
@@ -137,6 +195,7 @@ public struct AgentOptions: Sendable {
         betweenTurns: BetweenTurnsHook? = nil,
         beforeRunEnd: BeforeRunEndHook? = nil,
         autoCompact: AgentAutoCompactOptions? = AgentAutoCompactOptions(),
+        idleCompact: AgentIdleCompactOptions? = nil,
         compactionModel: Model? = nil,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)? = nil
     ) {
@@ -160,6 +219,7 @@ public struct AgentOptions: Sendable {
         self.betweenTurns = betweenTurns
         self.beforeRunEnd = beforeRunEnd
         self.autoCompact = autoCompact
+        self.idleCompact = idleCompact
         self.compactionModel = compactionModel
         self.authResolver = authResolver
     }
@@ -219,6 +279,8 @@ public final class Agent: @unchecked Sendable {
     private var _betweenTurns: BetweenTurnsHook?
     private var _beforeRunEnd: BeforeRunEndHook?
     private var _autoCompact: AgentAutoCompactOptions?
+    private var _idleCompact: AgentIdleCompactOptions?
+    let idleCompactionTimer = IdleCompactionTimer()
     private var _compactionModel: Model?
     private var _authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     private var _retryBaseDelayMs: UInt64 = 1_000
@@ -278,6 +340,18 @@ public final class Agent: @unchecked Sendable {
     public var autoCompact: AgentAutoCompactOptions? {
         get { lock.withLock { _autoCompact } }
         set { lock.withLock { _autoCompact = newValue } }
+    }
+
+    /// Idle-time compaction. Assigning restarts the idle countdown from now
+    /// (or cancels it for `nil`), so a change made while the agent is already
+    /// idle takes effect without waiting for another run.
+    public var idleCompact: AgentIdleCompactOptions? {
+        get { lock.withLock { _idleCompact } }
+        set {
+            lock.withLock { _idleCompact = newValue }
+            idleCompactionTimer.cancel()
+            noteIdleActivity()
+        }
     }
     /// Model used for compaction summaries. Assign `nil` to follow the live
     /// conversation model again. This never mutates `state.model`.
@@ -359,11 +433,14 @@ public final class Agent: @unchecked Sendable {
         self._betweenTurns = options.betweenTurns
         self._beforeRunEnd = options.beforeRunEnd
         self._autoCompact = options.autoCompact
+        self._idleCompact = options.idleCompact
         self._compactionModel = options.compactionModel
         self._authResolver = options.authResolver
         self.steeringQueue = PendingMessageQueue(mode: options.steeringMode)
         self.followUpQueue = PendingMessageQueue(mode: options.followUpMode)
         self.runtimeAsideQueue = PendingMessageQueue(mode: .all)
+        // A restored session may be left untouched from the start.
+        noteIdleActivity()
     }
 
     internal func streamForCompaction(
@@ -635,6 +712,7 @@ extension Agent {
         for cancellation in cancellations {
             cancellation.cancel(reason: "session retired")
         }
+        idleCompactionTimer.cancel()
         clearAllQueues()
     }
 
@@ -807,6 +885,7 @@ extension Agent {
         }
 
         let cancellation = lock.withLock { activeCancellation! }
+        idleCompactionTimer.cancel()
         state.setStreaming(true)
         state.setStreamingMessage(nil)
         state.setErrorMessage(nil)
@@ -844,6 +923,7 @@ extension Agent {
             return drained
         }
         for waiter in waiters { waiter.resume() }
+        noteIdleActivity()
     }
 
     private func finishMaintenance(_ cancellation: CancellationHandle) {
@@ -855,6 +935,7 @@ extension Agent {
             return drained
         }
         for waiter in waiters { waiter.resume() }
+        noteIdleActivity()
     }
 
     private func drainRuntimeMessages() -> [Message] {
@@ -1085,6 +1166,10 @@ extension Agent {
         for listener in snapshotListeners() {
             await listener(event, cancellation)
         }
+    }
+
+    func emitIdleCompaction(_ event: AgentEvent, cancellation: CancellationHandle) async {
+        await emitSynthetic(event, cancellation: cancellation)
     }
 
     /// Emit process-local telemetry that originates outside an active model
