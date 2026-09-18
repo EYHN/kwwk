@@ -187,7 +187,10 @@ struct MultiProviderAuthTests {
             // supplies the same metadata so the coding endpoint accepts it.
             #expect(resolved?.model.headers?["User-Agent"]?.hasPrefix("KimiCLI/") == true)
             let resolvedModel = try #require(resolved?.model)
-            #expect(resolvedModel.contextWindow == 262_144)
+            // Registration preserves the current catalog limit; the legacy
+            // resolver fallback remains 256K if the alias is no longer listed.
+            let catalogModel = ModelsCatalog.model(provider: "kimi-coding", id: "kimi-for-coding")
+            #expect(resolvedModel.contextWindow == (catalogModel?.contextWindow ?? 262_144))
             #expect(resolvedModel.compat?.forceAdaptiveThinking == true)
             #expect(resolvedModel.compat?.allowEmptySignature == true)
             #expect(resolved?.modelLabel == "kimi-for-coding · Kimi For Coding")
