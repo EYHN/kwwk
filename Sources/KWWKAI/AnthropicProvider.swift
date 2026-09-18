@@ -185,11 +185,18 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
 
     // MARK: - Driver
 
+    // Current Fable/Mythos aliases follow omp's family policy; Opus 5 follows
+    // pi's explicit allowedFallbackModels entry. Keep unknown/future models out.
+    private static let serverFallbackModels: Set<String> = [
+        "claude-fable-5", "claude-fable-5-1",
+        "claude-mythos-5", "claude-mythos-5-1", "claude-opus-5",
+    ]
+
     private static func usesServerSideFallback(model: Model, url: URL, options: StreamOptions?) -> Bool {
         options?.anthropicServerSideFallback != false
             && url.scheme == "https" && url.host?.lowercased() == "api.anthropic.com"
             && model.provider == "anthropic" && model.api == "anthropic-messages"
-            && (model.id == "claude-fable-5" || model.id == "claude-fable-5-1")
+            && serverFallbackModels.contains(model.id)
     }
 
     private func run(

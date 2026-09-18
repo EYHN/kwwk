@@ -4,14 +4,17 @@ import Testing
 
 @Suite("Anthropic server-side fallback")
 struct AnthropicFallbackTests {
-    @Test func nativeCompactionPreservesFallbackHistoryAndBeta() async throws {
+    static let supportedModels = ["claude-fable-5", "claude-fable-5-1", "claude-mythos-5", "claude-mythos-5-1", "claude-opus-5"]
+
+    @Test(arguments: supportedModels)
+    func nativeCompactionPreservesFallbackHistoryAndBeta(_ id: String) async throws {
         let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}]}"#)
         let history = AssistantMessage(content: [
-            .fallback(AnthropicFallbackContent(from: "claude-fable-5", to: "claude-opus-4-8")),
+            .fallback(AnthropicFallbackContent(from: id, to: "claude-opus-4-8")),
             .thinking(ThinkingContent(thinking: "reasoning", thinkingSignature: "opus-sig")),
             .text(TextContent(text: "done")),
-        ], api: "anthropic-messages", provider: "anthropic", model: "claude-fable-5", responseModel: "claude-opus-4-8")
-        _ = try await AnthropicProvider(client: client).compact(model: model(), context: Context(messages: [.assistant(history)]), instructions: "summarize", options: nil)
+        ], api: "anthropic-messages", provider: "anthropic", model: id, responseModel: "claude-opus-4-8")
+        _ = try await AnthropicProvider(client: client).compact(model: model(id), context: Context(messages: [.assistant(history)]), instructions: "summarize", options: nil)
         let request = try #require(client.lastRequest)
         let data = try #require(request.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -39,7 +42,7 @@ struct AnthropicFallbackTests {
     private let delta = #"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hello"}}"#
     private let stop = #"{"type":"message_stop"}"#
 
-    @Test(arguments: ["claude-fable-5", "claude-fable-5-1"])
+    @Test(arguments: supportedModels)
     func requestOptsIntoFallback(_ id: String) async throws {
         let client = StubSSEClient(body: sse([start, stop]))
         _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: nil).result()
@@ -50,9 +53,10 @@ struct AnthropicFallbackTests {
         #expect(request.headers["anthropic-beta"]?.contains("server-side-fallback-2026-06-01") == true)
     }
 
-    @Test func doesNotEnableOnOtherRoutesOrOptOut() async throws {
+    @Test(arguments: supportedModels)
+    func doesNotEnableOnOtherRoutesOrOptOut(_ id: String) async throws {
         for variant in 0..<5 {
-            var selected = model()
+            var selected = model(id)
             var options = StreamOptions()
             if variant == 0 { selected.baseURL = "https://proxy.example.com" }
             if variant == 1 { selected.provider = "github-copilot" }
@@ -67,6 +71,17 @@ struct AnthropicFallbackTests {
             #expect(body["fallbacks"] == nil)
             #expect(request.headers["anthropic-beta"]?.contains("server-side-fallback") != true)
         }
+    }
+
+    @Test(arguments: ["claude-sonnet-5", "claude-haiku-4-5", "claude-opus-4-8", "claude-opus-5-1", "claude-mythos-preview", "claude-fable-5-custom"])
+    func unrelatedAndUnknownModelsDoNotOptIn(_ id: String) async throws {
+        let client = StubSSEClient(body: sse([start.replacingOccurrences(of: "claude-fable-5", with: id), stop]))
+        _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: nil).result()
+        let request = try #require(client.lastRequest)
+        let data = try #require(request.body)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["fallbacks"] == nil)
+        #expect(request.headers["anthropic-beta"]?.contains("server-side-fallback") != true)
     }
 
     @Test func handoffTracksModelAndUsesDenseContentIndices() async throws {
@@ -127,12 +142,13 @@ struct AnthropicFallbackTests {
         #expect(replay.content == [.text(TextContent(text: "reasoning"))])
     }
 
-    @Test func oauthPreservesBetasAndHonorsTopLevelServedModel() async throws {
+    @Test(arguments: supportedModels)
+    func oauthPreservesBetasAndHonorsTopLevelServedModel(_ id: String) async throws {
         let client = StubSSEClient(body: sse([
             start.replacingOccurrences(of: "claude-fable-5", with: "claude-opus-4-8"), stop,
         ]))
         let provider = ProviderVariants.anthropicOAuth(client: client)
-        let result = await provider.stream(model: model("claude-fable-5-1"), context: Context(),
+        let result = await provider.stream(model: model(id), context: Context(),
                                           options: StreamOptions(headers: ["Anthropic-Beta": "custom-beta"])).result()
         #expect(result.responseModel == "claude-opus-4-8")
         let headers = try #require(client.lastRequest?.headers)
@@ -142,21 +158,22 @@ struct AnthropicFallbackTests {
         }
     }
 
-    @Test func nextRequestReplaysPersistedBoundaryAndBothSignatures() async throws {
+    @Test(arguments: supportedModels)
+    func nextRequestReplaysPersistedBoundaryAndBothSignatures(_ id: String) async throws {
         let client = StubSSEClient(body: sse([
-            start,
+            start.replacingOccurrences(of: "claude-fable-5", with: id),
             #"{"type":"content_block_start","index":0,"content_block":{"type":"thinking"}}"#,
             #"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"fable-signature"}}"#,
-            handoff.replacingOccurrences(of: "\"index\":0", with: "\"index\":1"),
+            handoff.replacingOccurrences(of: "\"index\":0", with: "\"index\":1").replacingOccurrences(of: "claude-fable-5", with: id),
             #"{"type":"content_block_start","index":2,"content_block":{"type":"thinking"}}"#,
             #"{"type":"content_block_delta","index":2,"delta":{"type":"signature_delta","signature":"opus-signature"}}"#,
             stop,
         ]))
-        let first = await AnthropicProvider(client: client).stream(model: model(), context: Context(), options: nil).result()
+        let first = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: nil).result()
         let restored = try JSONDecoder().decode(AssistantMessage.self, from: JSONEncoder().encode(first))
         #expect(restored == first)
         for variant in 0..<4 {
-            var selected = model()
+            var selected = model(id)
             var options = StreamOptions()
             if variant == 1 { options.anthropicServerSideFallback = false }
             if variant == 2 { selected.baseURL = "https://proxy.example.com" }
@@ -178,11 +195,12 @@ struct AnthropicFallbackTests {
                 #expect(second.responseModel == "claude-opus-4-8")
                 #expect(second.content.isEmpty)
                 #expect(second.usage.anthropicIterations?.count == 1)
-                #expect(body["model"] as? String == "claude-fable-5")
+                #expect(body["model"] as? String == id)
                 #expect(content.compactMap { $0["type"] as? String } == ["thinking", "fallback", "thinking", "text"])
                 #expect(content[0]["signature"] as? String == "fable-signature")
                 #expect(content[2]["signature"] as? String == "opus-signature")
                 #expect((content[1]["to"] as? [String: String])?["model"] == "claude-opus-4-8")
+                #expect((content[1]["from"] as? [String: String])?["model"] == id)
                 #expect(content[1]["cache_control"] == nil)
             } else {
                 #expect(!content.contains { $0["type"] as? String == "fallback" })
@@ -212,16 +230,19 @@ struct AnthropicFallbackTests {
         #expect(results.compactMap { $0["tool_use_id"] as? String } == ["before", "after"])
     }
 
-    @Test(arguments: [0, 7])
-    func iterationBillingWaivesBlockedAttemptsAndCreditsFallbackInput(_ primaryOutput: Int) throws {
-        let primary = try #require(ModelsCatalog.model(provider: "anthropic", id: "claude-fable-5"))
+    @Test(arguments: supportedModels, [0, 7])
+    func iterationBillingWaivesBlockedAttemptsAndCreditsFallbackInput(_ id: String, _ primaryOutput: Int) throws {
+        // Unknown catalog entries (e.g. custom Mythos models) use request rates.
+        var primary = try #require(ModelsCatalog.model(provider: "anthropic", id: "claude-fable-5"))
+        primary = ModelsCatalog.model(provider: "anthropic", id: id) ?? primary
+        primary.id = id
         let opus = try #require(ModelsCatalog.model(provider: "anthropic", id: "claude-opus-4-8"))
         let state = AnthropicStreamState(api: primary.api, provider: primary.provider, modelId: primary.id)
         state.requestModel = primary
         state.fallbackEnabled = true
         let raw = """
         {"input_tokens":200,"output_tokens":\(primaryOutput + 10),"iterations":[
-          {"type":"message","model":"claude-fable-5","input_tokens":100,"output_tokens":\(primaryOutput)},
+          {"type":"message","model":"\(id)","input_tokens":100,"output_tokens":\(primaryOutput)},
           {"type":"fallback_message","model":"claude-opus-4-8","input_tokens":100,"output_tokens":10,"cache_read_input_tokens":20}
         ]}
         """
