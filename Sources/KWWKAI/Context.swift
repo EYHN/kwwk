@@ -177,7 +177,7 @@ public struct StreamOptions: Sendable {
     /// analog ignore this.
     public var interleavedThinking: Bool?
 
-    /// Official Anthropic Fable 5/5.1 requests default to server-side Opus
+    /// Official Anthropic Fable/Mythos 5/5.1 and Opus 5 default to server-side Opus 4.8
     /// fallback. Set false to opt out; other endpoints/models are unaffected.
     public var anthropicServerSideFallback: Bool?
 

@@ -1,13 +1,17 @@
-# Anthropic Fable fallback
+# Anthropic server-side fallback
 
-Official Anthropic Messages requests for `claude-fable-5` and
-`claude-fable-5-1` automatically include `fallbacks: [{"model":"claude-opus-4-8"}]`
+Official Anthropic Messages requests for `claude-fable-5`, `claude-fable-5-1`,
+`claude-mythos-5`, `claude-mythos-5-1`, and `claude-opus-5`
+automatically include `fallbacks: [{"model":"claude-opus-4-8"}]`
 and `server-side-fallback-2026-06-01` (omp's protocol). Both API-key and Claude subscription
 routes use this provider. Set `StreamOptions.anthropicServerSideFallback = false`
 to disable it. Other models and third-party endpoints do not opt in.
+This is an exact allowlist: preview IDs, unknown suffixes, and future versions
+are not implicitly enabled. Mythos support applies to custom model definitions;
+this change does not add Mythos entries or guessed prices to the bundled catalog.
 
 This is server-side refusal fallback, not a client retry on quota, 429, or
-network errors. The request's model selector remains Fable, while preserved
+network errors. The request's model selector remains the original model, while preserved
 fallback blocks in history allow Anthropic's sticky routing to keep serving
 Opus on subsequent turns. This does not promise permanent routing after that
 history is removed (for example by compaction), or after disabling fallback.
@@ -32,7 +36,7 @@ model rates; absent iterations use the served model's ordinary rates. Raw
 iterations and calculated costs survive storage; run summaries retain these
 provider costs. These are local estimates, not billing records.
 
-## Upstream research (2026-09-17)
+## Upstream research (2026-09-18)
 
 - [omp settings adapter](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/session/settings-stream-fn.ts):
   opt-in Fable/Mythos family fallback to Opus 4.8, including Fable 5.1 through
@@ -45,7 +49,11 @@ provider costs. These are local estimates, not billing records.
   served-model pricing, explicit rejection of mid-output fallback.
 - [pi catalog generator](https://github.com/earendil-works/pi/blob/main/packages/ai/scripts/generate-models.ts):
   currently lists Fable 5 → Opus 4.8 / Opus 5 and Opus 5 → Opus 4.8;
-  it does not explicitly list Fable 5.1. Our 5.1 policy follows omp's family rule.
+  it does not explicitly list Fable 5.1. Our Fable/Mythos policy follows omp's
+  family rule; Opus 5 follows pi's explicit mapping. The default target remains
+  Opus 4.8 for all five models, without adding a multi-target fallback chain.
+- [Anthropic SDK model IDs](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/model.py):
+  confirms the current Fable/Mythos 5 and 5.1 aliases and Opus 5 ID.
 
 Validation uses recorded SSE fixtures; no paid live inference is required.
 
@@ -55,3 +63,5 @@ ordering. Local equivalents are in `AnthropicFallbackTests`, with disk restore
 coverage in `SessionStoreTests`, cost aggregation in `FallbackRunCostTests`, and
 live/history visibility in `TranscriptSnapshotTests`. Mock tests verify the
 outgoing sticky-routing contract; they cannot prove Anthropic's live routing.
+Request opt-in, OAuth headers, persisted signed replay, native compaction,
+opt-out/proxy isolation, and iteration billing cover all five eligible IDs.
