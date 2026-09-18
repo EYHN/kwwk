@@ -30,6 +30,10 @@ final class TUIRunner: @unchecked Sendable {
     private var exitContinuation: CheckedContinuation<Void, Never>?
     private var pendingExitCode: Int32?
     private let escapeFlushScheduler: EscapeFlushScheduler
+    /// Called on the main queue for every raw stdin chunk, before routing.
+    /// Lets idle timers observe "the user touched the keyboard" without
+    /// caring which binding or component ends up consuming the input.
+    var onInputActivity: (() -> Void)?
     /// Pending flush for a buffered standalone ESC. `StdinBuffer` holds a
     /// lone 0x1B byte waiting for a potential CSI continuation (arrow keys,
     /// function keys, etc.). If no continuation arrives we must flush it
@@ -224,6 +228,7 @@ final class TUIRunner: @unchecked Sendable {
     /// `RawStdin`'s callback, but made internal so tests can drive the
     /// escape-flush timer without setting up real termios.
     func ingest(_ data: Data) {
+        onInputActivity?()
         // Cancel any pending ESC flush — new data arrived, so the ESC is
         // either part of a CSI sequence (handled by `takeOne`) or irrelevant
         // (user kept typing). Either way, don't flush it as a standalone.

@@ -17,6 +17,7 @@ func runCodingTUIInternal(
     providerSlots: [ProviderSlot] = [],
     authResolvers: SessionAuthResolvers? = nil,
     autoCompactThreshold: Double? = 0.75,
+    idleCompaction: IdleCompactionSettings = .init(),
     thinkingLevel: ThinkingLevel = .medium,
     context1m: Bool = false,
     resume: SessionResume = .none
@@ -961,6 +962,23 @@ func runCodingTUIInternal(
         }
     )
 
+    // --- idle compaction --------------------------------------------------
+    // The agent owns the countdown and the idle checks it can see (runs,
+    // queues, background tasks). The TUI adds what only it knows: keystrokes
+    // count as activity, and an unsent draft or an open modal means the user
+    // is mid-thought even though the agent is idle.
+    let idleCompactVeto: @Sendable () async -> Bool = {
+        await MainActor.run {
+            updateFrameStatus()
+            return !frame.isBusy
+                && !modal.isOpen
+                && frame.input.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
+    slashContext.idleCompactVeto = idleCompactVeto
+    agent.idleCompact = idleCompaction.agentOptions(canCompact: idleCompactVeto)
+    runner.onInputActivity = { agentBox.agent.noteIdleActivity() }
+
     // --- keybindings ----------------------------------------------------
 
     // Enter. Four modes of operation:
@@ -1567,6 +1585,7 @@ func copyAgentRuntimePreferences(from source: Agent, to destination: Agent) {
     destination.transformContext = source.transformContext
     destination.betweenTurns = source.betweenTurns
     destination.compactionModel = source.compactionModel
+    destination.idleCompact = source.idleCompact
 }
 
 /// Whether the goal-continuation loop's logged-out "/login" hint has already

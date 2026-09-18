@@ -458,6 +458,21 @@ inspect it, or `/compact-model clear` to follow `/model` again. A custom
 the summary stream cap automatic; set a positive value only when an explicit
 hard output limit is required.
 
+Idle compaction is off by default. Set `AgentOptions.idleCompact` (or
+`CodingAgentConfig.idleCompact`, or assign `agent.idleCompact` at runtime) to
+compact a session that has sat untouched for `delay` seconds (default 300) once
+its context reaches `threshold` — `.ratio(0.5)` of the window by default, or an
+absolute `.tokens(150_000)` that stays put across model switches. The countdown
+starts whenever a run or maintenance window ends and is cancelled by the next
+run; hosts report activity the agent cannot see with `agent.noteIdleActivity()`
+and veto a due compaction (unsent draft, open dialog) with `canCompact`. Queued
+messages, or active tasks on `autoCompact.backgroundManager` for the session,
+mean the agent is waiting rather than idle, and skip it. It reuses
+`autoCompact.config`, emits the same `compactStart` / `compactEnd` events (so
+`SessionRecorder` persists it), and attempts at most once per transcript
+revision. `agent.compactIfIdle()` runs the same checks immediately. The CLI
+exposes it as `--idle-compact` and `/idle-compact [on|off] [50% | 150k] [delay]`.
+
 Compaction requests retry transient network, rate-limit, and provider-overload
 failures through `AgentContextCompactionConfig.summaryRetryPolicy` (five total
 attempts by default, exponential backoff with jitter and Retry-After support).

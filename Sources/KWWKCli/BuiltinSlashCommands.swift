@@ -35,6 +35,11 @@ func registerBuiltinSlashCommands(_ registry: SlashCommandRegistry) {
         handler: handleCompactCommand
     ))
     registry.register(SlashCommand(
+        name: "idle-compact",
+        description: "Compact automatically while idle: on|off [50% | 150k] [delay]",
+        handler: handleIdleCompactCommand
+    ))
+    registry.register(SlashCommand(
         name: "shake",
         description: "Trim heavy tool output or remove images from the session (no LLM)",
         handler: handleShakeCommand
@@ -886,6 +891,42 @@ private func handleCompactCommand(_ ctx: SlashContext, _ args: String) async {
     // User prompts queued by Enter do not install their own idle waiter. Hand
     // them to the normal arbiter only after persistence + UI settlement above.
     compactAgent.resumeQueuedWork()
+}
+
+// MARK: - /idle-compact
+
+/// `/idle-compact [on|off|status] [threshold] [delay]` — toggles and tunes the
+/// agent's idle compaction for this session. The threshold is a window ratio
+/// (`50%`) or an absolute token count (`150k`). Bare `50%` / `10m` arguments
+/// retune without changing whether it is on.
+@MainActor
+private func handleIdleCompactCommand(_ ctx: SlashContext, _ args: String) async {
+    let current = IdleCompactionSettings(ctx.agent.idleCompact)
+    var settings = current
+    for word in args.split(whereSeparator: \.isWhitespace).map(String.init) {
+        switch word.lowercased() {
+        case "on", "enable": settings.enabled = true
+        case "off", "disable": settings.enabled = false
+        case "status": break
+        default:
+            // `%`, `k`, or a value below 100 is a threshold; `s`/`m`/`h` or a
+            // bare value of 100+ is a delay. `50` alone therefore means 50%.
+            if let threshold = parseIdleThreshold(word) {
+                settings.threshold = threshold
+            } else if let delay = parseIdleDelay(word) {
+                settings.setDelay(seconds: delay)
+            } else {
+                ctx.notify(Style.error(
+                    "  /idle-compact: usage: /idle-compact [on|off|status] [threshold e.g. 50% or 150k] [delay e.g. 5m]"
+                ))
+                return
+            }
+        }
+    }
+    if settings != current {
+        ctx.agent.idleCompact = settings.agentOptions(canCompact: ctx.idleCompactVeto)
+    }
+    ctx.notify(Style.dimmed("  /idle-compact: \(settings.summary)"))
 }
 
 // MARK: - /context

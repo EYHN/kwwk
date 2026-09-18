@@ -118,6 +118,9 @@ final class SlashContext {
     let setCompacting: @MainActor (_ active: Bool) -> Void
     /// Mark the TUI busy while `/shake` owns and rewrites the session.
     let setShaking: @MainActor (_ active: Bool) -> Void
+    /// Host veto `/idle-compact` installs into `Agent.idleCompact` (unsent
+    /// draft, open modal, busy frame). Nil in headless / test contexts.
+    var idleCompactVeto: (@Sendable () async -> Bool)?
 
     init(
         agent: Agent,
