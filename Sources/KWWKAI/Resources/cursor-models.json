@@ -4162,6 +4162,158 @@
       "input" : 0,
       "output" : 0
     },
+    "id" : "grok-4.7-high",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-high-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-low",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-low-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-medium",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  Medium",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-medium-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  Medium Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-xhigh",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  Extra High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "grok-4.7-xhigh-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Grok 4.7  Extra High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
     "id" : "kimi-k2.7-code",
     "input" : [
       "text"
