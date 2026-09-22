@@ -390,6 +390,41 @@
         "xhigh" : "xhigh"
       }
     },
+    "anthropic.claude-opus-5-5" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "id" : "anthropic.claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
     "anthropic.claude-sonnet-4-5-20250929-v1:0" : {
       "api" : "bedrock-converse-stream",
       "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
@@ -777,6 +812,41 @@
       },
       "maxTokens" : 128000,
       "name" : "Claude Opus 5 (AU)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
+    "au.anthropic.claude-opus-5-5" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.22,
+        "cacheWrite" : 5.5,
+        "input" : 4.4,
+        "output" : 22
+      },
+      "id" : "au.anthropic.claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5 (AU)",
       "provider" : "amazon-bedrock",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -1323,6 +1393,41 @@
         "xhigh" : "xhigh"
       }
     },
+    "eu.anthropic.claude-opus-5-5" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.eu-central-1.amazonaws.com",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.22,
+        "cacheWrite" : 5.5,
+        "input" : 4.4,
+        "output" : 22
+      },
+      "id" : "eu.anthropic.claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5 (EU)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
     "eu.anthropic.claude-sonnet-4-5-20250929-v1:0" : {
       "api" : "bedrock-converse-stream",
       "baseUrl" : "https:\/\/bedrock-runtime.eu-central-1.amazonaws.com",
@@ -1797,6 +1902,41 @@
       },
       "maxTokens" : 128000,
       "name" : "Claude Opus 5 (Global)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
+    "global.anthropic.claude-opus-5-5" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "id" : "global.anthropic.claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5 (Global)",
       "provider" : "amazon-bedrock",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -2450,6 +2590,41 @@
       },
       "maxTokens" : 128000,
       "name" : "Claude Opus 5 (JP)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
+    "jp.anthropic.claude-opus-5-5" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.22,
+        "cacheWrite" : 5.5,
+        "input" : 4.4,
+        "output" : 22
+      },
+      "id" : "jp.anthropic.claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5 (JP)",
       "provider" : "amazon-bedrock",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -4191,6 +4366,41 @@
         "xhigh" : "xhigh"
       }
     },
+    "us.anthropic.claude-opus-5-5" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.22,
+        "cacheWrite" : 5.5,
+        "input" : 4.4,
+        "output" : 22
+      },
+      "id" : "us.anthropic.claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5 (US)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
     "us.anthropic.claude-sonnet-4-5-20250929-v1:0" : {
       "api" : "bedrock-converse-stream",
       "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
@@ -5402,6 +5612,55 @@
       },
       "maxTokens" : 128000,
       "name" : "Claude Opus 5",
+      "promptCache" : {
+        "long" : 3600,
+        "short" : 300
+      },
+      "provider" : "anthropic",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "claude-opus-5-5" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/api.anthropic.com",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsMidConvoEffort" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsMidConvoToolChanges" : true,
+        "supportsStrictTools" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "id" : "claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerRequest" : 600,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        },
+        "maxRequestBytes" : 33554432
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5",
       "promptCache" : {
         "long" : 3600,
         "short" : 300
@@ -12997,6 +13256,60 @@
       },
       "maxTokens" : 128000,
       "name" : "Grok 4.6",
+      "provider" : "github-copilot",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "grok-4.7" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
+      "contextWindow" : 500000,
+      "cost" : {
+        "cacheRead" : 0.5,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 6,
+        "tiers" : [
+          {
+            "cacheRead" : 1,
+            "cacheWrite" : 0,
+            "input" : 4,
+            "inputTokensAbove" : 200000,
+            "output" : 12
+          }
+        ]
+      },
+      "headers" : {
+        "Copilot-Integration-Id" : "vscode-chat",
+        "Editor-Plugin-Version" : "copilot-chat\/0.35.0",
+        "Editor-Version" : "vscode\/1.107.0",
+        "User-Agent" : "GitHubCopilotChat\/0.35.0"
+      },
+      "id" : "grok-4.7",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Grok 4.7",
       "provider" : "github-copilot",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -23532,7 +23845,7 @@
       "provider" : "opencode",
       "reasoning" : true
     },
-    "mimo-v2.5-free" : {
+    "mimo-v2.6-flash-free" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
       "compat" : {
@@ -23548,7 +23861,7 @@
         "input" : 0,
         "output" : 0
       },
-      "id" : "mimo-v2.5-free",
+      "id" : "mimo-v2.6-flash-free",
       "input" : [
         "text",
         "image"
@@ -23564,7 +23877,7 @@
         }
       },
       "maxTokens" : 32000,
-      "name" : "MiMo V2.5 Free",
+      "name" : "MiMo-V2.6-Flash Free",
       "provider" : "opencode",
       "reasoning" : true
     },
@@ -24672,6 +24985,78 @@
       "provider" : "opencode-go",
       "reasoning" : true
     },
+    "mimo-v2.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0028,
+        "cacheWrite" : 0,
+        "input" : 0.14,
+        "output" : 0.28
+      },
+      "id" : "mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Flash",
+      "provider" : "opencode-go",
+      "reasoning" : true
+    },
+    "mimo-v2.6-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
+      "compat" : {
+        "maxTokensField" : "max_tokens",
+        "supportsDeveloperRole" : false,
+        "supportsStore" : false,
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0036250000000000002,
+        "cacheWrite" : 0,
+        "input" : 0.435,
+        "output" : 0.87
+      },
+      "id" : "mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Pro",
+      "provider" : "opencode-go",
+      "reasoning" : true
+    },
     "minimax-m2.7" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/go\/v1",
@@ -25081,10 +25466,10 @@
       },
       "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0.5,
-        "cacheWrite" : 6.25,
-        "input" : 5,
-        "output" : 25
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
       },
       "id" : "~anthropic\/claude-opus-latest",
       "input" : [
@@ -25111,7 +25496,7 @@
         "max" : "max",
         "medium" : "medium",
         "minimal" : null,
-        "off" : "none",
+        "off" : null,
         "xhigh" : "xhigh"
       }
     },
@@ -25217,10 +25602,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.018186000000000001,
+        "cacheRead" : 0.017724,
         "cacheWrite" : 0,
-        "input" : 0.57156,
-        "output" : 1.71468
+        "input" : 0.55704,
+        "output" : 1.67112
       },
       "id" : "~deepseek\/deepseek-pro-latest",
       "input" : [
@@ -25252,10 +25637,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.016,
+        "cacheRead" : 0.0080000000000000002,
         "cacheWrite" : 0,
-        "input" : 0.040000000000000001,
-        "output" : 0.16
+        "input" : 0.029999999999999999,
+        "output" : 1
       },
       "id" : "~deepseek\/deepseek-v4-flash-latest",
       "input" : [
@@ -25376,10 +25761,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.17,
+        "cacheRead" : 0.15,
         "cacheWrite" : 0,
-        "input" : 1.7,
-        "output" : 8.5
+        "input" : 1.5,
+        "output" : 7.5
       },
       "id" : "~moonshotai\/kimi-latest",
       "input" : [
@@ -25736,10 +26121,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.14352,
+        "cacheRead" : 0.12142,
         "cacheWrite" : 0,
-        "input" : 0.7728,
-        "output" : 2.4288
+        "input" : 0.6538,
+        "output" : 2.0548
       },
       "id" : "~z-ai\/glm-latest",
       "input" : [
@@ -25768,7 +26153,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 1048576,
       "cost" : {
         "cacheRead" : 0.2,
         "cacheWrite" : 0,
@@ -25796,7 +26181,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 1048576,
       "cost" : {
         "cacheRead" : 0.75,
         "cacheWrite" : 0,
@@ -25824,7 +26209,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 1048576,
       "cost" : {
         "cacheRead" : 0.18,
         "cacheWrite" : 0,
@@ -26766,6 +27151,95 @@
         "xhigh" : "xhigh"
       }
     },
+    "anthropic\/claude-opus-5.5" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/openrouter.ai\/api",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsMidConvoEffort" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "id" : "anthropic\/claude-opus-5.5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Anthropic: Claude Opus 5.5",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "anthropic\/claude-opus-5.5:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "cacheControlFormat" : "anthropic",
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "anthropic\/claude-opus-5.5:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Anthropic: Claude Opus 5.5 (batch)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "anthropic\/claude-sonnet-4" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/openrouter.ai\/api",
@@ -27636,10 +28110,10 @@
       },
       "contextWindow" : 1024000,
       "cost" : {
-        "cacheRead" : 0.011088000000000001,
+        "cacheRead" : 0.0097999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.055440000000000003,
-        "output" : 0.11088
+        "input" : 0.049000000000000002,
+        "output" : 0.098000000000000004
       },
       "id" : "deepseek\/deepseek-v4-flash",
       "input" : [
@@ -27674,7 +28148,7 @@
         "cacheRead" : 0.016,
         "cacheWrite" : 0,
         "input" : 0.040000000000000001,
-        "output" : 0.16
+        "output" : 0.64
       },
       "id" : "deepseek\/deepseek-v4-flash-0731",
       "input" : [
@@ -27682,41 +28156,6 @@
       ],
       "maxTokens" : 943718,
       "name" : "DeepSeek: DeepSeek V4 Flash 0731",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : "max",
-        "medium" : null,
-        "minimal" : null,
-        "off" : "none",
-        "xhigh" : null
-      }
-    },
-    "deepseek\/deepseek-v4-flash-0731:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "requiresReasoningContentOnAssistantMessages" : true,
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 1048576,
-      "cost" : {
-        "cacheRead" : 0.0035000000000000001,
-        "cacheWrite" : 0,
-        "input" : 0.11,
-        "output" : 0.33
-      },
-      "id" : "deepseek\/deepseek-v4-flash-0731:batch",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 943718,
-      "name" : "DeepSeek: DeepSeek V4 Flash 0731 (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -27775,52 +28214,6 @@
         "xhigh" : null
       }
     },
-    "deepseek\/deepseek-v4-flash-vision-exp:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "requiresReasoningContentOnAssistantMessages" : true,
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 1048576,
-      "cost" : {
-        "cacheRead" : 0.0035000000000000001,
-        "cacheWrite" : 0,
-        "input" : 0.11,
-        "output" : 0.33
-      },
-      "id" : "deepseek\/deepseek-v4-flash-vision-exp:batch",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 943718,
-      "name" : "DeepSeek: DeepSeek V4 Flash Vision Exp (batch)",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : "max",
-        "medium" : null,
-        "minimal" : null,
-        "off" : "none",
-        "xhigh" : null
-      }
-    },
     "deepseek\/deepseek-v4-pro" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -27833,10 +28226,10 @@
       },
       "contextWindow" : 1024000,
       "cost" : {
-        "cacheRead" : 0.077589000000000005,
+        "cacheRead" : 0.076604000000000005,
         "cacheWrite" : 0,
-        "input" : 0.931074,
-        "output" : 1.862148
+        "input" : 0.919242,
+        "output" : 1.838484
       },
       "id" : "deepseek\/deepseek-v4-pro",
       "input" : [
@@ -27868,52 +28261,17 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.018186000000000001,
-        "cacheWrite" : 0,
-        "input" : 0.57156,
-        "output" : 1.71468
-      },
-      "id" : "deepseek\/deepseek-v4-pro-0813",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 393216,
-      "name" : "DeepSeek: DeepSeek V4 Pro 0813",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : "max",
-        "medium" : null,
-        "minimal" : null,
-        "off" : "none",
-        "xhigh" : null
-      }
-    },
-    "deepseek\/deepseek-v4-pro-0813:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "requiresReasoningContentOnAssistantMessages" : true,
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 1048576,
-      "cost" : {
         "cacheRead" : 0.021999999999999999,
         "cacheWrite" : 0,
         "input" : 0.66,
         "output" : 1.98
       },
-      "id" : "deepseek\/deepseek-v4-pro-0813:batch",
+      "id" : "deepseek\/deepseek-v4-pro-0813",
       "input" : [
         "text"
       ],
-      "maxTokens" : 943718,
-      "name" : "DeepSeek: DeepSeek V4 Pro 0813 (batch)",
+      "maxTokens" : 384000,
+      "name" : "DeepSeek: DeepSeek V4 Pro 0813",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -27960,6 +28318,52 @@
       },
       "maxTokens" : 384000,
       "name" : "DeepSeek: DeepSeek V4.1 Flash",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null,
+        "off" : "none",
+        "xhigh" : null
+      }
+    },
+    "deepseek\/deepseek-v4.1-flash:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0033600000000000001,
+        "cacheWrite" : 0,
+        "input" : 0.112,
+        "output" : 0.336
+      },
+      "id" : "deepseek\/deepseek-v4.1-flash:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "DeepSeek: DeepSeek V4.1 Flash (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -29608,31 +30012,6 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
-    "kwaipilot\/kat-coder-pro-v2" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0.059999999999999998,
-        "cacheWrite" : 0,
-        "input" : 0.3,
-        "output" : 1.2
-      },
-      "id" : "kwaipilot\/kat-coder-pro-v2",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 144000,
-      "name" : "Kwaipilot: KAT-Coder-Pro V2",
-      "provider" : "openrouter",
-      "reasoning" : false
-    },
     "kwaipilot\/kat-coder-pro-v2.5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -29795,12 +30174,12 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 128000,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.2,
-        "output" : 0.8
+        "input" : 0.1875,
+        "output" : 0.6525
       },
       "id" : "meta-llama\/llama-4-maverick",
       "input" : [
@@ -29891,51 +30270,6 @@
       },
       "maxTokens" : 16384,
       "name" : "Meta: Muse Glimmer 30B",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : null,
-        "medium" : "medium",
-        "minimal" : null,
-        "off" : null,
-        "xhigh" : "xhigh"
-      }
-    },
-    "meta\/muse-glimmer-30b:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 131072,
-      "cost" : {
-        "cacheRead" : 0.02,
-        "cacheWrite" : 0,
-        "input" : 0.175,
-        "output" : 0.75
-      },
-      "id" : "meta\/muse-glimmer-30b:batch",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 117964,
-      "name" : "Meta: Muse Glimmer 30B (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -30343,42 +30677,6 @@
       },
       "maxTokens" : 512000,
       "name" : "MiniMax: MiniMax M3",
-      "provider" : "openrouter",
-      "reasoning" : true
-    },
-    "minimax\/minimax-m3:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 524288,
-      "cost" : {
-        "cacheRead" : 0.059999999999999998,
-        "cacheWrite" : 0,
-        "input" : 0.3,
-        "output" : 1.2
-      },
-      "id" : "minimax\/minimax-m3:batch",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 471859,
-      "name" : "MiniMax: MiniMax M3 (batch)",
       "provider" : "openrouter",
       "reasoning" : true
     },
@@ -31312,7 +31610,7 @@
         "cacheRead" : 0.18,
         "cacheWrite" : 0,
         "input" : 0.7062,
-        "output" : 3.21
+        "output" : 3.3
       },
       "id" : "moonshotai\/kimi-k2.7-code",
       "input" : [
@@ -31348,10 +31646,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.17,
+        "cacheRead" : 0.3,
         "cacheWrite" : 0,
-        "input" : 1.7,
-        "output" : 8.5
+        "input" : 3,
+        "output" : 15
       },
       "id" : "moonshotai\/kimi-k3",
       "input" : [
@@ -31393,10 +31691,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.3,
+        "cacheRead" : 0.228,
         "cacheWrite" : 0,
-        "input" : 3,
-        "output" : 15
+        "input" : 2.28,
+        "output" : 11.4
       },
       "id" : "moonshotai\/kimi-k3:batch",
       "input" : [
@@ -31413,7 +31711,7 @@
           }
         }
       },
-      "maxTokens" : 943718,
+      "maxTokens" : 16384,
       "name" : "MoonshotAI: Kimi K3 (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -31460,6 +31758,51 @@
       },
       "maxTokens" : 235929,
       "name" : "Nex AGI: Nex-N2.5-Mini (free)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : null,
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : "none",
+        "xhigh" : null
+      }
+    },
+    "nex-agi\/nex-n2.5-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0.014999999999999999,
+        "cacheWrite" : 0,
+        "input" : 0.074999999999999997,
+        "output" : 0.25
+      },
+      "id" : "nex-agi\/nex-n2.5-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 235929,
+      "name" : "Nex AGI: Nex-N2.5-Pro",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -31528,10 +31871,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.029999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.059999999999999998,
-        "output" : 0.24
+        "input" : 0.050000000000000003,
+        "output" : 0.2
       },
       "id" : "nvidia\/nemotron-3-nano-30b-a3b",
       "input" : [
@@ -34651,17 +34994,50 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.029999999999999999,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.029999999999999999,
-        "output" : 0.13
+        "input" : 0.017999999999999999,
+        "output" : 0.089999999999999997
       },
       "id" : "openai\/gpt-oss-20b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 117964,
+      "maxTokens" : 32768,
       "name" : "OpenAI: gpt-oss-20b",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
+    "openai\/gpt-oss-20b:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 131072,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0.024,
+        "output" : 0.112
+      },
+      "id" : "openai\/gpt-oss-20b:batch",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 117964,
+      "name" : "OpenAI: gpt-oss-20b (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -34695,39 +35071,6 @@
       ],
       "maxTokens" : 65536,
       "name" : "OpenAI: gpt-oss-120b",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : null,
-        "medium" : "medium",
-        "minimal" : null,
-        "off" : null,
-        "xhigh" : null
-      }
-    },
-    "openai\/gpt-oss-120b:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 131072,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 0.6
-      },
-      "id" : "openai\/gpt-oss-120b:batch",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 117964,
-      "name" : "OpenAI: gpt-oss-120b (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -35920,7 +36263,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 131072,
+      "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
@@ -35931,7 +36274,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 32768,
+      "maxTokens" : 235929,
       "name" : "Qwen: Qwen3 Next 80B A3B Thinking",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -36236,42 +36579,6 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
-    "qwen\/qwen3.5-9b:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.17,
-        "output" : 0.25
-      },
-      "id" : "qwen\/qwen3.5-9b:batch",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 235929,
-      "name" : "Qwen: Qwen3.5-9B (batch)",
-      "provider" : "openrouter",
-      "reasoning" : true
-    },
     "qwen\/qwen3.5-27b" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -36535,10 +36842,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.029999999999999999,
+        "cacheRead" : 0.15,
         "cacheWrite" : 0,
-        "input" : 0.3,
-        "output" : 2
+        "input" : 0.32,
+        "output" : 2.7
       },
       "id" : "qwen\/qwen3.6-27b",
       "input" : [
@@ -36555,7 +36862,7 @@
           }
         }
       },
-      "maxTokens" : 65536,
+      "maxTokens" : 262140,
       "name" : "Qwen: Qwen3.6 27B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -36812,40 +37119,6 @@
       ],
       "maxTokens" : 131072,
       "name" : "Qwen: Qwen3.8 2.4T A95B",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : null,
-        "low" : "low",
-        "max" : null,
-        "medium" : "medium",
-        "minimal" : null,
-        "off" : null,
-        "xhigh" : "xhigh"
-      }
-    },
-    "qwen\/qwen3.8-2.4t-a95b:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 1010000,
-      "cost" : {
-        "cacheRead" : 0.25,
-        "cacheWrite" : 0,
-        "input" : 2,
-        "output" : 6
-      },
-      "id" : "qwen\/qwen3.8-2.4t-a95b:batch",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 909000,
-      "name" : "Qwen: Qwen3.8 2.4T A95B (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -37605,51 +37878,6 @@
         "xhigh" : null
       }
     },
-    "thinkingmachines\/inkling:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 524288,
-      "cost" : {
-        "cacheRead" : 0.17,
-        "cacheWrite" : 0,
-        "input" : 1,
-        "output" : 4.05
-      },
-      "id" : "thinkingmachines\/inkling:batch",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 471859,
-      "name" : "Thinking Machines: Inkling (batch)",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : "max",
-        "medium" : "medium",
-        "minimal" : "minimal",
-        "off" : "none",
-        "xhigh" : null
-      }
-    },
     "thinkingmachines\/inkling:free" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -38160,6 +38388,114 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
+    "xiaomi\/mimo-v2.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0028,
+        "cacheWrite" : 0,
+        "input" : 0.14,
+        "output" : 0.28
+      },
+      "id" : "xiaomi\/mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Xiaomi: MiMo-V2.6-Flash",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "xiaomi\/mimo-v2.6-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0035999999999999999,
+        "cacheWrite" : 0,
+        "input" : 0.435,
+        "output" : 0.87
+      },
+      "id" : "xiaomi\/mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Xiaomi: MiMo-V2.6-Pro",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "xiaomi\/mimo-v2.6-pro-ultraspeed" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.035999999999999997,
+        "cacheWrite" : 0,
+        "input" : 4.35,
+        "output" : 8.699999999999999
+      },
+      "id" : "xiaomi\/mimo-v2.6-pro-ultraspeed",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Xiaomi: MiMo-V2.6-Pro-UltraSpeed",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
     "z-ai\/glm-4.5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -38466,40 +38802,6 @@
         "xhigh" : "xhigh"
       }
     },
-    "z-ai\/glm-5.2:batch" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 1048576,
-      "cost" : {
-        "cacheRead" : 0.070000000000000007,
-        "cacheWrite" : 0,
-        "input" : 0.7,
-        "output" : 2.2
-      },
-      "id" : "z-ai\/glm-5.2:batch",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 943718,
-      "name" : "Z.ai: GLM 5.2 (batch)",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : null,
-        "max" : null,
-        "medium" : null,
-        "minimal" : null,
-        "off" : "none",
-        "xhigh" : "xhigh"
-      }
-    },
     "z-ai\/glm-5.3" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -38511,10 +38813,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.169,
+        "cacheRead" : 0.12142,
         "cacheWrite" : 0,
-        "input" : 0.91,
-        "output" : 2.86
+        "input" : 0.6538,
+        "output" : 2.0548
       },
       "id" : "z-ai\/glm-5.3",
       "input" : [
@@ -38545,10 +38847,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.017999999999999999,
+        "cacheRead" : 0.050000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.089999999999999997,
-        "output" : 0.3
+        "input" : 0.15,
+        "output" : 0.5
       },
       "id" : "z-ai\/glm-5.3-flash",
       "input" : [
@@ -38565,7 +38867,7 @@
           }
         }
       },
-      "maxTokens" : 131072,
+      "maxTokens" : 943718,
       "name" : "Z.ai: GLM 5.3 Flash",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -38590,10 +38892,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.014999999999999999,
+        "cacheRead" : 0.012,
         "cacheWrite" : 0,
-        "input" : 0.074999999999999997,
-        "output" : 0.25
+        "input" : 0.059999999999999998,
+        "output" : 0.2
       },
       "id" : "z-ai\/glm-5.3-flash:batch",
       "input" : [
@@ -38610,7 +38912,7 @@
           }
         }
       },
-      "maxTokens" : 943718,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5.3 Flash (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -38680,16 +38982,16 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.13,
+        "cacheRead" : 0.12,
         "cacheWrite" : 0,
-        "input" : 0.7,
-        "output" : 2.2
+        "input" : 0.72,
+        "output" : 2.4
       },
       "id" : "z-ai\/glm-5.3:batch",
       "input" : [
         "text"
       ],
-      "maxTokens" : 943718,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5.3 (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -40883,6 +41185,55 @@
       "reasoning" : true,
       "thinkingLevelMap" : {
         "max" : "max",
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "claude-opus-5-5" : {
+      "api" : "pi-messages",
+      "baseUrl" : "https:\/\/radius.pi.dev\/v1",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "enabled" : true,
+      "id" : "claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "lab" : "Anthropic",
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5",
+      "provider" : "radius",
+      "providers" : [
+        {
+          "credential" : "radius",
+          "id" : "anthropic",
+          "name" : "Anthropic",
+          "source" : "radius"
+        }
+      ],
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
         "off" : null,
         "xhigh" : "xhigh"
       }
@@ -44634,7 +44985,7 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.029999999999999999,
+        "cacheRead" : 0.0070000000000000001,
         "cacheWrite" : 0,
         "input" : 0.3,
         "output" : 1.2
@@ -49351,6 +49702,105 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
+    "xiaomi\/mimo-v2.6-flash" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0028,
+        "cacheWrite" : 0,
+        "input" : 0.14,
+        "output" : 0.28
+      },
+      "id" : "xiaomi\/mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo V2.6 Flash",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "xiaomi\/mimo-v2.6-pro" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0035999999999999999,
+        "cacheWrite" : 0,
+        "input" : 0.435,
+        "output" : 0.87
+      },
+      "id" : "xiaomi\/mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo V2.6 Pro",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "xiaomi\/mimo-v2.6-pro-ultraspeed" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.035999999999999997,
+        "cacheWrite" : 0,
+        "input" : 4.35,
+        "output" : 8.699999999999999
+      },
+      "id" : "xiaomi\/mimo-v2.6-pro-ultraspeed",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo V2.6 Pro UltraSpeed",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
     "zai\/glm-4.5" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -49782,7 +50232,16 @@
         "cacheRead" : 0.2,
         "cacheWrite" : 0,
         "input" : 1.25,
-        "output" : 2.5
+        "output" : 2.5,
+        "tiers" : [
+          {
+            "cacheRead" : 0.4,
+            "cacheWrite" : 0,
+            "input" : 2.5,
+            "inputTokensAbove" : 200000,
+            "output" : 5
+          }
+        ]
       },
       "id" : "grok-4.3",
       "input" : [
@@ -49824,7 +50283,16 @@
         "cacheRead" : 0.3,
         "cacheWrite" : 0,
         "input" : 2,
-        "output" : 6
+        "output" : 6,
+        "tiers" : [
+          {
+            "cacheRead" : 0.6,
+            "cacheWrite" : 0,
+            "input" : 4,
+            "inputTokensAbove" : 200000,
+            "output" : 12
+          }
+        ]
       },
       "id" : "grok-4.5",
       "input" : [
@@ -49866,7 +50334,16 @@
         "cacheRead" : 0.5,
         "cacheWrite" : 0,
         "input" : 2,
-        "output" : 6
+        "output" : 6,
+        "tiers" : [
+          {
+            "cacheRead" : 1,
+            "cacheWrite" : 0,
+            "input" : 4,
+            "inputTokensAbove" : 200000,
+            "output" : 12
+          }
+        ]
       },
       "id" : "grok-4.6",
       "input" : [
@@ -49908,7 +50385,16 @@
         "cacheRead" : 0.5,
         "cacheWrite" : 0,
         "input" : 2,
-        "output" : 6
+        "output" : 6,
+        "tiers" : [
+          {
+            "cacheRead" : 1,
+            "cacheWrite" : 0,
+            "input" : 4,
+            "inputTokensAbove" : 200000,
+            "output" : 12
+          }
+        ]
       },
       "id" : "grok-4.7",
       "input" : [
@@ -50023,6 +50509,111 @@
       "name" : "MiMo-V2.5-Pro-UltraSpeed",
       "provider" : "xiaomi",
       "reasoning" : true
+    },
+    "mimo-v2.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/api.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0028,
+        "cacheWrite" : 0,
+        "input" : 0.14,
+        "output" : 0.28
+      },
+      "id" : "mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Flash",
+      "provider" : "xiaomi",
+      "reasoning" : true
+    },
+    "mimo-v2.6-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/api.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.0035999999999999999,
+        "cacheWrite" : 0,
+        "input" : 0.435,
+        "output" : 0.87
+      },
+      "id" : "mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Pro",
+      "provider" : "xiaomi",
+      "reasoning" : true
+    },
+    "mimo-v2.6-pro-ultraspeed" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/api.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.035999999999999997,
+        "cacheWrite" : 0,
+        "input" : 4.35,
+        "output" : 8.699999999999999
+      },
+      "id" : "mimo-v2.6-pro-ultraspeed",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Pro-UltraSpeed",
+      "provider" : "xiaomi",
+      "reasoning" : true
     }
   },
   "xiaomi-token-plan-ams" : {
@@ -50082,6 +50673,76 @@
       ],
       "maxTokens" : 131072,
       "name" : "MiMo-V2.5-Pro",
+      "provider" : "xiaomi-token-plan-ams",
+      "reasoning" : true
+    },
+    "mimo-v2.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan-ams.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Flash",
+      "provider" : "xiaomi-token-plan-ams",
+      "reasoning" : true
+    },
+    "mimo-v2.6-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan-ams.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Pro",
       "provider" : "xiaomi-token-plan-ams",
       "reasoning" : true
     }
@@ -50145,6 +50806,76 @@
       "name" : "MiMo-V2.5-Pro",
       "provider" : "xiaomi-token-plan-cn",
       "reasoning" : true
+    },
+    "mimo-v2.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan-cn.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Flash",
+      "provider" : "xiaomi-token-plan-cn",
+      "reasoning" : true
+    },
+    "mimo-v2.6-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan-cn.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Pro",
+      "provider" : "xiaomi-token-plan-cn",
+      "reasoning" : true
     }
   },
   "xiaomi-token-plan-sgp" : {
@@ -50204,6 +50935,76 @@
       ],
       "maxTokens" : 131072,
       "name" : "MiMo-V2.5-Pro",
+      "provider" : "xiaomi-token-plan-sgp",
+      "reasoning" : true
+    },
+    "mimo-v2.6-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan-sgp.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "mimo-v2.6-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Flash",
+      "provider" : "xiaomi-token-plan-sgp",
+      "reasoning" : true
+    },
+    "mimo-v2.6-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/token-plan-sgp.xiaomimimo.com\/v1",
+      "compat" : {
+        "requiresReasoningContentOnAssistantMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "deepseek"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "mimo-v2.6-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "MiMo-V2.6-Pro",
       "provider" : "xiaomi-token-plan-sgp",
       "reasoning" : true
     }
