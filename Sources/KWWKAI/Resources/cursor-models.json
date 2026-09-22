@@ -1389,6 +1389,206 @@
       "input" : 0,
       "output" : 0
     },
+    "id" : "claude-opus-5-5-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-high-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-low-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Low Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-max",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Max",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-max-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Max Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-medium-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-xhigh",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Extra High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-opus-5-5-xhigh-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 5.5 1M Extra High Fast",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
     "id" : "claude-opus-5-high",
     "input" : [
       "text",
@@ -1953,7 +2153,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5",
+    "name" : "Grok 4.5",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1973,7 +2173,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Fast",
+    "name" : "Grok 4.5 Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -1993,7 +2193,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Low",
+    "name" : "Grok 4.5 Low",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2013,7 +2213,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Low Fast",
+    "name" : "Grok 4.5 Low Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2033,7 +2233,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Medium",
+    "name" : "Grok 4.5 Medium",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2053,7 +2253,7 @@
       "image"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.5 Medium Fast",
+    "name" : "Grok 4.5 Medium Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2072,7 +2272,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6",
+    "name" : "Grok 4.6",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2091,7 +2291,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Fast",
+    "name" : "Grok 4.6 Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2110,7 +2310,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Low",
+    "name" : "Grok 4.6 Low",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2129,7 +2329,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Low Fast",
+    "name" : "Grok 4.6 Low Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2148,7 +2348,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Medium",
+    "name" : "Grok 4.6 Medium",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2167,7 +2367,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Medium Fast",
+    "name" : "Grok 4.6 Medium Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2186,7 +2386,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Extra High",
+    "name" : "Grok 4.6 Extra High",
     "provider" : "cursor",
     "reasoning" : false
   },
@@ -2205,7 +2405,7 @@
       "text"
     ],
     "maxTokens" : 64000,
-    "name" : "Cursor Grok 4.6 Extra High Fast",
+    "name" : "Grok 4.6 Extra High Fast",
     "provider" : "cursor",
     "reasoning" : false
   },
