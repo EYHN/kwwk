@@ -2081,6 +2081,40 @@
         "xhigh" : "xhigh"
       }
     },
+    "global.moonshotai.kimi-k3" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.3,
+        "cacheWrite" : 3.75,
+        "input" : 3,
+        "output" : 15
+      },
+      "id" : "global.moonshotai.kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Kimi K3 (Global)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true
+    },
     "global.openai.gpt-5.6-luna" : {
       "api" : "bedrock-converse-stream",
       "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
@@ -2217,6 +2251,80 @@
       },
       "maxTokens" : 128000,
       "name" : "GPT-6 Astra (Global)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "global.openai.gpt-6-luna" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.01,
+        "cacheWrite" : 0.125,
+        "input" : 0.1,
+        "output" : 0.5
+      },
+      "id" : "global.openai.gpt-6-luna",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Luna (Global)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "global.openai.gpt-6-sol" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "global.openai.gpt-6-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Sol (Global)",
       "provider" : "amazon-bedrock",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -4688,6 +4796,40 @@
       "provider" : "amazon-bedrock",
       "reasoning" : false
     },
+    "us.moonshotai.kimi-k3" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.33,
+        "cacheWrite" : 4.125,
+        "input" : 3.3,
+        "output" : 16.5
+      },
+      "id" : "us.moonshotai.kimi-k3",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Kimi K3 (US)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true
+    },
     "us.openai.gpt-5.6-luna" : {
       "api" : "bedrock-converse-stream",
       "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
@@ -4824,6 +4966,80 @@
       },
       "maxTokens" : 128000,
       "name" : "GPT-6 Astra (US)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "us.openai.gpt-6-luna" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.010999999999999999,
+        "cacheWrite" : 0.1375,
+        "input" : 0.11,
+        "output" : 0.55
+      },
+      "id" : "us.openai.gpt-6-luna",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Luna (US)",
+      "provider" : "amazon-bedrock",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "us.openai.gpt-6-sol" : {
+      "api" : "bedrock-converse-stream",
+      "baseUrl" : "https:\/\/bedrock-runtime.us-east-1.amazonaws.com",
+      "compat" : {
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.22,
+        "cacheWrite" : 2.75,
+        "input" : 2.2,
+        "output" : 11
+      },
+      "id" : "us.openai.gpt-6-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerMessage" : 20,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Sol (US)",
       "provider" : "amazon-bedrock",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -5668,7 +5884,11 @@
       "provider" : "anthropic",
       "reasoning" : true,
       "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
         "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
         "off" : null,
         "xhigh" : "xhigh"
       }
@@ -10559,7 +10779,16 @@
       "maxTokens" : 16384,
       "name" : "GPT OSS 20B",
       "provider" : "cloudflare-workers-ai",
-      "reasoning" : true
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
     },
     "@cf\/openai\/gpt-oss-120b" : {
       "api" : "openai-completions",
@@ -12464,6 +12693,51 @@
         "xhigh" : "xhigh"
       }
     },
+    "claude-opus-5.5" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "headers" : {
+        "Copilot-Integration-Id" : "vscode-chat",
+        "Editor-Plugin-Version" : "copilot-chat\/0.35.0",
+        "Editor-Version" : "vscode\/1.107.0",
+        "User-Agent" : "GitHubCopilotChat\/0.35.0"
+      },
+      "id" : "claude-opus-5.5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5",
+      "provider" : "github-copilot",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
     "claude-sonnet-4.6" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
@@ -13211,7 +13485,7 @@
         "supportsMidConvoSystemMessages" : true,
         "supportsOpenAIGrammarTools" : true
       },
-      "contextWindow" : 1050000,
+      "contextWindow" : 1000000,
       "cost" : {
         "cacheRead" : 1,
         "cacheWrite" : 12.5,
@@ -13259,6 +13533,124 @@
         "medium" : "medium",
         "minimal" : null,
         "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6-luna" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
+      "compat" : {
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.01,
+        "cacheWrite" : 0.125,
+        "input" : 0.1,
+        "output" : 0.5,
+        "tiers" : [
+          {
+            "cacheRead" : 0.02,
+            "cacheWrite" : 0.25,
+            "input" : 0.2,
+            "inputTokensAbove" : 272000,
+            "output" : 0.75
+          }
+        ]
+      },
+      "headers" : {
+        "Copilot-Integration-Id" : "vscode-chat",
+        "Editor-Plugin-Version" : "copilot-chat\/0.35.0",
+        "Editor-Version" : "vscode\/1.107.0",
+        "User-Agent" : "GitHubCopilotChat\/0.35.0"
+      },
+      "id" : "gpt-6-luna",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Luna",
+      "provider" : "github-copilot",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : "none",
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6-sol" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
+      "compat" : {
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.4,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "headers" : {
+        "Copilot-Integration-Id" : "vscode-chat",
+        "Editor-Plugin-Version" : "copilot-chat\/0.35.0",
+        "Editor-Version" : "vscode\/1.107.0",
+        "User-Agent" : "GitHubCopilotChat\/0.35.0"
+      },
+      "id" : "gpt-6-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Sol",
+      "provider" : "github-copilot",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : "none",
         "xhigh" : "xhigh"
       }
     },
@@ -22254,6 +22646,45 @@
         "xhigh" : "xhigh"
       }
     },
+    "claude-opus-5-5" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/opencode.ai\/zen",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsTemperature" : false
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20
+      },
+      "id" : "claude-opus-5-5",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Opus 5.5",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "xhigh" : "xhigh"
+      }
+    },
     "claude-sonnet-4" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/opencode.ai\/zen",
@@ -23863,6 +24294,96 @@
         "xhigh" : "xhigh"
       }
     },
+    "gpt-6-luna" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "compat" : {
+        "sessionAffinityFormat" : "openai-nosession",
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.01,
+        "cacheWrite" : 0.125,
+        "input" : 0.1,
+        "output" : 0.5
+      },
+      "id" : "gpt-6-luna",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Luna",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : "none",
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6-sol" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "compat" : {
+        "sessionAffinityFormat" : "openai-nosession",
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "gpt-6-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6 Sol",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : "none",
+        "xhigh" : "xhigh"
+      }
+    },
     "grok-4.5" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
@@ -23935,6 +24456,48 @@
       },
       "maxTokens" : 500000,
       "name" : "Grok 4.6",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "grok-4.7" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/opencode.ai\/zen\/v1",
+      "compat" : {
+        "sessionAffinityFormat" : "openai-nosession"
+      },
+      "contextWindow" : 500000,
+      "cost" : {
+        "cacheRead" : 0.35,
+        "cacheWrite" : 0,
+        "input" : 1.4,
+        "output" : 4.2
+      },
+      "id" : "grok-4.7",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 500000,
+      "name" : "Grok 4.7 (30% Off)",
       "provider" : "opencode",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -25883,10 +26446,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0035999999999999999,
+        "cacheRead" : 0.058000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.12,
-        "output" : 0.48
+        "input" : 0.058999999999999997,
+        "output" : 0.6
       },
       "id" : "~deepseek\/deepseek-flash-latest",
       "input" : [
@@ -26422,7 +26985,7 @@
           }
         }
       },
-      "maxTokens" : 943718,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM Flash Latest",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -26447,10 +27010,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.12142,
+        "cacheRead" : 0.125,
         "cacheWrite" : 0,
-        "input" : 0.6538,
-        "output" : 2.0548
+        "input" : 0.5625,
+        "output" : 2.5
       },
       "id" : "~z-ai\/glm-latest",
       "input" : [
@@ -26479,7 +27042,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 131072,
       "cost" : {
         "cacheRead" : 0.2,
         "cacheWrite" : 0,
@@ -26507,7 +27070,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 131072,
       "cost" : {
         "cacheRead" : 0.75,
         "cacheWrite" : 0,
@@ -26535,7 +27098,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 131072,
       "cost" : {
         "cacheRead" : 0.18,
         "cacheWrite" : 0,
@@ -28143,6 +28706,42 @@
         "xhigh" : null
       }
     },
+    "cohere\/command-a-plus" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 192000,
+      "cost" : {
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
+        "input" : 0.3,
+        "output" : 1.5
+      },
+      "id" : "cohere\/command-a-plus",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 64000,
+      "name" : "Cohere: Command A+",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
     "cohere\/command-r-08-2024" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -28436,10 +29035,10 @@
       },
       "contextWindow" : 1024000,
       "cost" : {
-        "cacheRead" : 0.0097999999999999997,
+        "cacheRead" : 0.017721000000000001,
         "cacheWrite" : 0,
-        "input" : 0.049000000000000002,
-        "output" : 0.098000000000000004
+        "input" : 0.088606000000000004,
+        "output" : 0.177212
       },
       "id" : "deepseek\/deepseek-v4-flash",
       "input" : [
@@ -28552,10 +29151,10 @@
       },
       "contextWindow" : 1024000,
       "cost" : {
-        "cacheRead" : 0.074922000000000002,
+        "cacheRead" : 0.079604999999999995,
         "cacheWrite" : 0,
-        "input" : 0.899058,
-        "output" : 1.798116
+        "input" : 0.95526,
+        "output" : 1.91052
       },
       "id" : "deepseek\/deepseek-v4-pro",
       "input" : [
@@ -28622,9 +29221,9 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0030000000000000001,
+        "cacheRead" : 0.058000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.15,
+        "input" : 0.058999999999999997,
         "output" : 0.6
       },
       "id" : "deepseek\/deepseek-v4.1-flash",
@@ -28642,7 +29241,7 @@
           }
         }
       },
-      "maxTokens" : 384000,
+      "maxTokens" : 943718,
       "name" : "DeepSeek: DeepSeek V4.1 Flash",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -37797,7 +38396,7 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 262144,
       "name" : "Qwen: Qwen3.8 2.4T A95B",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -37981,6 +38580,42 @@
         "off" : null,
         "xhigh" : "xhigh"
       }
+    },
+    "qwen\/qwen3.8-omni-flash" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.016,
+        "cacheWrite" : 0,
+        "input" : 0.15,
+        "output" : 0.47
+      },
+      "id" : "qwen\/qwen3.8-omni-flash",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Qwen: Qwen3.8 Omni Flash",
+      "provider" : "openrouter",
+      "reasoning" : true
     },
     "rekaai\/reka-edge" : {
       "api" : "openai-completions",
@@ -38332,10 +38967,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.020625000000000001,
+        "cacheRead" : 0.033000000000000002,
         "cacheWrite" : 0,
-        "input" : 0.082500000000000004,
-        "output" : 0.33
+        "input" : 0.132,
+        "output" : 0.528
       },
       "id" : "tencent\/hy3",
       "input" : [
@@ -39493,10 +40128,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.12142,
+        "cacheRead" : 0.156,
         "cacheWrite" : 0,
-        "input" : 0.6538,
-        "output" : 2.0548
+        "input" : 0.84,
+        "output" : 2.64
       },
       "id" : "z-ai\/glm-5.3",
       "input" : [
@@ -44988,7 +45623,7 @@
           }
         }
       },
-      "maxTokens" : 8192,
+      "maxTokens" : 32000,
       "name" : "Claude Opus 4",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
@@ -45364,7 +45999,7 @@
           }
         }
       },
-      "maxTokens" : 8192,
+      "maxTokens" : 64000,
       "name" : "Claude Sonnet 4",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
@@ -45912,7 +46547,7 @@
           }
         }
       },
-      "maxTokens" : 65536,
+      "maxTokens" : 65535,
       "name" : "Gemini 2.5 Flash",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
@@ -45945,7 +46580,7 @@
           }
         }
       },
-      "maxTokens" : 65536,
+      "maxTokens" : 65535,
       "name" : "Gemini 2.5 Flash Lite",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
@@ -45978,7 +46613,7 @@
           }
         }
       },
-      "maxTokens" : 65536,
+      "maxTokens" : 65535,
       "name" : "Gemini 2.5 Pro",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
@@ -46209,7 +46844,7 @@
           }
         }
       },
-      "maxTokens" : 65536,
+      "maxTokens" : 65535,
       "name" : "Gemini 3.7 Flash",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
@@ -46242,7 +46877,7 @@
           }
         }
       },
-      "maxTokens" : 65536,
+      "maxTokens" : 65535,
       "name" : "Gemini 3.8 Flash",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
