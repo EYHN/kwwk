@@ -770,7 +770,7 @@ struct AnthropicProviderTests {
             options: nil
         ).result()
         let headers = client.lastRequest?.headers ?? [:]
-        #expect(headers["user-agent"] == "claude-cli/2.1.251")
+        #expect(headers["user-agent"] == "claude-cli/2.1.280")
         #expect(headers["x-app"] == "cli")
         #expect(headers["anthropic-beta"]?.contains("claude-code-20250219") == true)
         #expect(headers["anthropic-beta"]?.contains("oauth-2025-04-20") == true)
