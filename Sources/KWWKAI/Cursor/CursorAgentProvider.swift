@@ -212,6 +212,9 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
         )
     }
 
+    /// The MCP server every advertised kwwk tool belongs to.
+    static let mcpProviderIdentifier = "kwwk"
+
     /// kwwk tools advertised to Cursor as MCP definitions, minus the ones
     /// Cursor provides natively (those arrive through the exec channel).
     static func mcpToolDefinitions(_ tools: [Tool]?) -> [Data] {
@@ -221,7 +224,7 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
                 CursorProto.encodeMcpToolDefinition(
                     name: tool.name,
                     description: tool.description,
-                    providerIdentifier: "kwwk",
+                    providerIdentifier: mcpProviderIdentifier,
                     toolName: tool.name,
                     inputSchema: CursorProto.encodeProtoValue(tool.parameters)
                 )
@@ -586,6 +589,11 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
             var result = ProtoWriter()
             result.bytesField(2, err.data)
             reply(23, result.data)
+
+        case .mcpState:
+            reply(36, CursorProto.encodeMcpStateResult(
+                toolDefs: session.toolDefs, providerIdentifier: Self.mcpProviderIdentifier
+            ))
 
         case .listMcpResources:
             reply(17, Data())

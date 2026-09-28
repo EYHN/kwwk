@@ -250,6 +250,27 @@ enum CursorProto {
         return result.data
     }
 
+    /// `McpStateExecResult { success=1: McpStateSuccess { servers=1:
+    /// McpStateServer { server_name=1, server_identifier=2, tools=5,
+    /// status=7 } } }`. Cursor's server loads MCP tools lazily: the model sees
+    /// only tool names until its `GetMcpTools` call makes the server ask the
+    /// client for the full definitions through this exec. Every kwwk tool is
+    /// one server, `providerIdentifier`, reported as connected.
+    static func encodeMcpStateResult(toolDefs: [Data], providerIdentifier: String) -> Data {
+        var success = ProtoWriter()
+        if !toolDefs.isEmpty {
+            success.messageField(1) { server in
+                server.stringField(1, providerIdentifier)
+                server.stringField(2, providerIdentifier)
+                for def in toolDefs { server.bytesField(5, def) }
+                server.stringField(7, "connected")
+            }
+        }
+        var result = ProtoWriter()
+        result.bytesField(1, success.data)
+        return result.data
+    }
+
     /// One MCP tool-result content item: text or image.
     enum McpContent {
         case text(String)
@@ -498,6 +519,7 @@ enum CursorProto {
         case backgroundShellSpawn = 16
         case listMcpResources = 17
         case readMcpResource = 18
+        case mcpState = 36
         case fetch = 20
         case recordScreen = 21
         case computerUse = 22
