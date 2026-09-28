@@ -699,11 +699,14 @@ enum CursorProto {
     /// Decode one `McpArgs.args` map value, mirroring oh-my-pi's
     /// `decodeMcpArgValue`: the bytes are a protobuf `google.protobuf.Value`;
     /// a Value that holds a string may itself be JSON text (double-encoded), so
-    /// it gets one more parse attempt. Bytes that don't decode as a Value fall
-    /// back to JSON text, then to a bare string.
+    /// a string that opens like a JSON object, array or string gets one more
+    /// parse attempt. Any other string stays a string — reparsing it turned
+    /// `"12"` into the integer 12 and failed string-typed schemas. Bytes that
+    /// don't decode as a Value fall back to JSON text, then to a bare string.
     static func decodeMcpArgValue(_ bytes: Data) -> JSONValue {
         if let value = decodeProtoValue(bytes) {
-            if case .string(let s) = value {
+            if case .string(let s) = value,
+               let first = s.first(where: { !$0.isWhitespace }), "{[\"".contains(first) {
                 return decodeLooseJSON(Data(s.utf8))
             }
             return value
