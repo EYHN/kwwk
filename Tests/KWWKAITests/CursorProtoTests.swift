@@ -429,6 +429,18 @@ struct CursorExecDecodeTests {
         #expect(strings[4] == "unknown_exec_variant")
     }
 
+    @Test("string arg values that look like scalars stay strings")
+    func mcpArgScalarLookingStrings() {
+        for text in ["12", "true", "null", "3.5", " 7"] {
+            let decoded = CursorProto.decodeMcpArgValue(CursorProto.encodeProtoValue(.string(text)))
+            #expect(decoded == .string(text))
+        }
+        let nested = CursorProto.decodeMcpArgValue(CursorProto.encodeProtoValue(.string(#"{"a":1}"#)))
+        #expect(nested == .object(["a": .int(1)]))
+        let number = CursorProto.decodeMcpArgValue(CursorProto.encodeProtoValue(.int(12)))
+        #expect(number != .string("12"))
+    }
+
     @Test("shell args decode")
     func shellArgs() {
         var w = ProtoWriter()
