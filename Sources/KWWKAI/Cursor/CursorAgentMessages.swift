@@ -202,14 +202,22 @@ enum CursorProto {
         return w.data
     }
 
-    /// Bare `ExecClientMessage { id=1, exec_id=15 }` acknowledgement (no typed
-    /// result) so the server does not hang waiting on an unhandled exec.
-    static func encodeExecAck(id: UInt32, execId: String) -> Data {
-        var exec = ProtoWriter()
-        exec.uint32Field(1, id)
-        if !execId.isEmpty { exec.stringField(15, execId) }
+    /// `AgentClientMessage { exec_client_control_message=5:
+    /// ExecClientControlMessage { throw=2: ExecClientThrow { id=1, error=2,
+    /// error_code=4 } } }` — the protocol's failure channel for an exec the
+    /// client cannot answer at all. Cursor's own executor sends this (then a
+    /// stream close) for a frame no handler claims, and the server surfaces
+    /// the error to the model. An `ExecClientMessage` with no result set is
+    /// not an answer: the server keeps waiting on it.
+    static func encodeExecThrow(id: UInt32, error: String, errorCode: String) -> Data {
+        var thrown = ProtoWriter()
+        thrown.uint32Field(1, id)
+        thrown.stringField(2, error)
+        thrown.stringField(4, errorCode)
+        var ctrl = ProtoWriter()
+        ctrl.bytesField(2, thrown.data)
         var w = ProtoWriter()
-        w.bytesField(2, exec.data)
+        w.bytesField(5, ctrl.data)
         return w.data
     }
 
@@ -248,6 +256,45 @@ enum CursorProto {
         var result = ProtoWriter()
         result.bytesField(1, success.data)
         return result.data
+    }
+
+    /// `McpStateExecResult { success=1: McpStateSuccess { servers=1:
+    /// McpStateServer { server_name=1, server_identifier=2, tools=5,
+    /// status=7 } } }`. Cursor's server loads MCP tools lazily: the model sees
+    /// only tool names until its `GetMcpTools` call makes the server ask the
+    /// client for the full definitions through this exec. kwwk hosts no MCP
+    /// servers of its own — every advertised tool sits under one synthetic
+    /// server, `providerIdentifier`, reported as connected. `serverIdentifiers`
+    /// filters the answer when the server asks about specific servers; the
+    /// success case is set even when nothing matches, since an unset oneof
+    /// reads as a malformed reply.
+    static func encodeMcpStateResult(
+        toolDefs: [Data], providerIdentifier: String, serverIdentifiers: [String]
+    ) -> Data {
+        var success = ProtoWriter()
+        let wanted = serverIdentifiers.isEmpty || serverIdentifiers.contains(providerIdentifier)
+        if wanted, !toolDefs.isEmpty {
+            success.messageField(1) { server in
+                server.stringField(1, providerIdentifier)
+                server.stringField(2, providerIdentifier)
+                for def in toolDefs { server.bytesField(5, def) }
+                server.stringField(7, "connected")
+            }
+        }
+        var result = ProtoWriter()
+        result.bytesField(1, success.data)
+        return result.data
+    }
+
+    /// `McpStateExecArgs { server_identifiers=1 (repeated), kick_only=2 }` →
+    /// the requested server identifiers (empty means all).
+    static func decodeMcpStateServerIdentifiers(_ data: Data) -> [String] {
+        var out: [String] = []
+        var reader = ProtoReader(data)
+        while let f = reader.next() {
+            if f.number == 1, let id = f.value.asString { out.append(id) }
+        }
+        return out
     }
 
     /// One MCP tool-result content item: text or image.
@@ -498,6 +545,7 @@ enum CursorProto {
         case backgroundShellSpawn = 16
         case listMcpResources = 17
         case readMcpResource = 18
+        case mcpState = 36
         case fetch = 20
         case recordScreen = 21
         case computerUse = 22

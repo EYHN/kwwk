@@ -341,6 +341,94 @@ struct CursorExecDecodeTests {
         #expect(msg.execCase == .fetch)
     }
 
+    @Test("mcp_state exec is dispatched, not bare-acked")
+    func mcpStateDispatched() {
+        // Captured from api2.cursor.sh 2026-09-28: ExecServerMessage { id=1,
+        // span_context=19, mcp_state_exec_args=36 { server_identifiers=["kwwk"] },
+        // accept_hook_additional_contexts=55 }.
+        var w = ProtoWriter()
+        w.uint32Field(1, 1)
+        w.messageField(19) { span in span.stringField(1, "trace") }
+        w.messageField(36) { args in args.stringField(1, "kwwk") }
+        w.uint32Field(55, 0)
+        let msg = CursorProto.decodeExecMessage(w.data)
+        #expect(msg.execCase == .mcpState)
+    }
+
+    @Test("mcp_state result lists every advertised tool under one connected server")
+    func mcpStateResult() {
+        let defs = CursorAgentProvider.mcpToolDefinitions([
+            Tool(name: "bot_send_message", description: "Send.", parameters: .object(["type": .string("object")])),
+            Tool(name: "bash", description: "Native.", parameters: .object(["type": .string("object")])),
+        ])
+        let result = CursorProto.encodeMcpStateResult(
+            toolDefs: defs, providerIdentifier: "kwwk", serverIdentifiers: ["kwwk"]
+        )
+        var outer = ProtoReader(result)
+        let success = outer.next()
+        #expect(success?.number == 1)
+        var servers = ProtoReader(success!.value.asData!)
+        let server = servers.next()
+        #expect(server?.number == 1)
+        #expect(servers.next() == nil)
+        var fields = ProtoReader(server!.value.asData!)
+        var strings: [Int: String] = [:]
+        var tools: [Data] = []
+        while let f = fields.next() {
+            if f.number == 5 { tools.append(f.value.asData!) } else { strings[f.number] = f.value.asString }
+        }
+        #expect(strings[1] == "kwwk")
+        #expect(strings[2] == "kwwk")
+        #expect(strings[7] == "connected")
+        #expect(tools == defs)
+        #expect(tools.count == 1)
+    }
+
+    @Test("mcp_state result for another server keeps success set with no servers")
+    func mcpStateResultFiltered() {
+        let defs = CursorAgentProvider.mcpToolDefinitions([
+            Tool(name: "bot_send_message", description: "Send.", parameters: .object(["type": .string("object")])),
+        ])
+        for result in [
+            CursorProto.encodeMcpStateResult(toolDefs: defs, providerIdentifier: "kwwk", serverIdentifiers: ["other"]),
+            CursorProto.encodeMcpStateResult(toolDefs: [], providerIdentifier: "kwwk", serverIdentifiers: []),
+        ] {
+            var outer = ProtoReader(result)
+            let success = outer.next()
+            #expect(success?.number == 1)
+            #expect(success?.value.asData?.isEmpty == true)
+        }
+    }
+
+    @Test("mcp_state args decode the requested server identifiers")
+    func mcpStateArgs() {
+        var w = ProtoWriter()
+        w.stringField(1, "kwwk")
+        w.stringField(1, "other")
+        w.uint32Field(2, 1)
+        #expect(CursorProto.decodeMcpStateServerIdentifiers(w.data) == ["kwwk", "other"])
+    }
+
+    @Test("exec throw rides the control channel with id, error and code")
+    func execThrow() {
+        let data = CursorProto.encodeExecThrow(id: 9, error: "nope", errorCode: "unknown_exec_variant")
+        var top = ProtoReader(data)
+        let ctrl = top.next()
+        #expect(ctrl?.number == 5)
+        var ctrlReader = ProtoReader(ctrl!.value.asData!)
+        let thrown = ctrlReader.next()
+        #expect(thrown?.number == 2)
+        var fields = ProtoReader(thrown!.value.asData!)
+        var id: UInt64?
+        var strings: [Int: String] = [:]
+        while let f = fields.next() {
+            if f.number == 1 { id = f.value.asUInt64 } else { strings[f.number] = f.value.asString }
+        }
+        #expect(id == 9)
+        #expect(strings[2] == "nope")
+        #expect(strings[4] == "unknown_exec_variant")
+    }
+
     @Test("shell args decode")
     func shellArgs() {
         var w = ProtoWriter()

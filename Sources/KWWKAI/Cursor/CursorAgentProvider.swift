@@ -212,6 +212,9 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
         )
     }
 
+    /// The MCP server every advertised kwwk tool belongs to.
+    static let mcpProviderIdentifier = "kwwk"
+
     /// kwwk tools advertised to Cursor as MCP definitions, minus the ones
     /// Cursor provides natively (those arrive through the exec channel).
     static func mcpToolDefinitions(_ tools: [Tool]?) -> [Data] {
@@ -221,7 +224,7 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
                 CursorProto.encodeMcpToolDefinition(
                     name: tool.name,
                     description: tool.description,
-                    providerIdentifier: "kwwk",
+                    providerIdentifier: mcpProviderIdentifier,
                     toolName: tool.name,
                     inputSchema: CursorProto.encodeProtoValue(tool.parameters)
                 )
@@ -587,6 +590,13 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
             result.bytesField(2, err.data)
             reply(23, result.data)
 
+        case .mcpState:
+            reply(36, CursorProto.encodeMcpStateResult(
+                toolDefs: session.toolDefs,
+                providerIdentifier: Self.mcpProviderIdentifier,
+                serverIdentifiers: CursorProto.decodeMcpStateServerIdentifiers(msg.payload)
+            ))
+
         case .listMcpResources:
             reply(17, Data())
         case .readMcpResource:
@@ -597,8 +607,12 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
             reply(22, Data())
 
         case nil:
-            // Unknown exec — bare ack so the server does not hang.
-            stream.send(CursorProto.encodeExecAck(id: msg.id, execId: msg.execId))
+            // An exec kwwk does not model. Fail it in band so the server hands
+            // the error to the model instead of waiting on a reply forever.
+            stream.send(CursorProto.encodeExecThrow(
+                id: msg.id, error: "Unsupported exec message", errorCode: "unknown_exec_variant"
+            ))
+            stream.send(CursorProto.encodeExecStreamClose(id: msg.id))
         }
     }
 
