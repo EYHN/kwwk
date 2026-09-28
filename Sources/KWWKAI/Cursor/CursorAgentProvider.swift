@@ -592,7 +592,9 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
 
         case .mcpState:
             reply(36, CursorProto.encodeMcpStateResult(
-                toolDefs: session.toolDefs, providerIdentifier: Self.mcpProviderIdentifier
+                toolDefs: session.toolDefs,
+                providerIdentifier: Self.mcpProviderIdentifier,
+                serverIdentifiers: CursorProto.decodeMcpStateServerIdentifiers(msg.payload)
             ))
 
         case .listMcpResources:
@@ -605,8 +607,12 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
             reply(22, Data())
 
         case nil:
-            // Unknown exec — bare ack so the server does not hang.
-            stream.send(CursorProto.encodeExecAck(id: msg.id, execId: msg.execId))
+            // An exec kwwk does not model. Fail it in band so the server hands
+            // the error to the model instead of waiting on a reply forever.
+            stream.send(CursorProto.encodeExecThrow(
+                id: msg.id, error: "Unsupported exec message", errorCode: "unknown_exec_variant"
+            ))
+            stream.send(CursorProto.encodeExecStreamClose(id: msg.id))
         }
     }
 
