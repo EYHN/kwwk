@@ -28,14 +28,12 @@ final class SubagentLimiter: @unchecked Sendable {
 
     /// Reserve capacity for a foreground child. This deliberately fails when
     /// no slot is available instead of suspending the parent tool call.
-    func reserve(tools: CodingTools) throws -> SubagentPermit {
+    func reserve(tools: CodingTools, countsTowardTotal: Bool = true) throws -> SubagentPermit {
         let mutating = Self.isMutating(tools)
         try lock.withLock {
-            guard total < limits.maxTotal else {
-                throw SubagentLimitError.total(limit: limits.maxTotal)
-            }
+            if countsTowardTotal { try validateTotal() }
             try validateAvailableCapacity(mutating: mutating)
-            total += 1
+            if countsTowardTotal { total += 1 }
             claimCapacity(mutating: mutating)
         }
         return SubagentPermit(limiter: self, mutating: mutating)
@@ -44,17 +42,17 @@ final class SubagentLimiter: @unchecked Sendable {
     /// Admit a background child without waiting for a runner slot. The total
     /// launch budget is charged now, so an arbitrarily large queued fan-out can
     /// never bypass `maxTotal`.
-    func enqueue(tools: CodingTools) throws -> SubagentCapacityReservation {
+    func enqueue(tools: CodingTools, countsTowardTotal: Bool = true) throws -> SubagentCapacityReservation {
         let mutating = Self.isMutating(tools)
         let id = UUID()
         let reservation = SubagentCapacityReservation(id: id, limiter: self)
         var immediatePermit: SubagentPermit?
 
         try lock.withLock {
-            guard total < limits.maxTotal else {
-                throw SubagentLimitError.total(limit: limits.maxTotal)
+            if countsTowardTotal {
+                try validateTotal()
+                total += 1
             }
-            total += 1
             if hasAvailableCapacity(mutating: mutating) {
                 claimCapacity(mutating: mutating)
                 immediatePermit = SubagentPermit(limiter: self, mutating: mutating)
@@ -76,7 +74,7 @@ final class SubagentLimiter: @unchecked Sendable {
     /// Spawn-time capacity context: 1-based position of `id` in the queue
     /// (nil once it holds a runner slot), total queued launches, and the
     /// concurrency limit — enough for the model to estimate expected wait.
-    func queueStatus(of id: UUID) -> (position: Int?, queuedCount: Int, maxConcurrent: Int) {
+    func queueStatus(of id: UUID) -> (position: Int?, queuedCount: Int, maxConcurrent: Int?) {
         lock.withLock {
             let index = queued.firstIndex(where: { $0.id == id })
             return (index.map { $0 + 1 }, queued.count, limits.maxConcurrent)
@@ -117,20 +115,28 @@ final class SubagentLimiter: @unchecked Sendable {
         }
     }
 
-    private func validateAvailableCapacity(mutating: Bool) throws {
-        guard active < limits.maxConcurrent else {
-            throw SubagentLimitError.concurrent(limit: limits.maxConcurrent)
+    private func validateTotal() throws {
+        if let maxTotal = limits.maxTotal, total >= maxTotal {
+            throw SubagentLimitError.total(limit: maxTotal)
         }
-        if mutating, activeMutating >= limits.maxConcurrentMutating {
-            throw SubagentLimitError.mutatingConcurrent(
-                limit: limits.maxConcurrentMutating
-            )
+    }
+
+    private func validateAvailableCapacity(mutating: Bool) throws {
+        if let maxConcurrent = limits.maxConcurrent, active >= maxConcurrent {
+            throw SubagentLimitError.concurrent(limit: maxConcurrent)
+        }
+        if mutating,
+           let maxMutating = limits.maxConcurrentMutating,
+           activeMutating >= maxMutating {
+            throw SubagentLimitError.mutatingConcurrent(limit: maxMutating)
         }
     }
 
     private func hasAvailableCapacity(mutating: Bool) -> Bool {
-        active < limits.maxConcurrent
-            && (!mutating || activeMutating < limits.maxConcurrentMutating)
+        let underConcurrent = limits.maxConcurrent.map { active < $0 } ?? true
+        let underMutating = !mutating
+            || (limits.maxConcurrentMutating.map { activeMutating < $0 } ?? true)
+        return underConcurrent && underMutating
     }
 
     private func claimCapacity(mutating: Bool) {
@@ -167,7 +173,7 @@ final class SubagentCapacityReservation: @unchecked Sendable {
 
     /// Capacity context for spawn-result rendering. Position is nil once the
     /// launch holds a runner slot.
-    var queueStatus: (position: Int?, queuedCount: Int, maxConcurrent: Int)? {
+    var queueStatus: (position: Int?, queuedCount: Int, maxConcurrent: Int?)? {
         limiter?.queueStatus(of: id)
     }
 
@@ -296,7 +302,7 @@ enum SubagentLimitError: Error, LocalizedError, Sendable {
         case .concurrent(let limit):
             return "agent: concurrent subagent limit reached (max \(limit)); wait for a running child to finish"
         case .mutatingConcurrent(let limit):
-            return "agent: concurrent mutating subagent limit reached (max \(limit)); writing children run serially by default"
+            return "agent: concurrent mutating subagent limit reached (max \(limit)); wait for a writing child to finish"
         case .total(let limit):
             return "agent: subagent launch budget exhausted for this parent session (max \(limit))"
         }

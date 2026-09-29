@@ -60,17 +60,25 @@ public struct SubagentDefinition: Sendable {
 
 /// Resource limits shared by all invocations launched through one `agent`
 /// tool (or one `SubagentRunner`).
+///
+/// Every ceiling is off by default: the parent decides how many children to
+/// run, how many of them write, and how long each may take. A host that wants
+/// a ceiling sets it explicitly; `nil` always means unbounded.
 public struct SubagentLimits: Sendable, Equatable {
-    public var maxConcurrent: Int
-    public var maxConcurrentMutating: Int
-    public var maxTotal: Int
+    /// Children running at once. `nil` is unbounded.
+    public var maxConcurrent: Int?
+    /// Children with write, edit, or bash running at once, within
+    /// `maxConcurrent`. `nil` is unbounded.
+    public var maxConcurrentMutating: Int?
+    /// Launches (not resumes) per parent session. `nil` is unbounded.
+    public var maxTotal: Int?
+    /// Assistant turns per child run. `nil` is unbounded.
     public var maxTurns: Int?
     /// Optional hard ceiling on a child's own runtime, foreground or
     /// background: a child still running at this point is cancelled and
     /// fails with `failure_kind=timeout`. `nil` (the default) leaves a child
-    /// unbounded except for the background manager's last-resort watchdog —
-    /// how long a caller *waits* for it is `foregroundTimeoutSeconds`, not
-    /// this.
+    /// unbounded, background manager included — how long a caller *waits*
+    /// for it is `foregroundTimeoutSeconds`, not this.
     public var timeoutSeconds: Int?
     /// Default foreground wait for one `agent` call (seconds) — the model's
     /// `timeout` when it passes none. Mirrors bash's soft timeout: with a
@@ -83,17 +91,21 @@ public struct SubagentLimits: Sendable, Equatable {
     public var maxForegroundTimeoutSeconds: Int
 
     public init(
-        maxConcurrent: Int = 4,
-        maxConcurrentMutating: Int = 1,
-        maxTotal: Int = 64,
-        maxTurns: Int? = 16,
+        maxConcurrent: Int? = nil,
+        maxConcurrentMutating: Int? = nil,
+        maxTotal: Int? = nil,
+        maxTurns: Int? = nil,
         timeoutSeconds: Int? = nil,
         foregroundTimeoutSeconds: Int = 120,
         maxForegroundTimeoutSeconds: Int = 600
     ) {
-        self.maxConcurrent = max(1, maxConcurrent)
-        self.maxConcurrentMutating = max(1, min(maxConcurrentMutating, self.maxConcurrent))
-        self.maxTotal = max(1, maxTotal)
+        let concurrent = maxConcurrent.map { max(1, $0) }
+        self.maxConcurrent = concurrent
+        self.maxConcurrentMutating = maxConcurrentMutating.map { mutating in
+            let bounded = max(1, mutating)
+            return concurrent.map { min(bounded, $0) } ?? bounded
+        }
+        self.maxTotal = maxTotal.map { max(1, $0) }
         self.maxTurns = maxTurns.map { max(1, $0) }
         self.timeoutSeconds = timeoutSeconds.map { max(1, $0) }
         self.maxForegroundTimeoutSeconds = max(1, maxForegroundTimeoutSeconds)

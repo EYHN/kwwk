@@ -1623,9 +1623,11 @@ public enum AgentLoop {
             return .immediate(errorToolResult("Tool \(toolCall.name) not found"), true)
         }
         let kwwkaiTool = tool.toKWWKAITool()
+        var normalizedCall = toolCall
+        normalizedCall.arguments = tool.normalizingBlankOptionalArguments(toolCall.arguments)
         let args: JSONValue
         do {
-            args = try validateToolArguments(tool: kwwkaiTool, toolCall: toolCall)
+            args = try validateToolArguments(tool: kwwkaiTool, toolCall: normalizedCall)
         } catch {
             return .immediate(errorToolResult(schemaValidationMessage(error)), true)
         }
@@ -1653,7 +1655,7 @@ public enum AgentLoop {
                 // hook context or the toolExecutionEnd event).
                 if let rewritten = result.modifiedArgs {
                     var rewrittenCall = toolCall
-                    rewrittenCall.arguments = rewritten
+                    rewrittenCall.arguments = tool.normalizingBlankOptionalArguments(rewritten)
                     do {
                         effectiveArgs = try validateToolArguments(
                             tool: kwwkaiTool,
