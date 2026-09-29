@@ -765,6 +765,7 @@ struct SubagentYieldAndHistoryTests {
         history.begin(
             childSessionId: childSessionId,
             parentSessionId: "large-live-parent",
+            agentId: "live-1",
             subagentType: "test",
             prompt: "retain committed history",
             model: "test-model"
@@ -790,19 +791,21 @@ struct SubagentYieldAndHistoryTests {
             nil
         )
 
+        // The streaming message is shown as the current activity, never
+        // expanded, so it cannot crowd out a committed message.
         let body = yieldResultText(result)
         #expect(body.utf8.count <= 64 * 1_024)
         #expect(body.contains("committed sentinel"))
-        #expect(!body.contains("oversizedMessage"))
+        #expect(body.contains("… live: streaming"))
+        #expect(!body.contains("<live>"))
         #expect(!body.contains(childSessionId))
-        #expect(!body.contains("childSessionId"))
         guard case .object(let details) = result.details ?? .null else {
             Issue.record("expected page details")
             return
         }
         #expect(details["returned"] == .int(1))
         #expect(details["next_offset"] == .null)
-        #expect(details["response_truncated"] == .bool(true))
+        #expect(details["response_truncated"] == .bool(false))
     }
 
     @Test("history retention evicts oldest terminal entries")
