@@ -1909,6 +1909,106 @@
       "input" : 0,
       "output" : 0
     },
+    "id" : "claude-sonnet-5-5-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Sonnet 5.5  High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-sonnet-5-5-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Sonnet 5.5  Low",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-sonnet-5-5-max",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Sonnet 5.5  Max",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-sonnet-5-5-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Sonnet 5.5  Medium",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-sonnet-5-5-xhigh",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Sonnet 5.5  Extra High",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
     "id" : "claude-sonnet-5-high",
     "input" : [
       "text",

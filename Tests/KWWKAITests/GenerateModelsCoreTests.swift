@@ -162,6 +162,85 @@ struct GenerateModelsCoreTests {
         #expect(model["contextWindow"] as? Int == 400_000)
     }
 
+    @Test("inlines chat entries from typed pi provider catalogs")
+    func inlinesTypedProviderCatalogs() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("kwwk-generate-models-\(UUID().uuidString)")
+        let providers = root.appendingPathComponent("providers")
+        let data = providers.appendingPathComponent("data")
+        try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let generated = """
+        import { OPENAI_CLASSIFIER_MODELS, OPENAI_IMAGE_MODELS, OPENAI_MODELS } from "./providers/openai.models.ts";
+
+        export const MODELS: {
+        \treadonly "openai": typeof OPENAI_MODELS;
+        } = {
+        \t"openai": OPENAI_MODELS,
+        };
+        """
+        try generated.write(
+            to: root.appendingPathComponent("models.generated.ts"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let provider = """
+        import values from "./data/openai.json" with { type: "json" };
+        import { flattenChatModelCatalog, flattenImageModelCatalog, type ChatModelCatalog, type ImageModelCatalog } from "../model-catalog.ts";
+
+        export const OPENAI_MODELS: ChatModelCatalog<typeof values, "openai"> =
+        \tflattenChatModelCatalog("openai", values);
+
+        export const OPENAI_IMAGE_MODELS: ImageModelCatalog<typeof values, "openai"> =
+        \tflattenImageModelCatalog("openai", values);
+        """
+        try provider.write(
+            to: providers.appendingPathComponent("openai.models.ts"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let values = """
+        {
+          "openai-responses": {
+            "chat:gpt-5.5": {
+              "id": "gpt-5.5",
+              "name": "GPT-5.5",
+              "api": "openai-responses",
+              "provider": "openai",
+              "contextWindow": 400000,
+              "type": "chat"
+            }
+          },
+          "openai-images": {
+            "image:gpt-image-2": {
+              "id": "gpt-image-2",
+              "api": "openai-images",
+              "provider": "openai",
+              "type": "image"
+            }
+          }
+        }
+        """
+        try values.write(
+            to: data.appendingPathComponent("openai.json"),
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let result = try GenerateModelsCore.generate(
+            fromFile: root.appendingPathComponent("models.generated.ts")
+        )
+        let openai = try #require(result.root["openai"] as? [String: Any])
+        let model = try #require(openai["gpt-5.5"] as? [String: Any])
+
+        #expect(openai.keys.sorted() == ["gpt-5.5"])
+        #expect(model["contextWindow"] as? Int == 400_000)
+        #expect(model["type"] == nil)
+    }
+
     @Test("preserves providers from the source catalog")
     func preservesSourceProviders() throws {
         let raw = """
