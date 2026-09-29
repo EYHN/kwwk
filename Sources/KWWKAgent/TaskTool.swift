@@ -473,6 +473,7 @@ private func configureTaskTool(
 ) -> AgentTool {
     var tool = tool
     tool.codingToolCapabilities = .task
+    tool.omitsBlankOptionalArguments = true
     tool.backgroundDeliveryConsumer = deliveryConsumer
     tool.backgroundTaskManager = manager
     return tool
@@ -541,8 +542,7 @@ private func taskStringArray(
     field: String,
     toolName: String
 ) throws -> [String] {
-    guard let value else { return [] }
-    if case .null = value { return [] }
+    guard let value, !isBlankToolArgument(value) else { return [] }
     guard case .array(let values) = value else {
         throw CodingToolError.invalidArgument(
             "\(toolName): `\(field)` must be an array of task IDs"
@@ -569,8 +569,7 @@ private func taskBool(
     field: String,
     toolName: String
 ) throws -> Bool {
-    guard let value else { return false }
-    if case .null = value { return false }
+    guard let value, !isBlankToolArgument(value) else { return false }
     guard case .bool(let bool) = value else {
         throw CodingToolError.invalidArgument("\(toolName): `\(field)` must be a boolean")
     }
@@ -584,8 +583,7 @@ private func taskBoundedInteger(
     defaultValue: Int,
     range: ClosedRange<Int>
 ) throws -> Int {
-    guard let value else { return defaultValue }
-    if case .null = value { return defaultValue }
+    guard let value, !isBlankToolArgument(value) else { return defaultValue }
     let raw: Int
     switch value {
     case .int(let integer):
@@ -614,8 +612,7 @@ private func taskBoundedInteger(
 }
 
 private func taskTimeout(_ value: JSONValue?) throws -> Int {
-    guard let value else { return 30 }
-    if case .null = value { return 30 }
+    guard let value, !isBlankToolArgument(value) else { return 30 }
     let raw: Int
     switch value {
     case .int(let integer):

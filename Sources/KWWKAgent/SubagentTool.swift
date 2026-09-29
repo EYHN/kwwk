@@ -510,7 +510,7 @@ internal func _createAgentTool(context: SubagentToolContext) -> AgentTool {
         "additionalProperties": .bool(false),
     ])
 
-    return AgentTool(
+    var tool = AgentTool(
         name: "agent",
         label: "agent",
         description: buildAgentToolDescription(
@@ -561,6 +561,8 @@ internal func _createAgentTool(context: SubagentToolContext) -> AgentTool {
             }
         }
     )
+    tool.omitsBlankOptionalArguments = true
+    return tool
 }
 
 /// `agent_send`: talk to a subagent the parent already launched. A running
@@ -596,7 +598,7 @@ internal func _createAgentSendTool(context: SubagentToolContext) -> AgentTool {
     - Subagents live in memory only; one that was dropped to free space, or lost with a restart, cannot be resumed. Launch a new one with `agent`.
     - `timeout` and `run_in_background` apply only when the message resumes a stopped subagent, the same way they do for `agent`.
     """
-    return AgentTool(
+    var tool = AgentTool(
         name: "agent_send",
         label: "agent send",
         description: description,
@@ -667,6 +669,8 @@ internal func _createAgentSendTool(context: SubagentToolContext) -> AgentTool {
             }
         }
     )
+    tool.omitsBlankOptionalArguments = true
+    return tool
 }
 
 /// The transcript a resumed run starts from. A run that stopped mid-turn can
@@ -1188,7 +1192,7 @@ private func parseAgentToolInput(
         throw CodingToolError.invalidArgument("agent: `prompt` is required")
     }
     func optionalTrimmedString(_ key: String) throws -> String? {
-        guard let value = obj[key] else { return nil }
+        guard let value = obj[key], value != .null else { return nil }
         guard case .string(let raw) = value else {
             throw CodingToolError.invalidArgument("agent: `\(key)` must be a string when provided")
         }
@@ -1254,8 +1258,21 @@ private func parseAgentSendInput(
     )
 }
 
+/// True when an optional argument carries no value: absent, `null`, or a
+/// blank string. Some models fill optional fields instead of omitting them.
+func isBlankToolArgument(_ value: JSONValue?) -> Bool {
+    switch value {
+    case nil, .null?:
+        return true
+    case .string(let string)?:
+        return string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    default:
+        return false
+    }
+}
+
 private func parseRunInBackground(_ obj: [String: JSONValue], tool: String) throws -> Bool? {
-    guard let value = obj["run_in_background"] else { return nil }
+    guard !isBlankToolArgument(obj["run_in_background"]), let value = obj["run_in_background"] else { return nil }
     guard case .bool(let parsed) = value else {
         throw CodingToolError.invalidArgument(
             "\(tool): `run_in_background` must be a boolean when provided"
@@ -1269,6 +1286,7 @@ private func parseForegroundTimeout(
     limits: SubagentLimits,
     tool: String
 ) throws -> Int {
+    if isBlankToolArgument(obj["timeout"]) { return limits.foregroundTimeoutSeconds }
     switch obj["timeout"] ?? .null {
     case .null:
         return limits.foregroundTimeoutSeconds

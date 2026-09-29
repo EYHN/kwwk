@@ -662,7 +662,7 @@ public func createSubagentHistoryTool(
         "additionalProperties": .bool(false),
     ])
 
-    return AgentTool(
+    var tool = AgentTool(
         name: "agent_history",
         label: "agent history",
         description: "Read a subagent's transcript as compact markdown: its messages, one line per tool call, and its final result in full. Pass `tool_call` to see one call's full arguments and result.",
@@ -728,6 +728,8 @@ public func createSubagentHistoryTool(
             )
         }
     )
+    tool.omitsBlankOptionalArguments = true
+    return tool
 }
 
 // MARK: - Request
@@ -827,8 +829,7 @@ private func historyOptionalInteger(
     key: String,
     range: ClosedRange<Int>
 ) throws -> Int? {
-    guard let value else { return nil }
-    if case .null = value { return nil }
+    guard let value, !isBlankToolArgument(value) else { return nil }
     guard case .int(let parsed) = value, range.contains(parsed) else {
         throw CodingToolError.invalidArgument(
             "agent_history: `\(key)` must be an integer in \(range.lowerBound)...\(range.upperBound)"
