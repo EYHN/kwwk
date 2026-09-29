@@ -135,8 +135,9 @@ for message in agent.state.messages {
 ### Subagents
 
 `CodingAgentConfig.subagents` defaults to an empty array. When it is
-empty, `makeCodingAgent` does not register the `agent` tool. Add
-subagent definitions explicitly when you want model-driven delegation:
+empty, `makeCodingAgent` does not register the subagent tools (`agent`,
+`agent_send`, `agent_history`). Add subagent definitions explicitly when you
+want model-driven delegation:
 
 ```swift
 let reviewer = SubagentDefinition(
@@ -175,9 +176,9 @@ foreground child still running when `timeout` elapses is moved to the
 background — the work continues, the tool returns `auto_backgrounded` with a
 task id, and completion arrives as the usual notification — or, without a
 background manager, is cancelled as a timeout. A child's own runtime is
-unbounded by default (`SubagentLimits.timeoutSeconds` is nil; the background
-manager's last-resort watchdog still applies), so foreground and background
-children behave identically once launched.
+unbounded by default (`SubagentLimits.timeoutSeconds` is nil, and the
+background manager then sets no deadline either), so foreground and
+background children behave identically once launched.
 
 `CodingAgentConfig.maxTaskTimeoutSeconds` (also on `createAgentTool`,
 `createSubagentToolset`, and `SubagentRunner`) is a runtime-wide ceiling on
@@ -227,10 +228,11 @@ propagated to child tools. Conversation-specific hooks such as
 `betweenTurns`, `transformContext`, `convertToLlm`, and `userPromptSubmit`
 remain local to the parent.
 
-Each `agent` surface defaults to four active children, one active child with
-write/edit/bash capability, 64 launches for the parent lifetime, 16 child
-turns, and a 600-second child deadline. Configure these through
-`SubagentLimits`. Model-issued overrides
+`SubagentLimits` sets no ceiling by default: active children, active children
+with write/edit/bash capability, launches for the parent lifetime, child turns,
+and child runtime are all unbounded, and the parent decides how to schedule its
+children. A host that wants a ceiling sets it explicitly; `nil` always means
+unbounded. Model-issued overrides
 must name the parent model, a same-provider catalog model, or a host-approved
 `allowedSubagentModels` entry; programmatic `SubagentModel.override` remains
 the trusted host path for custom models. Child completion uses an internal,
@@ -253,17 +255,35 @@ notifications. Normal completion is delivered automatically; `task_poll` is
 only for a parent that is otherwise blocked, and one call can watch multiple
 task ids with wait-any semantics.
 
-When background execution is available, `makeCodingAgent` registers a
-parent-only `agent_history` tool that pages a background subagent's retained
-messages by task id. Use `task_list` to discover task ids. Internal child session
-ids are not exposed to the model. The registry is process-local, keeps at most
-the newest 32 terminal children subject to a 16 MiB estimated transcript
-budget, and does not survive application restart. Each response is capped at
-64 KiB and marks an individual message that is too large for one response. SDK
-users who construct
-`createAgentTool` directly can share a `SubagentHistoryStore` with
-`createSubagentHistoryTool`; `SubagentRunner.historyStore` exposes the same
-process-local registry for direct-run integrations.
+Every child has a stable `agent_id` across all of its runs: `<type>-<n>` by
+default, or the `name` the parent passes to `agent`. Tool results, task
+notifications, and `task_list` all carry it.
+
+`agent_send {agent_id, message}` talks to a child the parent already launched.
+A running child (or one still waiting for capacity) reads the message at its
+next step; if it already submitted its result when the message lands, the run
+continues until it has answered the message and submitted again. A stopped
+child — completed, incomplete, failed, or aborted — is resumed from its own
+transcript with the message as a new prompt, in a new run with a new
+background task id; `timeout` and `run_in_background` then work as they do for
+`agent`. A resume does not count as another launch.
+
+`agent_history` reads a child's transcript as compact markdown, by `agent_id`
+or by the task id of any of its runs, and lists every child when given
+neither. It shows the runs, user and assistant text in full, one line per
+tool call (`→ [23.2] bash(xcodebuild -scheme App build) ⇒ error · 212 lines —
+<first error line>`), and each submitted result in full; thinking, usage, and
+image bytes are left out. The default view is the newest 20 messages;
+`offset`/`limit` or `tail` page it. `tool_call: "23.2"` returns that call's
+full arguments and its result paged by lines (120 by default). Internal child
+session ids are not exposed to the model. The registry is process-local,
+keeps at most 32 terminal children (least recently active evicted first)
+subject to a 16 MiB estimated transcript budget, and does not survive
+application restart; an evicted child cannot be resumed. Each response is
+capped at 64 KiB. SDK users who construct `createAgentTool` directly can share
+a `SubagentHistoryStore` with `createSubagentHistoryTool`;
+`SubagentRunner.historyStore` exposes the same process-local registry for
+direct-run integrations.
 
 In the interactive TUI, foreground subagent tool calls update their
 in-flight display with the child agent's token usage as it runs. When a

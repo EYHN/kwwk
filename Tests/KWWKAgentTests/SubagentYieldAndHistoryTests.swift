@@ -348,8 +348,8 @@ struct SubagentYieldAndHistoryTests {
         }
     }
 
-    @Test("agent_history exposes task IDs but not child session IDs")
-    func historyToolSchemaUsesTaskIdsOnly() async throws {
+    @Test("agent_history takes agent or task IDs but never child session IDs")
+    func historyToolSchemaUsesPublicIdsOnly() async throws {
         let history = SubagentHistoryStore()
         let tool = createSubagentHistoryTool(store: history, sessionId: "schema-parent")
 
@@ -358,10 +358,10 @@ struct SubagentYieldAndHistoryTests {
             Issue.record("expected agent_history schema properties")
             return
         }
-        #expect(Set(properties.keys) == Set(["task_id", "offset", "limit", "tail"]))
+        #expect(Set(properties.keys) == Set(["agent_id", "task_id", "tool_call", "offset", "limit", "tail"]))
         #expect(properties["child_session_id"] == nil)
         #expect(properties["list"] == nil)
-        #expect(schema["required"] == .array([.string("task_id")]))
+        #expect(schema["required"] == nil)
         #expect(schema["additionalProperties"] == .bool(false))
         #expect(!tool.description.contains("child_session_id"))
         #expect(!tool.description.lowercased().contains("list"))
@@ -369,8 +369,9 @@ struct SubagentYieldAndHistoryTests {
         history.begin(
             childSessionId: "foreground-internal-id",
             parentSessionId: "schema-parent",
+            agentId: "test-1",
             subagentType: "test",
-            prompt: "foreground prompt must not be queryable",
+            prompt: "foreground prompt is queryable by agent_id",
             model: "test-model"
         )
         history.update(
@@ -389,9 +390,19 @@ struct SubagentYieldAndHistoryTests {
                 nil
             )
         }
-        await #expect(throws: CodingToolError.self) {
-            _ = try await tool.execute("history-without-task-id", .object([:]), nil, nil)
-        }
+        // Without an id the tool lists subagents by agent_id only.
+        let index = yieldResultText(try await tool.execute("history-index", .object([:]), nil, nil))
+        #expect(index.contains("| test-1 | test | completed |"))
+        #expect(!index.contains("foreground-internal-id"))
+        // A foreground child has no task id, and is read by agent_id.
+        let foreground = yieldResultText(try await tool.execute(
+            "history-foreground",
+            .object(["agent_id": .string("TEST-1")]),
+            nil,
+            nil
+        ))
+        #expect(foreground.contains("foreground transcript sentinel"))
+        #expect(!foreground.contains("foreground-internal-id"))
         await #expect(throws: CodingToolError.self) {
             _ = try await tool.execute(
                 "removed-history-list",
@@ -549,19 +560,20 @@ struct SubagentYieldAndHistoryTests {
             nil,
             nil
         )
+        // Default-filled pagination carries no intent: it is the default
+        // view, the newest page.
         let resultText = yieldResultText(result)
-        #expect(resultText.contains("default-page-000"))
-        #expect(resultText.contains("default-page-019"))
-        #expect(!resultText.contains("default-page-020"))
-        #expect(!resultText.contains("default-page-024"))
+        #expect(!resultText.contains("default-page-004"))
+        #expect(resultText.contains("default-page-005"))
+        #expect(resultText.contains("default-page-024"))
         guard case .object(let details) = result.details ?? .null else {
             Issue.record("expected normalized history details")
             return
         }
         #expect(details["task_id"] == .string(taskId))
-        #expect(details["offset"] == .int(0))
+        #expect(details["offset"] == .int(5))
         #expect(details["returned"] == .int(20))
-        #expect(details["next_offset"] == .int(20))
+        #expect(details["next_offset"] == .null)
 
         let tailOnlyResult = try await tool.execute(
             "tail-only-history",
@@ -605,16 +617,17 @@ struct SubagentYieldAndHistoryTests {
             nil
         )
         let nullText = yieldResultText(nullResult)
-        #expect(nullText.contains("default-page-000"))
-        #expect(nullText.contains("default-page-019"))
-        #expect(!nullText.contains("default-page-020"))
+        #expect(!nullText.contains("default-page-004"))
+        #expect(nullText.contains("default-page-005"))
+        #expect(nullText.contains("default-page-024"))
+        #expect(nullText.contains("earlier: agent_history"))
         guard case .object(let nullDetails) = nullResult.details ?? .null else {
             Issue.record("expected null-pagination history details")
             return
         }
-        #expect(nullDetails["offset"] == .int(0))
+        #expect(nullDetails["offset"] == .int(5))
         #expect(nullDetails["returned"] == .int(20))
-        #expect(nullDetails["next_offset"] == .int(20))
+        #expect(nullDetails["next_offset"] == .null)
 
         let nullPaginationTail: JSONValue = .object([
             "task_id": .string(taskId),
@@ -640,21 +653,10 @@ struct SubagentYieldAndHistoryTests {
         #expect(nullPaginationTailDetails["returned"] == .int(20))
         #expect(nullPaginationTailDetails["next_offset"] == .null)
 
-        await #expect(throws: CodingToolError.self) {
-            _ = try await tool.execute(
-                "blank-history-task-id",
-                .object(["task_id": .string("  ")]),
-                nil,
-                nil
-            )
-        }
-        await #expect(throws: CodingToolError.self) {
-            _ = try await tool.execute(
-                "null-history-task-id",
-                .object(["task_id": .null]),
-                nil,
-                nil
-            )
+        // A blank or null id asks for no particular child: the index.
+        for (id, value) in [("blank-history-task-id", JSONValue.string("  ")), ("null-history-task-id", .null)] {
+            let index = yieldResultText(try await tool.execute(id, .object(["task_id": value]), nil, nil))
+            #expect(index.contains("# Subagents"))
         }
 
         await #expect(throws: CodingToolError.self) {
@@ -696,46 +698,49 @@ struct SubagentYieldAndHistoryTests {
         #expect(history.snapshot(taskId: "bg_anonymous", parentSessionId: nil) != nil)
     }
 
-    @Test("history responses are bounded and mark an oversized message")
-    func oversizedHistoryMessageIsMarked() async throws {
+    @Test("history responses are bounded and keep the head of an oversized message")
+    func oversizedHistoryMessageIsBounded() async throws {
         let history = SubagentHistoryStore()
         let childSessionId = "oversized-child"
         history.begin(
             childSessionId: childSessionId,
             parentSessionId: "oversized-parent",
+            agentId: "big-1",
             subagentType: "test",
             prompt: "retain a large result",
             model: "test-model"
         )
-        let huge = String(repeating: "<oversized>&", count: 12_000)
-        let message = Message.toolResult(ToolResultMessage(
-            toolCallId: "huge",
-            toolName: "read",
-            content: [.text(TextContent(text: huge))]
+        let huge = "HEAD-SENTINEL " + String(repeating: "<oversized>&", count: 12_000)
+        let message = Message.assistant(AssistantMessage(
+            content: [.text(TextContent(text: huge))],
+            api: "faux",
+            provider: "faux",
+            model: "test-model",
+            usage: Usage(),
+            stopReason: .stop
         ))
         history.update(
             childSessionId: childSessionId,
             messages: [message],
             liveMessage: nil,
-            currentActivity: "large tool result"
+            currentActivity: "large answer"
         )
         history.finish(childSessionId: childSessionId, status: .completed)
-        let taskId = "bg_oversized"
-        history.attachTask(taskId, childSessionId: childSessionId)
         let tool = createSubagentHistoryTool(store: history, sessionId: "oversized-parent")
 
         let result = try await tool.execute(
             "oversized-history",
-            .object(["task_id": .string(taskId)]),
+            .object(["agent_id": .string("big-1")]),
             nil,
             nil
         )
 
         let body = yieldResultText(result)
         #expect(body.utf8.count <= 64 * 1_024)
-        #expect(body.contains("oversizedMessage"))
+        #expect(body.contains("HEAD-SENTINEL"))
+        #expect(body.contains("bytes truncated to fit one response"))
         #expect(!body.contains(childSessionId))
-        #expect(!body.contains("childSessionId"))
+        #expect(!body.contains("<oversized>"))
         guard case .object(let details) = result.details ?? .null else {
             Issue.record("expected bounded history details")
             return
@@ -822,35 +827,29 @@ struct SubagentYieldAndHistoryTests {
         #expect(history.retention(parentSessionId: "retention-parent").evictedEntries == 1)
     }
 
-    @Test("foreground completions do not evict task-addressable history at minimal retention")
-    func foregroundCompletionDoesNotEvictBackgroundHistory() async throws {
+    @Test("retention evicts the least recently active child, foreground or background")
+    func retentionEvictsLeastRecentlyActive() async throws {
         let history = SubagentHistoryStore(
             maxTerminalEntries: 1,
             maxEstimatedBytes: 1_000_000
         )
         let parentSessionId = "mixed-retention-parent"
-        let childSessionId = "retained-background-child"
-        let taskId = "bg_retained"
 
         history.begin(
-            childSessionId: childSessionId,
+            childSessionId: "older-background-child",
             parentSessionId: parentSessionId,
+            agentId: "older-1",
             subagentType: "test",
-            prompt: "retain task-addressable history",
+            prompt: "older background run",
             model: "test-model"
         )
-        history.attachTask(taskId, childSessionId: childSessionId)
-        history.update(
-            childSessionId: childSessionId,
-            messages: [.user(UserMessage(text: "retained background transcript sentinel"))],
-            liveMessage: nil,
-            currentActivity: nil
-        )
-        history.finish(childSessionId: childSessionId, status: .completed)
+        history.attachTask("bg_older", childSessionId: "older-background-child")
+        history.finish(childSessionId: "older-background-child", status: .completed)
 
         history.begin(
             childSessionId: "newer-foreground-child",
             parentSessionId: parentSessionId,
+            agentId: "newer-1",
             subagentType: "test",
             prompt: "newer foreground completion",
             model: "test-model"
@@ -863,17 +862,15 @@ struct SubagentYieldAndHistoryTests {
         )
         history.finish(childSessionId: "newer-foreground-child", status: .completed)
 
+        #expect(history.snapshot(taskId: "bg_older", parentSessionId: parentSessionId) == nil)
         let tool = createSubagentHistoryTool(store: history, sessionId: parentSessionId)
-        let result = try await tool.execute(
-            "retained-background-history",
-            .object(["task_id": .string(taskId)]),
+        let body = yieldResultText(try await tool.execute(
+            "newer-foreground-history",
+            .object(["agent_id": .string("newer-1")]),
             nil,
             nil
-        )
-        let body = yieldResultText(result)
-
-        #expect(body.contains("retained background transcript sentinel"))
-        #expect(!body.contains("foreground transcript sentinel"))
+        ))
+        #expect(body.contains("foreground transcript sentinel"))
     }
 
     @Test("history retention limits are isolated per parent session")

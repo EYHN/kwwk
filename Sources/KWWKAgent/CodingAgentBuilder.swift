@@ -252,7 +252,7 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
     )
     if !config.subagents.isEmpty {
         let subagentHistoryStore = SubagentHistoryStore()
-        tools.append(_createAgentTool(
+        let subagentContext = SubagentToolContext(
             cwd: cwd,
             subagents: config.subagents,
             backgroundManager: bgManager,
@@ -265,13 +265,13 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
             bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
             maxTaskTimeoutSeconds: config.maxTaskTimeoutSeconds,
             bashShellPath: config.bashShellPath
+        )
+        tools.append(_createAgentTool(context: subagentContext))
+        tools.append(_createAgentSendTool(context: subagentContext))
+        tools.append(createSubagentHistoryTool(
+            store: subagentHistoryStore,
+            sessionId: sessionId
         ))
-        if bgManager != nil {
-            tools.append(createSubagentHistoryTool(
-                store: subagentHistoryStore,
-                sessionId: sessionId
-            ))
-        }
     }
 
     let systemPrompt = config.systemPrompt ?? buildSystemPrompt(SystemPromptOptions(

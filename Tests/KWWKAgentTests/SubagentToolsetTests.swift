@@ -5,7 +5,7 @@ import Testing
 
 @Suite("SubagentToolset")
 struct SubagentToolsetTests {
-    @Test("exposes the agent tool without a background manager")
+    @Test("exposes agent, agent_send, and agent_history without a background manager")
     func exposesAgentTool() async {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -15,10 +15,10 @@ struct SubagentToolsetTests {
             bashEnvironment: [:]
         )
 
-        #expect(toolset.tools.map(\.name) == ["agent"])
+        #expect(toolset.tools.map(\.name) == ["agent", "agent_send", "agent_history"])
     }
 
-    @Test("adds agent_history when a background manager is attached")
+    @Test("exposes the same tools when a background manager is attached")
     func addsHistoryToolWithManager() async {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -29,7 +29,7 @@ struct SubagentToolsetTests {
             bashEnvironment: [:]
         )
 
-        #expect(toolset.tools.map(\.name) == ["agent", "agent_history"])
+        #expect(toolset.tools.map(\.name) == ["agent", "agent_send", "agent_history"])
     }
 
     @Test("defaults to the builtin subagent lineup for the child tool set")

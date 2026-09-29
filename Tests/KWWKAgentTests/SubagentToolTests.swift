@@ -5,7 +5,7 @@ import Testing
 
 @Suite("Subagent tool")
 struct SubagentToolTests {
-    @Test("coding agent exposes history only when subagents and background tasks are configured")
+    @Test("coding agent exposes agent, agent_send, and agent_history whenever subagents are configured")
     func agentToolIsConditional() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
@@ -20,6 +20,7 @@ struct SubagentToolTests {
         )).agent
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent" })
         #expect(!withoutSubagents.state.tools.contains { $0.name == "agent_history" })
+        #expect(!withoutSubagents.state.tools.contains { $0.name == "agent_send" })
 
         let withSubagentsOnly = await makeCodingAgent(CodingAgentConfig(
             model: faux.getModel(),
@@ -30,7 +31,8 @@ struct SubagentToolTests {
             bashEnvironment: [:]
         )).agent
         #expect(withSubagentsOnly.state.tools.contains { $0.name == "agent" })
-        #expect(!withSubagentsOnly.state.tools.contains { $0.name == "agent_history" })
+        #expect(withSubagentsOnly.state.tools.contains { $0.name == "agent_send" })
+        #expect(withSubagentsOnly.state.tools.contains { $0.name == "agent_history" })
 
         let outputDir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: outputDir) }
@@ -45,7 +47,7 @@ struct SubagentToolTests {
         #expect(withBackgroundTasks.state.tools.contains { $0.name == "agent" })
         #expect(withBackgroundTasks.state.tools.contains { $0.name == "agent_history" })
         #expect(withBackgroundTasks.state.tools.first { $0.name == "agent_history" }?.description
-            == "Read a background subagent transcript.")
+            .hasPrefix("Read a subagent's transcript as compact markdown") == true)
     }
 
     @Test("agent description lists task tools only when they can be registered")
@@ -63,7 +65,7 @@ struct SubagentToolTests {
         #expect(!withoutManager.description.contains("task_list"))
         #expect(!withoutManager.description.contains("run_in_background"))
         #expect(withoutManager.description.contains(
-            "result; summarize it for the user when relevant.\n- Subagents cannot spawn other subagents."
+            "`agent_history` to read what it did.\n- Subagents cannot spawn other subagents."
         ))
 
         let outputDir = makeTempDir()
@@ -697,7 +699,9 @@ struct SubagentToolTests {
             Issue.record("expected task_id detail")
             return
         }
-        #expect(resultText(result).contains("agent_history({\"task_id\":\"\(taskId)\"})"))
+        #expect(resultText(result).contains("agent_id: mini-1"))
+        #expect(resultText(result).contains("agent_history({\"agent_id\":\"mini-1\"})"))
+        #expect(resultText(result).contains("agent_send"))
         #expect(resultText(result).contains("task_list({})"))
         #expect(resultText(result).contains("poll only when otherwise blocked"))
 
@@ -793,9 +797,11 @@ struct SubagentToolTests {
             nil,
             nil
         )
-        #expect(resultText(listed).contains("output_tail:"))
-        #expect(resultText(listed).contains("[progress]"))
-        #expect(resultText(listed).contains("tool bash started"))
+        // The list names the child and its type; output stays in details and
+        // behind agent_history / task_read.
+        #expect(resultText(listed).contains("\(taskId) [agent mini-1 · mini] running"))
+        #expect(resultText(listed).contains("— report live progress"))
+        #expect(!resultText(listed).contains("[progress]"))
         guard case .object(let details) = listed.details ?? .null,
               case .array(let tasks) = details["tasks"] ?? .null,
               case .object(let task) = tasks.first ?? .null,

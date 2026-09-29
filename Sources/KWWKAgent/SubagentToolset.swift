@@ -10,8 +10,7 @@ import KWWKAI
 /// interactive steering: create the toolset first, register `tools` on the
 /// agent, then call `attach(to:)` once the `Agent` exists.
 public struct SubagentToolset: Sendable {
-    /// The `agent` tool, plus `agent_history` when a background manager is
-    /// supplied.
+    /// `agent`, `agent_send`, and `agent_history`.
     public let tools: [AgentTool]
     let parent: SubagentParentBox
 
@@ -63,24 +62,24 @@ public func createSubagentToolset(
     )
     let definitions = subagents ?? SubagentDefinition.builtins(for: childTools)
     let historyStore = SubagentHistoryStore()
-    var tools = [
-        _createAgentTool(
-            cwd: cwd,
-            subagents: definitions,
-            backgroundManager: backgroundManager,
-            sessionId: sessionId,
-            historyStore: historyStore,
-            parentSnapshot: { parent.snapshot() },
-            limits: limits,
-            bashEnvironment: bashEnvironment,
-            bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
-            bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
-            maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
-            bashShellPath: bashShellPath
-        ),
+    let context = SubagentToolContext(
+        cwd: cwd,
+        subagents: definitions,
+        backgroundManager: backgroundManager,
+        sessionId: sessionId,
+        historyStore: historyStore,
+        parentSnapshot: { parent.snapshot() },
+        limits: limits,
+        bashEnvironment: bashEnvironment,
+        bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
+        bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
+        maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
+        bashShellPath: bashShellPath
+    )
+    let tools = [
+        _createAgentTool(context: context),
+        _createAgentSendTool(context: context),
+        createSubagentHistoryTool(store: historyStore, sessionId: sessionId),
     ]
-    if backgroundManager != nil {
-        tools.append(createSubagentHistoryTool(store: historyStore, sessionId: sessionId))
-    }
     return SubagentToolset(tools: tools, parent: parent)
 }
