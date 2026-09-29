@@ -161,10 +161,15 @@ public enum GenerateModelsCore {
         let expressionText = String(expression)
         let directImport = regexMatches(#"^([A-Za-z_][A-Za-z0-9_]*)\s+as\b"#, in: expressionText)
             .first?.first
-        let flattenedImport = regexMatches(
-            #"^flattenModelCatalog\(\s*"[^"]+"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"#,
+        // `flattenModelCatalog` keys groups by model id; the newer
+        // `flattenChatModelCatalog` keys them as `<type>:<id>` alongside image
+        // and classifier entries, and only chat models belong in the catalog.
+        let flattenMatch = regexMatches(
+            #"^flatten(Chat)?ModelCatalog\(\s*"[^"]+"\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)"#,
             in: expressionText
-        ).first?.first
+        ).first
+        let flattenedImport = flattenMatch?.last
+        let chatOnly = flattenMatch?.count == 2
         guard let importedName = directImport ?? flattenedImport else {
             throw GenerateModelsCoreError.conversion(
                 "unsupported value for exported constant \(constant)"
@@ -223,7 +228,17 @@ public enum GenerateModelsCore {
                         "provider JSON group \(groupName) for \(constant) is not an object"
                     )
                 }
-                for (modelId, model) in group {
+                for (key, value) in group {
+                    var model = value
+                    var modelId = key
+                    if chatOnly {
+                        guard var object = value as? [String: Any],
+                              object["type"] as? String == "chat",
+                              let id = object["id"] as? String else { continue }
+                        object.removeValue(forKey: "type")
+                        model = object
+                        modelId = id
+                    }
                     guard models[modelId] == nil else {
                         throw GenerateModelsCoreError.conversion(
                             "duplicate model \(modelId) while flattening provider JSON for \(constant)"
@@ -244,13 +259,17 @@ public enum GenerateModelsCore {
     }
 
     private static func importedModelConstants(in raw: String) -> [String: String] {
-        let pattern = #"(?m)^\s*import\s+\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\s+from\s+"([^"]+)";"#
+        let pattern = #"(?m)^\s*import\s+\{([^}]*)\}\s+from\s+"([^"]+)";"#
         let matches = regexMatches(pattern, in: raw)
 
         var imports: [String: String] = [:]
         for match in matches {
             guard match.count == 2 else { continue }
-            imports[match[0]] = match[1]
+            for name in match[0].split(separator: ",") {
+                let constant = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !constant.isEmpty, !constant.hasPrefix("type ") else { continue }
+                imports[constant] = match[1]
+            }
         }
         return imports
     }
