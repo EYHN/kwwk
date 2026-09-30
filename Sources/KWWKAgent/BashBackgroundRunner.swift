@@ -246,7 +246,7 @@ struct SpawnedBashProcess: Sendable {
     /// caller-owned `stdoutFd`/`stderrFd` (which may be the same fd — a file —
     /// or distinct pipe write ends). The child is placed in its own process
     /// group (`POSIX_SPAWN_SETPGROUP`, pgid 0) so signalling the group reaches
-    /// grandchildren. The caller retains ownership of the passed fds and must
+    /// grandchildren, with an empty signal mask and default dispositions. The caller retains ownership of the passed fds and must
     /// close its own copies after this returns.
     static func start(
         shellPath: String,
@@ -292,7 +292,21 @@ struct SpawnedBashProcess: Sendable {
         #endif
         posix_spawnattr_init(&attr)
         defer { posix_spawnattr_destroy(&attr) }
-        let flags = Int16(POSIX_SPAWN_SETPGROUP)
+        // The child starts from plain Unix signal state rather than whatever
+        // the spawning thread happens to carry. On Linux libdispatch blocks
+        // every asynchronous signal on its worker threads, and a host may
+        // ignore SIGPIPE (or others) for itself; both survive exec, which left
+        // Agent commands deaf to SIGTERM/SIGINT (`timeout` never fired,
+        // `kill -TERM $$` did nothing) and made `yes | head` spin. So: an empty
+        // signal mask, and every catchable signal back to SIG_DFL — SIGPIPE
+        // included. Only the child is affected; the host keeps its own mask
+        // and dispositions.
+        var emptyMask = sigset_t()
+        sigemptyset(&emptyMask)
+        posix_spawnattr_setsigmask(&attr, &emptyMask)
+        var defaultSignals = Self.catchableSignals()
+        posix_spawnattr_setsigdefault(&attr, &defaultSignals)
+        let flags = Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)
         posix_spawnattr_setflags(&attr, flags)
         posix_spawnattr_setpgroup(&attr, 0)
 
@@ -330,6 +344,18 @@ struct SpawnedBashProcess: Sendable {
         }
         guard result == 0 else { throw SpawnError.spawn(String(cString: strerror(result))) }
         return SpawnedBashProcess(pid: pid)
+    }
+
+    /// Every signal a process may catch or ignore: the full set minus SIGKILL
+    /// and SIGSTOP, whose disposition can't be changed (Darwin rejects them in
+    /// a spawn's default set). libc's full set already leaves out its own
+    /// internal signals on Linux.
+    static func catchableSignals() -> sigset_t {
+        var set = sigset_t()
+        sigfillset(&set)
+        sigdelset(&set, SIGKILL)
+        sigdelset(&set, SIGSTOP)
+        return set
     }
 
     func wait() -> ExitStatus {
