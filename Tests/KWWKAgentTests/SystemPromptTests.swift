@@ -18,6 +18,24 @@ struct SystemPromptTests {
         #expect(prompt.contains("Current working directory: /tmp/project"))
     }
 
+    @Test("default prompt (and so every subagent) asks for parallel tool calls")
+    func parallelToolCalls() {
+        let prompt = buildSystemPrompt(SystemPromptOptions(
+            cwd: "/tmp",
+            appendSystemPrompt: "# Subagent Instructions"
+        ))
+        #expect(prompt.contains("- \(parallelToolCallsGuideline)"))
+    }
+
+    @Test("customPrompt leaves the parallel guideline to the caller")
+    func customPromptOmitsParallelGuideline() {
+        let prompt = buildSystemPrompt(SystemPromptOptions(
+            cwd: "/a",
+            customPrompt: "You are a custom assistant."
+        ))
+        #expect(!prompt.contains(parallelToolCallsGuideline))
+    }
+
     @Test("does not render a synthetic tool list")
     func hiddenTools() {
         let prompt = buildSystemPrompt(SystemPromptOptions(cwd: "/tmp"))
