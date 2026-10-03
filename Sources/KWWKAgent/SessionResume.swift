@@ -68,10 +68,16 @@ extension SessionStore {
     /// `SessionStoreError.invalidId` rather than silently substituting a random
     /// session — a caller asking for a named session should hear about a typo,
     /// not scatter transcripts across UUID files.
+    ///
+    /// `scope` is how much of the stored file to replay: a host that never
+    /// shows the visual history (a bot) passes `.context`, which skips every
+    /// entry before the newest compaction marker; `displayMessages` then
+    /// equals `messages`.
     public func resolveResume(
         _ resume: SessionResume,
         cwd: String,
-        freshId: String = UUID().uuidString
+        freshId: String = UUID().uuidString,
+        scope: LoadScope = .full
     ) async throws -> ResolvedResume {
         switch resume {
         case .none:
@@ -84,7 +90,7 @@ extension SessionStore {
 
         case .latestForCwd:
             guard let info = latestForCwd(cwd),
-                  let loaded = try? load(id: info.id) else {
+                  let loaded = try? load(id: info.id, scope: scope) else {
                 return ResolvedResume(sessionId: freshId)
             }
             return ResolvedResume(
@@ -102,7 +108,7 @@ extension SessionStore {
                 throw SessionStoreError.invalidId(id)
             }
             do {
-                let loaded = try load(id: id)
+                let loaded = try load(id: id, scope: scope)
                 return ResolvedResume(
                     sessionId: loaded.header.id,
                     messages: loaded.messages,
