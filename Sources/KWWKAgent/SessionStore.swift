@@ -709,7 +709,7 @@ public actor SessionStore {
     /// The non-empty lines of `data`, numbered like
     /// `split(separator: "\n", omittingEmptySubsequences: true)` numbers them.
     private static func lineRanges(in data: Data) -> [Range<Int>] {
-        data.withUnsafeBytes { bytes -> [Range<Int>] in
+        data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> [Range<Int>] in
             var ranges: [Range<Int>] = []
             var lineStart = 0
             for offset in 0..<bytes.count where bytes[offset] == 0x0A {
@@ -724,7 +724,7 @@ public actor SessionStore {
     /// Whether `needle` occurs inside `data[range]`, without copying the line.
     private static func contains(_ data: Data, _ range: Range<Int>, _ needle: [UInt8]) -> Bool {
         guard let head = needle.first, range.count >= needle.count else { return false }
-        return data.withUnsafeBytes { bytes in
+        return data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> Bool in
             var offset = range.lowerBound
             let last = range.upperBound - needle.count
             while offset <= last {
