@@ -353,6 +353,9 @@ internal final class SubagentToolContext: @unchecked Sendable {
     let bashMaxTimeoutSeconds: Int
     let maxTaskTimeoutSeconds: Int?
     let bashShellPath: String
+    /// Where each child's transcript is written; nil keeps children in
+    /// memory only.
+    let transcriptStore: SessionStore?
 
     init(
         cwd: String,
@@ -366,7 +369,8 @@ internal final class SubagentToolContext: @unchecked Sendable {
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
         maxTaskTimeoutSeconds: Int? = nil,
-        bashShellPath: String = kwwkDefaultShellPath
+        bashShellPath: String = kwwkDefaultShellPath,
+        transcriptStore: SessionStore? = nil
     ) {
         self.cwd = cwd
         self.registry = SubagentRegistry(subagents)
@@ -385,6 +389,7 @@ internal final class SubagentToolContext: @unchecked Sendable {
         self.bashMaxTimeoutSeconds = bashMaxTimeoutSeconds
         self.maxTaskTimeoutSeconds = maxTaskTimeoutSeconds
         self.bashShellPath = bashShellPath
+        self.transcriptStore = transcriptStore
     }
 
     func makeRunner(
@@ -413,7 +418,8 @@ internal final class SubagentToolContext: @unchecked Sendable {
             bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
             maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
             bashEnvironment: bashEnvironment,
-            bashShellPath: bashShellPath
+            bashShellPath: bashShellPath,
+            transcriptStore: transcriptStore
         )
     }
 
@@ -2020,6 +2026,8 @@ internal struct SubagentInvocationRunner: Sendable {
     var reservedPermit: SubagentPermit?
     var capacityReservation: SubagentCapacityReservation?
     var reservedParent: SubagentParentSnapshot?
+    /// Where this child's transcript is written; nil keeps it in memory only.
+    var transcriptStore: SessionStore?
     /// Identifies this run to the history store, so a stale run still
     /// settling cannot touch the run that resumed after it.
     let runToken = UUID()
@@ -2045,7 +2053,8 @@ internal struct SubagentInvocationRunner: Sendable {
         bashShellPath: String,
         reservedPermit: SubagentPermit? = nil,
         capacityReservation: SubagentCapacityReservation? = nil,
-        reservedParent: SubagentParentSnapshot? = nil
+        reservedParent: SubagentParentSnapshot? = nil,
+        transcriptStore: SessionStore? = nil
     ) {
         self.cwd = cwd
         self.definition = definition
@@ -2068,6 +2077,7 @@ internal struct SubagentInvocationRunner: Sendable {
         self.reservedPermit = reservedPermit
         self.capacityReservation = capacityReservation
         self.reservedParent = reservedParent
+        self.transcriptStore = transcriptStore
     }
 
     /// Admit a background child now, but defer runner capacity until a slot is
@@ -2306,6 +2316,21 @@ internal struct SubagentInvocationRunner: Sendable {
         childOptions.terminalToolName = subagentYieldToolName
         childOptions.terminalToolReminderLimit = subagentYieldReminderLimit
         let child = Agent(options: childOptions)
+        let transcript: SubagentTranscriptRecording?
+        if let transcriptStore {
+            transcript = await SubagentTranscriptRecording.start(
+                store: transcriptStore,
+                childSessionId: childSessionId,
+                cwd: cwd,
+                model: model,
+                launch: launch,
+                subagentType: definition.name,
+                resumeMessages: resumeMessages,
+                child: child
+            )
+        } else {
+            transcript = nil
+        }
         let progress = SubagentProgressEmitter(
             subagentName: definition.name,
             childSessionId: childSessionId,
@@ -2366,6 +2391,7 @@ internal struct SubagentInvocationRunner: Sendable {
         _ = historyStore.detachLiveIfSettled(childSessionId: childSessionId, runToken: runToken)
         cancelRegistration.cancel()
         unsubscribeProgress()
+        await transcript?.finish(messages: child.state.messages)
         if let detachBackground {
             await detachBackground()
         }

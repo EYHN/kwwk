@@ -56,7 +56,8 @@ func runCodingTUIInternal(
         authResolver: authResolver,
         autoCompactThreshold: autoCompactThreshold,
         bashEnvironment: environment,
-        bashShellPath: cliShellPath(environment: environment)
+        bashShellPath: cliShellPath(environment: environment),
+        subagentTranscriptStore: sessionStore.subagentTranscripts
     ))
     let agentBox = AgentSessionBox(initialCodingAgent)
     // Local computed values deliberately resolve through the box on every
@@ -746,7 +747,8 @@ func runCodingTUIInternal(
             autoCompactConfig: outgoing.autoCompact?.config ?? .init(),
             compactionModel: outgoing.compactionModel,
             bashEnvironment: environment,
-            bashShellPath: cliShellPath(environment: environment)
+            bashShellPath: cliShellPath(environment: environment),
+            subagentTranscriptStore: sessionStore.subagentTranscripts
         ))
         let replacement = replacementCodingAgent.agent
         copyAgentRuntimePreferences(from: outgoing, to: replacement)

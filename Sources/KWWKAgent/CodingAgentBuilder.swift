@@ -71,6 +71,10 @@ public struct CodingAgentConfig: Sendable {
     /// Extra models a model-issued subagent override may select. Programmatic
     /// `SubagentModel.override` remains a trusted host configuration path.
     public var allowedSubagentModels: [Model]
+    /// Where each subagent's transcript is written as it runs (usually the
+    /// parent store's `subagentTranscripts`). `nil` (default) keeps subagent
+    /// transcripts in memory only.
+    public var subagentTranscriptStore: SessionStore?
     public var sessionId: String
     public var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     public var autoCompactThreshold: Double?
@@ -120,7 +124,8 @@ public struct CodingAgentConfig: Sendable {
         bashDefaultTimeoutSeconds: Int = 120,
         bashMaxTimeoutSeconds: Int = 600,
         maxTaskTimeoutSeconds: Int? = nil,
-        bashShellPath: String = kwwkDefaultShellPath
+        bashShellPath: String = kwwkDefaultShellPath,
+        subagentTranscriptStore: SessionStore? = nil
     ) {
         self.model = model
         self.cwd = cwd
@@ -134,6 +139,7 @@ public struct CodingAgentConfig: Sendable {
         self.subagents = subagents
         self.subagentLimits = subagentLimits
         self.allowedSubagentModels = allowedSubagentModels
+        self.subagentTranscriptStore = subagentTranscriptStore
         self.sessionId = sessionId
         self.authResolver = authResolver
         self.autoCompactThreshold = autoCompactThreshold
@@ -264,7 +270,8 @@ public func makeCodingAgent(_ config: CodingAgentConfig) async -> CodingAgent {
             bashDefaultTimeoutSeconds: config.bashDefaultTimeoutSeconds,
             bashMaxTimeoutSeconds: config.bashMaxTimeoutSeconds,
             maxTaskTimeoutSeconds: config.maxTaskTimeoutSeconds,
-            bashShellPath: config.bashShellPath
+            bashShellPath: config.bashShellPath,
+            transcriptStore: config.subagentTranscriptStore
         )
         tools.append(_createAgentTool(context: subagentContext))
         tools.append(_createAgentSendTool(context: subagentContext))
