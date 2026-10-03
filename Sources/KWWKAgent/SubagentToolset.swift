@@ -25,6 +25,8 @@ public struct SubagentToolset: Sendable {
 /// Creates the subagent toolset with the same child-agent semantics
 /// `makeCodingAgent` wires up: `subagents` defaults to the built-in set for
 /// `childTools`, children run in `cwd`, and fall back to the parent's model.
+/// Pass `transcriptStore` (usually `parentStore.subagentTranscripts`) to write
+/// each child's transcript to disk as it runs.
 public func createSubagentToolset(
     cwd: String,
     model: Model,
@@ -40,7 +42,8 @@ public func createSubagentToolset(
     bashDefaultTimeoutSeconds: Int = 120,
     bashMaxTimeoutSeconds: Int = 600,
     maxTaskTimeoutSeconds: Int? = nil,
-    bashShellPath: String = kwwkDefaultShellPath
+    bashShellPath: String = kwwkDefaultShellPath,
+    transcriptStore: SessionStore? = nil
 ) -> SubagentToolset {
     let parent = SubagentParentBox(
         childCwd: cwd,
@@ -74,7 +77,8 @@ public func createSubagentToolset(
         bashDefaultTimeoutSeconds: bashDefaultTimeoutSeconds,
         bashMaxTimeoutSeconds: bashMaxTimeoutSeconds,
         maxTaskTimeoutSeconds: maxTaskTimeoutSeconds,
-        bashShellPath: bashShellPath
+        bashShellPath: bashShellPath,
+        transcriptStore: transcriptStore
     )
     let tools = [
         _createAgentTool(context: context),

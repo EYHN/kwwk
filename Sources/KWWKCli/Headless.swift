@@ -58,7 +58,8 @@ func runHeadlessInternal(
         authResolver: resolved.authResolver,
         autoCompactThreshold: autoCompactThreshold,
         bashEnvironment: environment,
-        bashShellPath: cliShellPath(environment: environment)
+        bashShellPath: cliShellPath(environment: environment),
+        subagentTranscriptStore: store.subagentTranscripts
     ))
     agent.state.thinkingLevel = thinkingLevel
 
