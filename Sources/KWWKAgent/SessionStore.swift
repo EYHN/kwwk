@@ -602,14 +602,37 @@ public actor SessionStore {
 
     // MARK: - Load
 
+    /// How much of a session file `load` replays.
+    public enum LoadScope: Sendable, Hashable {
+        /// Every entry: the model-facing context plus the full visual
+        /// history (`displayMessages`) a terminal recap shows.
+        case full
+        /// The model-facing context only. Every compaction marker replaces
+        /// the context wholesale, so nothing before the newest marker can
+        /// reach it: those entries are skipped without being decoded, apart
+        /// from the small `meta` lines. `displayMessages` then equals
+        /// `messages`. A long-lived session's file keeps every message it
+        /// ever recorded, embedded images included, so this is what keeps
+        /// resuming one proportional to its live context rather than to its
+        /// age.
+        case context
+    }
+
     /// Replay a session file into its header, projected resumable context, raw
     /// transcript message entries, and latest metadata. Throws on a
     /// missing/invalid header or unsupported version.
-    public func load(id: String) throws -> LoadedSession {
-        try load(at: try path(for: id))
+    public func load(id: String, scope: LoadScope = .full) throws -> LoadedSession {
+        try load(at: try path(for: id), scope: scope)
     }
 
-    public func load(at url: URL) throws -> LoadedSession {
+    public func load(at url: URL, scope: LoadScope = .full) throws -> LoadedSession {
+        switch scope {
+        case .full: return try loadFull(at: url)
+        case .context: return try loadContext(at: url)
+        }
+    }
+
+    private func loadFull(at url: URL) throws -> LoadedSession {
         guard let raw = try? String(contentsOf: url, encoding: .utf8) else {
             throw SessionStoreError.notFound(url.lastPathComponent)
         }
@@ -617,45 +640,141 @@ public actor SessionStore {
         guard let first = lines.first else {
             throw SessionStoreError.missingHeader(url.path)
         }
-        let header = try parseHeader(String(first), path: url.path)
-
-        var messages: [Message] = []
-        var displayMessages: [Message] = []
-        var model = header.model
-        var provider = header.provider
-        var thinkingLevel: String?
-        var title: String?
+        var replay = Replay(header: try parseHeader(String(first), path: url.path), tracksDisplay: true)
 
         // Line 1 is the header; entries start at line 2. An entry that fails
         // to decode (schema drift after an up/downgrade, mid-file corruption)
         // is an error — throwing with the exact line keeps a resumed context
         // from silently losing messages out of the middle of a conversation.
         for (offset, line) in lines.dropFirst().enumerated() {
-            let lineNumber = offset + 2
             guard let data = String(line).data(using: .utf8) else {
-                throw SessionStoreError.undecodableEntry(path: url.path, line: lineNumber)
+                throw SessionStoreError.undecodableEntry(path: url.path, line: offset + 2)
             }
-            let entry: Entry
-            do {
-                entry = try Self.decoder.decode(Entry.self, from: data)
-            } catch {
-                throw SessionStoreError.undecodableEntry(path: url.path, line: lineNumber)
+            replay.apply(try Self.decodeEntry(data, path: url.path, line: offset + 2))
+        }
+        return replay.loaded
+    }
+
+    private func loadContext(at url: URL) throws -> LoadedSession {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
+            throw SessionStoreError.notFound(url.lastPathComponent)
+        }
+        let lines = Self.lineRanges(in: data)
+        guard let first = lines.first else {
+            throw SessionStoreError.missingHeader(url.path)
+        }
+        guard let headerLine = String(data: data.subdata(in: first), encoding: .utf8) else {
+            throw SessionStoreError.invalidHeader(url.path)
+        }
+        var replay = Replay(header: try parseHeader(headerLine, path: url.path), tracksDisplay: false)
+
+        // The newest compaction marker, searched from the end. A raw
+        // `"type":"compaction"` (unescaped quotes) only occurs as an entry's
+        // own discriminator: inside a message it would be string content,
+        // where the quotes are escaped. The decode confirms it all the same.
+        var start = 1
+        var index = lines.count - 1
+        while index >= 1 {
+            if Self.contains(data, lines[index], Self.compactionDiscriminator),
+               case .compaction? = try? Self.decodeEntry(
+                    data.subdata(in: lines[index]), path: url.path, line: index + 1) {
+                start = index
+                break
             }
+            index -= 1
+        }
+        // Metadata is sparse and may predate the marker; nothing else before
+        // it can reach the projected context.
+        for index in lines.indices.dropFirst().prefix(while: { $0 < start })
+        where Self.contains(data, lines[index], Self.metaDiscriminator) {
+            replay.apply(try Self.decodeEntry(data.subdata(in: lines[index]), path: url.path, line: index + 1))
+        }
+        for index in lines.indices.dropFirst(start) {
+            replay.apply(try Self.decodeEntry(data.subdata(in: lines[index]), path: url.path, line: index + 1))
+        }
+        return replay.loaded
+    }
+
+    private static let compactionDiscriminator = Array(#""type":"compaction""#.utf8)
+    private static let metaDiscriminator = Array(#""type":"meta""#.utf8)
+
+    private static func decodeEntry(_ data: Data, path: String, line: Int) throws -> Entry {
+        do {
+            return try decoder.decode(Entry.self, from: data)
+        } catch {
+            throw SessionStoreError.undecodableEntry(path: path, line: line)
+        }
+    }
+
+    /// The non-empty lines of `data`, numbered like
+    /// `split(separator: "\n", omittingEmptySubsequences: true)` numbers them.
+    private static func lineRanges(in data: Data) -> [Range<Int>] {
+        data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> [Range<Int>] in
+            var ranges: [Range<Int>] = []
+            var lineStart = 0
+            for offset in 0..<bytes.count where bytes[offset] == 0x0A {
+                if offset > lineStart { ranges.append(lineStart..<offset) }
+                lineStart = offset + 1
+            }
+            if bytes.count > lineStart { ranges.append(lineStart..<bytes.count) }
+            return ranges
+        }
+    }
+
+    /// Whether `needle` occurs inside `data[range]`, without copying the line.
+    private static func contains(_ data: Data, _ range: Range<Int>, _ needle: [UInt8]) -> Bool {
+        guard let head = needle.first, range.count >= needle.count else { return false }
+        return data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> Bool in
+            var offset = range.lowerBound
+            let last = range.upperBound - needle.count
+            while offset <= last {
+                if bytes[offset] == head {
+                    var matched = 1
+                    while matched < needle.count, bytes[offset + matched] == needle[matched] { matched += 1 }
+                    if matched == needle.count { return true }
+                }
+                offset += 1
+            }
+            return false
+        }
+    }
+
+    /// Replays entries in file order into a `LoadedSession`. The one place
+    /// that says what each entry kind does to the projected context.
+    private struct Replay {
+        let header: Header
+        let tracksDisplay: Bool
+        var messages: [Message] = []
+        var displayMessages: [Message] = []
+        var model: String?
+        var provider: String?
+        var thinkingLevel: String?
+        var title: String?
+
+        init(header: Header, tracksDisplay: Bool) {
+            self.header = header
+            self.tracksDisplay = tracksDisplay
+            self.model = header.model
+            self.provider = header.provider
+        }
+
+        mutating func apply(_ entry: Entry) {
             switch entry {
             case .message(_, let message):
                 messages.append(message)
-                displayMessages.append(message)
+                if tracksDisplay { displayMessages.append(message) }
             case .meta(_, let m, let p, let t, let ti):
                 if let m { model = m }
                 if let p { provider = p }
                 if let t { thinkingLevel = t }
                 if let ti { title = ti }
             case .compaction(_, let compaction):
-                messages = Self.upgradingLegacyRecapSource(
+                messages = SessionStore.upgradingLegacyRecapSource(
                     in: compaction.replacementMessages,
                     reason: compaction.reason,
                     trustedRecap: compaction.trustedRecap
                 )
+                guard tracksDisplay else { return }
                 switch compaction.reason {
                 case .compact:
                     // Context compaction shrinks the model-facing context
@@ -677,16 +796,18 @@ public actor SessionStore {
             }
         }
 
-        return LoadedSession(
-            header: header,
-            messages: messages,
-            displayMessages: displayMessages,
-            persistedContextCount: messages.count,
-            model: model,
-            provider: provider,
-            thinkingLevel: thinkingLevel,
-            title: title
-        )
+        var loaded: LoadedSession {
+            LoadedSession(
+                header: header,
+                messages: messages,
+                displayMessages: tracksDisplay ? displayMessages : messages,
+                persistedContextCount: messages.count,
+                model: model,
+                provider: provider,
+                thinkingLevel: thinkingLevel,
+                title: title
+            )
+        }
     }
 
     private static func upgradingLegacyRecapSource(
