@@ -164,7 +164,7 @@ public struct BackgroundTaskListPage: Sendable {
 
 /// Structured completion (or stall) notification. Delivered through the
 /// Agent's internal runtime-aside channel via `messageText()`.
-public struct BackgroundTaskNotification: Sendable {
+public struct BackgroundTaskNotification: Sendable, CustomReflectable {
     public let taskId: String
     public let sessionId: String?
     public let kind: String
@@ -181,6 +181,20 @@ public struct BackgroundTaskNotification: Sendable {
     public let stalled: Bool
     /// Why the stall watchdog fired. Nil for terminal notifications.
     public var stallReason: StallReason? = nil
+    /// Captured when this task was created, never rendered in its notice.
+    public var hostContextID: String? = nil
+
+    public var customMirror: Mirror {
+        Mirror(self, children: [
+            "taskId": taskId as Any, "sessionId": sessionId as Any,
+            "kind": kind as Any, "label": label as Any,
+            "description": description as Any, "status": status as Any,
+            "outcome": outcome as Any, "outputTail": outputTail as Any,
+            "outputTruncated": outputTruncated as Any, "outputFile": outputFile as Any,
+            "durationMs": durationMs as Any, "stalled": stalled as Any,
+            "stallReason": stallReason as Any,
+        ])
+    }
 
     public enum StallReason: String, Sendable {
         case interactivePrompt = "interactive_prompt"

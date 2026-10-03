@@ -138,6 +138,9 @@ internal struct SubagentParentSnapshot: Sendable {
     var availableSkills: [Skill]
     var fileAccessPolicy: FileAccessPolicy
     var allowedModelOverrides: [Model]
+    var userMessageFactory: UserMessageFactory? = nil
+    var userMessageConsumed: UserMessageConsumedHook? = nil
+    var wrapToolExecution: ToolExecutionWrapper? = nil
 }
 
 internal final class SubagentParentBox: @unchecked Sendable {
@@ -244,7 +247,10 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     childCwd: childCwd,
                     fallback: fallbackFileAccessPolicy
                 ),
-                allowedModelOverrides: allowedModelOverrides
+                allowedModelOverrides: allowedModelOverrides,
+                userMessageFactory: agent.userMessageFactory,
+                userMessageConsumed: agent.userMessageConsumed,
+                wrapToolExecution: agent.wrapToolExecution
             )
         }
     }
@@ -703,11 +709,13 @@ private func claimFollowUpWaitingOutTransitions(
     cancellation: CancellationHandle?
 ) async throws -> SubagentFollowUpClaim {
     let deadline = Date().addingTimeInterval(30)
+    let captured = context.parentSnapshot().userMessageFactory?(subagentSteerMessageText(input.message))
     while true {
         let claim = context.historyStore.claimFollowUp(
             agentId: input.agentId,
             parentSessionId: context.sessionId,
-            message: input.message
+            message: input.message,
+            hostContextID: captured?.hostContextID
         )
         guard case .busy = claim, Date() < deadline else { return claim }
         try cancellation?.throwIfCancelled()
@@ -2008,6 +2016,8 @@ internal struct SubagentInvocationRunner: Sendable {
     var definition: SubagentDefinition
     var launch: SubagentLaunchInfo
     var taskPrompt: String
+    /// Captured before runner/background tasks detach from the tool's scope.
+    var taskMessage: UserMessage
     var modelOverride: String?
     /// The transcript a resumed run continues from; nil for a first run.
     var resumeMessages: [Message]?
@@ -2060,6 +2070,7 @@ internal struct SubagentInvocationRunner: Sendable {
         self.definition = definition
         self.launch = launch
         self.taskPrompt = taskPrompt
+        self.taskMessage = parentSnapshot().userMessageFactory?(taskPrompt) ?? UserMessage(text: taskPrompt)
         self.modelOverride = modelOverride
         self.resumeMessages = resumeMessages
         self.parentSnapshot = parentSnapshot
@@ -2302,6 +2313,9 @@ internal struct SubagentInvocationRunner: Sendable {
             ),
             beforeToolCall: parent.beforeToolCall,
             afterToolCall: parent.afterToolCall,
+            userMessageFactory: parent.userMessageFactory,
+            userMessageConsumed: parent.userMessageConsumed,
+            wrapToolExecution: parent.wrapToolExecution,
             autoCompact: inheritedAutoCompact(
                 parent.autoCompact,
                 backgroundManager: backgroundManager
@@ -2374,7 +2388,7 @@ internal struct SubagentInvocationRunner: Sendable {
         )
         let promptError: Error?
         do {
-            try await child.prompt(taskPrompt)
+            try await child.prompt(taskMessage)
             // Submitting the result ends a run at once, so a follow-up that
             // arrived just before or after it is still queued. Keep the run
             // going until every follow-up has been read and answered; the

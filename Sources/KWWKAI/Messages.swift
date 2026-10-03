@@ -243,7 +243,7 @@ public struct Usage: Codable, Sendable, Hashable {
 
 // MARK: - Messages
 
-public struct UserMessage: Codable, Sendable, Hashable {
+public struct UserMessage: Codable, Sendable, Hashable, CustomReflectable {
     public var role: Role
     public var content: [UserBlock]
     public var timestamp: Int64
@@ -252,6 +252,21 @@ public struct UserMessage: Codable, Sendable, Hashable {
     /// user actually submitted.
     public var source: UserMessageSource?
     public var nativeCompaction: NativeCompactionPayload?
+    /// Opaque host nonce. Never serialized, persisted, rendered or sent to a
+    /// provider. The SDK does not interpret it; restored messages have nil.
+    public var hostContextID: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case role, content, timestamp, source, nativeCompaction
+    }
+
+    public var customMirror: Mirror {
+        Mirror(self, children: [
+            "role": role as Any, "content": content as Any,
+            "timestamp": timestamp as Any, "source": source as Any,
+            "nativeCompaction": nativeCompaction as Any,
+        ])
+    }
 
     public init(
         content: [UserBlock],

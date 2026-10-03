@@ -157,6 +157,9 @@ public struct AgentOptions: Sendable {
     public var beforeToolCall: BeforeToolCallHook?
     public var afterToolCall: AfterToolCallHook?
     public var userPromptSubmit: UserPromptSubmitHook?
+    public var userMessageFactory: UserMessageFactory?
+    public var userMessageConsumed: UserMessageConsumedHook?
+    public var wrapToolExecution: ToolExecutionWrapper?
     public var convertToLlm: ConvertToLlmHook?
     public var transformContext: TransformContextHook?
     public var betweenTurns: BetweenTurnsHook?
@@ -190,6 +193,9 @@ public struct AgentOptions: Sendable {
         beforeToolCall: BeforeToolCallHook? = nil,
         afterToolCall: AfterToolCallHook? = nil,
         userPromptSubmit: UserPromptSubmitHook? = nil,
+        userMessageFactory: UserMessageFactory? = nil,
+        userMessageConsumed: UserMessageConsumedHook? = nil,
+        wrapToolExecution: ToolExecutionWrapper? = nil,
         convertToLlm: ConvertToLlmHook? = nil,
         transformContext: TransformContextHook? = nil,
         betweenTurns: BetweenTurnsHook? = nil,
@@ -214,6 +220,9 @@ public struct AgentOptions: Sendable {
         self.beforeToolCall = beforeToolCall
         self.afterToolCall = afterToolCall
         self.userPromptSubmit = userPromptSubmit
+        self.userMessageFactory = userMessageFactory
+        self.userMessageConsumed = userMessageConsumed
+        self.wrapToolExecution = wrapToolExecution
         self.convertToLlm = convertToLlm
         self.transformContext = transformContext
         self.betweenTurns = betweenTurns
@@ -274,6 +283,9 @@ public final class Agent: @unchecked Sendable {
     private var _beforeToolCall: BeforeToolCallHook?
     private var _afterToolCall: AfterToolCallHook?
     private var _userPromptSubmit: UserPromptSubmitHook?
+    private var _userMessageFactory: UserMessageFactory?
+    private var _userMessageConsumed: UserMessageConsumedHook?
+    private var _wrapToolExecution: ToolExecutionWrapper?
     private var _convertToLlm: ConvertToLlmHook?
     private var _transformContext: TransformContextHook?
     private var _betweenTurns: BetweenTurnsHook?
@@ -320,6 +332,20 @@ public final class Agent: @unchecked Sendable {
     public var userPromptSubmit: UserPromptSubmitHook? {
         get { lock.withLock { _userPromptSubmit } }
         set { lock.withLock { _userPromptSubmit = newValue } }
+    }
+    public var userMessageFactory: UserMessageFactory? {
+        get { lock.withLock { _userMessageFactory } }
+        set { lock.withLock { _userMessageFactory = newValue } }
+    }
+    public var userMessageConsumed: UserMessageConsumedHook? {
+        get { lock.withLock { _userMessageConsumed } }
+        set { lock.withLock { _userMessageConsumed = newValue } }
+    }
+    /// Changing this affects future children. Existing tools are wrapped once
+    /// during construction; hosts changing it later must wrap their own tools.
+    public var wrapToolExecution: ToolExecutionWrapper? {
+        get { lock.withLock { _wrapToolExecution } }
+        set { lock.withLock { _wrapToolExecution = newValue } }
     }
     public var convertToLlm: ConvertToLlmHook? {
         get { lock.withLock { _convertToLlm } }
@@ -404,7 +430,9 @@ public final class Agent: @unchecked Sendable {
             thinkingLevel: options.initialState.thinkingLevel,
             thinkingDisplay: options.initialState.thinkingDisplay,
             verboseEnabled: options.initialState.verboseEnabled,
-            tools: options.initialState.tools,
+            tools: options.initialState.tools.map { tool in
+                options.wrapToolExecution?(options.sessionId, tool) ?? tool
+            },
             messages: options.initialState.messages
         )
         self.usesCustomStream = options.streamFn != nil
@@ -428,6 +456,9 @@ public final class Agent: @unchecked Sendable {
         self._beforeToolCall = options.beforeToolCall
         self._afterToolCall = options.afterToolCall
         self._userPromptSubmit = options.userPromptSubmit
+        self._userMessageFactory = options.userMessageFactory
+        self._userMessageConsumed = options.userMessageConsumed
+        self._wrapToolExecution = options.wrapToolExecution
         self._convertToLlm = options.convertToLlm
         self._transformContext = options.transformContext
         self._betweenTurns = options.betweenTurns
@@ -478,7 +509,11 @@ public final class Agent: @unchecked Sendable {
     }
 
     /// Convenience: steer a plain-text user message.
-    public func steer(_ text: String) { steer(.user(UserMessage(text: text))) }
+    public func steer(_ text: String) { steer(.user(makeUserMessage(text))) }
+
+    public func makeUserMessage(_ text: String) -> UserMessage {
+        userMessageFactory?(text) ?? UserMessage(text: text)
+    }
 
     /// Convenience: steer a `UserMessage` without wrapping it in `.user(...)`.
     public func steer(_ message: UserMessage) { steer(.user(message)) }
@@ -487,7 +522,7 @@ public final class Agent: @unchecked Sendable {
     public func followUp(_ message: Message) { followUpQueue.enqueue(message) }
 
     /// Convenience: follow up with a plain-text user message.
-    public func followUp(_ text: String) { followUp(.user(UserMessage(text: text))) }
+    public func followUp(_ text: String) { followUp(.user(makeUserMessage(text))) }
 
     /// Convenience: follow up with a `UserMessage` without `.user(...)` wrapping.
     public func followUp(_ message: UserMessage) { followUp(.user(message)) }
@@ -593,9 +628,13 @@ extension Agent {
     // MARK: - Prompt / continue / abort / waitForIdle
 
     public func prompt(_ text: String, images: [ImageContent] = []) async throws {
-        var blocks: [UserBlock] = [.text(TextContent(text: text))]
-        for image in images { blocks.append(.image(image)) }
-        let userMessage = UserMessage(content: blocks)
+        var message = makeUserMessage(text)
+        for image in images { message.content.append(.image(image)) }
+        try await prompt(message)
+    }
+
+    /// Submit an already captured host message without regenerating context.
+    public func prompt(_ userMessage: UserMessage) async throws {
         try await runLifecycle { [self] cancellation, emit in
             try await AgentLoop.run(
                 prompts: [.user(userMessage)],
@@ -1227,6 +1266,9 @@ extension Agent {
         case .messageEnd(let message):
             state.setStreamingMessage(nil)
             state.appendMessage(message)
+            if case .user(let user) = message {
+                await userMessageConsumed?(sessionId, user)
+            }
 
         case .toolExecutionStart(let id, _, _):
             state.insertPendingToolCall(id)

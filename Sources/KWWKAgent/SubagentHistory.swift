@@ -164,11 +164,18 @@ final class SubagentLiveChild: @unchecked Sendable {
         self.agent = agent
     }
 
-    func deliver(_ message: String) {
-        agent.steer(UserMessage(text: subagentSteerMessageText(message)))
+    func deliver(_ message: SubagentSteeringMessage) {
+        var user = UserMessage(text: subagentSteerMessageText(message.text))
+        user.hostContextID = message.hostContextID
+        agent.steer(user)
     }
 
     var hasQueuedSteering: Bool { agent.queuedSteeringCount() > 0 }
+}
+
+struct SubagentSteeringMessage: Sendable {
+    var text: String
+    var hostContextID: String?
 }
 
 /// Everything a resumed run needs from the child it continues.
@@ -182,7 +189,8 @@ struct SubagentResumeTicket: Sendable {
     var previousStatus: SubagentHistoryStatus
     /// Follow-ups that were queued for a run that never read them; they
     /// belong at the front of the resumed run's prompt.
-    var carriedMessages: [String]
+    var carriedSteers: [SubagentSteeringMessage]
+    var carriedMessages: [String] { carriedSteers.map(\.text) }
     /// The number of the run the resume starts, 1-based.
     var runNumber: Int
 }
@@ -221,7 +229,7 @@ public final class SubagentHistoryStore: @unchecked Sendable {
         var awaitingTaskId: Bool
         var modelOverride: String?
         var live: SubagentLiveChild?
-        var pendingSteers: [String] = []
+        var pendingSteers: [SubagentSteeringMessage] = []
         /// The run that owns the entry right now. Calls carrying another
         /// run's token (a stale run still settling) are ignored.
         var runToken: UUID?
@@ -505,9 +513,11 @@ public final class SubagentHistoryStore: @unchecked Sendable {
     func claimFollowUp(
         agentId: String,
         parentSessionId: String?,
-        message: String
+        message: String,
+        hostContextID: String? = nil
     ) -> SubagentFollowUpClaim {
-        lock.withLock {
+        let message = SubagentSteeringMessage(text: message, hostContextID: hostContextID)
+        return lock.withLock {
             guard let id = entryId(agentId: agentId, parentSessionId: parentSessionId),
                   var entry = entries[id] else {
                 let scope = Scope(parentSessionId)
@@ -560,7 +570,7 @@ public final class SubagentHistoryStore: @unchecked Sendable {
                 modelOverride: entry.modelOverride,
                 messages: entry.snapshot.messages,
                 previousStatus: previousStatus,
-                carriedMessages: carried,
+                carriedSteers: carried,
                 runNumber: entry.snapshot.runs.count
             ))
         }
@@ -579,7 +589,7 @@ public final class SubagentHistoryStore: @unchecked Sendable {
             entry.snapshot.taskId = entry.snapshot.runs.last?.taskId
             // Follow-ups acknowledged meanwhile stay queued for the next
             // resume, behind the ones this claim carried.
-            entry.pendingSteers = ticket.carriedMessages + entry.pendingSteers
+            entry.pendingSteers = ticket.carriedSteers + entry.pendingSteers
             entries[ticket.childSessionId] = entry
         }
     }

@@ -43,6 +43,7 @@ public actor BackgroundTaskManager {
     private struct Entry {
         var spec: BackgroundTaskSpec
         var sessionId: String?
+        var hostContextID: String? = nil
         var status: BackgroundTaskStatus
         var startedAt: Date
         var runningAt: Date?
@@ -157,6 +158,7 @@ public actor BackgroundTaskManager {
         runner: BackgroundTaskRunner,
         sessionId: String? = nil
     ) async -> (taskId: String, outputFile: URL) {
+        let hostContextID = HostMessageContext.id
         let epoch = await captureSpawnEpoch(sessionId: sessionId)
         // `spec` is SDK-supplied code too: a computed getter can block just as
         // easily as `run`. Resolve it off-actor before entering registry state.
@@ -170,7 +172,8 @@ public actor BackgroundTaskManager {
             runner: runner,
             spec: spec,
             sessionId: sessionId,
-            epoch: epoch
+            epoch: epoch,
+            hostContextID: hostContextID
         )
     }
 
@@ -185,7 +188,8 @@ public actor BackgroundTaskManager {
         runner: BackgroundTaskRunner,
         spec: BackgroundTaskSpec,
         sessionId: String?,
-        epoch: SpawnEpoch
+        epoch: SpawnEpoch,
+        hostContextID: String?
     ) -> (taskId: String, outputFile: URL) {
         pruneTerminalTasksIfNeeded()
         let startsQueued = (runner as? any CapacityQueuedBackgroundTaskRunner)?
@@ -195,6 +199,7 @@ public actor BackgroundTaskManager {
             sessionId: sessionId,
             initialStatus: startsQueued ? .queued : .running
         )
+        tasks[taskId]?.hostContextID = hostContextID
         let cancellation = tasks[taskId]!.cancellation
         if spawnEpochIsStale(epoch) {
             settleLateSpawn(taskId: taskId)
@@ -288,6 +293,7 @@ public actor BackgroundTaskManager {
             sessionId: sessionId,
             presetOutputFile: outputFile
         )
+        tasks[taskId]?.hostContextID = HostMessageContext.id
         let cancellation = tasks[taskId]!.cancellation
         scheduleHardTimeout(taskId: taskId, seconds: spec.hardTimeoutSeconds)
         if spec.kind != "agent" { launchWatchdog(taskId: taskId) }
@@ -838,7 +844,8 @@ public actor BackgroundTaskManager {
             outputFile: entry.outputFile.path,
             durationMs: durationMs,
             stalled: stalled,
-            stallReason: stallReason
+            stallReason: stallReason,
+            hostContextID: entry.hostContextID
         )
     }
 
@@ -1382,10 +1389,12 @@ public final class BackgroundTaskDeliveryConsumer: @unchecked Sendable {
             return drained
         }
         return notifications.map { notification in
-            .user(UserMessage(
+            var message = UserMessage(
                 content: [.text(TextContent(text: notification.messageText()))],
                 source: .runtime
-            ))
+            )
+            message.hostContextID = notification.hostContextID
+            return .user(message)
         }
     }
 
