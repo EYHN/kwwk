@@ -47,6 +47,10 @@ public struct AgentLoopConfig: Sendable {
     public var betweenTurns: BetweenTurnsHook?
     public var beforeRunEnd: BeforeRunEndHook?
     public var contextCompaction: ContextCompactionHook?
+    /// Live tool set, read before every provider request so tools activated
+    /// mid-run (e.g. by `tool_search`) are callable on the next request.
+    /// Nil keeps the tools the run started with.
+    public var currentTools: (@Sendable () -> [AgentTool])?
 
     public init(
         model: Model,
@@ -398,6 +402,10 @@ public enum AgentLoop {
                     return
                 }
 
+                if let currentTools = config.currentTools {
+                    currentContext.tools = currentTools()
+                }
+
                 if let compact = config.contextCompaction {
                     if let replacement = try await compact(
                         currentContext,
@@ -406,6 +414,15 @@ public enum AgentLoop {
                     ) {
                         applyCompactionReplacement(replacement)
                     }
+                }
+
+                // Record tool availability changes in the transcript so it
+                // replays to exactly the tools this request sends.
+                if let declaration = toolDeclaration(for: currentContext) {
+                    let message = Message.system(declaration)
+                    await emit(.messageStart(message: message))
+                    await emit(.messageEnd(message: message))
+                    currentContext.messages.append(message)
                 }
 
                 let finalTextOnly = config.finalTextOnlyOnLastTurn
@@ -956,6 +973,17 @@ public enum AgentLoop {
     ) async throws {
         do { try await ProviderRetryPolicy.wait(delayMs, cancellation: cancellation) }
         catch { throw AgentError.aborted }
+    }
+
+    /// The system message declaring how `context.tools` differs from the
+    /// tool state the transcript already declares, or nil when they match.
+    /// Mirrors pi's `declareToolChanges`.
+    static func toolDeclaration(for context: AgentContext) -> SystemMessage? {
+        let declared = TranscriptTools.currentTools(in: context.messages)
+        let current = context.tools.map { $0.toKWWKAITool() }
+        let changes = TranscriptTools.changes(from: declared, to: current)
+        guard !changes.isEmpty else { return nil }
+        return SystemMessage(toolsAdded: changes.toolsAdded, toolsRemoved: changes.toolsRemoved)
     }
 
     private static func appendFinalTurnInstruction(

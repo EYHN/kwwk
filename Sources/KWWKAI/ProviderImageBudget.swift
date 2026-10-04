@@ -54,7 +54,7 @@ enum ProviderImageBudget {
                 count += result.content.reduce(into: 0) { count, block in
                     if case .image = block { count += 1 }
                 }
-            case .assistant:
+            case .assistant, .system:
                 break
             }
         }
@@ -84,7 +84,7 @@ enum ProviderImageBudget {
             guard content.count != result.content.count else { return message }
             result.content = content.isEmpty ? [toolResultImageOmission] : content
             return .toolResult(result)
-        case .assistant:
+        case .assistant, .system:
             return message
         }
     }

@@ -476,6 +476,8 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         var out: [[String: Any]] = []
         for message in context.messages {
             switch message {
+            case .system:
+                continue
             case .user(let u):
                 let parts: [[String: Any]] = u.content.compactMap { block in
                     switch block {

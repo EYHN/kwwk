@@ -1,4 +1,5 @@
 import Foundation
+import Crypto
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -851,10 +852,27 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     ) throws -> OpenAIResponsesRequest {
         var context = context
         context.messages = TransformMessages.normalize(context.messages, model: model)
+        // Tools added mid-conversation are loaded in place (pi
+        // openai-responses-shared.ts) so the cached prefix, which starts with
+        // the top-level tool list, survives the change. Removals and
+        // redefinitions cannot be expressed this way and fall back to sending
+        // the full current tool list.
+        let toolChanges = TranscriptTools.resolve(
+            messages: context.messages,
+            tools: context.tools,
+            supportsChanges: model.compat?.supportsAdditionalTools == true
+                || model.compat?.supportsToolSearch == true,
+            allowsNonAdditive: false
+        )
+        context.tools = toolChanges.requestTools
         var root: [String: JSONValue] = [
             "model": .string(model.id),
             "stream": .bool(true),
-            "input": .array(encodeInput(context: context, model: model)),
+            "input": .array(encodeInput(
+                context: context,
+                model: model,
+                anchorsToolChanges: toolChanges.anchorsChanges
+            )),
         ]
         if let maxTokens = OutputTokenPolicy.effectiveLimit(
             for: model,
@@ -873,15 +891,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
             root["instructions"] = .string(sys)
         }
         if let tools = context.tools, !tools.isEmpty {
-            root["tools"] = .array(tools.map { tool -> JSONValue in
-                var entry: [String: JSONValue] = [
-                    "type": .string("function"),
-                    "name": .string(tool.name),
-                    "description": .string(tool.description),
-                ]
-                entry["parameters"] = tool.parameters
-                return .object(entry)
-            })
+            root["tools"] = .array(tools.map { encodeTool($0) })
             if let choice = encodeToolChoice(options?.toolChoice) {
                 root["tool_choice"] = choice
             }
@@ -968,14 +978,77 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         return OpenAIResponsesRequest(fields: root)
     }
 
+    /// One Responses function tool definition. Tools loaded through a
+    /// client `tool_search_output` carry `defer_loading`.
+    static func encodeTool(_ tool: Tool, deferLoading: Bool = false) -> JSONValue {
+        var entry: [String: JSONValue] = [
+            "type": .string("function"),
+            "name": .string(tool.name),
+            "description": .string(tool.description),
+            "parameters": tool.parameters,
+        ]
+        if deferLoading { entry["defer_loading"] = .bool(true) }
+        return .object(entry)
+    }
+
+    /// Encode the tools a system message adds as input items: an
+    /// `additional_tools` item when the model accepts one, otherwise a
+    /// synthetic client-executed tool search that "found" exactly those tools.
+    static func encodeToolAdditions(_ system: SystemMessage, model: Model, seed: String) -> [JSONValue] {
+        let tools = system.toolsAdded ?? []
+        guard !tools.isEmpty else { return [] }
+        if model.compat?.supportsAdditionalTools == true {
+            return [.object([
+                "type": .string("additional_tools"),
+                "role": .string("developer"),
+                "tools": .array(tools.map { encodeTool($0) }),
+            ])]
+        }
+        guard model.compat?.supportsToolSearch == true else { return [] }
+        let names = tools.map(\.name)
+        let digest = SHA256.hash(data: Data("\(seed):\(names.joined(separator: ","))".utf8))
+        let hash = digest.prefix(6).map { String(format: "%02x", $0) }.joined()
+        let callId = "kwwk_tool_load_\(hash)"
+        return [
+            .object([
+                "type": .string("tool_search_call"),
+                "call_id": .string(callId),
+                "execution": .string("client"),
+                "status": .string("completed"),
+                "arguments": .object([
+                    "query": .string(names.joined(separator: " ")),
+                    "limit": .int(names.count),
+                ]),
+            ]),
+            .object([
+                "type": .string("tool_search_output"),
+                "call_id": .string(callId),
+                "execution": .string("client"),
+                "status": .string("completed"),
+                "tools": .array(tools.map { encodeTool($0, deferLoading: true) }),
+            ]),
+        ]
+    }
+
     /// Convert our Message transcript into OpenAI Responses' `input` array.
     /// Each element is a typed item (`reasoning`, `message`, `function_call`,
     /// or `function_call_output`). Assistant messages with tool calls expand
     /// into multiple items.
-    private static func encodeInput(context: Context, model: Model) -> [JSONValue] {
+    private static func encodeInput(
+        context: Context,
+        model: Model,
+        anchorsToolChanges: Bool = false
+    ) -> [JSONValue] {
         var out: [JSONValue] = []
-        for message in context.messages {
+        let initialDeclaration = TranscriptTools.initialDeclarationIndex(in: context.messages)
+        for (index, message) in context.messages.enumerated() {
             switch message {
+            case .system(let system):
+                // The initial declaration is the top-level tool list. Later
+                // ones only reach the wire when the request anchors changes;
+                // otherwise the top-level list already holds every tool.
+                guard anchorsToolChanges, index != initialDeclaration else { continue }
+                out.append(contentsOf: encodeToolAdditions(system, model: model, seed: "system:\(index)"))
             case .user(let u):
                 if let native = u.nativeCompaction, native.canReplay(with: model) {
                     out.append(contentsOf: native.items)

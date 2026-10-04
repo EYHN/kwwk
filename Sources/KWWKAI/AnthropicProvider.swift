@@ -179,6 +179,9 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         if interleaved && !adaptive {
             appendBeta("interleaved-thinking-2025-05-14")
         }
+        if Self.toolChangePlan(model: model, context: context).anchorsChanges {
+            appendBeta(Self.inlineToolsBeta)
+        }
 
         return headers
     }
@@ -578,20 +581,18 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         }
         // pi default for `supportsEagerToolInputStreaming` is `true`.
         let supportsEager = model.compat?.supportsEagerToolInputStreaming != false
-        if let tools = context.tools, !tools.isEmpty {
-            var toolEntries = tools.map { tool -> [String: Any] in
-                var entry: [String: Any] = [
-                    "name": tool.name,
-                    "description": tool.description,
-                ]
-                if supportsEager { entry["eager_input_streaming"] = true }
-                if let params = anyFromJSONValue(tool.parameters) {
-                    entry["input_schema"] = params
-                }
-                return entry
-            }
+        // Native tool changes keep the top-level list fixed at the initial
+        // tools and define every later change in place, so the cached prefix
+        // survives tool loading (pi anthropic-messages.ts).
+        let toolPlan = toolChangePlan(model: model, context: context)
+        let requestTools = toolPlan.requestTools
+        if !requestTools.isEmpty {
+            var toolEntries = requestTools.map { encodeTool($0, supportsEager: supportsEager) }
             if cacheOnTools, let cc = cacheControl, !toolEntries.isEmpty {
                 toolEntries[toolEntries.count - 1]["cache_control"] = cc
+            }
+            if toolPlan.anchorsChanges {
+                toolEntries.append(deferredToolPlaceholder)
             }
             root["tools"] = toolEntries
             // Anthropic folds the parallel-tool-call switch into `tool_choice`
@@ -604,7 +605,27 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         }
         // pi default for `allowEmptySignature` is `false`.
         let allowEmptySig = model.compat?.allowEmptySignature == true
-        var messages = context.messages.compactMap { Self.encodeMessage($0, allowEmptySignature: allowEmptySig, fallbackEnabled: fallbackEnabled) }
+        var messages: [[String: Any]] = []
+        // Tool changes are held back and emitted directly before the next
+        // assistant turn (or at the end): a system message between a
+        // `tool_use` and its `tool_result` is rejected.
+        var pendingToolChanges: [[String: Any]] = []
+        let initialDeclaration = TranscriptTools.initialDeclarationIndex(in: context.messages)
+        for (index, message) in context.messages.enumerated() {
+            if case .system(let system) = message {
+                guard toolPlan.anchorsChanges, index != initialDeclaration,
+                      let encoded = encodeToolChanges(system, supportsEager: supportsEager) else { continue }
+                pendingToolChanges.append(encoded)
+                continue
+            }
+            guard let encoded = Self.encodeMessage(message, allowEmptySignature: allowEmptySig, fallbackEnabled: fallbackEnabled) else { continue }
+            if encoded["role"] as? String == "assistant" {
+                messages.append(contentsOf: pendingToolChanges)
+                pendingToolChanges = []
+            }
+            messages.append(encoded)
+        }
+        messages.append(contentsOf: pendingToolChanges)
         if context.messages.contains(where: {
             if case .user(let user) = $0 { return user.nativeCompaction?.api == "anthropic-messages" }
             return false
@@ -622,6 +643,62 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         }
         root["messages"] = messages
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    static let inlineToolsBeta = "inline-tools-2026-09-15"
+
+    /// Declared whenever native tool changes are in use. Anthropic adds hidden
+    /// prompt scaffolding for mid-conversation tool changes; declaring this
+    /// deferred placeholder from the first request keeps that scaffolding in
+    /// the cached prefix, so the first tool change does not invalidate the
+    /// cache (pi measured a full miss without it). It is never activated.
+    static var deferredToolPlaceholder: [String: Any] { [
+        "name": "__kwwk_deferred_placeholder__",
+        "description": "Reserved placeholder. Never available. Never call this.",
+        "input_schema": ["type": "object", "properties": [String: Any](), "required": [String]()],
+        "defer_loading": true,
+    ] }
+
+    /// Whether this request encodes transcript tool changes natively.
+    static func toolChangePlan(model: Model, context: Context) -> TranscriptTools.Resolution {
+        TranscriptTools.resolve(
+            messages: context.messages,
+            tools: context.tools,
+            supportsChanges: model.compat?.supportsMidConvoSystemMessages == true
+                && model.compat?.supportsMidConvoToolChanges == true,
+            allowsNonAdditive: true
+        )
+    }
+
+    static func encodeTool(_ tool: Tool, supportsEager: Bool) -> [String: Any] {
+        var entry: [String: Any] = [
+            "name": tool.name,
+            "description": tool.description,
+        ]
+        if supportsEager { entry["eager_input_streaming"] = true }
+        if let params = anyFromJSONValue(tool.parameters) {
+            entry["input_schema"] = params
+        }
+        return entry
+    }
+
+    /// A system-role message carrying `tool_removal` / `tool_addition`
+    /// blocks. A new definition under an existing name replaces the old one,
+    /// so it needs no removal.
+    static func encodeToolChanges(_ system: SystemMessage, supportsEager: Bool) -> [String: Any]? {
+        let added = system.toolsAdded ?? []
+        let redefined = Set(added.map(\.name))
+        var blocks: [[String: Any]] = []
+        for name in system.toolsRemoved ?? [] where !redefined.contains(name) {
+            blocks.append(["type": "tool_removal", "tool": ["type": "tool_reference", "name": name]])
+        }
+        for tool in added {
+            blocks.append([
+                "type": "tool_addition",
+                "tool": ["type": "tool_definition", "definition": encodeTool(tool, supportsEager: supportsEager)],
+            ])
+        }
+        return blocks.isEmpty ? nil : ["role": "system", "content": blocks]
     }
 
     /// Attach a `cache_control` marker to the final content block of a message,
@@ -694,6 +771,10 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
 
     private static func encodeMessage(_ message: Message, allowEmptySignature: Bool, fallbackEnabled: Bool) -> [String: Any]? {
         switch message {
+        case .system:
+            // Encoded by `encodeToolChanges` when the request anchors tool
+            // changes; otherwise the top-level list holds every tool.
+            return nil
         case .user(let u):
             if let native = u.nativeCompaction, native.api == "anthropic-messages" {
                 var blocks = native.items.compactMap { anyFromJSONValue($0) as? [String: Any] }

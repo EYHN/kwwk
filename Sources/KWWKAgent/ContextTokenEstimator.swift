@@ -44,6 +44,13 @@ enum ContextTokenEstimator {
     static func estimate(message: Message) -> Int {
         var tokens = 6 // role and message framing
         switch message {
+        case .system(let system):
+            // Definitions are already counted with `AgentContext.tools`, which
+            // the wire carries either up front or as these in-place changes.
+            for name in (system.toolsAdded ?? []).map(\.name) + (system.toolsRemoved ?? []) {
+                tokens += 4 + estimate(text: name)
+            }
+
         case .user(let user):
             if let native = user.nativeCompaction {
                 tokens += native.items.reduce(0) { $0 + estimateNativeItem($1) }

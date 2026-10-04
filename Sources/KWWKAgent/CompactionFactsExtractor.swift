@@ -49,7 +49,7 @@ enum CompactionFactsExtractor {
                     break
                 }
 
-            case .user:
+            case .user, .system:
                 continue
             }
         }

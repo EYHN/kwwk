@@ -59,7 +59,7 @@ public enum TransformMessages {
             case .toolResult(var t):
                 t.content = replaceToolImages(t.content, placeholder: nonVisionToolImagePlaceholder)
                 return .toolResult(t)
-            case .assistant:
+            case .assistant, .system:
                 return message
             }
         }
@@ -206,7 +206,7 @@ public enum TransformMessages {
                     t.toolCallId = mapped
                 }
                 return .toolResult(t)
-            case .user:
+            case .user, .system:
                 return message
             }
         }
@@ -254,6 +254,8 @@ public enum TransformMessages {
                     return block
                 }
                 return .toolResult(r)
+            case .system:
+                return message
             }
         }
     }
@@ -324,7 +326,7 @@ public enum TransformMessages {
                 }
                 existingResultIds.insert(r.toolCallId)
                 result.append(message)
-            case .user:
+            case .user, .system:
                 flushSynthetic()
                 result.append(message)
             }

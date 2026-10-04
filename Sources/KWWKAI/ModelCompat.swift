@@ -50,6 +50,19 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     public var forceAdaptiveThinking: Bool?
     public var allowEmptySignature: Bool?
 
+    // MARK: mid-conversation tool changes
+    /// The model accepts system-role messages after the conversation started.
+    public var supportsMidConvoSystemMessages: Bool?
+    /// Anthropic: system messages may carry `tool_addition` / `tool_removal`
+    /// blocks (`inline-tools-2026-09-15`). Requires
+    /// `supportsMidConvoSystemMessages`.
+    public var supportsMidConvoToolChanges: Bool?
+    /// OpenAI Responses: the model accepts `additional_tools` input items.
+    public var supportsAdditionalTools: Bool?
+    /// OpenAI Responses: the model accepts client-executed
+    /// `tool_search_call` / `tool_search_output` items.
+    public var supportsToolSearch: Bool?
+
     public init() {}
 }
 

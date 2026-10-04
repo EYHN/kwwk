@@ -705,6 +705,8 @@ public final class FauxProvider: APIProvider, @unchecked Sendable {
                 parts.append("assistant:\(assistantContentToText(a.content))")
             case .toolResult(let t):
                 parts.append("toolResult:\(toolResultToText(t))")
+            case .system:
+                continue
             }
         }
         if let tools = context.tools, !tools.isEmpty {

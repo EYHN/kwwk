@@ -499,6 +499,10 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
         while index < context.messages.count {
             let message = context.messages[index]
             switch message {
+            case .system:
+                // Bedrock Converse has no mid-conversation tool changes; the
+                // top-level tool list already holds every current tool.
+                break
             case .user(let u):
                 var parts: [[String: Any]] = []
                 for block in u.content {
@@ -642,7 +646,7 @@ public final class BedrockProvider: APIProvider, @unchecked Sendable {
             case .toolResult(var tr):
                 tr.toolCallId = normalize(tr.toolCallId)
                 return .toolResult(tr)
-            case .user:
+            case .user, .system:
                 return message
             }
         }

@@ -178,6 +178,8 @@ private actor RewindProviderGate {
 
 private func rewindRaceText(_ message: Message) -> String {
     switch message {
+    case .system:
+        return ""
     case .user(let user):
         return user.content.compactMap { block in
             if case .text(let text) = block { return text.text }

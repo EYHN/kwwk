@@ -190,6 +190,10 @@ final class TranscriptRenderer {
         switch event {
         case .messageStart(let message):
             switch message {
+            case .system:
+                // Tool declarations are transcript bookkeeping; the
+                // `tool_search` result already tells the user what loaded.
+                break
             case .user(let u):
                 flushCollapsedThinking()
                 let text = userText(u)
@@ -300,6 +304,8 @@ final class TranscriptRenderer {
 
         case .messageEnd(let message):
             switch message {
+            case .system:
+                break
             case .assistant(let a):
                 // Seal any thinking blocks that didn't get an explicit
                 // `thinkingEnd` (e.g. turn aborted mid-thought). This

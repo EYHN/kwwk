@@ -150,7 +150,7 @@ struct SubagentToolTests {
         faux.setResponses([
             .factory { context, _, _, _ in
                 await capture.record(
-                    messageCount: context.messages.count,
+                    messageCount: context.messages.filter { $0.role != .system }.count,
                     toolNames: context.tools?.map(\.name) ?? []
                 )
                 return subagentYieldMessage("captured wildcard")
@@ -473,7 +473,7 @@ struct SubagentToolTests {
         faux.setResponses([
             .factory { context, _, _, _ in
                 await capture.record(
-                    messageCount: context.messages.count,
+                    messageCount: context.messages.filter { $0.role != .system }.count,
                     toolNames: context.tools?.map(\.name) ?? []
                 )
                 return subagentYieldMessage("captured")

@@ -158,6 +158,8 @@ enum CursorRequestBuilder {
                     ["role": "user", "content": [["type": "text", "text": "\(prefix)\n\(text)"]]],
                     in: blobStore
                 ))
+            case .system:
+                continue
             }
         }
         return ids
@@ -204,7 +206,7 @@ enum CursorRequestBuilder {
                             CursorProto.encodeAssistantStep(text: "\(prefix)\n\(t)")
                         ))
                     }
-                case .user:
+                case .user, .system:
                     break
                 }
                 i += 1

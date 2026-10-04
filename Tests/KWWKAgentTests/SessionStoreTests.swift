@@ -70,7 +70,7 @@ struct SessionStoreTests {
                     if case .image = block { return true }
                     return false
                 }
-            case .assistant:
+            case .assistant, .system:
                 return count
             }
         }
@@ -88,6 +88,8 @@ struct SessionStoreTests {
 
     private func text(from message: Message?) -> String {
         switch message {
+        case .system:
+            return ""
         case .user(let user):
             return user.content.compactMap { block in
                 guard case .text(let text) = block else { return nil }

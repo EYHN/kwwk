@@ -663,12 +663,16 @@ extension Agent {
         }
 
         let messages = state.messages
-        guard let last = messages.last else {
+        // Tool declarations are transcript bookkeeping, not a turn: continue
+        // from the last real message.
+        guard let last = messages.last(where: { $0.role != .system }) else {
             finishRun()
             throw AgentError.noMessagesToContinue
         }
 
         switch last.role {
+        case .system:
+            preconditionFailure("system messages are skipped above")
         case .user, .toolResult:
             await runOwnedLifecycle(cancellation: cancellation) { [self] cancellation, emit in
                 try await AgentLoop.runContinue(
@@ -839,6 +843,7 @@ extension Agent {
             beforeRunEnd: beforeRunEnd,
             contextCompaction: builtInContextCompactionHook()
         )
+        config.currentTools = { [state] in state.tools }
         config.finalTextOnlyOnLastTurn = finalTextOnlyOnLastTurn
         config.terminalToolName = terminalToolName
         config.terminalToolReminderLimit = terminalToolReminderLimit
