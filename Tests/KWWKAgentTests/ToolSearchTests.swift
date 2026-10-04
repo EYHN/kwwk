@@ -88,9 +88,9 @@ struct ToolCatalogTests {
             tools: [makeCalculateTool(), makeToolSearchTool(catalog: catalog)]
         ))
         catalog.setTools([
-            (tool: namedTool("mcp__gh__search_issues", "Search GitHub issues"), exposure: .deferred),
-            (tool: namedTool("mcp__gh__get_file", "Read a file from a repository"), exposure: .deferred),
-            (tool: namedTool("mcp__docs__lookup", "Look up documentation"), exposure: .direct),
+            namedTool("mcp__gh__search_issues", "Search GitHub issues"),
+            namedTool("mcp__gh__get_file", "Read a file from a repository"),
+            namedTool("mcp__docs__lookup", "Look up documentation"),
         ], source: "mcp")
         catalog.bind(to: agent)
 
@@ -99,7 +99,7 @@ struct ToolCatalogTests {
         let contexts = await log.contexts
         try #require(contexts.count == 3)
         let first = Set((contexts[0].tools ?? []).map(\.name))
-        #expect(first == ["calculate", toolSearchToolName, "mcp__docs__lookup"])
+        #expect(first == ["calculate", toolSearchToolName])
         let second = Set((contexts[1].tools ?? []).map(\.name))
         #expect(second.contains("mcp__gh__search_issues"))
         #expect(!second.contains("mcp__gh__get_file"))
@@ -170,14 +170,14 @@ struct ToolCatalogTests {
         let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), tools: [makeCalculateTool()]))
         let catalog = ToolCatalog()
         catalog.setTools([
-            (tool: namedTool("mcp__a__one", "one"), exposure: .deferred),
-            (tool: namedTool("mcp__a__other", "other"), exposure: .deferred),
+            namedTool("mcp__a__one", "one"),
+            namedTool("mcp__a__other", "other"),
         ], source: "a")
         catalog.restoreLoadedTools(from: transcript)
         catalog.bind(to: agent)
         #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__a__one"])
 
-        catalog.setTools([(tool: namedTool("mcp__b__two", "two"), exposure: .deferred)], source: "b")
+        catalog.setTools([namedTool("mcp__b__two", "two")], source: "b")
         #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__a__one", "mcp__b__two"])
 
         // A server that withdraws a loaded tool takes it out of the agent.

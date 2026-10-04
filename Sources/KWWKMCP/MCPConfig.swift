@@ -3,22 +3,22 @@ import KWWKAI
 
 /// How the tools of an MCP server reach the model.
 ///
-/// - `direct`: declared to the model like any built-in tool.
+/// MCP tools are never declared up front: a session never waits on a
+/// server before its first request, and tools only cost context once used.
+///
 /// - `deferred`: registered but not declared until a tool-search step loads
 ///   them (default).
 /// - `hidden`: never exposed; `MCPManager.tools()` leaves them out.
 public enum MCPToolExposure: String, Sendable, Hashable, Codable, CaseIterable {
-    case direct
     case deferred
     case hidden
 
-    /// Parse a config value. pi's `codemode` / `codemode-deferred` exposures
-    /// have no kwwk equivalent and are read as `deferred`, so pi configs can be
-    /// copied over unchanged.
+    /// Parse a config value. pi's `direct`, `codemode` and
+    /// `codemode-deferred` exposures have no kwwk equivalent and are read as
+    /// `deferred`, so pi configs can be copied over unchanged.
     public init?(configValue: String) {
         switch configValue {
-        case "direct": self = .direct
-        case "deferred", "codemode", "codemode-deferred": self = .deferred
+        case "deferred", "direct", "codemode", "codemode-deferred": self = .deferred
         case "hidden": self = .hidden
         default: return nil
         }
@@ -128,7 +128,11 @@ public struct MCPConfigLoadResult: Sendable {
     }
 }
 
-/// Reads `~/.kwwk/mcp.json` and `<cwd>/.kwwk/mcp.json`.
+/// Reads `<home>/.kwwk/mcp.json` and `<cwd>/.kwwk/mcp.json`.
+///
+/// Nothing in the SDK calls this on its own: an `MCPManager` only ever sees
+/// the configs its caller passes in. The kwwk TUI is the one caller that
+/// loads the user's files.
 ///
 /// Both files use the `mcpServers` shape shared with other MCP clients:
 ///
@@ -155,13 +159,13 @@ public enum MCPConfigLoader {
     static let overrideKeys: Set<String> = ["enabled", "exposure", "toolExposure"]
 
     /// Load user and project configuration. Never throws: unreadable files
-    /// and invalid entries become warnings.
+    /// and invalid entries become warnings. The home directory is explicit
+    /// so a library caller never reads the user's config by accident.
     public static func load(
         cwd: String,
-        homeDirectory: String? = nil,
+        homeDirectory home: String,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> MCPConfigLoadResult {
-        let home = homeDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
         let userPath = URL(fileURLWithPath: home).appendingPathComponent(".kwwk").appendingPathComponent(fileName).path
         let projectPath = URL(fileURLWithPath: cwd).appendingPathComponent(".kwwk").appendingPathComponent(fileName).path
         var state = State(environment: environment)
@@ -439,7 +443,7 @@ public enum MCPConfigLoader {
         }
     }
 
-    static let exposureList = "\"direct\", \"deferred\", \"hidden\""
+    static let exposureList = "\"deferred\", \"hidden\""
 
     static func parseExposure(_ value: JSONValue?, name: String) throws -> MCPToolExposure? {
         switch value {

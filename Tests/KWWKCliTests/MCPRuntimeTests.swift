@@ -88,13 +88,13 @@ struct MCPRuntimeTests {
         #expect(trusted.warnings.isEmpty)
     }
 
-    @Test("direct tools join the agent, deferred tools load through tool_search")
+    @Test("MCP tools stay hidden until tool_search loads them")
     func endToEnd() async throws {
         let sandbox = try Sandbox()
         defer { try? FileManager.default.removeItem(at: sandbox.root) }
         var entry = sandbox.serverEntry
         entry["description"] = "Docs and issue tracker"
-        entry["toolExposure"] = ["lookup": "direct"]
+        entry["toolExposure"] = ["create_*": "hidden"]
         try sandbox.writeUser(["tracker": entry])
 
         let runtime = MCPRuntime(cwd: sandbox.project.path, homeDirectory: sandbox.home.path, environment: [:])
@@ -111,9 +111,9 @@ struct MCPRuntimeTests {
 
         #expect(await runtime.waitForStartup(timeout: 20))
         let names = agent.state.tools.map(\.name)
-        #expect(names.contains("mcp__tracker__lookup"))
-        #expect(names.contains(toolSearchToolName))
-        #expect(!names.contains("mcp__tracker__search_issues"))
+        #expect(names == ["echo", toolSearchToolName])
+        #expect(runtime.catalog.registeredEntries.map(\.tool.name).sorted()
+            == ["mcp__tracker__lookup", "mcp__tracker__search_issues"])
 
         let search = try #require(agent.state.tools.first { $0.name == toolSearchToolName })
         let result = try await search.execute("s1", ["query": "search bugs"], nil, nil)

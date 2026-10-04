@@ -145,26 +145,17 @@ public struct ToolSearchRanker: Sendable {
 
 // MARK: - Catalog
 
-/// How a catalog tool reaches the model.
-public enum ToolExposure: String, Sendable, Hashable, Codable {
-    /// Declared to the model as soon as it is registered.
-    case direct
-    /// Hidden until `tool_search` loads it.
-    case deferred
-}
-
-/// Tools that can change while a session runs, such as MCP server tools,
-/// kept in sync with an agent's live tool set.
+/// Deferred tools, such as MCP server tools, that stay hidden from the model
+/// until `tool_search` (or a resumed transcript) loads them, kept in sync with
+/// an agent's live tool set.
 ///
 /// Built-in tools stay owned by the caller. The catalog only adds and removes
-/// the tools it registered: direct tools as soon as they are registered,
-/// deferred tools once `tool_search` (or a resumed transcript) loads them.
-/// Every change goes through `AgentState.tools`, so the agent loop declares
-/// it in the transcript before the next provider request.
+/// the tools it registered and loaded. Every change goes through
+/// `AgentState.tools`, so the agent loop declares it in the transcript before
+/// the next provider request.
 public final class ToolCatalog: @unchecked Sendable {
     public struct Entry: Sendable {
         public var tool: AgentTool
-        public var exposure: ToolExposure
         public var source: String
     }
 
@@ -199,9 +190,9 @@ public final class ToolCatalog: @unchecked Sendable {
     }
 
     /// Replace every tool registered under `source`.
-    public func setTools(_ tools: [(tool: AgentTool, exposure: ToolExposure)], source: String) {
+    public func setTools(_ tools: [AgentTool], source: String) {
         lock.withLock {
-            let incoming = tools.map { Entry(tool: $0.tool, exposure: $0.exposure, source: source) }
+            let incoming = tools.map { Entry(tool: $0, source: source) }
             var merged: [Entry] = []
             var inserted = false
             for entry in entries {
@@ -230,14 +221,11 @@ public final class ToolCatalog: @unchecked Sendable {
         lock.withLock {
             loaded = []
             pendingRestore = []
-            let byName = Dictionary(entries.map { ($0.tool.name, $0) }, uniquingKeysWith: { first, _ in first })
+            let registered = Set(entries.map(\.tool.name))
             for name in declared {
-                switch byName[name]?.exposure {
-                case .deferred?:
+                if registered.contains(name) {
                     if !loaded.contains(name) { loaded.append(name) }
-                case .direct?:
-                    continue
-                case nil:
+                } else {
                     pendingRestore.insert(name)
                 }
             }
@@ -245,9 +233,9 @@ public final class ToolCatalog: @unchecked Sendable {
         sync()
     }
 
-    /// Whether any deferred tool is registered.
-    public var hasDeferredTools: Bool {
-        lock.withLock { entries.contains { $0.exposure == .deferred } }
+    /// Whether any tool is registered.
+    public var hasTools: Bool {
+        lock.withLock { !entries.isEmpty }
     }
 
     public var registeredEntries: [Entry] {
@@ -259,7 +247,7 @@ public final class ToolCatalog: @unchecked Sendable {
         let preparation = lock.withLock { searchPreparation }
         await preparation?()
         let matches: [AgentTool] = lock.withLock {
-            let candidates = entries.filter { $0.exposure == .deferred && !loaded.contains($0.tool.name) }
+            let candidates = entries.filter { !loaded.contains($0.tool.name) }
             let ranked = ToolSearchRanker().rank(
                 query: query,
                 documents: candidates.map { ToolSearchDocument(tool: $0.tool) },
@@ -274,19 +262,14 @@ public final class ToolCatalog: @unchecked Sendable {
         return matches
     }
 
-    /// The tools this catalog currently exposes, in registration order for
-    /// direct tools followed by load order for deferred ones.
+    /// The loaded tools, in load order.
     public var activeTools: [AgentTool] {
         lock.withLock { activeToolsLocked() }
     }
 
     private func activeToolsLocked() -> [AgentTool] {
-        let direct = entries.filter { $0.exposure == .direct }.map(\.tool)
-        let byName = Dictionary(
-            entries.filter { $0.exposure == .deferred }.map { ($0.tool.name, $0.tool) },
-            uniquingKeysWith: { first, _ in first }
-        )
-        return direct + loaded.compactMap { byName[$0] }
+        let byName = Dictionary(entries.map { ($0.tool.name, $0.tool) }, uniquingKeysWith: { first, _ in first })
+        return loaded.compactMap { byName[$0] }
     }
 
     /// Push the catalog's active tools into the bound agent, leaving the

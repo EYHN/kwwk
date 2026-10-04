@@ -78,8 +78,10 @@ Image inputs are resized and recompressed before entering the conversation.
 
 ### MCP servers
 
-kwwk connects to [Model Context Protocol](https://modelcontextprotocol.io)
+The kwwk TUI connects to [Model Context Protocol](https://modelcontextprotocol.io)
 servers listed in `~/.kwwk/mcp.json`, using the usual `mcpServers` shape.
+`kwwk -p` and the SDK never read this file; SDK callers build an
+`MCPManager` from configs they pass in.
 Both stdio and Streamable HTTP servers are supported. SSE-only servers and
 OAuth are not.
 
@@ -96,22 +98,19 @@ OAuth are not.
       "type": "http",
       "url": "https://example.com/mcp",
       "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
-      "exposure": "direct"
+      "toolExposure": { "delete_*": "hidden" }
     }
   }
 }
 ```
 
 Tools are named `mcp__<server>__<tool>`. Servers connect in the background,
-and `/mcp` shows their status. Each server, or each tool through a
-`toolExposure` map with `*` globs, picks how its tools reach the model:
-
-- `deferred` (default): hidden until the model loads them with the built-in
-  `tool_search` tool, a BM25 search over tool names, descriptions and
-  parameters. Loaded tools are callable from the next model request.
-- `direct`: declared up front. The first prompt waits briefly for these
-  servers to connect.
-- `hidden`: never exposed.
+and `/mcp` shows their status. MCP tools are never declared up front, so no
+request waits for a server. The model loads them with the built-in
+`tool_search` tool, a BM25 search over tool names, descriptions and
+parameters, and can call them from its next request. `tool_search` waits for
+servers that are still connecting. Set `exposure` on a server, or map tools
+with `*` globs in `toolExposure`, to `hidden` to keep tools out entirely.
 
 A project can also define servers in `.kwwk/mcp.json`. Those only start when
 `KWWK_ALLOW_PROJECT_MCP=1` is set, because opening a repository must not run

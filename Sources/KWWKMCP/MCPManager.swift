@@ -10,7 +10,7 @@ public struct MCPAgentTool: Sendable {
     public var server: String
     /// Tool name as the server offers it.
     public var originalName: String
-    /// Effective exposure (`direct` or `deferred`; hidden tools are omitted).
+    /// Effective exposure: always `deferred`, since hidden tools are omitted.
     public var exposure: MCPToolExposure
     /// The tool as listed by the server (annotations, output schema, ...).
     public var mcpTool: MCPTool

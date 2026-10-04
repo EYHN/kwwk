@@ -182,7 +182,7 @@ struct MCPStdioEndToEndTests {
                 name: "fake-srv",
                 transport: .stdio(command: python, args: ["-u", installed.script]),
                 exposure: .deferred,
-                toolExposure: ["echo": .direct, "s*": .hidden, "state": .deferred],
+                toolExposure: ["echo": .deferred, "s*": .hidden, "state": .deferred],
                 description: "Fake tools"
             ),
             MCPServerConfig(name: "off", transport: .stdio(command: "nothing"), enabled: false),
@@ -201,7 +201,7 @@ struct MCPStdioEndToEndTests {
         #expect(names.contains("mcp__fake_srv__echo"))
         #expect(names.contains("mcp__fake_srv__state"))
         #expect(!names.contains("mcp__fake_srv__slow"), "hidden by pattern")
-        #expect(tools.first { $0.originalName == "echo" }?.exposure == .direct)
+        #expect(tools.first { $0.originalName == "echo" }?.exposure == .deferred)
         #expect(tools.first { $0.originalName == "add" }?.exposure == .deferred)
         #expect(tools.allSatisfy { $0.server == "fake-srv" })
 

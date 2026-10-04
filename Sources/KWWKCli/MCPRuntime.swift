@@ -3,23 +3,20 @@ import KWWKAI
 import KWWKAgent
 import KWWKMCP
 
-/// The CLI's MCP integration: loads `~/.kwwk/mcp.json` (and, when allowed,
+/// The TUI's MCP integration: loads `~/.kwwk/mcp.json` (and, when allowed,
 /// `<cwd>/.kwwk/mcp.json`), connects servers in the background, and keeps
 /// their tools in a ``ToolCatalog`` bound to the live agent.
 ///
-/// Direct tools are declared as soon as their server connects; the first
-/// prompt waits briefly for direct servers so the model sees them up front.
-/// Deferred tools stay hidden until `tool_search` loads them. Either way the
-/// agent loop records the change in the transcript, so prompt caching and
-/// session resume keep working.
+/// MCP tools are always deferred: nothing waits for a server before a
+/// request. `tool_search` waits for servers still connecting, then loads the
+/// matching tools; the agent loop records the change in the transcript, so
+/// prompt caching and session resume keep working.
 final class MCPRuntime: @unchecked Sendable {
     /// Environment variable that opts into servers defined by the project's
     /// own `.kwwk/mcp.json`. Off by default: a cloned repository must not be
     /// able to launch arbitrary commands just by being opened.
     static let allowProjectServersVariable = "KWWK_ALLOW_PROJECT_MCP"
     static let catalogSource = "mcp"
-    /// How long the first prompt waits for servers with direct tools.
-    static let directStartupTimeout: TimeInterval = 10
 
     let manager: MCPManager?
     let catalog = ToolCatalog()
@@ -31,12 +28,9 @@ final class MCPRuntime: @unchecked Sendable {
     /// servers connect.
     let systemPromptSection: String?
 
-    private let lock = NSLock()
-    private var directStartupSettled = false
-
     init(
         cwd: String,
-        homeDirectory: String? = nil,
+        homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         let loaded = MCPConfigLoader.load(cwd: cwd, homeDirectory: homeDirectory, environment: environment)
@@ -68,18 +62,14 @@ final class MCPRuntime: @unchecked Sendable {
         self.systemPromptSection = Self.renderSection(enabled)
     }
 
-    /// Whether any enabled server can expose deferred tools, which makes
+    /// Whether any enabled server can expose a tool, which makes
     /// `tool_search` necessary.
-    var hasDeferredServers: Bool {
-        configs.contains { config in
-            config.enabled && (config.exposure == .deferred || config.toolExposure.values.contains(.deferred))
-        }
+    var hasSearchableServers: Bool {
+        configs.contains(where: Self.isSearchable)
     }
 
-    private var hasDirectServers: Bool {
-        configs.contains { config in
-            config.enabled && (config.exposure == .direct || config.toolExposure.values.contains(.direct))
-        }
+    private static func isSearchable(_ config: MCPServerConfig) -> Bool {
+        config.enabled && (config.exposure == .deferred || config.toolExposure.values.contains(.deferred))
     }
 
     /// Connect servers in the background and mirror their tools into the
@@ -113,10 +103,7 @@ final class MCPRuntime: @unchecked Sendable {
     }
 
     private static func publish(_ tools: [MCPAgentTool], to catalog: ToolCatalog) {
-        catalog.setTools(
-            tools.map { (tool: $0.tool, exposure: $0.exposure == .direct ? ToolExposure.direct : .deferred) },
-            source: catalogSource
-        )
+        catalog.setTools(tools.map(\.tool), source: catalogSource)
     }
 
     /// Wire an agent to the catalog. `messages` is the transcript the agent
@@ -127,34 +114,17 @@ final class MCPRuntime: @unchecked Sendable {
             agent.state.systemPrompt = agent.state.systemPrompt + "\n\n" + section
         }
         rebind(to: agent, messages: messages)
-        if hasDirectServers {
-            let previous = agent.userPromptSubmit
-            agent.userPromptSubmit = { [weak self] context, cancellation in
-                await self?.waitForDirectServersOnce()
-                return await previous?(context, cancellation)
-            }
-        }
     }
 
     /// Move the catalog to a replacement agent (`/new`, `/resume`) whose
     /// system prompt and hooks were copied from the previous one.
     func rebind(to agent: Agent, messages: [Message]) {
         guard manager != nil else { return }
-        if hasDeferredServers, !agent.state.tools.contains(where: { $0.name == toolSearchToolName }) {
+        if hasSearchableServers, !agent.state.tools.contains(where: { $0.name == toolSearchToolName }) {
             agent.state.tools = agent.state.tools + [makeToolSearchTool(catalog: catalog)]
         }
         catalog.restoreLoadedTools(from: messages)
         catalog.bind(to: agent)
-    }
-
-    /// Give servers with direct tools a bounded chance to connect before the
-    /// first request, so their tools are part of the initial declaration.
-    private func waitForDirectServersOnce() async {
-        guard manager != nil else { return }
-        let settled = lock.withLock { directStartupSettled }
-        guard !settled else { return }
-        await waitForStartup(timeout: Self.directStartupTimeout)
-        lock.withLock { directStartupSettled = true }
     }
 
     func shutdown() async {
@@ -162,7 +132,7 @@ final class MCPRuntime: @unchecked Sendable {
     }
 
     private static func renderSection(_ configs: [MCPServerConfig]) -> String? {
-        let listed = configs.filter { $0.exposure == .deferred || $0.toolExposure.values.contains(.deferred) }
+        let listed = configs.filter(isSearchable)
         guard !listed.isEmpty else { return nil }
         var lines = [
             "<mcp_servers>",
