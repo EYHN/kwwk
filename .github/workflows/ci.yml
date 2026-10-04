@@ -39,6 +39,8 @@ jobs:
     container: swift:${{ matrix.swift }}
     steps:
       - uses: actions/checkout@v5
+      - name: install python3 (fake MCP servers in tests)
+        run: apt-get update && apt-get install -y --no-install-recommends python3
       - name: swift build
         run: swift build --product kwwk
       - name: bundled resource self-test
