@@ -174,13 +174,23 @@ public final class ToolCatalog: @unchecked Sendable {
 
     public init() {}
 
-    /// Keep `agent.state.tools` in sync with this catalog.
+    /// Keep `agent.state.tools` in sync with this catalog, re-checked before
+    /// every provider request so a model switch takes effect.
     public func bind(to agent: Agent) {
         lock.withLock {
             if self.agent !== agent { injected = [] }
             self.agent = agent
         }
+        agent.prepareTools = { [weak self] in self?.sync() }
         sync()
+    }
+
+    /// Whether the model's harness discovers tools on its own. Cursor's
+    /// agent keeps advertised tools behind its own keyword search, so a
+    /// catalog hands it every tool instead of hiding them behind
+    /// `tool_search` as well.
+    public static func modelDiscoversTools(_ model: Model) -> Bool {
+        model.api == "cursor-agent"
     }
 
     /// Work `tool_search` awaits before searching, such as waiting for MCP
@@ -264,10 +274,11 @@ public final class ToolCatalog: @unchecked Sendable {
 
     /// The loaded tools, in load order.
     public var activeTools: [AgentTool] {
-        lock.withLock { activeToolsLocked() }
+        lock.withLock { activeToolsLocked(exposeAll: false) }
     }
 
-    private func activeToolsLocked() -> [AgentTool] {
+    private func activeToolsLocked(exposeAll: Bool) -> [AgentTool] {
+        if exposeAll { return entries.map(\.tool) }
         let byName = Dictionary(entries.map { ($0.tool.name, $0.tool) }, uniquingKeysWith: { first, _ in first })
         return loaded.compactMap { byName[$0] }
     }
@@ -280,7 +291,8 @@ public final class ToolCatalog: @unchecked Sendable {
             let current = agent.state.tools
             let base = current.filter { !injected.contains($0.name) }
             let baseNames = Set(base.map(\.name))
-            let additions = activeToolsLocked().filter { !baseNames.contains($0.name) }
+            let exposeAll = Self.modelDiscoversTools(agent.state.model)
+            let additions = activeToolsLocked(exposeAll: exposeAll).filter { !baseNames.contains($0.name) }
             let next = base + additions
             injected = Set(additions.map(\.name))
             let unchanged = next.count == current.count && zip(next, current).allSatisfy { lhs, rhs in
@@ -307,11 +319,21 @@ Some tools, such as the tools of MCP servers, are not provided to you upfront. U
 """
 
 /// The `tool_search` tool for a catalog.
-public func makeToolSearchTool(catalog: ToolCatalog) -> AgentTool {
+///
+/// `sources` names what the deferred tools come from (for example MCP servers
+/// and what they do). It is appended to the description so harnesses that
+/// discover tools by keyword (Cursor) can find `tool_search` by those names.
+/// Keep it stable for the session: it is part of the tool definition.
+public func makeToolSearchTool(catalog: ToolCatalog, sources: [String] = []) -> AgentTool {
+    var description = toolSearchDescription
+    if !sources.isEmpty {
+        description += "\n\nDeferred tools are available from:\n"
+            + sources.map { "- \($0)" }.joined(separator: "\n")
+    }
     var tool = AgentTool(
         name: toolSearchToolName,
         label: "Tool search",
-        description: toolSearchDescription,
+        description: description,
         parameters: .object([
             "type": .string("object"),
             "properties": .object([

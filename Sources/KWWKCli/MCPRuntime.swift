@@ -121,7 +121,7 @@ final class MCPRuntime: @unchecked Sendable {
     func rebind(to agent: Agent, messages: [Message]) {
         guard manager != nil else { return }
         if hasSearchableServers, !agent.state.tools.contains(where: { $0.name == toolSearchToolName }) {
-            agent.state.tools = agent.state.tools + [makeToolSearchTool(catalog: catalog)]
+            agent.state.tools = agent.state.tools + [makeToolSearchTool(catalog: catalog, sources: toolSearchSources)]
         }
         catalog.restoreLoadedTools(from: messages)
         catalog.bind(to: agent)
@@ -129,6 +129,21 @@ final class MCPRuntime: @unchecked Sendable {
 
     func shutdown() async {
         await manager?.shutdown()
+    }
+
+    /// One line per searchable server for the `tool_search` description.
+    private var toolSearchSources: [String] {
+        configs.filter(Self.isSearchable).map(Self.serverLine)
+    }
+
+    private static func serverLine(_ config: MCPServerConfig) -> String {
+        var line = "MCP server \(config.name) (tools named mcp__\(config.name)__<tool>)"
+        if let description = config.description?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !description.isEmpty {
+            let clipped = description.count > 250 ? String(description.prefix(249)) + "…" : description
+            line += ": \(clipped.replacingOccurrences(of: "\n", with: " "))"
+        }
+        return line
     }
 
     private static func renderSection(_ configs: [MCPServerConfig]) -> String? {

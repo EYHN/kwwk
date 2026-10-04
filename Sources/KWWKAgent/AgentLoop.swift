@@ -1045,6 +1045,14 @@ public enum AgentLoop {
         turnToolState: TurnToolExecutionState,
         emit: @escaping AgentEventSink
     ) async -> ToolResultMessage {
+        // Cursor runs a whole multi-step turn inside one request, so a tool
+        // loaded mid-turn (by `tool_search`) is not in the request's tool
+        // snapshot yet. Resolve unknown names against the live tool set.
+        var context = context
+        if !context.tools.contains(where: { $0.name == call.name }),
+           let live = config.currentTools?().first(where: { $0.name == call.name }) {
+            context.tools.append(live)
+        }
         await emit(.toolExecutionStart(toolCallId: call.id, toolName: call.name, args: call.arguments))
 
         // The hook context wants the surrounding assistant message, which is

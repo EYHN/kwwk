@@ -189,6 +189,28 @@ struct ToolCatalogTests {
         #expect(agent.state.tools.map(\.name) == ["calculate"])
     }
 
+    @Test("Cursor discovers tools itself, so it gets every catalog tool")
+    func cursorGetsEveryTool() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        var cursor = faux.getModel()
+        cursor.api = "cursor-agent"
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), tools: [makeCalculateTool()]))
+        let catalog = ToolCatalog()
+        catalog.setTools([namedTool("mcp__a__one", "one"), namedTool("mcp__a__two", "two")], source: "a")
+        catalog.bind(to: agent)
+        #expect(agent.state.tools.map(\.name) == ["calculate"])
+
+        // The switch takes effect at the next request through `prepareTools`.
+        agent.state.model = cursor
+        agent.prepareTools?()
+        #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__a__one", "mcp__a__two"])
+
+        agent.state.model = faux.getModel()
+        agent.prepareTools?()
+        #expect(agent.state.tools.map(\.name) == ["calculate"])
+    }
+
     @Test("compaction re-declares the tool state right after the recap")
     func compactionRedeclaresTools() async {
         let faux = await registerFauxProvider()
