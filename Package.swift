@@ -68,7 +68,7 @@ let package = Package(
         ),
         .target(
             name: "KWWKCli",
-            dependencies: ["KWWKAI", "KWWKAgent"],
+            dependencies: ["KWWKAI", "KWWKAgent", "KWWKMCP"],
             path: "Sources/KWWKCli"
         ),
         .target(

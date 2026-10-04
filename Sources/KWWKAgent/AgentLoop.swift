@@ -209,10 +209,10 @@ public enum AgentLoop {
         cancellation: CancellationHandle?,
         streamFn: @escaping StreamFn
     ) async throws {
-        guard !context.messages.isEmpty else {
+        // Tool declarations are bookkeeping; continue from the last real turn.
+        guard let last = context.messages.last(where: { $0.role != .system }) else {
             throw AgentError.noMessagesToContinue
         }
-        let last = context.messages.last!
         if case .assistant = last {
             throw AgentError.cannotContinueFromRole(last.role.rawValue)
         }

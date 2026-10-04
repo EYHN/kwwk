@@ -73,6 +73,13 @@ func runCodingTUIInternal(
         agent.state.messages = resolvedResume.messages
     }
 
+    // MCP servers connect in the background; their tools join the agent's
+    // tool set through the catalog as they arrive (direct) or when
+    // `tool_search` loads them (deferred).
+    let mcpRuntime = MCPRuntime(cwd: cwd, environment: environment)
+    await mcpRuntime.start()
+    mcpRuntime.attach(to: agent, messages: agent.state.messages)
+
     // Persist the transcript as it grows. The recorder + its subscription
     // live in a reference box so `/resume` can hot-swap them to a different
     // session file mid-run (a plain `var` can't be mutated from the resume
@@ -757,6 +764,7 @@ func runCodingTUIInternal(
         replacementTools.append(createGoalTool(store: goalStore))
         replacementTools.append(askTool)
         replacement.state.tools = replacementTools
+        mcpRuntime.rebind(to: replacement, messages: messages)
 
         agentBox.replace(with: replacementCodingAgent)
         agentBox.eventUnsubscribe = subscribeToAgentEvents(replacement)
@@ -839,6 +847,7 @@ func runCodingTUIInternal(
     // modal host, and a `notify` hook that appends into retained history.
     let slashRegistry = SlashCommandRegistry()
     registerBuiltinSlashCommands(slashRegistry)
+    registerMCPSlashCommand(slashRegistry, runtime: mcpRuntime)
     // User/project prompt-template commands (`.kwwk/commands/*.md`,
     // `~/.kwwk/commands/*.md`). Registered after builtins so a custom file
     // can't shadow a core command; their handlers render the template against
@@ -1411,6 +1420,7 @@ func runCodingTUIInternal(
         currentCodingAgent.agent.clearAllQueues()
         await currentCodingAgent.agent.waitForIdle()
         await currentCodingAgent.agent.closeSession()
+        await mcpRuntime.shutdown()
     }
 
     // `--resume`: open the arrow-key session picker on the first frame, reusing
@@ -1418,6 +1428,10 @@ func runCodingTUIInternal(
     // is safe — `modal.open` just stages the overlay; the first render (once
     // the runner starts) paints it, and the ModalInputRouter already routes
     // keys to it. Cancel leaves the fresh session in place.
+    if !mcpRuntime.warnings.isEmpty {
+        slashContext.notifyBlock(mcpRuntime.warnings.map { Style.dimmed("  mcp: \($0)") })
+    }
+
     if openResumePickerOnStart, let resumeCmd = slashRegistry.find("resume") {
         await resumeCmd.handler(slashContext, "")
     }

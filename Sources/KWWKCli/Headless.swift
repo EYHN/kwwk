@@ -1,6 +1,7 @@
 import Foundation
 import KWWKAI
 import KWWKAgent
+import KWWKMCP
 
 /// Internal implementation of `kwwk -p <prompt>` — a one-shot, non-interactive
 /// coding-agent run. Mirrors the ergonomics of `claude -p`:
@@ -69,6 +70,16 @@ func runHeadlessInternal(
         agent.state.messages = resolvedResume.messages
     }
 
+    // One-shot runs wait for every MCP server up front: there is no later
+    // prompt that could pick up a slow server's tools.
+    let mcpRuntime = MCPRuntime(cwd: cwd, environment: environment)
+    for warning in mcpRuntime.warnings {
+        writeStderr("kwwk: mcp: \(warning)\n")
+    }
+    await mcpRuntime.start()
+    mcpRuntime.attach(to: agent, messages: agent.state.messages)
+    await mcpRuntime.waitForStartup(timeout: MCPManager.defaultStartupTimeoutSeconds)
+
     // Persist the transcript as it grows. `ensureCreated` writes the header
     // for a brand-new session; resumed sessions already have one.
     let recorder = SessionRecorder(
@@ -133,6 +144,7 @@ func runHeadlessInternal(
         try await agent.prompt(text)
     } catch {
         await cleanupHeadlessAgent(agent)
+        await mcpRuntime.shutdown()
         let msg = (error as? LocalizedError)?.errorDescription ?? "\(error)"
         writeStderr("kwwk: \(msg)\n")
         return 1
@@ -140,6 +152,7 @@ func runHeadlessInternal(
 
     let stop = box.lock.withLock { box.finalStopReason }
     await cleanupHeadlessAgent(agent)
+    await mcpRuntime.shutdown()
     return stop == .stop ? 0 : 1
 }
 

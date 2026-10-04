@@ -76,6 +76,54 @@ billing estimates, and the SDK opt-out.
 
 Image inputs are resized and recompressed before entering the conversation.
 
+### MCP servers
+
+kwwk connects to [Model Context Protocol](https://modelcontextprotocol.io)
+servers listed in `~/.kwwk/mcp.json`, using the usual `mcpServers` shape.
+Both stdio and Streamable HTTP servers are supported. SSE-only servers and
+OAuth are not.
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" },
+      "description": "GitHub issues, pull requests and files"
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
+      "exposure": "direct"
+    }
+  }
+}
+```
+
+Tools are named `mcp__<server>__<tool>`. Servers connect in the background,
+and `/mcp` shows their status. Each server, or each tool through a
+`toolExposure` map with `*` globs, picks how its tools reach the model:
+
+- `deferred` (default): hidden until the model loads them with the built-in
+  `tool_search` tool, a BM25 search over tool names, descriptions and
+  parameters. Loaded tools are callable from the next model request.
+- `direct`: declared up front. The first prompt waits briefly for these
+  servers to connect.
+- `hidden`: never exposed.
+
+A project can also define servers in `.kwwk/mcp.json`. Those only start when
+`KWWK_ALLOW_PROJECT_MCP=1` is set, because opening a repository must not run
+its commands.
+
+Tool changes are recorded in the session transcript. Models that support
+mid-conversation tool changes (Anthropic Opus 4.8 and the 5.x family, OpenAI
+GPT-5.4 and later on the Responses API) receive loaded tools in place, so the
+prompt cache survives. Other models receive the full tool list, and loading
+a tool costs one cache miss. Resumed sessions restore the tools they had
+loaded.
+
 ---
 
 ## 2. The agent SDK
@@ -599,6 +647,7 @@ Antigravity provider groups stay absent.
 
 - `Sources/KWWKAI` — model clients, OAuth, provider adapters
 - `Sources/KWWKAgent` — tool-using agent loop and built-in tools
+- `Sources/KWWKMCP` — MCP client: config, stdio / Streamable HTTP transports, tool adapter
 - `Sources/KWWKCli` — interactive TUI, slash commands, rendering
 - `Sources/kwwk` — the executable entry point
 - `Tests/` — XCTest suites for each module

@@ -185,7 +185,10 @@ public final class ToolCatalog: @unchecked Sendable {
 
     /// Keep `agent.state.tools` in sync with this catalog.
     public func bind(to agent: Agent) {
-        lock.withLock { self.agent = agent }
+        lock.withLock {
+            if self.agent !== agent { injected = [] }
+            self.agent = agent
+        }
         sync()
     }
 
@@ -219,11 +222,14 @@ public final class ToolCatalog: @unchecked Sendable {
         sync()
     }
 
-    /// Re-load the deferred tools a resumed transcript had loaded. Names not
+    /// Make the loaded deferred tools exactly those a transcript had loaded,
+    /// as when a session starts, resumes, or is replaced. Names not
     /// registered yet are loaded as soon as they are.
     public func restoreLoadedTools(from messages: [Message]) {
         let declared = TranscriptTools.currentTools(in: messages).map(\.name)
         lock.withLock {
+            loaded = []
+            pendingRestore = []
             let byName = Dictionary(entries.map { ($0.tool.name, $0) }, uniquingKeysWith: { first, _ in first })
             for name in declared {
                 switch byName[name]?.exposure {

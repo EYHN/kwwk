@@ -19,6 +19,9 @@ public final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
     public static let stderrTailLimit = 4_000
     /// Grace period between SIGTERM and SIGKILL on close.
     public static let terminateGraceSeconds: Double = 2
+    /// How long a server may take to exit after stdin closes before it is
+    /// sent SIGTERM.
+    public static let stdinCloseGraceSeconds: Double = 1
 
     public let command: String
     public let args: [String]
@@ -179,7 +182,15 @@ public final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
             }
         continuation?.finish()
         try? stdin?.close()
-        guard let process, process.isRunning else { return }
+        guard let process else { return }
+        // MCP stdio shutdown: close stdin and let the server exit on its own
+        // first. Wrappers such as `npx` only reach their child through that
+        // EOF; signalling the wrapper right away can orphan the real server.
+        let eofDeadline = Date().addingTimeInterval(Self.stdinCloseGraceSeconds)
+        while process.isRunning && Date() < eofDeadline {
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        guard process.isRunning else { return }
         process.terminate()
         let deadline = Date().addingTimeInterval(Self.terminateGraceSeconds)
         while process.isRunning && Date() < deadline {
