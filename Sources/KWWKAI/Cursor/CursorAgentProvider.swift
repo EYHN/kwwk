@@ -139,6 +139,7 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
                 out: out,
                 blobStore: conversation.blobStore,
                 toolDefs: toolDefs,
+                systemPrompt: context.systemPrompt,
                 bridge: options?.cursorExecBridge
             )
 
@@ -240,6 +241,7 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
         let out: AssistantMessageStream
         let blobStore: CursorBlobStore
         let toolDefs: [Data]
+        let systemPrompt: String?
         let bridge: CursorExecBridge?
 
         func emit(_ event: AssistantMessageEvent) { out.push(event) }
@@ -406,6 +408,7 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
         case .requestContext:
             reply(10, CursorProto.encodeRequestContextResult(
                 toolDefs: session.toolDefs,
+                systemPrompt: session.systemPrompt,
                 workspacePath: session.bridge?.cwd,
                 osVersion: osVersionString(),
                 shell: ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh",

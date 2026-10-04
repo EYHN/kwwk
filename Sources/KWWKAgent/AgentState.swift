@@ -16,6 +16,7 @@ public final class AgentState: @unchecked Sendable {
     private var _thinkingDisplay: ThinkingDisplay
     private var _verboseEnabled: Bool
     private var _tools: [AgentTool]
+    private var _toolCatalog: ToolCatalog?
     private var _messages: [Message]
     /// Advances whenever model-facing context changes. Compaction uses it as a
     /// compare-and-swap guard so a summary built from one prompt snapshot can
@@ -93,6 +94,29 @@ public final class AgentState: @unchecked Sendable {
         }
     }
 
+    /// Deferred tools (e.g. MCP) this agent can load with `tool_search`.
+    /// Its loaded tools join every provider request after `tools`; `tools`
+    /// wins on a name clash. Loading is not a context edit: it never
+    /// invalidates a compaction in flight. Subagents that may mutate inherit
+    /// a child of it.
+    public var toolCatalog: ToolCatalog? {
+        get { lock.withLock { _toolCatalog } }
+        set { lock.withLock { _toolCatalog = newValue } }
+    }
+
+    /// The tools the next provider request declares: `tools` plus the
+    /// catalog's loaded tools.
+    public var effectiveTools: [AgentTool] {
+        let (tools, catalog) = lock.withLock { (_tools, _toolCatalog) }
+        return Self.merge(tools, catalog?.tools)
+    }
+
+    private static func merge(_ tools: [AgentTool], _ extra: [AgentTool]?) -> [AgentTool] {
+        guard let extra, !extra.isEmpty else { return tools }
+        let names = Set(tools.map(\.name))
+        return tools + extra.filter { !names.contains($0.name) }
+    }
+
     public var messages: [Message] {
         get { lock.withLock { _messages } }
         set {
@@ -129,13 +153,14 @@ public final class AgentState: @unchecked Sendable {
     }
 
     func snapshotModelContext() -> (revision: UInt64, context: AgentContext, model: Model) {
-        lock.withLock {
+        let extra = lock.withLock { _toolCatalog }?.tools
+        return lock.withLock {
             (
                 _contextRevision,
                 AgentContext(
                     systemPrompt: _systemPrompt,
                     messages: _messages,
-                    tools: _tools
+                    tools: Self.merge(_tools, extra)
                 ),
                 _model
             )

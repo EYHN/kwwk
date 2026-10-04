@@ -29,7 +29,7 @@ final class SubagentLimiter: @unchecked Sendable {
     /// Reserve capacity for a foreground child. This deliberately fails when
     /// no slot is available instead of suspending the parent tool call.
     func reserve(tools: CodingTools, countsTowardTotal: Bool = true) throws -> SubagentPermit {
-        let mutating = Self.isMutating(tools)
+        let mutating = tools.isMutating
         try lock.withLock {
             if countsTowardTotal { try validateTotal() }
             try validateAvailableCapacity(mutating: mutating)
@@ -43,7 +43,7 @@ final class SubagentLimiter: @unchecked Sendable {
     /// launch budget is charged now, so an arbitrarily large queued fan-out can
     /// never bypass `maxTotal`.
     func enqueue(tools: CodingTools, countsTowardTotal: Bool = true) throws -> SubagentCapacityReservation {
-        let mutating = Self.isMutating(tools)
+        let mutating = tools.isMutating
         let id = UUID()
         let reservation = SubagentCapacityReservation(id: id, limiter: self)
         var immediatePermit: SubagentPermit?
@@ -142,10 +142,6 @@ final class SubagentLimiter: @unchecked Sendable {
     private func claimCapacity(mutating: Bool) {
         active += 1
         if mutating { activeMutating += 1 }
-    }
-
-    private static func isMutating(_ tools: CodingTools) -> Bool {
-        tools.contains(.write) || tools.contains(.edit) || tools.contains(.bash)
     }
 }
 

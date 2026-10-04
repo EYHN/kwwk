@@ -47,6 +47,10 @@ public struct AgentLoopConfig: Sendable {
     public var betweenTurns: BetweenTurnsHook?
     public var beforeRunEnd: BeforeRunEndHook?
     public var contextCompaction: ContextCompactionHook?
+    /// Live tool set, read after every turn so tools activated mid-run
+    /// (e.g. by `tool_search`) are declared on the next request. Nil keeps
+    /// the tools the run started with.
+    public var currentTools: (@Sendable () -> [AgentTool])?
 
     public init(
         model: Model,
@@ -205,10 +209,10 @@ public enum AgentLoop {
         cancellation: CancellationHandle?,
         streamFn: @escaping StreamFn
     ) async throws {
-        guard !context.messages.isEmpty else {
+        // Tool declarations are bookkeeping; continue from the last real turn.
+        guard let last = context.messages.last(where: { $0.role != .system }) else {
             throw AgentError.noMessagesToContinue
         }
-        let last = context.messages.last!
         if case .assistant = last {
             throw AgentError.cannotContinueFromRole(last.role.rawValue)
         }
@@ -406,6 +410,15 @@ public enum AgentLoop {
                     ) {
                         applyCompactionReplacement(replacement)
                     }
+                }
+
+                // Record tool availability changes in the transcript so it
+                // replays to exactly the tools this request sends.
+                if let declaration = toolDeclaration(for: currentContext) {
+                    let message = Message.system(declaration)
+                    await emit(.messageStart(message: message))
+                    await emit(.messageEnd(message: message))
+                    currentContext.messages.append(message)
                 }
 
                 let finalTextOnly = config.finalTextOnlyOnLastTurn
@@ -623,6 +636,13 @@ public enum AgentLoop {
                 if finalTextOnly {
                     await emit(.agentEnd(messages: delta(), summary: finalize(nil)))
                     return
+                }
+
+                // Tools that changed during this turn (e.g. loaded by
+                // `tool_search`) join the next request. Refreshed before the
+                // SDK hook so the hook can still override the tool set.
+                if let currentTools = config.currentTools {
+                    currentContext.tools = currentTools()
                 }
 
                 // SDK between-turn hooks may replace the context before the
@@ -958,6 +978,17 @@ public enum AgentLoop {
         catch { throw AgentError.aborted }
     }
 
+    /// The system message declaring how `context.tools` differs from the
+    /// tool state the transcript already declares, or nil when they match.
+    /// Mirrors pi's `declareToolChanges`.
+    static func toolDeclaration(for context: AgentContext) -> SystemMessage? {
+        let declared = TranscriptTools.currentTools(in: context.messages)
+        let current = context.tools.map { $0.toKWWKAITool() }
+        let changes = TranscriptTools.changes(from: declared, to: current)
+        guard !changes.isEmpty else { return nil }
+        return SystemMessage(toolsAdded: changes.toolsAdded, toolsRemoved: changes.toolsRemoved)
+    }
+
     private static func appendFinalTurnInstruction(
         to systemPrompt: String?,
         terminalToolName: String?
@@ -1017,6 +1048,14 @@ public enum AgentLoop {
         turnToolState: TurnToolExecutionState,
         emit: @escaping AgentEventSink
     ) async -> ToolResultMessage {
+        // Cursor runs a whole multi-step turn inside one request, so a tool
+        // loaded mid-turn (by `tool_search`) is not in the request's tool
+        // snapshot yet. Resolve unknown names against the live tool set.
+        var context = context
+        if !context.tools.contains(where: { $0.name == call.name }),
+           let live = config.currentTools?().first(where: { $0.name == call.name }) {
+            context.tools.append(live)
+        }
         await emit(.toolExecutionStart(toolCallId: call.id, toolName: call.name, args: call.arguments))
 
         // The hook context wants the surrounding assistant message, which is

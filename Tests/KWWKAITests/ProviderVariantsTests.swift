@@ -172,6 +172,16 @@ struct ProviderVariantsTests {
         )
         try? await Task.sleep(nanoseconds: 300_000_000)
         #expect(client.lastRequest?.headers["x-initiator"] == "user")
+
+        // A tool declaration after the prompt is not a turn.
+        _ = await provider.stream(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "hi")), .system(SystemMessage(toolsAdded: [
+                Tool(name: "noop", description: "noop", parameters: ["type": "object"]),
+            ]))]),
+            options: nil
+        ).result()
+        #expect(client.lastRequest?.headers["x-initiator"] == "user")
     }
 
     @Test("Copilot stamps copilot-vision-request when images are present")

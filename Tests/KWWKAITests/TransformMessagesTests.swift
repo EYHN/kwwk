@@ -35,6 +35,8 @@ struct TransformMessagesTests {
             return a.content.compactMap { if case .text(let t) = $0 { return t.text } else { return nil } }
         case .toolResult(let r):
             return r.content.compactMap { if case .text(let t) = $0 { return t.text } else { return nil } }
+        case .system:
+            return []
         }
     }
 

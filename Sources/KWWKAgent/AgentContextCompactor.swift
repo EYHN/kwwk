@@ -460,6 +460,8 @@ public enum AgentContextCompactor {
         var removedCount = 0
         let rewritten = messages.map { message -> Message in
             switch message {
+            case .system:
+                return message
             case .user(var user):
                 let originalCount = user.content.count
                 user.content.removeAll { block in

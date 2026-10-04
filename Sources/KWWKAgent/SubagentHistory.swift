@@ -148,6 +148,30 @@ public struct SubagentHistorySnapshot: Sendable, Hashable {
     }
 }
 
+extension SubagentHistorySnapshot {
+    /// The snapshot without transcript tool declarations, with run start
+    /// indices remapped to the remaining messages.
+    func withoutToolDeclarations() -> SubagentHistorySnapshot {
+        guard TranscriptTools.hasSystemMessages(messages) else { return self }
+        var visibleIndex: [Int] = []
+        visibleIndex.reserveCapacity(messages.count + 1)
+        var count = 0
+        for message in messages {
+            visibleIndex.append(count)
+            if message.role != .system { count += 1 }
+        }
+        visibleIndex.append(count)
+        var copy = self
+        copy.messages = TranscriptTools.withoutSystemMessages(messages)
+        copy.runs = runs.map { run in
+            var run = run
+            run.firstMessageIndex = visibleIndex[min(max(0, run.firstMessageIndex), visibleIndex.count - 1)]
+            return run
+        }
+        return copy
+    }
+}
+
 public struct SubagentHistoryRetention: Sendable, Hashable {
     public var processLocal: Bool
     public var maxTerminalEntries: Int
@@ -727,6 +751,7 @@ public func createSubagentHistoryTool(
             switch request.target {
             case .index:
                 let children = store.list(parentSessionId: effectiveSessionId)
+                    .map { $0.withoutToolDeclarations() }
                 let body = renderSubagentHistoryIndex(children)
                 return AgentToolResult(
                     content: [.text(TextContent(text: body))],
@@ -734,9 +759,13 @@ public func createSubagentHistoryTool(
                     uiDisplay: ["agent history · \(children.count) subagents"]
                 )
             case .agentId(let agentId):
-                snapshot = store.snapshot(agentId: agentId, parentSessionId: effectiveSessionId)
+                // Tool declarations are bookkeeping, not conversation: number
+                // only the messages the parent can reason about.
+                snapshot = store.snapshot(agentId: agentId, parentSessionId: effectiveSessionId)?
+                    .withoutToolDeclarations()
             case .taskId(let taskId):
-                snapshot = store.snapshot(taskId: taskId, parentSessionId: effectiveSessionId)
+                snapshot = store.snapshot(taskId: taskId, parentSessionId: effectiveSessionId)?
+                    .withoutToolDeclarations()
             }
             guard let snapshot else {
                 let known = store.list(parentSessionId: effectiveSessionId).map(\.agentId)
@@ -1127,7 +1156,7 @@ private func renderSubagentHistoryMarkdown(
                 lines.append("")
                 lines.append(section)
             }
-        case .toolResult:
+        case .toolResult, .system:
             continue
         }
     }

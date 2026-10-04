@@ -76,6 +76,56 @@ billing estimates, and the SDK opt-out.
 
 Image inputs are resized and recompressed before entering the conversation.
 
+### MCP servers
+
+The kwwk TUI connects to [Model Context Protocol](https://modelcontextprotocol.io)
+servers listed in `~/.kwwk/mcp.json`, using the usual `mcpServers` shape.
+`kwwk -p` and the SDK never read this file; SDK callers build an
+`MCPManager` from configs they pass in.
+Both stdio and Streamable HTTP servers are supported. SSE-only servers and
+OAuth are not.
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" },
+      "description": "GitHub issues, pull requests and files"
+    },
+    "docs": {
+      "type": "http",
+      "url": "https://example.com/mcp",
+      "headers": { "Authorization": "Bearer ${DOCS_TOKEN}" },
+      "toolExposure": { "delete_*": "hidden" }
+    }
+  }
+}
+```
+
+Tools are named `mcp__<server>__<tool>`. Servers connect in the background,
+and `/mcp` shows their status. MCP tools are never declared up front, so no
+request waits for a server. The model loads them with the built-in
+`tool_search` tool, a BM25 search over tool names, descriptions and
+parameters, and can call them from its next request. `tool_search` waits for
+servers that are still connecting. Set `exposure` on a server, or map tools
+with `*` globs in `toolExposure`, to `hidden` to keep tools out entirely.
+Subagents that can write, edit or run commands get `tool_search` over the
+same MCP tools (loading for themselves); read-only subagents get none.
+
+A project can also define servers in `.kwwk/mcp.json`; its entries replace
+user entries of the same name. The file is only read when
+`KWWK_ALLOW_PROJECT_MCP=1` is set, because opening a repository must not run
+its commands. `"enabled": false` turns an entry off.
+
+Tool changes are recorded in the session transcript. Models that support
+mid-conversation tool changes (Anthropic Opus 4.8 and the 5.x family, OpenAI
+GPT-5.4 and later on the Responses API) receive loaded tools in place, so the
+prompt cache survives. Other models receive the full tool list, and loading
+a tool costs one cache miss. Resumed sessions keep the tools they had
+loaded, even while their servers are still connecting.
+
 ---
 
 ## 2. The agent SDK
@@ -599,6 +649,7 @@ Antigravity provider groups stay absent.
 
 - `Sources/KWWKAI` — model clients, OAuth, provider adapters
 - `Sources/KWWKAgent` — tool-using agent loop and built-in tools
+- `Sources/KWWKMCP` — MCP client SDK: stdio / Streamable HTTP transports, server manager, tool adapter (reads no config files)
 - `Sources/KWWKCli` — interactive TUI, slash commands, rendering
 - `Sources/kwwk` — the executable entry point
 - `Tests/` — XCTest suites for each module

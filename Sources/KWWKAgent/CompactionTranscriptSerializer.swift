@@ -148,6 +148,18 @@ enum CompactionTranscriptSerializer {
         limits: Limits
     ) -> TranscriptRecord {
         switch message {
+        case .system(let system):
+            // Tool availability changes, by name only: definitions are
+            // re-declared after the recap, not summarized.
+            var text: [String] = []
+            if let added = system.toolsAdded, !added.isEmpty {
+                text.append("tools added: " + added.map(\.name).joined(separator: ", "))
+            }
+            if let removed = system.toolsRemoved, !removed.isEmpty {
+                text.append("tools removed: " + removed.joined(separator: ", "))
+            }
+            return TranscriptRecord(index: index, role: "system", text: text.nilIfEmpty)
+
         case .user(let user):
             let text = user.content.compactMap { block -> String? in
                 if case .text(let text) = block {

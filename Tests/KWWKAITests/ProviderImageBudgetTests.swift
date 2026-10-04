@@ -164,7 +164,7 @@ struct ProviderImageBudgetTests {
                     if case .image(let image) = block { return image.data }
                     return nil
                 }
-            case .assistant:
+            case .assistant, .system:
                 return []
             }
         }
@@ -183,7 +183,7 @@ struct ProviderImageBudgetTests {
                     if case .text(let text) = block { return text.text }
                     return nil
                 }
-            case .assistant:
+            case .assistant, .system:
                 return []
             }
         }

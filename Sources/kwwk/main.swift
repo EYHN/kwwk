@@ -120,6 +120,9 @@ struct KwwkCLI {
         Sessions are persisted to ~/.kwwk/sessions/<id>.jsonl as an
         append-only log and replayed on resume.
 
+        MCP servers are read from ~/.kwwk/mcp.json (project servers in
+        .kwwk/mcp.json need KWWK_ALLOW_PROJECT_MCP=1); /mcp shows status.
+
         Credentials are read from the OAuth store at ~/.kwwk/oauth.json,
         with supported API-key environment variables as a fallback. With
         neither configured, launch kwwk and run /login to sign in to a

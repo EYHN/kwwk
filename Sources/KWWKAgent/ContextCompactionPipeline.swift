@@ -24,7 +24,66 @@ struct ContextCompactionPipelineRequest: Sendable {
 }
 
 enum ContextCompactionPipeline {
+    /// Compact the context, carrying the transcript's tool state across.
+    ///
+    /// Tool declarations (`SystemMessage`) are folded out before planning and
+    /// the replayed tool state is re-declared once, directly after the recap.
+    /// The replacement therefore replays to exactly the pre-compaction tool
+    /// state on its own, so resuming a session never has to read entries
+    /// older than the newest compaction marker.
     static func run(
+        _ request: ContextCompactionPipelineRequest
+    ) async throws -> AgentContextCompactionResult {
+        let toolState = TranscriptTools.currentTools(in: request.context.messages)
+        guard TranscriptTools.hasSystemMessages(request.context.messages) else {
+            return try await runPlanned(request)
+        }
+        var planningContext = request.context
+        planningContext.messages = TranscriptTools.withoutSystemMessages(request.context.messages)
+        let result = try await runPlanned(ContextCompactionPipelineRequest(
+            context: planningContext,
+            reservedMessages: request.reservedMessages,
+            contextModel: request.contextModel,
+            summaryModel: request.summaryModel,
+            backgroundManager: request.backgroundManager,
+            sessionId: request.sessionId,
+            config: request.config,
+            targetTokens: request.targetTokens,
+            summaryReasoning: request.summaryReasoning,
+            authResolver: request.authResolver,
+            transformContext: request.transformContext,
+            convertToLlm: request.convertToLlm,
+            stream: request.stream,
+            cancellation: request.cancellation
+        ))
+        return redeclaringTools(toolState, in: result)
+    }
+
+    /// Insert the tool declaration after the recap, which must stay first:
+    /// recap detection and native-compaction replay look at index 0.
+    static func redeclaringTools(
+        _ tools: [Tool],
+        in result: AgentContextCompactionResult
+    ) -> AgentContextCompactionResult {
+        guard !tools.isEmpty else { return result }
+        var messages = result.messages
+        let recapTimestamp: Int64 = {
+            guard case .user(let recap)? = messages.first else { return Timestamp.now() }
+            return recap.timestamp
+        }()
+        let declaration = Message.system(SystemMessage(toolsAdded: tools, timestamp: recapTimestamp))
+        messages.insert(declaration, at: min(1, messages.count))
+        return AgentContextCompactionResult(
+            messages: messages,
+            messagesCompacted: result.messagesCompacted,
+            hasRunningTasksLedger: result.hasRunningTasksLedger,
+            firstKeptMessageIndex: result.firstKeptMessageIndex,
+            tokensBefore: result.tokensBefore,
+            tokensAfter: result.tokensAfter
+        )
+    }
+
+    private static func runPlanned(
         _ request: ContextCompactionPipelineRequest
     ) async throws -> AgentContextCompactionResult {
         try checkCancellation(request.cancellation)
@@ -398,6 +457,7 @@ enum ContextCompactionPipeline {
     private static func recapTimestamp(after messages: [Message]) -> Int64 {
         let latestMessageTimestamp = messages.map { message -> Int64 in
             switch message {
+            case .system(let system): return system.timestamp
             case .user(let user): return user.timestamp
             case .assistant(let assistant): return assistant.timestamp
             case .toolResult(let result): return result.timestamp

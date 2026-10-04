@@ -1202,6 +1202,8 @@ private enum SummaryGateError: Error {
 private func rewriteText(in messages: [Message], replacing old: String, with new: String) -> [Message] {
     messages.map { message in
         switch message {
+        case .system:
+            return message
         case .user(var user):
             user.content = user.content.map { block in
                 switch block {

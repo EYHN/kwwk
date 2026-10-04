@@ -69,10 +69,13 @@ enum CursorRequestBuilder {
     /// Index of the trailing user message when it carries text or images —
     /// that message becomes the action. `nil` means resume (context ends in
     /// assistant/tool-result messages, or the trailing user message is empty).
+    /// Tool declarations (`.system`) are bookkeeping, not turns, so a prompt
+    /// followed by one is still the active message.
     private static func activeUserMessageIndex(_ messages: [Message]) -> Int? {
-        guard case .user(let u)? = messages.last else { return nil }
+        guard let index = messages.lastIndex(where: { $0.role != .system }),
+              case .user(let u) = messages[index] else { return nil }
         guard !userText(u).isEmpty || !userImages(u).isEmpty else { return nil }
-        return messages.count - 1
+        return index
     }
 
     // MARK: - Content extraction
@@ -158,6 +161,8 @@ enum CursorRequestBuilder {
                     ["role": "user", "content": [["type": "text", "text": "\(prefix)\n\(text)"]]],
                     in: blobStore
                 ))
+            case .system:
+                continue
             }
         }
         return ids
@@ -204,7 +209,7 @@ enum CursorRequestBuilder {
                             CursorProto.encodeAssistantStep(text: "\(prefix)\n\(t)")
                         ))
                     }
-                case .user:
+                case .user, .system:
                     break
                 }
                 i += 1

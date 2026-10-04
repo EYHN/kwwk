@@ -20,6 +20,8 @@ enum TranscriptSnapshot {
         renderer.displayWidth = width
         for message in messages {
             switch message {
+            case .system:
+                continue
             case .user:
                 renderer.apply(.messageStart(message: message))
             case .assistant(let a):

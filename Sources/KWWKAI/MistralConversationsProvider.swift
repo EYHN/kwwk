@@ -30,7 +30,7 @@ public final class MistralConversationsProvider: APIProvider, @unchecked Sendabl
 
     public func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
         var newContext = context
-        newContext.messages = Self.normalizeToolIds(context.messages)
+        newContext.messages = Self.normalizeToolIds(TranscriptTools.withoutSystemMessages(context.messages))
         var opts = options
         opts?.reasoning = nil
         return inner.stream(model: model, context: newContext, options: opts)
@@ -75,7 +75,7 @@ public final class MistralConversationsProvider: APIProvider, @unchecked Sendabl
             case .toolResult(var tr):
                 tr.toolCallId = mapId(tr.toolCallId)
                 return .toolResult(tr)
-            case .user:
+            case .user, .system:
                 return message
             }
         }

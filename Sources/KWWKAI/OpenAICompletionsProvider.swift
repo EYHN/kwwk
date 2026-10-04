@@ -687,7 +687,9 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
             out.append(["role": role, "content": sys])
         }
         var lastRole: Role?
-        let msgs = context.messages
+        // Chat Completions has no mid-conversation tool changes: the request's
+        // top-level tool list already holds every current tool.
+        let msgs = TranscriptTools.withoutSystemMessages(context.messages)
         var i = 0
         while i < msgs.count {
             let message = msgs[i]
@@ -695,6 +697,8 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 out.append(["role": "assistant", "content": "I have processed the tool results."])
             }
             switch message {
+            case .system:
+                break
             case .user(let u):
                 let strings = u.content.compactMap { block -> String? in
                     if case .text(let t) = block { return t.text } else { return nil }
@@ -873,7 +877,7 @@ public final class OpenAICompletionsProvider: APIProvider, @unchecked Sendable {
                 return true
             case .assistant(let a):
                 return a.content.contains { if case .toolCall = $0 { return true }; return false }
-            case .user:
+            case .user, .system:
                 return false
             }
         }

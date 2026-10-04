@@ -3,6 +3,7 @@ import Foundation
 // MARK: - Role & stop reasons
 
 public enum Role: String, Codable, Sendable, Hashable {
+    case system
     case user
     case assistant
     case toolResult
@@ -352,14 +353,55 @@ public struct ToolResultMessage: Codable, Sendable, Hashable {
     }
 }
 
+/// A transcript-level declaration of tool availability changes.
+///
+/// `Context.tools` is the tool set the runtime can execute right now; system
+/// messages record when that set changed so a transcript can be replayed into
+/// the exact tool state at every point. The first declaration (see
+/// ``TranscriptTools/initialDeclarationIndex(in:)``) lists the initial tools;
+/// later ones are deltas.
+/// Replaying every message in order with ``TranscriptTools/currentTools(in:)``
+/// yields the current tool state.
+///
+/// Providers that support mid-conversation tool changes encode these deltas in
+/// place so the prompt-cache prefix survives a tool change; every other
+/// provider drops them and sends `Context.tools` as the full tool list.
+public struct SystemMessage: Codable, Sendable, Hashable {
+    public var role: Role
+    /// Complete definitions of tools that become available at this point. A
+    /// definition whose name was already declared replaces the old one.
+    public var toolsAdded: [Tool]?
+    /// Names of tools that stop being available at this point.
+    public var toolsRemoved: [String]?
+    public var timestamp: Int64
+
+    public init(
+        toolsAdded: [Tool]? = nil,
+        toolsRemoved: [String]? = nil,
+        timestamp: Int64 = Timestamp.now()
+    ) {
+        self.role = .system
+        self.toolsAdded = toolsAdded.flatMap { $0.isEmpty ? nil : $0 }
+        self.toolsRemoved = toolsRemoved.flatMap { $0.isEmpty ? nil : $0 }
+        self.timestamp = timestamp
+    }
+
+    /// True when the message declares no tool changes at all.
+    public var isEmpty: Bool {
+        (toolsAdded?.isEmpty ?? true) && (toolsRemoved?.isEmpty ?? true)
+    }
+}
+
 /// Discriminated union of all message kinds.
 public enum Message: Sendable, Hashable, Codable {
+    case system(SystemMessage)
     case user(UserMessage)
     case assistant(AssistantMessage)
     case toolResult(ToolResultMessage)
 
     public var role: Role {
         switch self {
+        case .system: return .system
         case .user: return .user
         case .assistant: return .assistant
         case .toolResult: return .toolResult
@@ -371,6 +413,7 @@ public enum Message: Sendable, Hashable, Codable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Role.self, forKey: .role) {
+        case .system: self = .system(try SystemMessage(from: decoder))
         case .user: self = .user(try UserMessage(from: decoder))
         case .assistant: self = .assistant(try AssistantMessage(from: decoder))
         case .toolResult: self = .toolResult(try ToolResultMessage(from: decoder))
@@ -379,6 +422,7 @@ public enum Message: Sendable, Hashable, Codable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
+        case .system(let m): try m.encode(to: encoder)
         case .user(let m): try m.encode(to: encoder)
         case .assistant(let m): try m.encode(to: encoder)
         case .toolResult(let m): try m.encode(to: encoder)

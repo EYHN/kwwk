@@ -138,6 +138,8 @@ internal struct SubagentParentSnapshot: Sendable {
     var availableSkills: [Skill]
     var fileAccessPolicy: FileAccessPolicy
     var allowedModelOverrides: [Model]
+    /// The parent's deferred tools; children that may mutate inherit them.
+    var toolCatalog: ToolCatalog?
 }
 
 internal final class SubagentParentBox: @unchecked Sendable {
@@ -218,7 +220,8 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     projectContextFiles: projectContextFiles,
                     availableSkills: availableSkills,
                     fileAccessPolicy: fallbackFileAccessPolicy,
-                    allowedModelOverrides: allowedModelOverrides
+                    allowedModelOverrides: allowedModelOverrides,
+                    toolCatalog: nil
                 )
             }
             return SubagentParentSnapshot(
@@ -244,7 +247,8 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     childCwd: childCwd,
                     fallback: fallbackFileAccessPolicy
                 ),
-                allowedModelOverrides: allowedModelOverrides
+                allowedModelOverrides: allowedModelOverrides,
+                toolCatalog: agent.state.toolCatalog
             )
         }
     }
@@ -2272,7 +2276,14 @@ internal struct SubagentInvocationRunner: Sendable {
             bashCommandPolicy: definition.bashCommandPolicy
         )
         tools.append(createSubagentYieldTool(capture: yieldCapture))
-        let systemPrompt = buildSubagentSystemPrompt(
+        // A child that may change things gets the parent's deferred tools
+        // (e.g. MCP); a read-only one must not, since they can do anything.
+        let toolCatalog = selectedTools.isMutating ? parent.toolCatalog?.makeChild() : nil
+        if let toolCatalog {
+            toolCatalog.restore(from: resumeMessages ?? [])
+            tools.append(makeToolSearchTool(catalog: toolCatalog))
+        }
+        var systemPrompt = buildSubagentSystemPrompt(
             definition: definition,
             cwd: cwd,
             tools: tools,
@@ -2283,6 +2294,9 @@ internal struct SubagentInvocationRunner: Sendable {
                 policy: fileAccessPolicy
             )
         )
+        if let instructions = toolCatalog?.instructions {
+            systemPrompt += "\n\n" + instructions
+        }
         var childOptions = AgentOptions(
             initialState: AgentInitialState(
                 systemPrompt: systemPrompt,
@@ -2316,6 +2330,7 @@ internal struct SubagentInvocationRunner: Sendable {
         childOptions.terminalToolName = subagentYieldToolName
         childOptions.terminalToolReminderLimit = subagentYieldReminderLimit
         let child = Agent(options: childOptions)
+        toolCatalog?.bind(to: child)
         let transcript: SubagentTranscriptRecording?
         if let transcriptStore {
             transcript = await SubagentTranscriptRecording.start(

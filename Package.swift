@@ -12,6 +12,7 @@ let package = Package(
         .library(name: "KWWKAI", targets: ["KWWKAI"]),
         .library(name: "KWWKAgent", targets: ["KWWKAgent"]),
         .library(name: "KWWKCli", targets: ["KWWKCli"]),
+        .library(name: "KWWKMCP", targets: ["KWWKMCP"]),
         .executable(name: "kwwk", targets: ["kwwk"]),
         .executable(name: "kwwk-generate-models", targets: ["kwwk-generate-models"]),
         .executable(name: "kwwk-generate-cursor-models", targets: ["kwwk-generate-cursor-models"]),
@@ -57,8 +58,17 @@ let package = Package(
             path: "Sources/KWWKAgent"
         ),
         .target(
+            name: "KWWKMCP",
+            dependencies: [
+                "KWWKAI",
+                "KWWKAgent",
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Sources/KWWKMCP"
+        ),
+        .target(
             name: "KWWKCli",
-            dependencies: ["KWWKAI", "KWWKAgent"],
+            dependencies: ["KWWKAI", "KWWKAgent", "KWWKMCP"],
             path: "Sources/KWWKCli"
         ),
         .target(
@@ -89,6 +99,11 @@ let package = Package(
             name: "KWWKAgentTests",
             dependencies: ["KWWKAgent", "KWWKAI"],
             path: "Tests/KWWKAgentTests"
+        ),
+        .testTarget(
+            name: "KWWKMCPTests",
+            dependencies: ["KWWKMCP", "KWWKAgent", "KWWKAI"],
+            path: "Tests/KWWKMCPTests"
         ),
         .testTarget(
             name: "KWWKCliTests",

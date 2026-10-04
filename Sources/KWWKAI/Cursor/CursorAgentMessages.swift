@@ -234,14 +234,27 @@ enum CursorProto {
     // MARK: Exec result payloads
 
     /// `RequestContextResult { success=1: RequestContextSuccess { request_context=1:
-    /// RequestContext { env=4, tools=7(repeated McpToolDefinition) } } }`.
+    /// RequestContext { rules=2, env=4, tools=7(repeated McpToolDefinition) } } }`.
     /// `workspacePath` populates `RequestContextEnv { os_version=1,
     /// workspace_paths=2, shell=3, time_zone=10 }` — the server-side harness
     /// takes its authoritative cwd from here, not from the system prompt text.
+    /// The system prompt also rides as a global user rule
+    /// (`CursorRule { full_path=1, content=2, type=3 { global=1 }, source=4 }`):
+    /// Cursor's harness builds its own system prompt and only reliably
+    /// surfaces client instructions through rules (as omp does).
     static func encodeRequestContextResult(
-        toolDefs: [Data], workspacePath: String?, osVersion: String, shell: String, timeZone: String
+        toolDefs: [Data], systemPrompt: String? = nil, workspacePath: String?,
+        osVersion: String, shell: String, timeZone: String
     ) -> Data {
         var requestContext = ProtoWriter()
+        if let systemPrompt, !systemPrompt.isEmpty {
+            requestContext.messageField(2) { rule in
+                rule.stringField(1, "/kwwk/system-prompt.mdc")
+                rule.stringField(2, systemPrompt)
+                rule.messageField(3) { type in type.messageField(1) { _ in } }
+                rule.int32Field(4, 2) // CURSOR_RULE_SOURCE_USER
+            }
+        }
         if let workspacePath, !workspacePath.isEmpty {
             requestContext.messageField(4) { env in
                 env.stringField(1, osVersion)

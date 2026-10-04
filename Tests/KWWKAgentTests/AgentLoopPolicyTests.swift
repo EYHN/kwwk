@@ -98,7 +98,7 @@ struct AgentLoopPolicyTests {
         )
 
         let delta = try #require(await events.snapshot())
-        #expect(delta.map(messageText) == ["between replacement", "final answer"])
+        #expect(delta.filter { $0.role != .system }.map(messageText) == ["between replacement", "final answer"])
     }
 
     @Test("before-tool rewrites are revalidated before execution")
@@ -786,6 +786,8 @@ private func toolResultText(_ result: ToolResultMessage?) -> String {
 
 private func messageText(_ message: Message) -> String {
     switch message {
+    case .system:
+        return ""
     case .user(let user):
         return user.content.compactMap { block -> String? in
             guard case .text(let text) = block else { return nil }

@@ -392,8 +392,9 @@ public enum ProviderVariants {
                 }
                 return false
             }
+            // Tool declarations (`.system`) are bookkeeping, not turns.
             let lastIsUser: Bool = {
-                guard let last = context.messages.last else { return true }
+                guard let last = context.messages.last(where: { $0.role != .system }) else { return true }
                 if case .user = last { return true } else { return false }
             }()
             headers["x-initiator"] = lastIsUser ? "user" : "agent"
