@@ -1,0 +1,65 @@
+import Foundation
+import KWWKAI
+
+/// A bidirectional channel carrying JSON-RPC messages to and from one MCP
+/// server.
+///
+/// `start()` returns the stream of inbound messages. The stream finishes when
+/// the connection closes — normally after `close()`, or with an error when the
+/// server went away (process exit, HTTP failure of the listening stream).
+public protocol MCPTransport: AnyObject, Sendable {
+    /// Open the connection and return the inbound message stream. Called once.
+    func start() async throws -> AsyncThrowingStream<JSONRPCMessage, Error>
+    /// Send one message. For HTTP this posts the message and feeds whatever
+    /// the server answers (JSON or an SSE stream) into the inbound stream
+    /// before returning; cancelling the calling task abandons that response.
+    func send(_ message: JSONRPCMessage) async throws
+    /// Called once `initialize` succeeded, with the negotiated protocol
+    /// version. HTTP transports start sending `MCP-Protocol-Version` and open
+    /// the server-to-client listening stream.
+    func didInitialize(protocolVersion: String) async
+    /// Close the connection and release resources (terminate the process,
+    /// delete the HTTP session). Idempotent.
+    func close() async
+    /// Extra context for error messages, such as the tail of a stdio server's
+    /// stderr.
+    var diagnostics: String? { get }
+}
+
+extension MCPTransport {
+    public func didInitialize(protocolVersion: String) async {}
+    public var diagnostics: String? { nil }
+}
+
+/// Builds the transport of a configured server. `workingDirectory` is the
+/// session directory relative `cwd` values resolve against.
+public typealias MCPTransportFactory = @Sendable (
+    _ config: MCPServerConfig,
+    _ workingDirectory: String
+) throws -> any MCPTransport
+
+public enum MCPTransports {
+    /// The default transport for a config: `MCPStdioTransport` for `.stdio`,
+    /// `MCPStreamableHTTPTransport` for `.http`.
+    public static func make(
+        for config: MCPServerConfig,
+        workingDirectory: String
+    ) throws -> any MCPTransport {
+        switch config.transport {
+        case .stdio(let command, let args, let env, let cwd):
+            return MCPStdioTransport(
+                command: command,
+                args: args,
+                env: env,
+                cwd: cwd,
+                workingDirectory: workingDirectory
+            )
+        case .http(let url, let headers):
+            return MCPStreamableHTTPTransport(
+                url: url,
+                headers: headers,
+                requestTimeoutSeconds: config.toolTimeoutSeconds ?? MCPClient.defaultRequestTimeoutSeconds
+            )
+        }
+    }
+}
