@@ -277,7 +277,6 @@ public final class Agent: @unchecked Sendable {
     private var _convertToLlm: ConvertToLlmHook?
     private var _transformContext: TransformContextHook?
     private var _betweenTurns: BetweenTurnsHook?
-    private var _prepareTools: (@Sendable () -> Void)?
     private var _beforeRunEnd: BeforeRunEndHook?
     private var _autoCompact: AgentAutoCompactOptions?
     private var _idleCompact: AgentIdleCompactOptions?
@@ -333,13 +332,6 @@ public final class Agent: @unchecked Sendable {
     public var betweenTurns: BetweenTurnsHook? {
         get { lock.withLock { _betweenTurns } }
         set { lock.withLock { _betweenTurns = newValue } }
-    }
-    /// Runs right before the loop reads `state.tools` for a provider request,
-    /// so a dynamic tool source (``ToolCatalog``) can adapt the tool set to
-    /// the live model.
-    public var prepareTools: (@Sendable () -> Void)? {
-        get { lock.withLock { _prepareTools } }
-        set { lock.withLock { _prepareTools = newValue } }
     }
     public var beforeRunEnd: BeforeRunEndHook? {
         get { lock.withLock { _beforeRunEnd } }
@@ -797,7 +789,7 @@ extension Agent {
         AgentContext(
             systemPrompt: state.systemPrompt,
             messages: state.messages,
-            tools: state.tools
+            tools: state.effectiveTools
         )
     }
 
@@ -851,10 +843,7 @@ extension Agent {
             beforeRunEnd: beforeRunEnd,
             contextCompaction: builtInContextCompactionHook()
         )
-        config.currentTools = { [state, weak self] in
-            self?.prepareTools?()
-            return state.tools
-        }
+        config.currentTools = { [state] in state.effectiveTools }
         config.finalTextOnlyOnLastTurn = finalTextOnlyOnLastTurn
         config.terminalToolName = terminalToolName
         config.terminalToolReminderLimit = terminalToolReminderLimit

@@ -145,160 +145,98 @@ public struct ToolSearchRanker: Sendable {
 
 // MARK: - Catalog
 
-/// Deferred tools, such as MCP server tools, that stay hidden from the model
-/// until `tool_search` (or a resumed transcript) loads them, kept in sync with
-/// an agent's live tool set.
+/// Deferred tools, such as MCP server tools, hidden from the model until
+/// `tool_search` loads them.
 ///
-/// Built-in tools stay owned by the caller. The catalog only adds and removes
-/// the tools it registered and loaded. Every change goes through
-/// `AgentState.tools`, so the agent loop declares it in the transcript before
-/// the next provider request.
+/// A catalog feeds an agent through `AgentState.toolSource`: the agent loop
+/// reads the loaded tools before each request and records every change in
+/// the transcript. The caller's own `AgentState.tools` are never touched.
 public final class ToolCatalog: @unchecked Sendable {
-    public struct Entry: Sendable {
-        public var tool: AgentTool
-        public var source: String
-    }
-
     private let lock = NSLock()
-    /// Registration order, used for stable tool ordering.
-    private var entries: [Entry] = []
-    /// Deferred tools loaded so far, in load order.
+    /// Every registered tool, in registration order.
+    private var registered: [AgentTool] = []
+    /// Loaded tool names, in load order.
     private var loaded: [String] = []
-    /// Loaded names restored from a transcript whose tools are not
-    /// registered yet (e.g. an MCP server still connecting).
-    private var pendingRestore: Set<String> = []
-    /// Names this catalog placed into the agent's tool set at the last sync.
-    private var injected: Set<String> = []
-    private weak var agent: Agent?
-    private var searchPreparation: (@Sendable () async -> Void)?
+    /// Definitions of loaded tools that are not registered (yet), restored
+    /// from a transcript: a server that is still connecting must not make a
+    /// resumed session lose its tools.
+    private var restored: [String: Tool] = [:]
+    private let prepare: @Sendable (CancellationHandle?) async -> Void
 
-    public init() {}
+    /// - Parameter prepare: Awaited before searching and before a restored
+    ///   tool runs, e.g. to wait for MCP servers that are still connecting.
+    public init(prepare: @escaping @Sendable (CancellationHandle?) async -> Void = { _ in }) {
+        self.prepare = prepare
+    }
 
-    /// Keep `agent.state.tools` in sync with this catalog, re-checked before
-    /// every provider request so a model switch takes effect.
+    /// Feed `agent` this catalog's loaded tools.
     public func bind(to agent: Agent) {
+        agent.state.toolSource = { [weak self] in self?.tools ?? [] }
+    }
+
+    /// Replace the registered tools.
+    public func setTools(_ tools: [AgentTool]) {
+        lock.withLock { registered = tools }
+    }
+
+    /// Make the loaded tools exactly `tools`, as when a session starts,
+    /// resumes or is replaced. Pass the deferred tools a transcript declares.
+    public func restore(loaded tools: [Tool]) {
         lock.withLock {
-            if self.agent !== agent { injected = [] }
-            self.agent = agent
+            loaded = tools.map(\.name)
+            restored = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { _, last in last })
         }
-        agent.prepareTools = { [weak self] in self?.sync() }
-        sync()
     }
 
-    /// Whether the model's harness discovers tools on its own. Cursor's
-    /// agent keeps advertised tools behind its own keyword search, so a
-    /// catalog hands it every tool instead of hiding them behind
-    /// `tool_search` as well.
-    public static func modelDiscoversTools(_ model: Model) -> Bool {
-        model.api == "cursor-agent"
+    /// Every registered tool, loaded or not.
+    public var registeredTools: [AgentTool] {
+        lock.withLock { registered }
     }
 
-    /// Work `tool_search` awaits before searching, such as waiting for MCP
-    /// servers that are still connecting.
-    public func setSearchPreparation(_ preparation: (@Sendable () async -> Void)?) {
-        lock.withLock { searchPreparation = preparation }
-    }
-
-    /// Replace every tool registered under `source`.
-    public func setTools(_ tools: [AgentTool], source: String) {
+    /// The loaded tools, in load order. A loaded tool whose source has not
+    /// registered it (yet) keeps its restored definition and waits for the
+    /// source when called.
+    public var tools: [AgentTool] {
         lock.withLock {
-            let incoming = tools.map { Entry(tool: $0, source: source) }
-            var merged: [Entry] = []
-            var inserted = false
-            for entry in entries {
-                if entry.source == source {
-                    if !inserted { merged.append(contentsOf: incoming); inserted = true }
-                } else {
-                    merged.append(entry)
-                }
-            }
-            if !inserted { merged.append(contentsOf: incoming) }
-            entries = merged
-            let names = Set(entries.map(\.tool.name))
-            for name in pendingRestore where names.contains(name) {
-                if !loaded.contains(name) { loaded.append(name) }
-            }
-            pendingRestore.subtract(names)
-        }
-        sync()
-    }
-
-    /// Make the loaded deferred tools exactly those a transcript had loaded,
-    /// as when a session starts, resumes, or is replaced. Names not
-    /// registered yet are loaded as soon as they are.
-    public func restoreLoadedTools(from messages: [Message]) {
-        let declared = TranscriptTools.currentTools(in: messages).map(\.name)
-        lock.withLock {
-            loaded = []
-            pendingRestore = []
-            let registered = Set(entries.map(\.tool.name))
-            for name in declared {
-                if registered.contains(name) {
-                    if !loaded.contains(name) { loaded.append(name) }
-                } else {
-                    pendingRestore.insert(name)
-                }
+            let byName = Dictionary(registered.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+            return loaded.compactMap { name in
+                byName[name] ?? restored[name].map(restoredTool)
             }
         }
-        sync()
     }
 
-    /// Whether any tool is registered.
-    public var hasTools: Bool {
-        lock.withLock { !entries.isEmpty }
-    }
-
-    public var registeredEntries: [Entry] {
-        lock.withLock { entries }
-    }
-
-    /// Rank the deferred tools that are not loaded yet and load the matches.
-    public func searchAndLoad(query: String, limit: Int) async -> [AgentTool] {
-        let preparation = lock.withLock { searchPreparation }
-        await preparation?()
-        let matches: [AgentTool] = lock.withLock {
-            let candidates = entries.filter { !loaded.contains($0.tool.name) }
-            let ranked = ToolSearchRanker().rank(
-                query: query,
-                documents: candidates.map { ToolSearchDocument(tool: $0.tool) },
-                limit: limit
-            )
-            let byName = Dictionary(candidates.map { ($0.tool.name, $0.tool) }, uniquingKeysWith: { first, _ in first })
-            let tools = ranked.compactMap { byName[$0.name] }
-            loaded.append(contentsOf: tools.map(\.name))
-            return tools
+    /// Rank the registered tools that are not loaded yet and load the matches.
+    public func search(query: String, limit: Int, cancellation: CancellationHandle? = nil) async -> [AgentTool] {
+        await prepare(cancellation)
+        if cancellation?.isCancelled == true { return [] }
+        return lock.withLock {
+            let candidates = registered.filter { !loaded.contains($0.name) }
+            let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+            let matches = ToolSearchRanker()
+                .rank(query: query, documents: candidates.map(ToolSearchDocument.init(tool:)), limit: limit)
+                .compactMap { byName[$0.name] }
+            loaded.append(contentsOf: matches.map(\.name))
+            return matches
         }
-        if !matches.isEmpty { sync() }
-        return matches
     }
 
-    /// The loaded tools, in load order.
-    public var activeTools: [AgentTool] {
-        lock.withLock { activeToolsLocked(exposeAll: false) }
+    private func registeredTool(named name: String) -> AgentTool? {
+        lock.withLock { registered.first { $0.name == name } }
     }
 
-    private func activeToolsLocked(exposeAll: Bool) -> [AgentTool] {
-        if exposeAll { return entries.map(\.tool) }
-        let byName = Dictionary(entries.map { ($0.tool.name, $0.tool) }, uniquingKeysWith: { first, _ in first })
-        return loaded.compactMap { byName[$0] }
-    }
-
-    /// Push the catalog's active tools into the bound agent, leaving the
-    /// caller's own tools untouched. A catalog tool never shadows one of them.
-    public func sync() {
-        lock.withLock {
-            guard let agent else { return }
-            let current = agent.state.tools
-            let base = current.filter { !injected.contains($0.name) }
-            let baseNames = Set(base.map(\.name))
-            let exposeAll = Self.modelDiscoversTools(agent.state.model)
-            let additions = activeToolsLocked(exposeAll: exposeAll).filter { !baseNames.contains($0.name) }
-            let next = base + additions
-            injected = Set(additions.map(\.name))
-            let unchanged = next.count == current.count && zip(next, current).allSatisfy { lhs, rhs in
-                lhs.name == rhs.name && lhs.description == rhs.description && lhs.parameters == rhs.parameters
+    private func restoredTool(_ definition: Tool) -> AgentTool {
+        AgentTool(
+            name: definition.name,
+            label: definition.name,
+            description: definition.description,
+            parameters: definition.parameters
+        ) { [weak self] toolCallId, args, cancellation, onUpdate in
+            guard let self else { throw CodingToolError.runtime("\(definition.name) is no longer available") }
+            await self.prepare(cancellation)
+            guard let tool = self.registeredTool(named: definition.name) else {
+                throw CodingToolError.runtime("\(definition.name) is not available: its server did not provide it")
             }
-            if !unchanged { agent.state.tools = next }
+            return try await tool.execute(toolCallId, args, cancellation, onUpdate)
         }
     }
 }
@@ -319,21 +257,11 @@ Some tools, such as the tools of MCP servers, are not provided to you upfront. U
 """
 
 /// The `tool_search` tool for a catalog.
-///
-/// `sources` names what the deferred tools come from (for example MCP servers
-/// and what they do). It is appended to the description so harnesses that
-/// discover tools by keyword (Cursor) can find `tool_search` by those names.
-/// Keep it stable for the session: it is part of the tool definition.
-public func makeToolSearchTool(catalog: ToolCatalog, sources: [String] = []) -> AgentTool {
-    var description = toolSearchDescription
-    if !sources.isEmpty {
-        description += "\n\nDeferred tools are available from:\n"
-            + sources.map { "- \($0)" }.joined(separator: "\n")
-    }
+public func makeToolSearchTool(catalog: ToolCatalog) -> AgentTool {
     var tool = AgentTool(
         name: toolSearchToolName,
         label: "Tool search",
-        description: description,
+        description: toolSearchDescription,
         parameters: .object([
             "type": .string("object"),
             "properties": .object([
@@ -343,48 +271,43 @@ public func makeToolSearchTool(catalog: ToolCatalog, sources: [String] = []) -> 
                 ]),
                 "limit": .object([
                     "type": .string("integer"),
+                    "minimum": .int(1),
                     "description": .string("Maximum number of tools to load. Defaults to \(defaultToolSearchLimit)."),
                 ]),
             ]),
             "required": .array([.string("query")]),
         ]),
         execute: { _, args, cancellation, _ in
-            try cancellation?.throwIfCancelled()
             guard case .object(let object) = args,
                   case .string(let query)? = object["query"],
                   !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw CodingToolError.invalidArgument("tool_search: query must not be empty")
             }
             var limit = defaultToolSearchLimit
-            switch object["limit"] {
-            case .int(let value)?: limit = value
-            case .double(let value)? where value.rounded() == value: limit = Int(value)
-            case nil, .null?: break
-            default: throw CodingToolError.invalidArgument("tool_search: limit must be a positive integer")
+            if case .int(let value)? = object["limit"] {
+                guard value > 0 else { throw CodingToolError.invalidArgument("tool_search: limit must be positive") }
+                limit = value
             }
-            guard limit > 0 else {
-                throw CodingToolError.invalidArgument("tool_search: limit must be a positive integer")
+            let tools = await catalog.search(query: query, limit: limit, cancellation: cancellation)
+            try cancellation?.throwIfCancelled()
+            guard !tools.isEmpty else {
+                return AgentToolResult(
+                    content: [.text(TextContent(text: "No matching tools found."))],
+                    details: .object(["loaded": .array([])]),
+                    uiDisplay: ["no matching tools"]
+                )
             }
-            let tools = await catalog.searchAndLoad(query: query, limit: limit)
-            let text: String
-            if tools.isEmpty {
-                text = "No matching tools found."
-            } else {
-                let lines = tools.map { tool -> String in
-                    let summary = tool.description
-                        .split(whereSeparator: \.isNewline).first
-                        .map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
-                    return "- \(tool.name): \(summary)"
-                }
-                text = "Loaded \(tools.count) tool\(tools.count == 1 ? "" : "s"). They are available from your next call:\n"
-                    + lines.joined(separator: "\n")
+            let lines = tools.map { tool -> String in
+                let summary = tool.description.split(whereSeparator: \.isNewline).first
+                    .map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+                return "- \(tool.name): \(summary)"
             }
+            let text = "Loaded \(tools.count) tool\(tools.count == 1 ? "" : "s"). They are available from your next call:\n"
+                + lines.joined(separator: "\n")
             return AgentToolResult(
                 content: [.text(TextContent(text: text))],
                 details: .object(["loaded": .array(tools.map { .string($0.name) })]),
-                uiDisplay: [tools.isEmpty
-                    ? "no matching tools"
-                    : "loaded \(tools.map(\.name).joined(separator: ", "))"]
+                uiDisplay: ["loaded \(tools.map(\.name).joined(separator: ", "))"]
             )
         }
     )

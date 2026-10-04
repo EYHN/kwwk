@@ -77,7 +77,7 @@ struct MCPRuntimeTests {
 
         let ignored = MCPRuntime(cwd: sandbox.project.path, homeDirectory: sandbox.home.path, environment: [:])
         #expect(ignored.manager == nil)
-        #expect(ignored.warnings.contains { $0.contains("repo") && $0.contains(MCPRuntime.allowProjectServersVariable) })
+        #expect(ignored.warnings.contains { $0.contains(".kwwk/mcp.json") && $0.contains(MCPRuntime.allowProjectServersVariable) })
 
         let trusted = MCPRuntime(
             cwd: sandbox.project.path,
@@ -109,12 +109,8 @@ struct MCPRuntimeTests {
         #expect(agent.state.systemPrompt.contains("<mcp_servers>"))
         #expect(agent.state.systemPrompt.contains("tracker: Docs and issue tracker"))
 
-        #expect(await runtime.waitForStartup(timeout: 20))
-        let names = agent.state.tools.map(\.name)
-        #expect(names == ["echo", toolSearchToolName])
-        #expect(runtime.catalog.registeredEntries.map(\.tool.name).sorted()
-            == ["mcp__tracker__lookup", "mcp__tracker__search_issues"])
-
+        // Nothing waits for the server: tool_search does.
+        #expect(agent.state.tools.map(\.name) == ["echo", toolSearchToolName])
         let search = try #require(agent.state.tools.first { $0.name == toolSearchToolName })
         let result = try await search.execute("s1", ["query": "search bugs"], nil, nil)
         guard case .text(let text)? = result.content.first else {
@@ -122,8 +118,46 @@ struct MCPRuntimeTests {
             return
         }
         #expect(text.text.contains("mcp__tracker__search_issues"))
-        let loaded = try #require(agent.state.tools.first { $0.name == "mcp__tracker__search_issues" })
+        #expect(runtime.catalog.registeredTools.map(\.name).sorted()
+            == ["mcp__tracker__lookup", "mcp__tracker__search_issues"])
+        let loaded = try #require(agent.state.effectiveTools.first { $0.name == "mcp__tracker__search_issues" })
         let call = try await loaded.execute("c1", ["query": "crash"], nil, nil)
+        guard case .text(let output)? = call.content.first else {
+            Issue.record("MCP call returned no text")
+            return
+        }
+        #expect(output.text == #"search_issues:{"query": "crash"}"#)
+    }
+
+    @Test("a resumed session keeps its MCP tools while the server connects")
+    func resumeBeforeConnect() async throws {
+        let sandbox = try Sandbox()
+        defer { try? FileManager.default.removeItem(at: sandbox.root) }
+        try sandbox.writeUser(["tracker": sandbox.serverEntry])
+        let runtime = MCPRuntime(cwd: sandbox.project.path, homeDirectory: sandbox.home.path, environment: [:])
+        defer { Task { await runtime.shutdown() } }
+
+        let declared = Tool(
+            name: "mcp__tracker__search_issues",
+            description: "Search the issue tracker for bugs",
+            parameters: ["type": "object", "properties": ["query": ["type": "string"]]]
+        )
+        let transcript: [Message] = [
+            .user(UserMessage(text: "find bugs")),
+            .system(SystemMessage(toolsAdded: [declared])),
+        ]
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), messages: transcript))
+        runtime.attach(to: agent, messages: transcript)
+
+        // Declared before the server even started, so the next request's
+        // tools match the transcript and nothing is withdrawn.
+        let tool = try #require(agent.state.effectiveTools.first { $0.name == declared.name })
+        #expect(tool.toKWWKAITool() == declared)
+
+        await runtime.start()
+        let call = try await tool.execute("c1", ["query": "crash"], nil, nil)
         guard case .text(let output)? = call.content.first else {
             Issue.record("MCP call returned no text")
             return

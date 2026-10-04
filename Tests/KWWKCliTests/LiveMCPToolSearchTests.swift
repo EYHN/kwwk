@@ -8,7 +8,8 @@ import Testing
 /// Explicit opt-in only (`KWWK_LIVE_MCP=1`). Drives the TUI's MCP runtime
 /// against a local fake MCP server with the logins stored in
 /// `~/.kwwk/oauth.json`. Prints model, tool calls and cache usage per
-/// request; never prints credentials or raw provider errors.
+/// request, and the provider's error message on failure; never prints
+/// credentials.
 ///
 /// `KWWK_LIVE_MCP_CASES` narrows the run, e.g. `anthropic:claude-opus-5-5`.
 @Suite("Live MCP tool search", .serialized)
@@ -222,9 +223,9 @@ for line in sys.stdin:
                     autoCompact: nil,
                     authResolver: resolved.authResolver
                 ))
+                // No waiting: the restored tool is declared before its server connects.
                 resumedRuntime.attach(to: resumed, messages: resumed.state.messages)
-                await resumedRuntime.waitForStartup(timeout: 30)
-                #expect(resumed.state.tools.contains { $0.name == "mcp__acme__search_issues" }, "resume should reload the tool")
+                #expect(resumed.state.effectiveTools.contains { $0.name == "mcp__acme__search_issues" }, "resume should reload the tool")
                 let third = await Self.prompt(resumed, "Search Acme issues about timeout and give me the number.", recorder: recorder)
                 Self.report("\(label) [resume]", third)
                 #expect(third.finalText.contains("4400"))

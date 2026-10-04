@@ -27,7 +27,6 @@ public final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
     public let args: [String]
     public let env: [String: String]
     public let cwd: String?
-    public let workingDirectory: String
 
     private let lock = NSLock()
     private var stderrBuffer = Data()
@@ -42,21 +41,12 @@ public final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
 
     /// - Parameters:
     ///   - env: Added to the inherited environment.
-    ///   - cwd: Server working directory; relative paths resolve against
-    ///     `workingDirectory`. `~/` names the home directory.
-    ///   - workingDirectory: Session directory, also the default `cwd`.
-    public init(
-        command: String,
-        args: [String] = [],
-        env: [String: String] = [:],
-        cwd: String? = nil,
-        workingDirectory: String = FileManager.default.currentDirectoryPath
-    ) {
+    ///   - cwd: Server working directory; nil inherits the process's.
+    public init(command: String, args: [String] = [], env: [String: String] = [:], cwd: String? = nil) {
         self.command = command
         self.args = args
         self.env = env
         self.cwd = cwd
-        self.workingDirectory = workingDirectory
     }
 
     public var diagnostics: String? {
@@ -77,21 +67,18 @@ public final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
         var environment = ProcessInfo.processInfo.environment
         for (key, value) in env { environment[key] = value }
 
-        let directory = Self.resolvePath(Self.expandHome(cwd ?? "."), relativeTo: workingDirectory)
+        let directory = Self.resolvePath(cwd ?? ".", relativeTo: FileManager.default.currentDirectoryPath)
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: directory, isDirectory: &isDirectory), isDirectory.boolValue else {
             throw MCPError.spawnFailed("working directory does not exist: \(directory)")
         }
-        let expandedCommand = Self.expandHome(command)
-        guard let executable = Self.findExecutable(
-            expandedCommand, path: environment["PATH"], relativeTo: directory
-        ) else {
+        guard let executable = Self.findExecutable(command, path: environment["PATH"], relativeTo: directory) else {
             throw MCPError.spawnFailed("command not found: \(command)")
         }
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = args.map(Self.expandHome)
+        process.arguments = args
         process.environment = environment
         process.currentDirectoryURL = URL(fileURLWithPath: directory)
         let stdin = Pipe()
@@ -262,13 +249,6 @@ public final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
     #endif
 
     // MARK: - Paths
-
-    static func expandHome(_ value: String) -> String {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        if value == "~" { return home }
-        if value.hasPrefix("~/") { return home + String(value.dropFirst(1)) }
-        return value
-    }
 
     static func resolvePath(_ path: String, relativeTo base: String) -> String {
         if path.hasPrefix("/") { return URL(fileURLWithPath: path).standardizedFileURL.path }

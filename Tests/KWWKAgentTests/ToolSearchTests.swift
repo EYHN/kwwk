@@ -13,6 +13,24 @@ private func namedTool(_ name: String, _ description: String, properties: [Strin
     )
 }
 
+private struct TestFailure: Error {}
+
+private actor Gate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
+}
+
 private actor ContextLog {
     var contexts: [Context] = []
     func record(_ context: Context) { contexts.append(context) }
@@ -91,7 +109,7 @@ struct ToolCatalogTests {
             namedTool("mcp__gh__search_issues", "Search GitHub issues"),
             namedTool("mcp__gh__get_file", "Read a file from a repository"),
             namedTool("mcp__docs__lookup", "Look up documentation"),
-        ], source: "mcp")
+        ])
         catalog.bind(to: agent)
 
         try await agent.prompt("find the bug report")
@@ -112,7 +130,9 @@ struct ToolCatalogTests {
         #expect(declarations.count == 2)
         #expect(declarations.last?.toolsAdded?.map(\.name) == ["mcp__gh__search_issues"])
         #expect(TranscriptTools.currentTools(in: agent.state.messages).map(\.name).sorted()
-            == agent.state.tools.map(\.name).sorted())
+            == agent.state.effectiveTools.map(\.name).sorted())
+        // The catalog feeds the request; the caller's own tools are untouched.
+        #expect(agent.state.tools.map(\.name) == ["calculate", toolSearchToolName])
         // The loaded tool really ran.
         #expect(agent.state.messages.contains { message in
             if case .toolResult(let result) = message { return result.toolName == "mcp__gh__search_issues" && !result.isError }
@@ -155,60 +175,58 @@ struct ToolCatalogTests {
         #expect(TranscriptTools.currentTools(in: agent.state.messages).map(\.name) == ["calculate"])
     }
 
-    @Test("restoring a transcript reloads its deferred tools, even ones registered later")
-    func restoreLoadedTools() async {
+    @Test("a restored tool keeps its transcript definition and runs once its source registers it")
+    func restoredTools() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        let transcript: [Message] = [
-            .system(SystemMessage(toolsAdded: [namedTool("calculate", "x").toKWWKAITool()])),
-            .user(UserMessage(text: "hi")),
-            .system(SystemMessage(toolsAdded: [
-                namedTool("mcp__a__one", "one").toKWWKAITool(),
-                namedTool("mcp__b__two", "two").toKWWKAITool(),
-            ])),
-        ]
         let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), tools: [makeCalculateTool()]))
-        let catalog = ToolCatalog()
-        catalog.setTools([
-            namedTool("mcp__a__one", "one"),
-            namedTool("mcp__a__other", "other"),
-        ], source: "a")
-        catalog.restoreLoadedTools(from: transcript)
+        let gate = Gate()
+        let catalog = ToolCatalog { _ in await gate.wait() }
+        let declared = namedTool("mcp__a__one", "one").toKWWKAITool()
+        catalog.restore(loaded: [declared])
         catalog.bind(to: agent)
-        #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__a__one"])
 
-        catalog.setTools([namedTool("mcp__b__two", "two")], source: "b")
-        #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__a__one", "mcp__b__two"])
+        // Before the server connects the tool is already declared, unchanged.
+        #expect(agent.state.effectiveTools.map(\.name) == ["calculate", "mcp__a__one"])
+        let restored = try #require(agent.state.effectiveTools.last)
+        #expect(restored.toKWWKAITool() == declared)
 
-        // A server that withdraws a loaded tool takes it out of the agent.
-        catalog.setTools([], source: "a")
-        #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__b__two"])
+        // A call waits for the source, then runs the registered tool.
+        let call = Task { try await restored.execute("c1", .object([:]), nil, nil) }
+        catalog.setTools([namedTool("mcp__a__one", "one"), namedTool("mcp__a__other", "other")])
+        await gate.open()
+        let result = try await call.value
+        guard case .text(let text)? = result.content.first else { throw TestFailure() }
+        #expect(text.text == "mcp__a__one ran")
 
         // A new session starts with nothing loaded.
-        catalog.restoreLoadedTools(from: [])
-        #expect(agent.state.tools.map(\.name) == ["calculate"])
+        catalog.restore(loaded: [])
+        #expect(agent.state.effectiveTools.map(\.name) == ["calculate"])
     }
 
-    @Test("Cursor discovers tools itself, so it gets every catalog tool")
-    func cursorGetsEveryTool() async {
+    @Test("a restored tool its source never provides fails when called")
+    func restoredToolWithoutSource() async throws {
+        let catalog = ToolCatalog()
+        catalog.restore(loaded: [namedTool("mcp__gone__tool", "gone").toKWWKAITool()])
+        let tool = try #require(catalog.tools.first)
+        await #expect(throws: CodingToolError.self) {
+            _ = try await tool.execute("c1", .object([:]), nil, nil)
+        }
+    }
+
+    @Test("loading tools is not a context edit, so it never invalidates compaction")
+    func loadingKeepsRevision() async {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        var cursor = faux.getModel()
-        cursor.api = "cursor-agent"
         let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), tools: [makeCalculateTool()]))
         let catalog = ToolCatalog()
-        catalog.setTools([namedTool("mcp__a__one", "one"), namedTool("mcp__a__two", "two")], source: "a")
         catalog.bind(to: agent)
-        #expect(agent.state.tools.map(\.name) == ["calculate"])
-
-        // The switch takes effect at the next request through `prepareTools`.
-        agent.state.model = cursor
-        agent.prepareTools?()
-        #expect(agent.state.tools.map(\.name) == ["calculate", "mcp__a__one", "mcp__a__two"])
-
-        agent.state.model = faux.getModel()
-        agent.prepareTools?()
-        #expect(agent.state.tools.map(\.name) == ["calculate"])
+        let before = agent.state.snapshotModelContext().revision
+        catalog.setTools([namedTool("mcp__a__one", "issue search")])
+        _ = await catalog.search(query: "issue", limit: 5)
+        let after = agent.state.snapshotModelContext()
+        #expect(after.revision == before)
+        #expect(after.context.tools.map(\.name) == ["calculate", "mcp__a__one"])
     }
 
     @Test("compaction re-declares the tool state right after the recap")

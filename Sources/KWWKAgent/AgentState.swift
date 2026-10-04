@@ -16,6 +16,7 @@ public final class AgentState: @unchecked Sendable {
     private var _thinkingDisplay: ThinkingDisplay
     private var _verboseEnabled: Bool
     private var _tools: [AgentTool]
+    private var _toolSource: (@Sendable () -> [AgentTool])?
     private var _messages: [Message]
     /// Advances whenever model-facing context changes. Compaction uses it as a
     /// compare-and-swap guard so a summary built from one prompt snapshot can
@@ -93,6 +94,29 @@ public final class AgentState: @unchecked Sendable {
         }
     }
 
+    /// Tools that come and go on their own, such as a ``ToolCatalog``'s
+    /// loaded MCP tools. Read before every provider request and merged after
+    /// `tools`; `tools` wins on a name clash. Changing what the source
+    /// returns is not a context edit: it never invalidates a compaction in
+    /// flight.
+    public var toolSource: (@Sendable () -> [AgentTool])? {
+        get { lock.withLock { _toolSource } }
+        set { lock.withLock { _toolSource = newValue } }
+    }
+
+    /// The tools the next provider request declares: `tools` plus the
+    /// source's tools.
+    public var effectiveTools: [AgentTool] {
+        let (tools, source) = lock.withLock { (_tools, _toolSource) }
+        return Self.merge(tools, source?())
+    }
+
+    private static func merge(_ tools: [AgentTool], _ extra: [AgentTool]?) -> [AgentTool] {
+        guard let extra, !extra.isEmpty else { return tools }
+        let names = Set(tools.map(\.name))
+        return tools + extra.filter { !names.contains($0.name) }
+    }
+
     public var messages: [Message] {
         get { lock.withLock { _messages } }
         set {
@@ -129,13 +153,15 @@ public final class AgentState: @unchecked Sendable {
     }
 
     func snapshotModelContext() -> (revision: UInt64, context: AgentContext, model: Model) {
-        lock.withLock {
+        let source = lock.withLock { _toolSource }
+        let extra = source?()
+        return lock.withLock {
             (
                 _contextRevision,
                 AgentContext(
                     systemPrompt: _systemPrompt,
                     messages: _messages,
-                    tools: _tools
+                    tools: Self.merge(_tools, extra)
                 ),
                 _model
             )

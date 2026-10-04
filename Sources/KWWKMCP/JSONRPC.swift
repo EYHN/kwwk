@@ -160,16 +160,24 @@ public struct NewlineFramer: Sendable {
 
     /// Append bytes and return every complete line.
     public mutating func append(_ data: Data) -> [Data] {
+        // Only the new bytes can hold a newline: scanning just them keeps a
+        // large message arriving in many chunks linear.
+        guard data.contains(UInt8(ascii: "\n")) else {
+            buffer.append(data)
+            return []
+        }
         buffer.append(data)
         var lines: [Data] = []
-        while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-            var line = buffer[buffer.startIndex..<newline]
-            buffer = Data(buffer[buffer.index(after: newline)...])
+        var start = buffer.startIndex
+        while let newline = buffer[start...].firstIndex(of: UInt8(ascii: "\n")) {
+            var line = buffer[start..<newline]
+            start = buffer.index(after: newline)
             if line.last == UInt8(ascii: "\r") { line = line.dropLast() }
             if !line.allSatisfy({ $0 == UInt8(ascii: " ") || $0 == UInt8(ascii: "\t") }) {
                 lines.append(Data(line))
             }
         }
+        buffer = Data(buffer[start...])
         return lines
     }
 

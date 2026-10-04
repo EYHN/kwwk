@@ -31,7 +31,7 @@ struct MCPStdioEndToEndTests {
             command: python,
             args: ["-u", installed.script],
             env: env,
-            workingDirectory: installed.directory.path
+            cwd: installed.directory.path
         )
         return (transport, installed.directory)
     }
@@ -156,13 +156,13 @@ struct MCPStdioEndToEndTests {
 
     @Test("spawn failures are reported")
     func spawnFailure() async throws {
-        let transport = MCPStdioTransport(command: "definitely-not-a-command-kwwk", workingDirectory: "/tmp")
+        let transport = MCPStdioTransport(command: "definitely-not-a-command-kwwk", cwd: "/tmp")
         let client = MCPClient(transport: transport)
         await #expect(throws: MCPError.spawnFailed("command not found: definitely-not-a-command-kwwk")) {
             try await client.connect()
         }
         // A server that exits immediately reports its stderr.
-        let crash = MCPStdioTransport(command: "/bin/sh", args: ["-c", "echo boom >&2; exit 2"], workingDirectory: "/tmp")
+        let crash = MCPStdioTransport(command: "/bin/sh", args: ["-c", "echo boom >&2; exit 2"], cwd: "/tmp")
         let crashClient = MCPClient(transport: crash)
         do {
             try await crashClient.connect(timeoutSeconds: 5)
@@ -180,81 +180,69 @@ struct MCPStdioEndToEndTests {
         let configs = [
             MCPServerConfig(
                 name: "fake-srv",
-                transport: .stdio(command: python, args: ["-u", installed.script]),
-                exposure: .deferred,
-                toolExposure: ["echo": .deferred, "s*": .hidden, "state": .deferred],
-                description: "Fake tools"
+                transport: .stdio(command: python, args: ["-u", installed.script], cwd: installed.directory.path),
+                toolExposure: ["s*": .hidden, "state": .deferred]
             ),
-            MCPServerConfig(name: "off", transport: .stdio(command: "nothing"), enabled: false),
             MCPServerConfig(name: "broken", transport: .stdio(command: "definitely-not-a-command-kwwk")),
         ]
-        let manager = MCPManager(configs: configs, workingDirectory: installed.directory.path)
+        let manager = MCPManager(configs: configs)
         let updates = Collector<[String]>()
         await manager.onToolsChanged { tools in updates.append(tools.map(\.tool.name)) }
-        let statuses = Collector<[MCPServerStatus]>()
-        await manager.onStatusChanged { statuses.append($0) }
         await manager.start()
         #expect(await manager.waitForStartup(timeout: 15))
+        // Startup includes delivering the tools to observers.
+        #expect(updates.values.last?.contains("mcp__fake_srv__echo") == true)
 
         let tools = await manager.tools()
+        func tool(_ name: String) throws -> AgentTool {
+            try #require(tools.first { $0.tool.name == "mcp__fake_srv__\(name)" }).tool
+        }
         let names = tools.map(\.tool.name)
-        #expect(names.contains("mcp__fake_srv__echo"))
         #expect(names.contains("mcp__fake_srv__state"))
         #expect(!names.contains("mcp__fake_srv__slow"), "hidden by pattern")
-        #expect(tools.first { $0.originalName == "echo" }?.exposure == .deferred)
-        #expect(tools.first { $0.originalName == "add" }?.exposure == .deferred)
         #expect(tools.allSatisfy { $0.server == "fake-srv" })
 
-        let states = await manager.statuses().map(\.state)
-        #expect(states[0] == .connected)
-        #expect(states[1] == .disabled)
-        if case .failed(let message) = states[2] {
+        @Sendable func state(_ server: String) async -> MCPServerState? {
+            await manager.statuses().first { $0.name == server }?.state
+        }
+        #expect(await state("fake-srv") == .connected)
+        if case .failed(let message)? = await state("broken") {
             #expect(message.contains("command not found"))
         } else {
-            Issue.record("expected broken server to fail, got \(states[2])")
+            Issue.record("expected broken server to fail")
         }
 
-        let summaries = await manager.serverSummaries()
-        #expect(summaries.map(\.name) == ["fake-srv", "broken"])
-        #expect(summaries[0].instructions == "Fake server for tests.\nSecond line.")
-        #expect(summaries[0].summaryLine == "Fake tools")
-        let section = MCPManager.renderServersSection(summaries)
-        #expect(section?.contains("- fake-srv: Fake tools") == true)
-
         // Execute through the AgentTool.
-        let echo = try #require(tools.first { $0.originalName == "echo" })
-        let result = try await echo.tool.execute("call-1", ["text": "via agent"], nil, nil)
+        let echo = try tool("echo")
+        let result = try await echo.execute("call-1", ["text": "via agent"], nil, nil)
         #expect(result.content == [.text(TextContent(text: "via agent"))])
-        let fail = try #require(tools.first { $0.originalName == "fail" })
+        let fail = try tool("fail")
         await #expect(throws: MCPToolCallError.self) {
-            _ = try await fail.tool.execute("call-2", [:], nil, nil)
+            _ = try await fail.execute("call-2", [:], nil, nil)
         }
 
         // list_changed adds the new tool and notifies observers.
-        let change = try #require(tools.first { $0.originalName == "change" })
-        _ = try await change.tool.execute("call-3", [:], nil, nil)
-        #expect(await waitUntil { await manager.tools().contains { $0.originalName == "late" } })
+        _ = try await tool("change").execute("call-3", [:], nil, nil)
+        #expect(await waitUntil { await manager.tools().contains { $0.tool.name == "mcp__fake_srv__late" } })
         #expect(await waitUntil { updates.values.last?.contains("mcp__fake_srv__late") == true })
 
         // A dropped connection reconnects on the next call.
-        let exit = try #require(tools.first { $0.originalName == "exit" })
-        _ = try? await exit.tool.execute("call-4", [:], nil, nil)
+        _ = try? await tool("exit").execute("call-4", [:], nil, nil)
         #expect(await waitUntil {
-            if case .disconnected? = await manager.state(of: "fake-srv") { return true }
+            if case .disconnected? = await state("fake-srv") { return true }
             return false
         })
-        let again = try await echo.tool.execute("call-5", ["text": "back"], nil, nil)
+        let again = try await echo.execute("call-5", ["text": "back"], nil, nil)
         #expect(again.content == [.text(TextContent(text: "back"))])
-        #expect(await manager.state(of: "fake-srv") == .connected)
+        #expect(await state("fake-srv") == .connected)
 
         await manager.shutdown()
         #expect(await manager.tools().isEmpty)
         #expect(updates.values.last == [])
-        #expect(await manager.state(of: "fake-srv") == .closed)
+        #expect(await state("fake-srv") == .closed)
         await #expect(throws: MCPManagerError.shutDown) {
-            _ = try await echo.tool.execute("call-6", ["text": "x"], nil, nil)
+            _ = try await echo.execute("call-6", ["text": "x"], nil, nil)
         }
-        #expect(!statuses.values.isEmpty)
     }
 
     @Test("tool calls wait for a server that is still connecting")
@@ -263,8 +251,10 @@ struct MCPStdioEndToEndTests {
         let installed = try FakeMCPServer.install()
         defer { try? FileManager.default.removeItem(at: installed.directory) }
         let manager = MCPManager(
-            configs: [MCPServerConfig(name: "fake", transport: .stdio(command: python, args: ["-u", installed.script]))],
-            workingDirectory: installed.directory.path
+            configs: [MCPServerConfig(
+                name: "fake",
+                transport: .stdio(command: python, args: ["-u", installed.script], cwd: installed.directory.path)
+            )]
         )
         await manager.start()
         // Call before startup finished.

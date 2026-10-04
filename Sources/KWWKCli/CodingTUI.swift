@@ -73,9 +73,8 @@ func runCodingTUIInternal(
         agent.state.messages = resolvedResume.messages
     }
 
-    // MCP servers connect in the background; their tools join the agent's
-    // tool set through the catalog as they arrive (direct) or when
-    // `tool_search` loads them (deferred).
+    // MCP servers connect in the background; their tools reach the model
+    // once `tool_search` loads them.
     let mcpRuntime = MCPRuntime(cwd: cwd, environment: environment)
     await mcpRuntime.start()
     mcpRuntime.attach(to: agent, messages: agent.state.messages)
@@ -1418,9 +1417,11 @@ func runCodingTUIInternal(
         await currentCodingAgent.detachBackground?()
         await bgManager.closeSession(sessionId: agentBox.sessionId)
         currentCodingAgent.agent.clearAllQueues()
+        // Before waiting for idle: closing the servers releases any tool call
+        // still waiting on a connection.
+        await mcpRuntime.shutdown()
         await currentCodingAgent.agent.waitForIdle()
         await currentCodingAgent.agent.closeSession()
-        await mcpRuntime.shutdown()
     }
 
     // `--resume`: open the arrow-key session picker on the first frame, reusing

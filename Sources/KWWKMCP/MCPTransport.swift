@@ -31,34 +31,21 @@ extension MCPTransport {
     public var diagnostics: String? { nil }
 }
 
-/// Builds the transport of a configured server. `workingDirectory` is the
-/// session directory relative `cwd` values resolve against.
-public typealias MCPTransportFactory = @Sendable (
-    _ config: MCPServerConfig,
-    _ workingDirectory: String
-) throws -> any MCPTransport
+/// Builds the transport of a configured server.
+public typealias MCPTransportFactory = @Sendable (_ config: MCPServerConfig) throws -> any MCPTransport
 
 public enum MCPTransports {
     /// The default transport for a config: `MCPStdioTransport` for `.stdio`,
     /// `MCPStreamableHTTPTransport` for `.http`.
-    public static func make(
-        for config: MCPServerConfig,
-        workingDirectory: String
-    ) throws -> any MCPTransport {
+    public static func make(for config: MCPServerConfig) throws -> any MCPTransport {
         switch config.transport {
         case .stdio(let command, let args, let env, let cwd):
-            return MCPStdioTransport(
-                command: command,
-                args: args,
-                env: env,
-                cwd: cwd,
-                workingDirectory: workingDirectory
-            )
+            return MCPStdioTransport(command: command, args: args, env: env, cwd: cwd)
         case .http(let url, let headers):
             return MCPStreamableHTTPTransport(
                 url: url,
                 headers: headers,
-                requestTimeoutSeconds: config.toolTimeoutSeconds ?? MCPClient.defaultRequestTimeoutSeconds
+                requestTimeoutSeconds: config.toolTimeoutSeconds
             )
         }
     }

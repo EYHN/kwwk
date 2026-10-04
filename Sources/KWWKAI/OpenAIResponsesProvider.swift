@@ -97,7 +97,11 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         let responsesURL = urlBuilder(model, options, defaultBaseURL)
         let url = codex ? responsesURL : responsesURL.appendingPathComponent("compact")
         var nativeContext = context
-        nativeContext.messages = TransformMessages.normalize(context.messages, model: model)
+        // Compaction sends the full tool list; in-place tool changes would
+        // otherwise leave later tools out of both `tools` and `input`.
+        nativeContext.messages = TransformMessages.normalize(
+            TranscriptTools.withoutSystemMessages(context.messages), model: model
+        )
         let input = Self.encodeInput(context: nativeContext, model: model)
         var body: [String: JSONValue] = [
             "model": .string(model.id),

@@ -47,9 +47,9 @@ public struct AgentLoopConfig: Sendable {
     public var betweenTurns: BetweenTurnsHook?
     public var beforeRunEnd: BeforeRunEndHook?
     public var contextCompaction: ContextCompactionHook?
-    /// Live tool set, read before every provider request so tools activated
-    /// mid-run (e.g. by `tool_search`) are callable on the next request.
-    /// Nil keeps the tools the run started with.
+    /// Live tool set, read after every turn so tools activated mid-run
+    /// (e.g. by `tool_search`) are declared on the next request. Nil keeps
+    /// the tools the run started with.
     public var currentTools: (@Sendable () -> [AgentTool])?
 
     public init(
@@ -402,10 +402,6 @@ public enum AgentLoop {
                     return
                 }
 
-                if let currentTools = config.currentTools {
-                    currentContext.tools = currentTools()
-                }
-
                 if let compact = config.contextCompaction {
                     if let replacement = try await compact(
                         currentContext,
@@ -640,6 +636,13 @@ public enum AgentLoop {
                 if finalTextOnly {
                     await emit(.agentEnd(messages: delta(), summary: finalize(nil)))
                     return
+                }
+
+                // Tools that changed during this turn (e.g. loaded by
+                // `tool_search`) join the next request. Refreshed before the
+                // SDK hook so the hook can still override the tool set.
+                if let currentTools = config.currentTools {
+                    currentContext.tools = currentTools()
                 }
 
                 // SDK between-turn hooks may replace the context before the

@@ -155,17 +155,21 @@ struct MCPHTTPTransportTests {
         #expect(delete.headers["Mcp-Session-Id"] == "session-123")
     }
 
-    @Test("expired sessions and HTTP errors surface as MCPError")
+    @Test("server errors surface as MCPError; an expired session ends the connection")
     func errors() async throws {
         let server = FakeHTTPMCPServer()
         let transport = MCPStreamableHTTPTransport(url: URL(string: "https://x.example/mcp")!, httpClient: server)
         let client = MCPClient(transport: transport)
+        let closed = Collector<String>()
+        await client.setCloseHandler { error in closed.append(error.map(MCPClient.describe) ?? "") }
         try await client.connect(timeoutSeconds: 5)
-        server.expireSession = true
-        await #expect(throws: MCPError.sessionExpired) { _ = try await client.listTools() }
         await #expect(throws: MCPError.server(code: -32601, message: "nope", data: nil)) {
             _ = try await client.request(method: "resources/list", params: nil)
         }
-        await client.close()
+        server.expireSession = true
+        await #expect(throws: MCPError.sessionExpired) { _ = try await client.listTools() }
+        // The owner hears about it and reconnects with a fresh session.
+        #expect(await waitUntil { closed.values.count == 1 })
+        #expect(await !client.isConnected)
     }
 }

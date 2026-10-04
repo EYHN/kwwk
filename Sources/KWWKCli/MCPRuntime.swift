@@ -3,29 +3,25 @@ import KWWKAI
 import KWWKAgent
 import KWWKMCP
 
-/// The TUI's MCP integration: loads `~/.kwwk/mcp.json` (and, when allowed,
-/// `<cwd>/.kwwk/mcp.json`), connects servers in the background, and keeps
-/// their tools in a ``ToolCatalog`` bound to the live agent.
+/// The TUI's MCP integration: loads `mcp.json` (see ``MCPConfigFile``),
+/// connects the servers in the background and exposes their tools through a
+/// ``ToolCatalog`` and `tool_search`.
 ///
-/// MCP tools are always deferred: nothing waits for a server before a
-/// request. `tool_search` waits for servers still connecting, then loads the
-/// matching tools; the agent loop records the change in the transcript, so
-/// prompt caching and session resume keep working.
-final class MCPRuntime: @unchecked Sendable {
-    /// Environment variable that opts into servers defined by the project's
-    /// own `.kwwk/mcp.json`. Off by default: a cloned repository must not be
-    /// able to launch arbitrary commands just by being opened.
+/// Nothing waits for a server before a request. `tool_search` waits for
+/// servers that are still connecting, and a tool restored from a resumed
+/// transcript waits for its server when called.
+final class MCPRuntime: Sendable {
+    /// Opts into servers defined by the project's own `.kwwk/mcp.json`. Off
+    /// by default: opening a repository must not run its commands.
     static let allowProjectServersVariable = "KWWK_ALLOW_PROJECT_MCP"
-    static let catalogSource = "mcp"
+    /// Prefix of every MCP tool name (`mcp__<server>__<tool>`).
+    static let toolPrefix = "mcp__"
 
     let manager: MCPManager?
-    let catalog = ToolCatalog()
+    let catalog: ToolCatalog
     let warnings: [String]
-    private let configs: [MCPServerConfig]
-
-    /// Static system-prompt section naming the servers whose tools must be
-    /// searched for. Built from config only so it never changes while
-    /// servers connect.
+    /// Names the servers and what they offer. Built from config only, so it
+    /// never changes while servers connect.
     let systemPromptSection: String?
 
     init(
@@ -33,43 +29,24 @@ final class MCPRuntime: @unchecked Sendable {
         homeDirectory: String = FileManager.default.homeDirectoryForCurrentUser.path,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
-        let loaded = MCPConfigLoader.load(cwd: cwd, homeDirectory: homeDirectory, environment: environment)
-        var warnings = loaded.warnings
-        let projectFile = URL(fileURLWithPath: cwd).appendingPathComponent(".kwwk/mcp.json").standardizedFileURL.path
-        let allowProject = ["1", "true", "yes"].contains(environment[Self.allowProjectServersVariable]?.lowercased() ?? "")
-        var configs: [MCPServerConfig] = []
-        var ignored: [String] = []
-        for config in loaded.servers {
-            let fromProject = config.source.map {
-                URL(fileURLWithPath: $0).standardizedFileURL.path == projectFile
-            } ?? false
-            if fromProject && !allowProject && config.enabled {
-                ignored.append(config.name)
-                continue
-            }
-            configs.append(config)
+        let loaded = MCPConfigFile.load(
+            cwd: cwd,
+            homeDirectory: homeDirectory,
+            trustProject: ["1", "true", "yes"].contains(environment[Self.allowProjectServersVariable]?.lowercased() ?? ""),
+            environment: environment
+        )
+        // A server whose every tool is hidden contributes nothing: don't run it.
+        let entries = loaded.entries.filter { entry in
+            entry.server.exposure == .deferred || entry.server.toolExposure.values.contains(.deferred)
         }
-        if !ignored.isEmpty {
-            warnings.append(
-                "ignored MCP servers from \(projectFile): \(ignored.joined(separator: ", ")). "
-                    + "Set \(Self.allowProjectServersVariable)=1 to trust this project's servers."
-            )
+        let manager = entries.isEmpty ? nil : MCPManager(configs: entries.map(\.server))
+        let startupTimeout = entries.map(\.server.startupTimeoutSeconds).max() ?? 0
+        self.manager = manager
+        self.catalog = ToolCatalog { cancellation in
+            await manager?.waitForStartup(timeout: startupTimeout, cancellation: cancellation)
         }
-        self.configs = configs
-        self.warnings = warnings
-        let enabled = configs.filter(\.enabled)
-        self.manager = enabled.isEmpty ? nil : MCPManager(configs: configs, workingDirectory: cwd)
-        self.systemPromptSection = Self.renderSection(enabled)
-    }
-
-    /// Whether any enabled server can expose a tool, which makes
-    /// `tool_search` necessary.
-    var hasSearchableServers: Bool {
-        configs.contains(where: Self.isSearchable)
-    }
-
-    private static func isSearchable(_ config: MCPServerConfig) -> Bool {
-        config.enabled && (config.exposure == .deferred || config.toolExposure.values.contains(.deferred))
+        self.warnings = loaded.warnings
+        self.systemPromptSection = Self.renderSection(entries)
     }
 
     /// Connect servers in the background and mirror their tools into the
@@ -77,53 +54,28 @@ final class MCPRuntime: @unchecked Sendable {
     func start() async {
         guard let manager else { return }
         let catalog = catalog
-        await manager.onToolsChanged { tools in
-            Self.publish(tools, to: catalog)
-        }
-        catalog.setSearchPreparation {
-            await Self.waitAndPublish(manager: manager, catalog: catalog, timeout: MCPManager.defaultStartupTimeoutSeconds)
-        }
+        await manager.onToolsChanged { tools in catalog.setTools(tools.map(\.tool)) }
         await manager.start()
     }
 
-    /// Wait for in-flight connections, then publish the settled tool list.
-    /// Change notifications are delivered asynchronously, so a waiter must
-    /// not rely on them having arrived when the wait returns.
-    @discardableResult
-    func waitForStartup(timeout: TimeInterval) async -> Bool {
-        guard let manager else { return true }
-        return await Self.waitAndPublish(manager: manager, catalog: catalog, timeout: timeout)
-    }
-
-    @discardableResult
-    private static func waitAndPublish(manager: MCPManager, catalog: ToolCatalog, timeout: TimeInterval) async -> Bool {
-        let settled = await manager.waitForStartup(timeout: timeout)
-        publish(await manager.tools(), to: catalog)
-        return settled
-    }
-
-    private static func publish(_ tools: [MCPAgentTool], to catalog: ToolCatalog) {
-        catalog.setTools(tools.map(\.tool), source: catalogSource)
-    }
-
-    /// Wire an agent to the catalog. `messages` is the transcript the agent
-    /// starts from; deferred tools it had loaded are loaded again.
+    /// Wire the session's first agent: the servers section joins its system
+    /// prompt (later agents copy it with the rest of the prompt).
     func attach(to agent: Agent, messages: [Message]) {
         guard manager != nil else { return }
-        if let section = systemPromptSection, !agent.state.systemPrompt.contains(section) {
-            agent.state.systemPrompt = agent.state.systemPrompt + "\n\n" + section
+        if let section = systemPromptSection {
+            agent.state.systemPrompt += "\n\n" + section
         }
         rebind(to: agent, messages: messages)
     }
 
-    /// Move the catalog to a replacement agent (`/new`, `/resume`) whose
-    /// system prompt and hooks were copied from the previous one.
+    /// Point the catalog at `agent` (also a replacement agent after `/new` or
+    /// `/resume`) and load the MCP tools its transcript had loaded.
     func rebind(to agent: Agent, messages: [Message]) {
         guard manager != nil else { return }
-        if hasSearchableServers, !agent.state.tools.contains(where: { $0.name == toolSearchToolName }) {
-            agent.state.tools = agent.state.tools + [makeToolSearchTool(catalog: catalog, sources: toolSearchSources)]
+        if !agent.state.tools.contains(where: { $0.name == toolSearchToolName }) {
+            agent.state.tools.append(makeToolSearchTool(catalog: catalog))
         }
-        catalog.restoreLoadedTools(from: messages)
+        catalog.restore(loaded: TranscriptTools.currentTools(in: messages).filter { $0.name.hasPrefix(Self.toolPrefix) })
         catalog.bind(to: agent)
     }
 
@@ -131,46 +83,28 @@ final class MCPRuntime: @unchecked Sendable {
         await manager?.shutdown()
     }
 
-    /// One line per searchable server for the `tool_search` description.
-    private var toolSearchSources: [String] {
-        configs.filter(Self.isSearchable).map(Self.serverLine)
-    }
-
-    private static func serverLine(_ config: MCPServerConfig) -> String {
-        var line = "MCP server \(config.name) (tools named mcp__\(config.name)__<tool>)"
-        if let description = config.description?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !description.isEmpty {
-            let clipped = description.count > 250 ? String(description.prefix(249)) + "…" : description
-            line += ": \(clipped.replacingOccurrences(of: "\n", with: " "))"
-        }
-        return line
-    }
-
-    private static func renderSection(_ configs: [MCPServerConfig]) -> String? {
-        let listed = configs.filter(isSearchable)
-        guard !listed.isEmpty else { return nil }
-        var lines = [
-            "<mcp_servers>",
-            "These MCP servers provide tools named mcp__<server>__<tool> that are not loaded upfront. "
-                + "Use \(toolSearchToolName) to find and load them before calling them.",
-        ]
-        for config in listed {
-            var line = "- \(config.name)"
-            if let description = config.description?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !description.isEmpty {
-                let clipped = description.count > 250 ? String(description.prefix(249)) + "…" : description
-                line += ": \(clipped.replacingOccurrences(of: "\n", with: " "))"
+    private static func renderSection(_ entries: [MCPConfigEntry]) -> String? {
+        guard !entries.isEmpty else { return nil }
+        let lines = entries.map { entry -> String in
+            let name = entry.server.name
+            guard let description = entry.description?.split(whereSeparator: \.isNewline).first else {
+                return "- \(name)"
             }
-            lines.append(line)
+            return "- \(name): \(description.prefix(250))"
         }
-        lines.append("</mcp_servers>")
-        return lines.joined(separator: "\n")
+        return """
+        <mcp_servers>
+        These MCP servers provide tools named mcp__<server>__<tool> that are not loaded upfront. \
+        Use \(toolSearchToolName) to find and load them before calling them.
+        \(lines.joined(separator: "\n"))
+        </mcp_servers>
+        """
     }
 }
 
 // MARK: - /mcp
 
-/// `/mcp`: list configured MCP servers with their connection state.
+/// `/mcp`: list MCP servers with their connection state.
 @MainActor
 func registerMCPSlashCommand(_ registry: SlashCommandRegistry, runtime: MCPRuntime) {
     registry.register(SlashCommand(
@@ -182,27 +116,25 @@ func registerMCPSlashCommand(_ registry: SlashCommandRegistry, runtime: MCPRunti
                 return
             }
             let statuses = await manager.statuses()
-            let mcpTools = await manager.tools()
-            let loaded = Set(ctx.agent.state.tools.map(\.name))
+            let servers = Dictionary(
+                await manager.tools().map { ($0.tool.name, $0.server) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let loaded = runtime.catalog.tools.compactMap { servers[$0.name] }
             var lines = [Style.dimmed("  /mcp: \(statuses.count) server\(statuses.count == 1 ? "" : "s")")]
             for status in statuses {
                 let state: String
                 switch status.state {
-                case .disabled: state = "disabled"
                 case .connecting: state = "connecting"
                 case .connected: state = "connected"
                 case .disconnected(let reason): state = "disconnected: \(reason)"
                 case .failed(let reason): state = "failed: \(reason)"
                 case .closed: state = "closed"
                 }
-                let active = mcpTools.filter { $0.server == status.name && loaded.contains($0.tool.name) }.count
-                lines.append(Style.dimmed(
-                    "    \(status.name) · \(state) · \(status.toolCount) tools, \(active) loaded"
-                ))
+                let active = loaded.filter { $0 == status.name }.count
+                lines.append(Style.dimmed("    \(status.name) · \(state) · \(status.toolCount) tools, \(active) loaded"))
             }
-            for warning in runtime.warnings {
-                lines.append(Style.dimmed("    warning: \(warning)"))
-            }
+            lines += runtime.warnings.map { Style.dimmed("    warning: \($0)") }
             ctx.notifyBlock(lines)
         }
     ))

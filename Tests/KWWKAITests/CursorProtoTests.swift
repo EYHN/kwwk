@@ -246,6 +246,17 @@ struct CursorProtoTests {
         #expect(userContent[0]["text"] as? String == "old question")
     }
 
+    @Test("a prompt followed by a tool declaration is still the user action")
+    func promptBeforeDeclaration() throws {
+        let (run, _) = buildRequest(messages: [
+            .user(UserMessage(text: "do something")),
+            .system(SystemMessage(toolsAdded: [Tool(name: "noop", description: "noop", parameters: ["type": "object"])])),
+        ])
+        // ConversationAction { user_message_action=1 }.
+        let action = field(run, 2)!
+        #expect(field(action, 1) != nil)
+    }
+
     @Test("trailing tool result yields a resume action and keeps history")
     func resumeAction() throws {
         let assistant = AssistantMessage(

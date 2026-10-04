@@ -14,7 +14,9 @@ import FoundationNetworking
 /// `initialize` completed. After initialization a GET request opens the
 /// optional server-to-client SSE stream (used for notifications such as
 /// `tools/list_changed`); servers that answer 405 simply don't offer it.
-/// `close()` deletes the session.
+/// `close()` aborts every in-flight request and deletes the session. When
+/// the server forgets the session (404), the inbound stream ends with
+/// `sessionExpired`, so the owner sees a dropped connection and reconnects.
 public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable {
     public let url: URL
     public let headers: [String: String]
@@ -27,6 +29,8 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
     private var continuation: AsyncThrowingStream<JSONRPCMessage, Error>.Continuation?
     private var listenTask: Task<Void, Never>?
     private var closed = false
+    /// Cancelled by `close()`; every request carries it.
+    private let lifetime = CancellationHandle()
 
     /// - Parameters:
     ///   - headers: Extra request headers (e.g. `Authorization`).
@@ -73,7 +77,7 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
             method: "POST",
             headers: requestHeaders,
             body: body,
-            cancellation: nil,
+            cancellation: lifetime,
             timeoutSeconds: requestTimeoutSeconds
         )
         if let assigned = response.value(forHTTPHeaderField: "Mcp-Session-Id"), !assigned.isEmpty {
@@ -83,6 +87,7 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         guard (200..<300).contains(status) else {
             let text = await Self.collectText(bytes, limit: 4_000)
             if status == 404, !isInitialize, requestHeaders["Mcp-Session-Id"] != nil {
+                finish(throwing: MCPError.sessionExpired)
                 throw MCPError.sessionExpired
             }
             throw MCPError.http(status: status, body: text)
@@ -127,6 +132,7 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
             return result
         }
         guard !alreadyClosed else { return }
+        lifetime.cancel(reason: "MCP transport closed")
         task?.cancel()
         continuation?.finish()
         guard session != nil else { return }
@@ -152,6 +158,15 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         return result
     }
 
+    /// End the inbound stream: the connection is over.
+    private func finish(throwing error: Error) {
+        lock.withLock {
+            let continuation = self.continuation
+            self.continuation = nil
+            return continuation
+        }?.finish(throwing: error)
+    }
+
     private func yield(_ messages: [JSONRPCMessage]) {
         guard let continuation = lock.withLock({ self.continuation }) else { return }
         for message in messages { continuation.yield(message) }
@@ -164,7 +179,7 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         do {
             let (response, bytes) = try await httpClient.stream(
                 url: url, method: "GET", headers: requestHeaders, body: nil,
-                cancellation: nil, timeoutSeconds: 24 * 60 * 60
+                cancellation: lifetime, timeoutSeconds: 24 * 60 * 60
             )
             let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
             guard (200..<300).contains(response.statusCode), contentType.contains("text/event-stream") else {

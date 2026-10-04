@@ -112,16 +112,17 @@ parameters, and can call them from its next request. `tool_search` waits for
 servers that are still connecting. Set `exposure` on a server, or map tools
 with `*` globs in `toolExposure`, to `hidden` to keep tools out entirely.
 
-A project can also define servers in `.kwwk/mcp.json`. Those only start when
+A project can also define servers in `.kwwk/mcp.json`; its entries replace
+user entries of the same name. The file is only read when
 `KWWK_ALLOW_PROJECT_MCP=1` is set, because opening a repository must not run
-its commands.
+its commands. `"enabled": false` turns an entry off.
 
 Tool changes are recorded in the session transcript. Models that support
 mid-conversation tool changes (Anthropic Opus 4.8 and the 5.x family, OpenAI
 GPT-5.4 and later on the Responses API) receive loaded tools in place, so the
 prompt cache survives. Other models receive the full tool list, and loading
-a tool costs one cache miss. Resumed sessions restore the tools they had
-loaded.
+a tool costs one cache miss. Resumed sessions keep the tools they had
+loaded, even while their servers are still connecting.
 
 ---
 
@@ -646,7 +647,7 @@ Antigravity provider groups stay absent.
 
 - `Sources/KWWKAI` — model clients, OAuth, provider adapters
 - `Sources/KWWKAgent` — tool-using agent loop and built-in tools
-- `Sources/KWWKMCP` — MCP client: config, stdio / Streamable HTTP transports, tool adapter
+- `Sources/KWWKMCP` — MCP client SDK: stdio / Streamable HTTP transports, server manager, tool adapter (reads no config files)
 - `Sources/KWWKCli` — interactive TUI, slash commands, rendering
 - `Sources/kwwk` — the executable entry point
 - `Tests/` — XCTest suites for each module
