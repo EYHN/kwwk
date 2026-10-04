@@ -20,9 +20,6 @@ final class MCPRuntime: Sendable {
     let manager: MCPManager?
     let catalog: ToolCatalog
     let warnings: [String]
-    /// Names the servers and what they offer. Built from config only, so it
-    /// never changes while servers connect.
-    let systemPromptSection: String?
 
     init(
         cwd: String,
@@ -42,11 +39,13 @@ final class MCPRuntime: Sendable {
         let manager = entries.isEmpty ? nil : MCPManager(configs: entries.map(\.server))
         let startupTimeout = entries.map(\.server.startupTimeoutSeconds).max() ?? 0
         self.manager = manager
-        self.catalog = ToolCatalog { cancellation in
+        self.catalog = ToolCatalog(
+            instructions: Self.renderSection(entries),
+            owns: { $0.hasPrefix(Self.toolPrefix) }
+        ) { cancellation in
             await manager?.waitForStartup(timeout: startupTimeout, cancellation: cancellation)
         }
         self.warnings = loaded.warnings
-        self.systemPromptSection = Self.renderSection(entries)
     }
 
     /// Connect servers in the background and mirror their tools into the
@@ -58,12 +57,13 @@ final class MCPRuntime: Sendable {
         await manager.start()
     }
 
-    /// Wire the session's first agent: the servers section joins its system
-    /// prompt (later agents copy it with the rest of the prompt).
+    /// Wire the session's first agent: the servers section (built from
+    /// config only, so it never changes while servers connect) joins its
+    /// system prompt; later agents copy it with the rest of the prompt.
     func attach(to agent: Agent, messages: [Message]) {
         guard manager != nil else { return }
-        if let section = systemPromptSection {
-            agent.state.systemPrompt += "\n\n" + section
+        if let instructions = catalog.instructions {
+            agent.state.systemPrompt += "\n\n" + instructions
         }
         rebind(to: agent, messages: messages)
     }
@@ -75,7 +75,7 @@ final class MCPRuntime: Sendable {
         if !agent.state.tools.contains(where: { $0.name == toolSearchToolName }) {
             agent.state.tools.append(makeToolSearchTool(catalog: catalog))
         }
-        catalog.restore(loaded: TranscriptTools.currentTools(in: messages).filter { $0.name.hasPrefix(Self.toolPrefix) })
+        catalog.restore(from: messages)
         catalog.bind(to: agent)
     }
 

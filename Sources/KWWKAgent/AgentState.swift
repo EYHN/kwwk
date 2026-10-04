@@ -16,7 +16,7 @@ public final class AgentState: @unchecked Sendable {
     private var _thinkingDisplay: ThinkingDisplay
     private var _verboseEnabled: Bool
     private var _tools: [AgentTool]
-    private var _toolSource: (@Sendable () -> [AgentTool])?
+    private var _toolCatalog: ToolCatalog?
     private var _messages: [Message]
     /// Advances whenever model-facing context changes. Compaction uses it as a
     /// compare-and-swap guard so a summary built from one prompt snapshot can
@@ -94,21 +94,21 @@ public final class AgentState: @unchecked Sendable {
         }
     }
 
-    /// Tools that come and go on their own, such as a ``ToolCatalog``'s
-    /// loaded MCP tools. Read before every provider request and merged after
-    /// `tools`; `tools` wins on a name clash. Changing what the source
-    /// returns is not a context edit: it never invalidates a compaction in
-    /// flight.
-    public var toolSource: (@Sendable () -> [AgentTool])? {
-        get { lock.withLock { _toolSource } }
-        set { lock.withLock { _toolSource = newValue } }
+    /// Deferred tools (e.g. MCP) this agent can load with `tool_search`.
+    /// Its loaded tools join every provider request after `tools`; `tools`
+    /// wins on a name clash. Loading is not a context edit: it never
+    /// invalidates a compaction in flight. Subagents that may mutate inherit
+    /// a child of it.
+    public var toolCatalog: ToolCatalog? {
+        get { lock.withLock { _toolCatalog } }
+        set { lock.withLock { _toolCatalog = newValue } }
     }
 
     /// The tools the next provider request declares: `tools` plus the
-    /// source's tools.
+    /// catalog's loaded tools.
     public var effectiveTools: [AgentTool] {
-        let (tools, source) = lock.withLock { (_tools, _toolSource) }
-        return Self.merge(tools, source?())
+        let (tools, catalog) = lock.withLock { (_tools, _toolCatalog) }
+        return Self.merge(tools, catalog?.tools)
     }
 
     private static func merge(_ tools: [AgentTool], _ extra: [AgentTool]?) -> [AgentTool] {
@@ -153,8 +153,7 @@ public final class AgentState: @unchecked Sendable {
     }
 
     func snapshotModelContext() -> (revision: UInt64, context: AgentContext, model: Model) {
-        let source = lock.withLock { _toolSource }
-        let extra = source?()
+        let extra = lock.withLock { _toolCatalog }?.tools
         return lock.withLock {
             (
                 _contextRevision,

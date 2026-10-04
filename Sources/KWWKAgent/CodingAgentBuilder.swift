@@ -32,6 +32,11 @@ public struct CodingTools: OptionSet, Sendable {
     public static let standard: CodingTools = [
         .read, .write, .edit, .bash, .grep, .find, .ls, .task,
     ]
+
+    /// Whether the selection can change anything: write, edit or shell.
+    public var isMutating: Bool {
+        !isDisjoint(with: [.write, .edit, .bash])
+    }
 }
 
 /// Configuration for `makeCodingAgent`. Bundles the model, working directory,

@@ -181,9 +181,12 @@ struct ToolCatalogTests {
         defer { faux.unregister() }
         let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), tools: [makeCalculateTool()]))
         let gate = Gate()
-        let catalog = ToolCatalog { _ in await gate.wait() }
+        let catalog = ToolCatalog(owns: { $0.hasPrefix("mcp__") }, prepare: { _ in await gate.wait() })
         let declared = namedTool("mcp__a__one", "one").toKWWKAITool()
-        catalog.restore(loaded: [declared])
+        // Builtins in the transcript are not the catalog's to restore.
+        catalog.restore(from: [
+            .system(SystemMessage(toolsAdded: [makeCalculateTool().toKWWKAITool(), declared])),
+        ])
         catalog.bind(to: agent)
 
         // Before the server connects the tool is already declared, unchanged.
@@ -200,14 +203,14 @@ struct ToolCatalogTests {
         #expect(text.text == "mcp__a__one ran")
 
         // A new session starts with nothing loaded.
-        catalog.restore(loaded: [])
+        catalog.restore(from: [])
         #expect(agent.state.effectiveTools.map(\.name) == ["calculate"])
     }
 
     @Test("a restored tool its source never provides fails when called")
     func restoredToolWithoutSource() async throws {
-        let catalog = ToolCatalog()
-        catalog.restore(loaded: [namedTool("mcp__gone__tool", "gone").toKWWKAITool()])
+        let catalog = ToolCatalog(owns: { _ in true })
+        catalog.restore(from: [.system(SystemMessage(toolsAdded: [namedTool("mcp__gone__tool", "gone").toKWWKAITool()]))])
         let tool = try #require(catalog.tools.first)
         await #expect(throws: CodingToolError.self) {
             _ = try await tool.execute("c1", .object([:]), nil, nil)

@@ -465,6 +465,68 @@ struct SubagentToolTests {
         #expect(summary?.subagents.first?.errorMessage == "agent: child blew up")
     }
 
+    @Test("subagents that may mutate inherit the parent's deferred tools; read-only ones do not")
+    func inheritsToolCatalog() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let seen = SubagentToolsSeen()
+        faux.setResponses([
+            .factory { context, _, _, _ in
+                await seen.record(tools: context.tools?.map(\.name) ?? [], prompt: context.systemPrompt ?? "")
+                return fauxAssistantMessage(
+                    blocks: [fauxToolCall(name: toolSearchToolName, arguments: ["query": "issues"], id: "s1")],
+                    stopReason: .toolUse
+                )
+            },
+            .factory { context, _, _, _ in
+                await seen.record(tools: context.tools?.map(\.name) ?? [], prompt: context.systemPrompt ?? "")
+                return subagentYieldMessage("done")
+            },
+            .factory { context, _, _, _ in
+                await seen.record(tools: context.tools?.map(\.name) ?? [], prompt: context.systemPrompt ?? "")
+                return subagentYieldMessage("done")
+            },
+        ])
+        let readOnly = SubagentDefinition(
+            name: "ro", description: "Use for read-only test work.", prompt: "Answer.", tools: .readOnly
+        )
+        let parent = await makeCodingAgent(CodingAgentConfig(
+            model: faux.getModel(),
+            cwd: FileManager.default.currentDirectoryPath,
+            tools: .standard,
+            subagents: [minimalSubagent(tools: .standard), readOnly],
+            bashEnvironment: testBashEnvironment
+        ))
+        defer { Task { await parent.detachBackground?() } }
+        let catalog = ToolCatalog(instructions: "<servers>issue tracker</servers>")
+        catalog.setTools([AgentTool(
+            name: "mcp__t__search_issues", label: "search", description: "Search issues",
+            parameters: ["type": "object"]
+        ) { _, _, _, _ in AgentToolResult(content: [.text(TextContent(text: "ok"))]) }])
+        catalog.bind(to: parent.agent)
+        let agentTool = try #require(parent.agent.state.tools.first { $0.name == "agent" })
+
+        for type in ["mini", "ro"] {
+            _ = try await agentTool.execute("call-\(type)", .object([
+                "description": .string("check"),
+                "prompt": .string("search issues"),
+                "subagent_type": .string(type),
+            ]), nil, nil)
+        }
+
+        let requests = await seen.requests
+        try #require(requests.count == 3)
+        // The mutating child searches its own catalog, then calls the loaded tool.
+        #expect(requests[0].tools.contains(toolSearchToolName))
+        #expect(requests[0].prompt.contains("<servers>issue tracker</servers>"))
+        #expect(requests[1].tools.contains("mcp__t__search_issues"))
+        // Loading in the child does not load it for the parent.
+        #expect(catalog.tools.isEmpty)
+        // The read-only child gets neither.
+        #expect(!requests[2].tools.contains(toolSearchToolName))
+        #expect(!requests[2].prompt.contains("<servers>"))
+    }
+
     @Test("fresh subagent does not inherit parent transcript or recursive agent tool")
     func freshContextAndNoRecursiveAgentTool() async throws {
         let faux = await registerFauxProvider()
@@ -1111,6 +1173,14 @@ private func detailObject(_ result: AgentToolResult, _ key: String) -> [String: 
         return nil
     }
     return value
+}
+
+private actor SubagentToolsSeen {
+    private(set) var requests: [(tools: [String], prompt: String)] = []
+
+    func record(tools: [String], prompt: String) {
+        requests.append((tools, prompt))
+    }
 }
 
 private actor SubagentContextCapture {

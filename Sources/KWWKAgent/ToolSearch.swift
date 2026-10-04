@@ -148,67 +148,108 @@ public struct ToolSearchRanker: Sendable {
 /// Deferred tools, such as MCP server tools, hidden from the model until
 /// `tool_search` loads them.
 ///
-/// A catalog feeds an agent through `AgentState.toolSource`: the agent loop
-/// reads the loaded tools before each request and records every change in
-/// the transcript. The caller's own `AgentState.tools` are never touched.
+/// Bound to an agent (``bind(to:)``), the catalog's loaded tools join every
+/// provider request and the agent loop records each change in the
+/// transcript; the agent's own `AgentState.tools` are never touched.
+/// Subagents that may mutate get a ``makeChild()``: same registered tools,
+/// their own loaded set.
 public final class ToolCatalog: @unchecked Sendable {
+    /// What a catalog shares with its children.
+    private final class Registry: @unchecked Sendable {
+        let lock = NSLock()
+        var tools: [AgentTool] = []
+        let instructions: String?
+        let owns: @Sendable (String) -> Bool
+        let prepare: @Sendable (CancellationHandle?) async -> Void
+
+        init(
+            instructions: String?,
+            owns: @escaping @Sendable (String) -> Bool,
+            prepare: @escaping @Sendable (CancellationHandle?) async -> Void
+        ) {
+            self.instructions = instructions
+            self.owns = owns
+            self.prepare = prepare
+        }
+    }
+
+    private let registry: Registry
     private let lock = NSLock()
-    /// Every registered tool, in registration order.
-    private var registered: [AgentTool] = []
     /// Loaded tool names, in load order.
     private var loaded: [String] = []
     /// Definitions of loaded tools that are not registered (yet), restored
     /// from a transcript: a server that is still connecting must not make a
     /// resumed session lose its tools.
     private var restored: [String: Tool] = [:]
-    private let prepare: @Sendable (CancellationHandle?) async -> Void
 
-    /// - Parameter prepare: Awaited before searching and before a restored
-    ///   tool runs, e.g. to wait for MCP servers that are still connecting.
-    public init(prepare: @escaping @Sendable (CancellationHandle?) async -> Void = { _ in }) {
-        self.prepare = prepare
+    /// - Parameters:
+    ///   - instructions: System-prompt text describing where the deferred
+    ///     tools come from (e.g. the MCP servers), for agents using it.
+    ///   - owns: Names that belong to this catalog even before they are
+    ///     registered, so ``restore(from:)`` keeps them (e.g. `mcp__` names).
+    ///   - prepare: Awaited before searching and before a restored tool runs,
+    ///     e.g. to wait for MCP servers that are still connecting.
+    public convenience init(
+        instructions: String? = nil,
+        owns: @escaping @Sendable (String) -> Bool = { _ in false },
+        prepare: @escaping @Sendable (CancellationHandle?) async -> Void = { _ in }
+    ) {
+        self.init(registry: Registry(instructions: instructions, owns: owns, prepare: prepare))
     }
+
+    private init(registry: Registry) {
+        self.registry = registry
+    }
+
+    /// A catalog sharing this one's registered tools, with nothing loaded.
+    public func makeChild() -> ToolCatalog {
+        ToolCatalog(registry: registry)
+    }
+
+    public var instructions: String? { registry.instructions }
 
     /// Feed `agent` this catalog's loaded tools.
     public func bind(to agent: Agent) {
-        agent.state.toolSource = { [weak self] in self?.tools ?? [] }
+        agent.state.toolCatalog = self
     }
 
-    /// Replace the registered tools.
+    /// Replace the registered tools (for this catalog and its children).
     public func setTools(_ tools: [AgentTool]) {
-        lock.withLock { registered = tools }
+        registry.lock.withLock { registry.tools = tools }
     }
 
-    /// Make the loaded tools exactly `tools`, as when a session starts,
-    /// resumes or is replaced. Pass the deferred tools a transcript declares.
-    public func restore(loaded tools: [Tool]) {
+    /// Every registered tool, loaded or not.
+    public var registeredTools: [AgentTool] {
+        registry.lock.withLock { registry.tools }
+    }
+
+    /// Make the loaded tools exactly the catalog tools `messages` declares,
+    /// as when a session starts, resumes or is replaced.
+    public func restore(from messages: [Message]) {
+        let registered = Set(registeredTools.map(\.name))
+        let tools = TranscriptTools.currentTools(in: messages).filter {
+            registered.contains($0.name) || registry.owns($0.name)
+        }
         lock.withLock {
             loaded = tools.map(\.name)
             restored = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { _, last in last })
         }
     }
 
-    /// Every registered tool, loaded or not.
-    public var registeredTools: [AgentTool] {
-        lock.withLock { registered }
-    }
-
-    /// The loaded tools, in load order. A loaded tool whose source has not
-    /// registered it (yet) keeps its restored definition and waits for the
-    /// source when called.
+    /// The loaded tools, in load order. A loaded tool that is not registered
+    /// (yet) keeps its restored definition and waits for it when called.
     public var tools: [AgentTool] {
-        lock.withLock {
-            let byName = Dictionary(registered.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
-            return loaded.compactMap { name in
-                byName[name] ?? restored[name].map(restoredTool)
-            }
+        let byName = Dictionary(registeredTools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        return lock.withLock {
+            loaded.compactMap { name in byName[name] ?? restored[name].map(restoredTool) }
         }
     }
 
     /// Rank the registered tools that are not loaded yet and load the matches.
     public func search(query: String, limit: Int, cancellation: CancellationHandle? = nil) async -> [AgentTool] {
-        await prepare(cancellation)
+        await registry.prepare(cancellation)
         if cancellation?.isCancelled == true { return [] }
+        let registered = registeredTools
         return lock.withLock {
             let candidates = registered.filter { !loaded.contains($0.name) }
             let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
@@ -220,20 +261,16 @@ public final class ToolCatalog: @unchecked Sendable {
         }
     }
 
-    private func registeredTool(named name: String) -> AgentTool? {
-        lock.withLock { registered.first { $0.name == name } }
-    }
-
     private func restoredTool(_ definition: Tool) -> AgentTool {
-        AgentTool(
+        let registry = registry
+        return AgentTool(
             name: definition.name,
             label: definition.name,
             description: definition.description,
             parameters: definition.parameters
-        ) { [weak self] toolCallId, args, cancellation, onUpdate in
-            guard let self else { throw CodingToolError.runtime("\(definition.name) is no longer available") }
-            await self.prepare(cancellation)
-            guard let tool = self.registeredTool(named: definition.name) else {
+        ) { toolCallId, args, cancellation, onUpdate in
+            await registry.prepare(cancellation)
+            guard let tool = registry.lock.withLock({ registry.tools.first { $0.name == definition.name } }) else {
                 throw CodingToolError.runtime("\(definition.name) is not available: its server did not provide it")
             }
             return try await tool.execute(toolCallId, args, cancellation, onUpdate)

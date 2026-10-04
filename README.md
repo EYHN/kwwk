@@ -111,6 +111,8 @@ request waits for a server. The model loads them with the built-in
 parameters, and can call them from its next request. `tool_search` waits for
 servers that are still connecting. Set `exposure` on a server, or map tools
 with `*` globs in `toolExposure`, to `hidden` to keep tools out entirely.
+Subagents that can write, edit or run commands get `tool_search` over the
+same MCP tools (loading for themselves); read-only subagents get none.
 
 A project can also define servers in `.kwwk/mcp.json`; its entries replace
 user entries of the same name. The file is only read when
