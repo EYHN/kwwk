@@ -145,38 +145,68 @@ public struct ToolSearchRanker: Sendable {
 
 // MARK: - Catalog
 
+/// A source of deferred tools that cannot provide them right now (e.g. an
+/// MCP server that is not connected), as `tool_search` reports it.
+public struct ToolSourceStatus: Sendable, Hashable {
+    public var name: String
+    /// Short reason, e.g. "requires authorization".
+    public var reason: String
+
+    public init(name: String, reason: String) {
+        self.name = name
+        self.reason = reason
+    }
+}
+
 /// Deferred tools, such as MCP server tools, hidden from the model until
 /// `tool_search` loads them.
 ///
-/// Bound to an agent (``bind(to:)``), the catalog's loaded tools join every
-/// provider request and the agent loop records each change in the
-/// transcript; the agent's own `AgentState.tools` are never touched.
+/// Bound to an agent (``bind(to:)``), the catalog adds `tool_search` and its
+/// loaded tools to every provider request, and its `instructions` to the
+/// system prompt; the agent loop records each tool change in the
+/// transcript. The agent's own `AgentState.tools` are never touched.
 /// Subagents that may mutate get a ``makeChild()``: same registered tools,
 /// their own loaded set.
+///
+/// A loaded tool that stops being registered (its source went away) is
+/// unloaded; registering it again makes it searchable, not loaded.
 public final class ToolCatalog: @unchecked Sendable {
     /// What a catalog shares with its children.
     private final class Registry: @unchecked Sendable {
         let lock = NSLock()
         var tools: [AgentTool] = []
-        let instructions: String?
+        var instructions: String?
+        /// Bumped by every `setTools`.
+        var epoch: UInt64 = 0
+        /// The epoch at which a name was last removed from `tools`.
+        var removedAt: [String: UInt64] = [:]
         let owns: @Sendable (String) -> Bool
         let prepare: @Sendable (CancellationHandle?) async -> Void
+        let unavailable: @Sendable () async -> [ToolSourceStatus]
 
         init(
             instructions: String?,
             owns: @escaping @Sendable (String) -> Bool,
-            prepare: @escaping @Sendable (CancellationHandle?) async -> Void
+            prepare: @escaping @Sendable (CancellationHandle?) async -> Void,
+            unavailable: @escaping @Sendable () async -> [ToolSourceStatus]
         ) {
             self.instructions = instructions
             self.owns = owns
             self.prepare = prepare
+            self.unavailable = unavailable
         }
+    }
+
+    private struct Loaded {
+        var name: String
+        /// Registry epoch when it was loaded.
+        var epoch: UInt64
     }
 
     private let registry: Registry
     private let lock = NSLock()
-    /// Loaded tool names, in load order.
-    private var loaded: [String] = []
+    /// Loaded tools, in load order.
+    private var loaded: [Loaded] = []
     /// Definitions of loaded tools that are not registered (yet), restored
     /// from a transcript: a server that is still connecting must not make a
     /// resumed session lose its tools.
@@ -184,17 +214,26 @@ public final class ToolCatalog: @unchecked Sendable {
 
     /// - Parameters:
     ///   - instructions: System-prompt text describing where the deferred
-    ///     tools come from (e.g. the MCP servers), for agents using it.
+    ///     tools come from (e.g. the MCP servers). Added to the system prompt
+    ///     of every agent the catalog is bound to.
     ///   - owns: Names that belong to this catalog even before they are
     ///     registered, so ``restore(from:)`` keeps them (e.g. `mcp__` names).
     ///   - prepare: Awaited before searching and before a restored tool runs,
     ///     e.g. to wait for MCP servers that are still connecting.
+    ///   - unavailableSources: Sources that cannot provide tools right now;
+    ///     `tool_search` names them when it finds fewer tools than asked for.
     public convenience init(
         instructions: String? = nil,
         owns: @escaping @Sendable (String) -> Bool = { _ in false },
-        prepare: @escaping @Sendable (CancellationHandle?) async -> Void = { _ in }
+        prepare: @escaping @Sendable (CancellationHandle?) async -> Void = { _ in },
+        unavailableSources: @escaping @Sendable () async -> [ToolSourceStatus] = { [] }
     ) {
-        self.init(registry: Registry(instructions: instructions, owns: owns, prepare: prepare))
+        self.init(registry: Registry(
+            instructions: instructions,
+            owns: owns,
+            prepare: prepare,
+            unavailable: unavailableSources
+        ))
     }
 
     private init(registry: Registry) {
@@ -206,16 +245,39 @@ public final class ToolCatalog: @unchecked Sendable {
         ToolCatalog(registry: registry)
     }
 
-    public var instructions: String? { registry.instructions }
+    /// System-prompt text about the deferred tools (shared with children).
+    public var instructions: String? {
+        registry.lock.withLock { registry.instructions }
+    }
 
-    /// Feed `agent` this catalog's loaded tools.
+    /// Replace the instructions. Takes effect on the next request of every
+    /// bound agent, which changes the system prompt: call it when that cost
+    /// is acceptable.
+    public func setInstructions(_ instructions: String?) {
+        registry.lock.withLock { registry.instructions = instructions }
+    }
+
+    /// Feed `agent` this catalog's `tool_search`, loaded tools and instructions.
     public func bind(to agent: Agent) {
         agent.state.toolCatalog = self
     }
 
+    /// The `tool_search` tool of this catalog.
+    public var searchTool: AgentTool {
+        makeToolSearchTool(catalog: self)
+    }
+
     /// Replace the registered tools (for this catalog and its children).
+    /// Loaded tools that are no longer registered are unloaded.
     public func setTools(_ tools: [AgentTool]) {
-        registry.lock.withLock { registry.tools = tools }
+        registry.lock.withLock {
+            registry.epoch &+= 1
+            let names = Set(tools.map(\.name))
+            for old in registry.tools where !names.contains(old.name) {
+                registry.removedAt[old.name] = registry.epoch
+            }
+            registry.tools = tools
+        }
     }
 
     /// Every registered tool, loaded or not.
@@ -223,25 +285,80 @@ public final class ToolCatalog: @unchecked Sendable {
         registry.lock.withLock { registry.tools }
     }
 
+    private var registryState: (tools: [AgentTool], epoch: UInt64, removedAt: [String: UInt64]) {
+        registry.lock.withLock { (registry.tools, registry.epoch, registry.removedAt) }
+    }
+
     /// Make the loaded tools exactly the catalog tools `messages` declares,
     /// as when a session starts, resumes or is replaced.
     public func restore(from messages: [Message]) {
-        let registered = Set(registeredTools.map(\.name))
+        let state = registryState
+        let registered = Set(state.tools.map(\.name))
         let tools = TranscriptTools.currentTools(in: messages).filter {
             registered.contains($0.name) || registry.owns($0.name)
         }
         lock.withLock {
-            loaded = tools.map(\.name)
+            loaded = tools.map { Loaded(name: $0.name, epoch: state.epoch) }
             restored = Dictionary(tools.map { ($0.name, $0) }, uniquingKeysWith: { _, last in last })
         }
+    }
+
+    /// Unload `names`. They stay registered and searchable.
+    public func unload(_ names: Set<String>) {
+        guard !names.isEmpty else { return }
+        lock.withLock {
+            loaded.removeAll { names.contains($0.name) }
+            for name in names { restored.removeValue(forKey: name) }
+        }
+    }
+
+    /// Loaded tools `messages` never calls, except those loaded since the
+    /// last user message (the model may be about to call them). Compaction
+    /// unloads these over the messages since the previous compaction.
+    public func unusedLoadedTools(in messages: [Message]) -> Set<String> {
+        var used: Set<String> = []
+        for message in messages {
+            guard case .assistant(let assistant) = message else { continue }
+            for block in assistant.content {
+                if case .toolCall(let call) = block { used.insert(call.name) }
+            }
+        }
+        if let lastUser = messages.lastIndex(where: { $0.role == .user }) {
+            for message in messages[lastUser...] {
+                if case .system(let declaration) = message {
+                    used.formUnion(declaration.toolsAdded?.map(\.name) ?? [])
+                }
+            }
+        }
+        return lock.withLock { Set(loaded.map(\.name)).subtracting(used) }
+    }
+
+    /// Unload `unusedLoadedTools(in:)`. Returns the names unloaded.
+    @discardableResult
+    public func retainLoaded(usedIn messages: [Message]) -> Set<String> {
+        let unused = unusedLoadedTools(in: messages)
+        unload(unused)
+        return unused
     }
 
     /// The loaded tools, in load order. A loaded tool that is not registered
     /// (yet) keeps its restored definition and waits for it when called.
     public var tools: [AgentTool] {
-        let byName = Dictionary(registeredTools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        let state = registryState
+        let byName = Dictionary(state.tools.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         return lock.withLock {
-            loaded.compactMap { name in byName[name] ?? restored[name].map(restoredTool) }
+            pruneRemoved(removedAt: state.removedAt)
+            return loaded.compactMap { entry in byName[entry.name] ?? restored[entry.name].map(restoredTool) }
+        }
+    }
+
+    /// Drop loaded entries whose tool was unregistered after they loaded.
+    /// Caller holds `lock`.
+    private func pruneRemoved(removedAt: [String: UInt64]) {
+        loaded.removeAll { entry in
+            guard let removed = removedAt[entry.name], removed > entry.epoch else { return false }
+            restored.removeValue(forKey: entry.name)
+            return true
         }
     }
 
@@ -249,16 +366,23 @@ public final class ToolCatalog: @unchecked Sendable {
     public func search(query: String, limit: Int, cancellation: CancellationHandle? = nil) async -> [AgentTool] {
         await registry.prepare(cancellation)
         if cancellation?.isCancelled == true { return [] }
-        let registered = registeredTools
+        let state = registryState
         return lock.withLock {
-            let candidates = registered.filter { !loaded.contains($0.name) }
+            pruneRemoved(removedAt: state.removedAt)
+            let loadedNames = Set(loaded.map(\.name))
+            let candidates = state.tools.filter { !loadedNames.contains($0.name) }
             let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             let matches = ToolSearchRanker()
                 .rank(query: query, documents: candidates.map(ToolSearchDocument.init(tool:)), limit: limit)
                 .compactMap { byName[$0.name] }
-            loaded.append(contentsOf: matches.map(\.name))
+            loaded.append(contentsOf: matches.map { Loaded(name: $0.name, epoch: state.epoch) })
             return matches
         }
+    }
+
+    /// Sources that cannot provide tools right now.
+    public func unavailableSources() async -> [ToolSourceStatus] {
+        await registry.unavailable()
     }
 
     private func restoredTool(_ definition: Tool) -> AgentTool {
@@ -279,6 +403,12 @@ public final class ToolCatalog: @unchecked Sendable {
 }
 
 // MARK: - Tool
+
+/// The fixed line naming sources that cannot provide tools right now.
+func unavailableNote(_ sources: [ToolSourceStatus]) -> String? {
+    guard !sources.isEmpty else { return nil }
+    return "Not connected: " + sources.map { "\($0.name) (\($0.reason))" }.joined(separator: ", ")
+}
 
 public let toolSearchToolName = "tool_search"
 public let defaultToolSearchLimit = 8
@@ -327,9 +457,10 @@ public func makeToolSearchTool(catalog: ToolCatalog) -> AgentTool {
             }
             let tools = await catalog.search(query: query, limit: limit, cancellation: cancellation)
             try cancellation?.throwIfCancelled()
+            let note = tools.count < limit ? unavailableNote(await catalog.unavailableSources()) : nil
             guard !tools.isEmpty else {
                 return AgentToolResult(
-                    content: [.text(TextContent(text: "No matching tools found."))],
+                    content: [.text(TextContent(text: "No matching tools found." + (note.map { "\n\n" + $0 } ?? "")))],
                     details: .object(["loaded": .array([])]),
                     uiDisplay: ["no matching tools"]
                 )
@@ -339,8 +470,9 @@ public func makeToolSearchTool(catalog: ToolCatalog) -> AgentTool {
                     .map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
                 return "- \(tool.name): \(summary)"
             }
-            let text = "Loaded \(tools.count) tool\(tools.count == 1 ? "" : "s"). They are available from your next call:\n"
+            var text = "Loaded \(tools.count) tool\(tools.count == 1 ? "" : "s"). They are available from your next call:\n"
                 + lines.joined(separator: "\n")
+            if let note { text += "\n\n" + note }
             return AgentToolResult(
                 content: [.text(TextContent(text: text))],
                 details: .object(["loaded": .array(tools.map { .string($0.name) })]),

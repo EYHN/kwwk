@@ -787,7 +787,7 @@ extension Agent {
 
     private func snapshotContext() -> AgentContext {
         AgentContext(
-            systemPrompt: state.systemPrompt,
+            systemPrompt: state.effectiveSystemPrompt,
             messages: state.messages,
             tools: state.effectiveTools
         )
@@ -1125,6 +1125,8 @@ extension Agent {
         }
         var replacement = context
         replacement.messages = state.messages
+        // Compaction may have unloaded deferred tools.
+        replacement.tools = state.effectiveTools
         var measuredReplacement = replacement
         measuredReplacement.messages.append(contentsOf: pendingMessages)
         let replacementUsage = AgentContextCompactor.currentUsage(

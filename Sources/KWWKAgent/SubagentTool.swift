@@ -2283,7 +2283,7 @@ internal struct SubagentInvocationRunner: Sendable {
             toolCatalog.restore(from: resumeMessages ?? [])
             tools.append(makeToolSearchTool(catalog: toolCatalog))
         }
-        var systemPrompt = buildSubagentSystemPrompt(
+        let systemPrompt = buildSubagentSystemPrompt(
             definition: definition,
             cwd: cwd,
             tools: tools,
@@ -2294,9 +2294,7 @@ internal struct SubagentInvocationRunner: Sendable {
                 policy: fileAccessPolicy
             )
         )
-        if let instructions = toolCatalog?.instructions {
-            systemPrompt += "\n\n" + instructions
-        }
+        // The bound catalog adds its instructions to every request itself.
         var childOptions = AgentOptions(
             initialState: AgentInitialState(
                 systemPrompt: systemPrompt,

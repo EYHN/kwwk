@@ -190,7 +190,8 @@ struct ToolCatalogTests {
         catalog.bind(to: agent)
 
         // Before the server connects the tool is already declared, unchanged.
-        #expect(agent.state.effectiveTools.map(\.name) == ["calculate", "mcp__a__one"])
+        // The bound catalog adds its tool_search.
+        #expect(agent.state.effectiveTools.map(\.name) == ["calculate", toolSearchToolName, "mcp__a__one"])
         let restored = try #require(agent.state.effectiveTools.last)
         #expect(restored.toKWWKAITool() == declared)
 
@@ -204,7 +205,7 @@ struct ToolCatalogTests {
 
         // A new session starts with nothing loaded.
         catalog.restore(from: [])
-        #expect(agent.state.effectiveTools.map(\.name) == ["calculate"])
+        #expect(agent.state.effectiveTools.map(\.name) == ["calculate", toolSearchToolName])
     }
 
     @Test("a restored tool its source never provides fails when called")
@@ -229,7 +230,7 @@ struct ToolCatalogTests {
         _ = await catalog.search(query: "issue", limit: 5)
         let after = agent.state.snapshotModelContext()
         #expect(after.revision == before)
-        #expect(after.context.tools.map(\.name) == ["calculate", "mcp__a__one"])
+        #expect(after.context.tools.map(\.name) == ["calculate", toolSearchToolName, "mcp__a__one"])
     }
 
     @Test("compaction re-declares the tool state right after the recap")
