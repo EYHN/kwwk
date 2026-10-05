@@ -31,6 +31,31 @@ extension MCPTransport {
     public var diagnostics: String? { nil }
 }
 
+/// What the server refused while one connect or call ran. A transport
+/// records into the capture of the task that sent the request (child tasks
+/// inherit it), so `MCPManager` can tell a server refusing the credentials
+/// from an authorization error the auth provider raised itself, and knows
+/// which token was refused.
+final class MCPRefusalCapture: @unchecked Sendable {
+    @TaskLocal static var current: MCPRefusalCapture?
+
+    private let lock = NSLock()
+    private var refused: MCPRefusedCredential?
+
+    /// The last refusal, if the server refused anything.
+    var refusal: MCPRefusedCredential? { lock.withLock { refused } }
+
+    func record(token: String?) {
+        lock.withLock { refused = MCPRefusedCredential(token: token) }
+    }
+}
+
+/// What a refused request carried.
+struct MCPRefusedCredential: Sendable, Equatable {
+    /// The bearer token sent, nil when the request carried none.
+    var token: String?
+}
+
 /// Builds the transport of a configured server, with the server's auth
 /// (HTTP only; nil when it has none).
 public typealias MCPTransportFactory = @Sendable (_ config: MCPServerConfig, _ auth: MCPTransportAuth?) throws -> any MCPTransport

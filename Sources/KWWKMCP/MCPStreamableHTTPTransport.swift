@@ -130,14 +130,18 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         guard (200..<300).contains(status) else {
             let text = await Self.collectText(bytes, limit: 4_000)
             if status == 401 {
-                try await handleUnauthorized(response: response, body: text, rejectedToken: token, isAuthRetry: isAuthRetry)
+                try await noteRefusal(of: token) {
+                    try await handleUnauthorized(response: response, body: text, rejectedToken: token, isAuthRetry: isAuthRetry)
+                }
                 try checkStillWanted()
                 return try await send(message, isAuthRetry: true, stepUpRetries: stepUpRetries)
             }
             if status == 403 {
                 let challenge = MCPAuthChallenge(header: response.value(forHTTPHeaderField: "WWW-Authenticate"))
                 if challenge.error == "insufficient_scope" {
-                    try await stepUp(challenge: challenge, retries: stepUpRetries)
+                    try await noteRefusal(of: token) {
+                        try await stepUp(challenge: challenge, retries: stepUpRetries)
+                    }
                     try checkStillWanted()
                     return try await send(message, isAuthRetry: isAuthRetry, stepUpRetries: stepUpRetries + 1)
                 }
@@ -191,6 +195,17 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
     private func checkStillWanted() throws {
         try Task.checkCancellation()
         if lifetime.isCancelled { throw MCPError.connectionClosed(details: nil) }
+    }
+
+    /// Report `token` as refused (`MCPRefusalCapture`) when `recovery`
+    /// fails for want of authorization.
+    private func noteRefusal(of token: String?, _ recovery: () async throws -> Void) async throws {
+        do {
+            try await recovery()
+        } catch let error as MCPAuthError where error.requiresAuthorization {
+            MCPRefusalCapture.current?.record(token: token)
+            throw error
+        }
     }
 
     private func currentToken() async throws -> String? {

@@ -8,20 +8,23 @@ extension MCPManager {
 
     /// A `ToolCatalog` fed by this manager, ready to `bind(to:)` an agent:
     ///
-    /// - every server's tools are searchable through `tool_search` once it
-    ///   connected, and leave the catalog (and any agent that loaded them)
-    ///   when their server is removed;
+    /// - every connected server's tools are searchable through
+    ///   `tool_search`, and leave the catalog (and any agent that loaded
+    ///   them) when their server is removed, replaced, needs authorization or
+    ///   the manager shuts down;
     /// - its instructions are `promptSection()` as of now. Call
     ///   `catalog.setInstructions(await manager.promptSection())` after
     ///   adding or removing servers, when changing the system prompt is fine;
-    /// - `tool_search` first retries servers whose reconnection gave up or
-    ///   that need authorization, and waits up to `searchWaitSeconds` for
-    ///   servers still connecting;
+    /// - `tool_search` first retries servers whose reconnection gave up, and
+    ///   servers that need authorization whose auth provider has a new
+    ///   token, and waits up to `searchWaitSeconds` for servers still
+    ///   connecting;
     /// - `tool_search` names the servers that cannot provide tools when it
     ///   finds fewer than asked for.
     ///
-    /// The manager holds the catalog weakly: once the catalog is released,
-    /// its observer unregisters itself. Starts the manager.
+    /// The manager holds the catalog weakly; after the catalog is released,
+    /// its observer unregisters itself at the next tool change. Starts the
+    /// manager.
     public func makeToolCatalog(searchWaitSeconds: TimeInterval = 30) async -> ToolCatalog {
         let catalog = ToolCatalog(
             instructions: promptSection(),

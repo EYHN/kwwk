@@ -552,11 +552,14 @@ Authentication follows the MCP TypeScript SDK's two layers:
   `MCPOAuthClientRegistrationStore`, `MCPOAuthDiscoveryStore` and
   `MCPOAuthCredentialInvalidation` for the optional parts.
 
-A server that needs authorization keeps the tools it offered and is not
-reconnected in the background; every `tool_search` and every call on it
-connects again and asks the auth provider for credentials, so new ones are
-picked up without telling the manager (cache in the provider if asking is
-expensive; `manager.reconnect("docs")` reconnects at once). A dropped
+Only the server decides that it needs authorization: a 401 the provider
+cannot recover from, or a 403 `insufficient_scope` while connecting. The
+server's tools are withdrawn and it is not asked again until the provider's
+`token()` returns a token other than the refused one; every `tool_search`
+checks (cache in the provider if asking is expensive), and
+`manager.reconnect("docs")` connects at once. A provider failing by itself,
+and a 401 to a server without one, are ordinary failures. A call refused
+with 403 `insufficient_scope` fails alone. A dropped
 connection keeps its tools and reconnects in the background. `addServer`,
 `updateServer` and `removeServer` change the set while running; call
 `catalog.setInstructions(await manager.promptSection())` when the system
