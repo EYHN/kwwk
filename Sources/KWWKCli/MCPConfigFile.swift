@@ -2,6 +2,15 @@ import Foundation
 import KWWKAI
 import KWWKMCP
 
+/// Where an MCP server is configured.
+enum MCPConfigScope: String, CaseIterable, Sendable {
+    /// `~/.kwwk/mcp.json`: every project.
+    case user
+    /// `<cwd>/.kwwk/mcp.json`: this project, shareable through version
+    /// control; read only with `KWWK_ALLOW_PROJECT_MCP=1`.
+    case project
+}
+
 /// One server from an `mcp.json` file.
 struct MCPConfigEntry: Sendable {
     var server: MCPServerConfig
@@ -9,6 +18,8 @@ struct MCPConfigEntry: Sendable {
     var description: String? { server.description }
     /// OAuth settings of an HTTP server; nil when it does not use OAuth.
     var oauth: MCPOAuthSettings?
+    /// The file it came from.
+    var scope: MCPConfigScope = .user
 }
 
 /// Reads the TUI's MCP configuration: `~/.kwwk/mcp.json` and, when the
@@ -42,10 +53,12 @@ enum MCPConfigFile {
         let userPath = resolved(homeDirectory)
         let projectPath = resolved(cwd)
         var paths = [userPath]
+        var scopes = [userPath: MCPConfigScope.user]
         var loaded = Loaded()
         if projectPath != userPath {
             if trustProject {
                 paths.append(projectPath)
+                scopes[projectPath] = .project
             } else if FileManager.default.fileExists(atPath: projectPath) {
                 loaded.warnings.append(
                     "ignored \(projectPath); set \(MCPRuntime.allowProjectServersVariable)=1 to trust this project's MCP servers"
@@ -64,12 +77,13 @@ enum MCPConfigFile {
                 for name in servers.keys.sorted() {
                     do {
                         var expander = Expander(home: homeDirectory, environment: environment)
-                        guard let entry = try parse(
+                        guard var entry = try parse(
                             name: name, raw: servers[name] ?? .null, cwd: cwd, expander: &expander
                         ) else {
                             byName[name] = nil
                             continue
                         }
+                        entry.scope = scopes[path] ?? .user
                         loaded.warnings += expander.warnings.map { "\(path): \($0)" }
                         if byName[name] == nil { order.append(name) }
                         byName[name] = entry
@@ -83,6 +97,25 @@ enum MCPConfigFile {
         }
         loaded.entries = order.compactMap { byName[$0] }
         return loaded
+    }
+
+    /// Parse one entry as `load` would, for `kwwk mcp add` to check a server
+    /// before writing it. Nil for `"enabled": false`.
+    static func validate(
+        name: String,
+        raw: JSONValue,
+        cwd: String,
+        homeDirectory: String,
+        environment: [String: String]
+    ) throws -> MCPConfigEntry? {
+        var expander = Expander(home: homeDirectory, environment: environment)
+        return try parse(name: name, raw: raw, cwd: cwd, expander: &expander)
+    }
+
+    /// The config file of a scope.
+    static func path(scope: MCPConfigScope, cwd: String, homeDirectory: String) -> URL {
+        let base = scope == .user ? homeDirectory : cwd
+        return URL(fileURLWithPath: base).appendingPathComponent(".kwwk/mcp.json")
     }
 
     // MARK: - Parsing

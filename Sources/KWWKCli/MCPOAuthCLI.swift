@@ -146,6 +146,7 @@ final class CLIMCPOAuthProvider: MCPOAuthClientRegistrationStore, MCPOAuthDiscov
     private let lock = NSLock()
     private var pendingAuthorizationURL: URL?
     private var issuedState: String?
+    private var opensBrowser = true
 
     init(server: String, serverURL: URL, settings: MCPOAuthSettings, store: MCPOAuthFileStore, callbackPort: UInt16) {
         self.server = server
@@ -198,8 +199,11 @@ final class CLIMCPOAuthProvider: MCPOAuthClientRegistrationStore, MCPOAuthDiscov
     }
 
     func redirectToAuthorization(_ url: URL) async throws {
-        lock.withLock { pendingAuthorizationURL = url }
-        Browser.open(url)
+        let open = lock.withLock { () -> Bool in
+            pendingAuthorizationURL = url
+            return opensBrowser
+        }
+        if open { Browser.open(url) }
     }
 
     func saveCodeVerifier(_ verifier: String) async throws {
@@ -242,11 +246,18 @@ final class CLIMCPOAuthProvider: MCPOAuthClientRegistrationStore, MCPOAuthDiscov
     /// Sign in with the browser: start the callback listener, run a fresh
     /// authorization (never just a refresh, so it also widens scope and
     /// switches accounts), check `state`, and exchange the code.
-    func login(httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient(), timeoutSeconds: Double = 300) async throws {
+    func login(
+        openBrowser: Bool = true,
+        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient(),
+        timeoutSeconds: Double = 300
+    ) async throws {
         let callback = try OAuthCallbackServer(port: callbackPort, path: "/callback")
         try callback.start()
         defer { callback.stop() }
-        lock.withLock { pendingAuthorizationURL = nil }
+        lock.withLock {
+            pendingAuthorizationURL = nil
+            opensBrowser = openBrowser
+        }
 
         let result = try await MCPOAuth.auth(self, options: MCPOAuthOptions(
             serverURL: serverURL,
@@ -255,7 +266,8 @@ final class CLIMCPOAuthProvider: MCPOAuthClientRegistrationStore, MCPOAuthDiscov
         ))
         guard result == .redirect else { return }
         if let url = lock.withLock({ pendingAuthorizationURL }) {
-            FileHandle.standardError.write(Data("If the browser did not open, visit:\n  \(url.absoluteString)\n".utf8))
+            let lead = openBrowser ? "If the browser did not open, visit" : "Open this URL to sign in"
+            FileHandle.standardError.write(Data("\(lead):\n  \(url.absoluteString)\n".utf8))
         }
         let parameters = try await withThrowingTaskGroup(of: [String: String].self) { group in
             group.addTask { try await callback.waitForCallback() }

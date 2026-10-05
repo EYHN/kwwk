@@ -105,6 +105,27 @@ their entry sends its own `Authorization` header or sets `"oauth": false`.
 }
 ```
 
+`kwwk mcp` edits these files for you, like `claude mcp`:
+
+```sh
+kwwk mcp add linear https://mcp.linear.app/mcp          # Streamable HTTP
+kwwk mcp add -e GITHUB_TOKEN='${GITHUB_TOKEN}' github -- npx -y @modelcontextprotocol/server-github
+kwwk mcp add --scope project docs https://example.com/mcp -H "Authorization: Bearer ${DOCS_TOKEN}"
+kwwk mcp add-json weather '{"type":"http","url":"https://weather.example/mcp"}'
+kwwk mcp list                     # check every server
+kwwk mcp get linear               # show one (secrets hidden)
+kwwk mcp login linear             # OAuth sign-in in the browser (--no-browser prints the URL)
+kwwk mcp logout linear
+kwwk mcp remove linear            # also forgets its sign-in
+```
+
+`--scope user` (default) writes `~/.kwwk/mcp.json`; `--scope project` writes
+`.kwwk/mcp.json` in the current directory. `kwwk mcp add --help` lists the
+options (`--transport`, `--env`, `--header`, `--description`,
+`--client-id`, `--client-secret`, `--client-name`, `--oauth-scope`,
+`--callback-port`, `--no-oauth`). Everything after `--` is the stdio
+command, passed through untouched.
+
 Tools are named `mcp__<server>__<tool>`. Servers connect in the background,
 and `/mcp` shows their status. MCP tools are never declared up front, so no
 request waits for a server. The model loads them with the built-in
@@ -115,9 +136,9 @@ with `*` globs in `toolExposure`, to `hidden` to keep tools out entirely.
 Subagents that can write, edit or run commands get `tool_search` over the
 same MCP tools (loading for themselves); read-only subagents get none.
 
-A server that needs a sign-in shows as such in `/mcp`; run
-`/mcp login <server>` to authorize it in the browser and `/mcp logout
-<server>` to forget it. kwwk registers itself with the server's
+A server that needs a sign-in shows as such in `/mcp` and `kwwk mcp list`;
+run `kwwk mcp login <server>` (or `/mcp login <server>` inside the TUI) to
+authorize it in the browser, and `logout` to forget it. kwwk registers itself with the server's
 authorization server (dynamic client registration, or a client ID metadata
 document when you set `oauth.clientMetadataUrl`), listens on
 `http://127.0.0.1:<port>/callback` for the redirect, and keeps the tokens in
