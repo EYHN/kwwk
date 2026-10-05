@@ -88,6 +88,41 @@ public struct MCPToolCallError: Error, LocalizedError, Sendable {
     public var errorDescription: String? { message }
 }
 
+/// A tool result over the size limit, handed to `MCPResultSpill` whole.
+public struct MCPSpilledResult: Sendable {
+    public var server: String
+    public var tool: String
+    /// All text of the result (text blocks, then structured content).
+    public var text: String
+    /// Images left out of the model-facing result: base64 data and MIME type.
+    public var images: [(data: String, mimeType: String)]
+}
+
+/// Stores tool results that were too large to show in full and says where.
+public protocol MCPResultSpill: Sendable {
+    /// Store `result`; return where the model can read it (e.g. a path).
+    func spill(_ result: MCPSpilledResult) async throws -> String
+}
+
+/// How much of one MCP tool result reaches the model.
+public struct MCPResultLimits: Sendable {
+    /// Estimated tokens: text counts 4 characters per token, each image
+    /// `imageTokens`. Nil means no limit.
+    public var maxTokens: Int?
+    public var imageTokens: Int
+    /// Receives results over the limit; without it the rest is dropped.
+    public var spill: (any MCPResultSpill)?
+
+    public init(maxTokens: Int? = 25_000, imageTokens: Int = 1_600, spill: (any MCPResultSpill)? = nil) {
+        self.maxTokens = maxTokens
+        self.imageTokens = imageTokens
+        self.spill = spill
+    }
+
+    public static let `default` = MCPResultLimits()
+    public static let unlimited = MCPResultLimits(maxTokens: nil)
+}
+
 /// Adapts MCP tools and results to kwwk agent tools.
 public enum MCPToolAdapter {
     /// Calls a tool on the server: `(toolName, arguments, cancellation, onProgress)`.
@@ -103,6 +138,7 @@ public enum MCPToolAdapter {
         server: String,
         tool: MCPTool,
         name: String,
+        limits: MCPResultLimits = .default,
         call: @escaping Caller
     ) -> AgentTool {
         let toolName = tool.name
@@ -126,7 +162,7 @@ public enum MCPToolAdapter {
                 progress = nil
             }
             let result = try await call(toolName, args, cancellation, progress)
-            return try convert(server: server, tool: toolName, result: result)
+            return try await convert(server: server, tool: toolName, result: result, limits: limits)
         }
     }
 
@@ -160,11 +196,38 @@ public enum MCPToolAdapter {
     /// Convert a `tools/call` result. Results with `isError` throw
     /// `MCPToolCallError` carrying the server's message.
     public static func convert(server: String, tool: String, result: MCPCallToolResult) throws -> AgentToolResult {
+        try finish(server: server, tool: tool, result: result, blocks: modelBlocks(result))
+    }
+
+    /// Convert a `tools/call` result within `limits`: text beyond the limit
+    /// is cut and images beyond it are left out; the whole result goes to
+    /// `limits.spill` and the model is told where.
+    public static func convert(
+        server: String,
+        tool: String,
+        result: MCPCallToolResult,
+        limits: MCPResultLimits
+    ) async throws -> AgentToolResult {
+        var blocks = modelBlocks(result)
+        if let maxTokens = limits.maxTokens, estimatedTokens(blocks, imageTokens: limits.imageTokens) > maxTokens {
+            blocks = await limit(blocks, server: server, tool: tool, maxTokens: maxTokens, limits: limits)
+        }
+        return try finish(server: server, tool: tool, result: result, blocks: blocks)
+    }
+
+    private static func modelBlocks(_ result: MCPCallToolResult) -> [ToolResultBlock] {
         var blocks = result.content.flatMap(contentBlocks(_:))
         let hasText = blocks.contains { if case .text = $0 { return true } else { return false } }
         if !hasText, let structured = result.structuredContent {
             blocks.insert(.text(TextContent(text: structured.mcpJSONText(pretty: true))), at: 0)
         }
+        return blocks
+    }
+
+    private static func finish(
+        server: String, tool: String, result: MCPCallToolResult, blocks input: [ToolResultBlock]
+    ) throws -> AgentToolResult {
+        var blocks = input
         var details: [String: JSONValue] = ["server": .string(server), "tool": .string(tool)]
         if let structured = result.structuredContent { details["structuredContent"] = structured }
 
@@ -180,6 +243,61 @@ public enum MCPToolAdapter {
             blocks = [.text(TextContent(text: "(no output)"))]
         }
         return AgentToolResult(content: blocks, details: .object(details))
+    }
+
+    static func estimatedTokens(_ blocks: [ToolResultBlock], imageTokens: Int) -> Int {
+        blocks.reduce(0) { total, block in
+            switch block {
+            case .text(let text): return total + (text.text.count + 3) / 4
+            case .image: return total + imageTokens
+            }
+        }
+    }
+
+    private static func limit(
+        _ blocks: [ToolResultBlock],
+        server: String,
+        tool: String,
+        maxTokens: Int,
+        limits: MCPResultLimits
+    ) async -> [ToolResultBlock] {
+        var budget = maxTokens * 4
+        var kept: [ToolResultBlock] = []
+        var omittedImages: [(data: String, mimeType: String)] = []
+        var allText: [String] = []
+        var shownCharacters = 0
+        var totalCharacters = 0
+        for block in blocks {
+            switch block {
+            case .text(let content):
+                allText.append(content.text)
+                totalCharacters += content.text.count
+                if budget > 0 {
+                    let part = String(content.text.prefix(budget))
+                    budget -= part.count
+                    shownCharacters += part.count
+                    kept.append(.text(TextContent(text: part)))
+                }
+            case .image(let image):
+                if budget >= limits.imageTokens * 4 {
+                    budget -= limits.imageTokens * 4
+                    kept.append(block)
+                } else {
+                    omittedImages.append((image.data, image.mimeType))
+                }
+            }
+        }
+        var note = "[MCP result over the size limit: showing \(shownCharacters) of \(totalCharacters) characters"
+        if !omittedImages.isEmpty { note += ", \(omittedImages.count) image\(omittedImages.count == 1 ? "" : "s") left out" }
+        if let spill = limits.spill,
+           let location = try? await spill.spill(MCPSpilledResult(
+               server: server, tool: tool, text: allText.joined(separator: "\n\n"), images: omittedImages
+           )) {
+            note += ". The full result is at \(location)"
+        }
+        note += ".]"
+        kept.append(.text(TextContent(text: note)))
+        return kept
     }
 
     /// Model-facing blocks of one MCP content block.
@@ -233,5 +351,44 @@ public enum MCPToolAdapter {
 
     static func format(_ value: Double) -> String {
         value.rounded() == value && abs(value) < 1e15 ? String(Int(value)) : String(value)
+    }
+}
+
+/// Spills oversized tool results into a directory: the text as
+/// `<server>-<tool>-<id>.txt`, each left-out image beside it.
+public struct MCPDirectoryResultSpill: MCPResultSpill {
+    public var directory: URL
+
+    public init(directory: URL) {
+        self.directory = directory
+    }
+
+    public func spill(_ result: MCPSpilledResult) async throws -> String {
+        // Results may hold private data: a 0700 directory and 0600 files.
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+            )
+        }
+        let stem = "\(MCPToolNaming.sanitize(result.server))-\(MCPToolNaming.sanitize(result.tool))-\(UUID().uuidString.prefix(8))"
+        let textURL = directory.appendingPathComponent("\(stem).txt")
+        try Self.writePrivate(Data(result.text.utf8), to: textURL)
+        var paths = [textURL.path]
+        for (index, image) in result.images.enumerated() {
+            guard let data = Data(base64Encoded: image.data) else { continue }
+            let ext = image.mimeType.split(separator: "/").last.map(String.init) ?? "bin"
+            let imageURL = directory.appendingPathComponent("\(stem)-\(index + 1).\(MCPToolNaming.sanitize(ext))")
+            try Self.writePrivate(data, to: imageURL)
+            paths.append(imageURL.path)
+        }
+        return paths.joined(separator: ", ")
+    }
+
+    private static func writePrivate(_ data: Data, to url: URL) throws {
+        guard FileManager.default.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]),
+              let handle = FileHandle(forWritingAtPath: url.path)
+        else { throw MCPError.protocolError("Could not write \(url.path)") }
+        defer { try? handle.close() }
+        try handle.write(contentsOf: data)
     }
 }

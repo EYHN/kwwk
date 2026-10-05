@@ -55,7 +55,7 @@ struct MCPStdioEndToEndTests {
         #expect(await client.isConnected)
         #expect(await client.serverInfo == MCPServerInfo(name: "fake", version: "1.2.3"))
         #expect(await client.instructions == "Fake server for tests.\nSecond line.")
-        #expect(await client.negotiatedProtocolVersion == "2025-06-18")
+        #expect(await client.negotiatedProtocolVersion == "2025-11-25")
 
         let tools = try await client.listTools()
         #expect(tools.map(\.name) == ["echo", "add", "fail", "slow", "image", "state", "change", "env", "exit"])

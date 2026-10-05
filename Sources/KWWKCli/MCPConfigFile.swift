@@ -2,11 +2,24 @@ import Foundation
 import KWWKAI
 import KWWKMCP
 
+/// Where an MCP server is configured.
+enum MCPConfigScope: String, CaseIterable, Sendable {
+    /// `~/.kwwk/mcp.json`: every project.
+    case user
+    /// `<cwd>/.kwwk/mcp.json`: this project, shareable through version
+    /// control; read only with `KWWK_ALLOW_PROJECT_MCP=1`.
+    case project
+}
+
 /// One server from an `mcp.json` file.
 struct MCPConfigEntry: Sendable {
     var server: MCPServerConfig
     /// What the server offers, for the system prompt.
-    var description: String?
+    var description: String? { server.description }
+    /// OAuth settings of an HTTP server; nil when it does not use OAuth.
+    var oauth: MCPOAuthSettings?
+    /// The file it came from.
+    var scope: MCPConfigScope = .user
 }
 
 /// Reads the TUI's MCP configuration: `~/.kwwk/mcp.json` and, when the
@@ -14,7 +27,11 @@ struct MCPConfigEntry: Sendable {
 ///
 /// Both use the `mcpServers` shape shared with other MCP clients, plus
 /// kwwk's `exposure`, `toolExposure`, `description`, `enabled`,
-/// `startupTimeout` and `toolTimeout` (seconds). A project entry replaces a
+/// `startupTimeout`, `toolTimeout` and `toolMaxTotalTimeout` (seconds), and
+/// for HTTP servers `oauth`: `false`, or an object with `clientName`,
+/// `scope`, `clientId`, `clientSecret`, `clientMetadataUrl` and
+/// `callbackPort`. HTTP servers use OAuth unless `oauth` is `false` or
+/// `headers` set `Authorization`. A project entry replaces a
 /// user entry of the same name. `${VAR}` / `${VAR:-default}` expand from the
 /// environment and a leading `~/` from the home directory; a relative stdio
 /// `cwd` resolves against the session directory.
@@ -36,10 +53,12 @@ enum MCPConfigFile {
         let userPath = resolved(homeDirectory)
         let projectPath = resolved(cwd)
         var paths = [userPath]
+        var scopes = [userPath: MCPConfigScope.user]
         var loaded = Loaded()
         if projectPath != userPath {
             if trustProject {
                 paths.append(projectPath)
+                scopes[projectPath] = .project
             } else if FileManager.default.fileExists(atPath: projectPath) {
                 loaded.warnings.append(
                     "ignored \(projectPath); set \(MCPRuntime.allowProjectServersVariable)=1 to trust this project's MCP servers"
@@ -58,12 +77,13 @@ enum MCPConfigFile {
                 for name in servers.keys.sorted() {
                     do {
                         var expander = Expander(home: homeDirectory, environment: environment)
-                        guard let entry = try parse(
+                        guard var entry = try parse(
                             name: name, raw: servers[name] ?? .null, cwd: cwd, expander: &expander
                         ) else {
                             byName[name] = nil
                             continue
                         }
+                        entry.scope = scopes[path] ?? .user
                         loaded.warnings += expander.warnings.map { "\(path): \($0)" }
                         if byName[name] == nil { order.append(name) }
                         byName[name] = entry
@@ -77,6 +97,25 @@ enum MCPConfigFile {
         }
         loaded.entries = order.compactMap { byName[$0] }
         return loaded
+    }
+
+    /// Parse one entry as `load` would, for `kwwk mcp add` to check a server
+    /// before writing it. Nil for `"enabled": false`.
+    static func validate(
+        name: String,
+        raw: JSONValue,
+        cwd: String,
+        homeDirectory: String,
+        environment: [String: String]
+    ) throws -> MCPConfigEntry? {
+        var expander = Expander(home: homeDirectory, environment: environment)
+        return try parse(name: name, raw: raw, cwd: cwd, expander: &expander)
+    }
+
+    /// The config file of a scope.
+    static func path(scope: MCPConfigScope, cwd: String, homeDirectory: String) -> URL {
+        let base = scope == .user ? homeDirectory : cwd
+        return URL(fileURLWithPath: base).appendingPathComponent(".kwwk/mcp.json")
     }
 
     // MARK: - Parsing
@@ -139,7 +178,48 @@ enum MCPConfigFile {
         }
         if let seconds = try seconds(fields, "startupTimeout") { server.startupTimeoutSeconds = seconds }
         if let seconds = try seconds(fields, "toolTimeout") ?? seconds(fields, "timeout") { server.toolTimeoutSeconds = seconds }
-        return MCPConfigEntry(server: server, description: try string(fields["description"], "description"))
+        if let seconds = try seconds(fields, "toolMaxTotalTimeout") { server.toolMaxTotalTimeoutSeconds = seconds }
+        server.description = try string(fields["description"], "description")
+        var oauth: MCPOAuthSettings?
+        if case .http(_, let headers) = transport {
+            oauth = try parseOAuth(fields["oauth"], headers: headers, expander: &expander)
+        }
+        return MCPConfigEntry(server: server, oauth: oauth)
+    }
+
+    /// OAuth settings of an HTTP server, or nil when it opts out.
+    private static func parseOAuth(
+        _ value: JSONValue?, headers: [String: String], expander: inout Expander
+    ) throws -> MCPOAuthSettings? {
+        switch value {
+        case .bool(false)?:
+            return nil
+        case nil, .null?, .bool(true)?:
+            let sendsAuthorization = headers.keys.contains { $0.lowercased() == "authorization" }
+            return sendsAuthorization ? nil : MCPOAuthSettings()
+        case .object(let fields)?:
+            var settings = MCPOAuthSettings()
+            if let name = try string(fields["clientName"], "oauth.clientName") { settings.clientName = name }
+            settings.scope = try string(fields["scope"], "oauth.scope")
+            settings.clientID = try string(fields["clientId"], "oauth.clientId").map { expander.expand($0, field: "oauth.clientId") }
+            settings.clientSecret = try string(fields["clientSecret"], "oauth.clientSecret").map {
+                expander.expand($0, field: "oauth.clientSecret")
+            }
+            if let raw = try string(fields["clientMetadataUrl"], "oauth.clientMetadataUrl") {
+                guard let url = URL(string: raw), url.scheme?.lowercased() == "https" else {
+                    throw ConfigError(message: "oauth.clientMetadataUrl must be an https URL")
+                }
+                settings.clientMetadataURL = url
+            }
+            switch fields["callbackPort"] {
+            case nil, .null?: break
+            case .int(let port)? where (1...65_535).contains(port): settings.callbackPort = UInt16(port)
+            default: throw ConfigError(message: "oauth.callbackPort must be a port number")
+            }
+            return settings
+        default:
+            throw ConfigError(message: "oauth must be false or an object")
+        }
     }
 
     /// pi's `direct`, `codemode` and `codemode-deferred` read as `deferred`,

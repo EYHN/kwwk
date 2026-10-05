@@ -165,6 +165,22 @@ public enum AgentContextCompactor {
         respectMinimumMessages: Bool = true,
         cancellation: CancellationHandle? = nil
     ) async -> AgentContextCompactionOutcome {
+        // Deferred tools loaded but not called since the previous compaction
+        // leave with the history that loaded them; `tool_search` finds them
+        // again. Recording the removal in the compacted context makes the
+        // recap re-declare the slimmer tool set; the catalog unloads them
+        // only once the compaction is applied.
+        var context = context
+        let catalog = agent.state.toolCatalog
+        let unload = catalog?.unusedLoadedTools(in: context.messages) ?? []
+        if !unload.isEmpty {
+            let declared = Set(TranscriptTools.currentTools(in: context.messages).map(\.name))
+            let removed = unload.intersection(declared).sorted()
+            if !removed.isEmpty {
+                context.messages.append(.system(SystemMessage(toolsRemoved: removed)))
+            }
+            context.tools = context.tools.filter { !unload.contains($0.name) }
+        }
         let result = await compactContext(
             context: context,
             model: model,
@@ -203,6 +219,7 @@ public enum AgentContextCompactor {
             ) else {
                 return .failed(AgentContextCompactionError.contextChanged.localizedDescription)
             }
+            catalog?.unload(unload)
             return .compacted(
                 messagesCompacted: replacement.messagesCompacted,
                 hasRunningTasksLedger: replacement.hasRunningTasksLedger

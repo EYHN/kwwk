@@ -40,6 +40,11 @@ import KWWKCli
 struct KwwkCLI {
     static func main() async {
         var args = Array(CommandLine.arguments.dropFirst())
+        // `kwwk mcp` takes its arguments verbatim: a stdio server's own flags
+        // (after `--`) must not be read as kwwk's global options.
+        if args.first == "mcp" {
+            Foundation.exit(await KWWK.runMCPCommand(Array(args.dropFirst())))
+        }
         let thinkingLevel: ThinkingLevel
         (args, thinkingLevel) = extractThinking(args)
         let modelOverride: String?
@@ -95,6 +100,8 @@ struct KwwkCLI {
           kwwk -p                     read the prompt from stdin
           kwwk --help                 show this message
           kwwk --self-test            verify bundled installation resources
+          kwwk mcp <command>          manage MCP servers: add, add-json, list,
+                                      get, remove, login, logout
 
         global options:
           --thinking <level>          reasoning effort: off, minimal, low,
@@ -121,7 +128,8 @@ struct KwwkCLI {
         append-only log and replayed on resume.
 
         MCP servers are read from ~/.kwwk/mcp.json (project servers in
-        .kwwk/mcp.json need KWWK_ALLOW_PROJECT_MCP=1); /mcp shows status.
+        .kwwk/mcp.json need KWWK_ALLOW_PROJECT_MCP=1); manage them with
+        `kwwk mcp` and see their status with /mcp.
 
         Credentials are read from the OAuth store at ~/.kwwk/oauth.json,
         with supported API-key environment variables as a fallback. With

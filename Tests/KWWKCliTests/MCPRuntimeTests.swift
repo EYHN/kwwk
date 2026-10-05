@@ -106,12 +106,15 @@ struct MCPRuntimeTests {
         defer { faux.unregister() }
         let agent = Agent(initialState: AgentInitialState(model: faux.getModel(), tools: [makeEchoTool()]))
         runtime.attach(to: agent, messages: [])
-        #expect(agent.state.systemPrompt.contains("<mcp_servers>"))
-        #expect(agent.state.systemPrompt.contains("tracker: Docs and issue tracker"))
+        // The bound catalog adds the server list and tool_search itself.
+        #expect(agent.state.effectiveSystemPrompt.contains("<mcp_servers>"))
+        #expect(agent.state.effectiveSystemPrompt.contains("tracker: Docs and issue tracker"))
+        #expect(!agent.state.systemPrompt.contains("<mcp_servers>"))
 
         // Nothing waits for the server: tool_search does.
-        #expect(agent.state.tools.map(\.name) == ["echo", toolSearchToolName])
-        let search = try #require(agent.state.tools.first { $0.name == toolSearchToolName })
+        #expect(agent.state.tools.map(\.name) == ["echo"])
+        #expect(agent.state.effectiveTools.map(\.name) == ["echo", toolSearchToolName])
+        let search = try #require(agent.state.effectiveTools.first { $0.name == toolSearchToolName })
         let result = try await search.execute("s1", ["query": "search bugs"], nil, nil)
         guard case .text(let text)? = result.content.first else {
             Issue.record("tool_search returned no text")

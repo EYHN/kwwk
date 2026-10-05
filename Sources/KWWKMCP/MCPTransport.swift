@@ -31,13 +31,14 @@ extension MCPTransport {
     public var diagnostics: String? { nil }
 }
 
-/// Builds the transport of a configured server.
-public typealias MCPTransportFactory = @Sendable (_ config: MCPServerConfig) throws -> any MCPTransport
+/// Builds the transport of a configured server, with the server's auth
+/// (HTTP only; nil when it has none).
+public typealias MCPTransportFactory = @Sendable (_ config: MCPServerConfig, _ auth: MCPTransportAuth?) throws -> any MCPTransport
 
 public enum MCPTransports {
     /// The default transport for a config: `MCPStdioTransport` for `.stdio`,
     /// `MCPStreamableHTTPTransport` for `.http`.
-    public static func make(for config: MCPServerConfig) throws -> any MCPTransport {
+    public static func make(for config: MCPServerConfig, auth: MCPTransportAuth? = nil) throws -> any MCPTransport {
         switch config.transport {
         case .stdio(let command, let args, let env, let cwd):
             return MCPStdioTransport(command: command, args: args, env: env, cwd: cwd)
@@ -45,7 +46,8 @@ public enum MCPTransports {
             return MCPStreamableHTTPTransport(
                 url: url,
                 headers: headers,
-                requestTimeoutSeconds: config.toolTimeoutSeconds
+                requestTimeoutSeconds: config.toolTimeoutSeconds,
+                auth: auth
             )
         }
     }

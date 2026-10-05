@@ -104,17 +104,37 @@ public final class AgentState: @unchecked Sendable {
         set { lock.withLock { _toolCatalog = newValue } }
     }
 
-    /// The tools the next provider request declares: `tools` plus the
-    /// catalog's loaded tools.
+    /// The tools the next provider request declares: `tools`, then the
+    /// catalog's `tool_search` (unless `tools` has one) and loaded tools.
     public var effectiveTools: [AgentTool] {
         let (tools, catalog) = lock.withLock { (_tools, _toolCatalog) }
-        return Self.merge(tools, catalog?.tools)
+        return Self.merge(tools, catalog)
     }
 
-    private static func merge(_ tools: [AgentTool], _ extra: [AgentTool]?) -> [AgentTool] {
-        guard let extra, !extra.isEmpty else { return tools }
-        let names = Set(tools.map(\.name))
-        return tools + extra.filter { !names.contains($0.name) }
+    /// The system prompt the next provider request sends: `systemPrompt`
+    /// plus the catalog's instructions.
+    public var effectiveSystemPrompt: String {
+        let (prompt, catalog) = lock.withLock { (_systemPrompt, _toolCatalog) }
+        return Self.compose(prompt, catalog)
+    }
+
+    private static func merge(_ tools: [AgentTool], _ catalog: ToolCatalog?) -> [AgentTool] {
+        guard let catalog else { return tools }
+        var names = Set(tools.map(\.name))
+        var result = tools
+        if !names.contains(toolSearchToolName) {
+            result.append(catalog.searchTool)
+            names.insert(toolSearchToolName)
+        }
+        result.append(contentsOf: catalog.tools.filter { !names.contains($0.name) })
+        return result
+    }
+
+    private static func compose(_ prompt: String, _ catalog: ToolCatalog?) -> String {
+        guard let instructions = catalog?.instructions?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !instructions.isEmpty
+        else { return prompt }
+        return prompt.isEmpty ? instructions : prompt + "\n\n" + instructions
     }
 
     public var messages: [Message] {
@@ -153,15 +173,26 @@ public final class AgentState: @unchecked Sendable {
     }
 
     func snapshotModelContext() -> (revision: UInt64, context: AgentContext, model: Model) {
-        let extra = lock.withLock { _toolCatalog }?.tools
+        let catalog = lock.withLock { _toolCatalog }
+        // Read the catalog outside the state lock: it takes its own locks.
+        let extra = catalog.map { (tools: $0.tools, search: $0.searchTool, instructions: $0.instructions) }
         return lock.withLock {
-            (
+            var tools = _tools
+            var systemPrompt = _systemPrompt
+            if let extra {
+                var names = Set(tools.map(\.name))
+                if !names.contains(toolSearchToolName) {
+                    tools.append(extra.search)
+                    names.insert(toolSearchToolName)
+                }
+                tools.append(contentsOf: extra.tools.filter { !names.contains($0.name) })
+                if let instructions = extra.instructions?.trimmingCharacters(in: .whitespacesAndNewlines), !instructions.isEmpty {
+                    systemPrompt = systemPrompt.isEmpty ? instructions : systemPrompt + "\n\n" + instructions
+                }
+            }
+            return (
                 _contextRevision,
-                AgentContext(
-                    systemPrompt: _systemPrompt,
-                    messages: _messages,
-                    tools: Self.merge(_tools, extra)
-                ),
+                AgentContext(systemPrompt: systemPrompt, messages: _messages, tools: tools),
                 _model
             )
         }

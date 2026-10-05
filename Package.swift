@@ -102,7 +102,7 @@ let package = Package(
         ),
         .testTarget(
             name: "KWWKMCPTests",
-            dependencies: ["KWWKMCP", "KWWKAgent", "KWWKAI"],
+            dependencies: ["KWWKMCP", "KWWKAgent", "KWWKAI", .product(name: "Crypto", package: "swift-crypto")],
             path: "Tests/KWWKMCPTests"
         ),
         .testTarget(
