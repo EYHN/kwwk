@@ -163,12 +163,12 @@ struct MCPAuthLifecycleTests {
         )
     }
 
-    @Test("a server that needs authorization withdraws, waits, and comes back on reconnect")
+    @Test("a server that needs authorization is left alone until the provider has a new token")
     func managerAuthorizationRequired() async throws {
         let server = FakeHTTPMCPServer()
         server.acceptedTokens = ["good"]
         let provider = SteppingTokenProvider(["bad"])
-        let manager = manager(server, provider)
+        let manager = manager(server, provider, policy: MCPReconnectPolicy(maxAttempts: 3, initialDelaySeconds: 0.01))
         await manager.waitForStartup(timeout: 5)
         guard case .authorizationRequired = await manager.statuses().first?.state else {
             Issue.record("expected authorizationRequired, got \(String(describing: await manager.statuses().first?.state))")
@@ -176,38 +176,153 @@ struct MCPAuthLifecycleTests {
         }
         #expect(await manager.tools().isEmpty)
         #expect(await manager.unavailableServers() == [ToolSourceStatus(name: "remote", reason: "requires authorization")])
+
+        // Until the provider has another token the server is not asked
+        // again: not in the background, not by a search, not by a call.
+        let requests = server.requests.count
+        try await Task.sleep(nanoseconds: 200_000_000)
+        await manager.prepareForSearch(timeout: 1)
         await #expect(throws: MCPManagerError.authorizationRequired("remote")) {
             _ = try await manager.callTool(server: "remote", tool: "one", arguments: [:])
         }
-        // A search does not retry it on its own.
-        await manager.prepareForSearch(timeout: 1)
-        guard case .authorizationRequired = await manager.statuses().first?.state else {
-            Issue.record("prepareForSearch must not reconnect a server that needs authorization")
-            return
-        }
+        #expect(server.requests.count == requests)
 
+        // The provider has a new token; the next search picks it up.
         provider.setTokens(["good"])
-        try await manager.reconnect("remote")
-        await manager.waitForStartup(timeout: 5)
+        await manager.prepareForSearch(timeout: 5)
         #expect(await manager.statuses().first?.state == .connected)
         #expect(await manager.tools().map(\.tool.name) == ["mcp__remote__one", "mcp__remote__two"])
         #expect(await manager.unavailableServers().isEmpty)
         await manager.shutdown()
     }
 
-    @Test("insufficient scope on a call withdraws the server's tools")
+    @Test("a call picks up a new token for a server that needs authorization")
+    func managerAuthorizationRetriedByCall() async throws {
+        let server = FakeHTTPMCPServer()
+        server.acceptedTokens = ["good"]
+        let provider = SteppingTokenProvider(["bad"])
+        let manager = manager(server, provider)
+        await manager.waitForStartup(timeout: 5)
+        guard case .authorizationRequired = await manager.statuses().first?.state else {
+            Issue.record("expected authorizationRequired")
+            return
+        }
+        provider.setTokens(["good"])
+        let result = try await manager.callTool(server: "remote", tool: "one", arguments: [:])
+        #expect(result.content == [.text("called")])
+        #expect(await manager.statuses().first?.state == .connected)
+        await manager.shutdown()
+    }
+
+    @Test("credentials refused on a call withdraw the server's tools")
+    func managerRefusedOnCall() async throws {
+        let server = FakeHTTPMCPServer()
+        server.acceptedTokens = ["good"]
+        let provider = SteppingTokenProvider(["good"])
+        let manager = manager(server, provider)
+        await manager.waitForStartup(timeout: 5)
+        #expect(await manager.tools().count == 2)
+        server.acceptedTokens = ["rotated"]
+        await #expect(throws: MCPManagerError.authorizationRequired("remote")) {
+            _ = try await manager.callTool(server: "remote", tool: "one", arguments: [:])
+        }
+        #expect(await manager.tools().isEmpty)
+        #expect(await manager.unavailableServers() == [ToolSourceStatus(name: "remote", reason: "requires authorization")])
+        await manager.shutdown()
+    }
+
+    @Test("a call refused for want of scope fails alone; the server stays connected")
     func managerInsufficientScope() async throws {
         let server = FakeHTTPMCPServer()
         server.scopedTokens = ["admin"]
         let manager = manager(server, SteppingTokenProvider(["reader"]))
         await manager.waitForStartup(timeout: 5)
         #expect(await manager.tools().count == 2)
-        await #expect(throws: MCPManagerError.authorizationRequired("remote")) {
+        await #expect(throws: MCPManagerError.insufficientScope("remote", "write")) {
             _ = try await manager.callTool(server: "remote", tool: "one", arguments: [:])
         }
-        #expect(await manager.tools().isEmpty)
+        #expect(await manager.statuses().first?.state == .connected)
+        #expect(await manager.tools().count == 2)
+        #expect(await manager.unavailableServers().isEmpty)
         // The refused call is not sent again.
         #expect(server.requests.filter { $0.body?["method"] == "tools/call" }.count == 1)
+        await manager.shutdown()
+    }
+
+    @Test("a 401 to a server without an auth provider is an ordinary failure")
+    func noProviderUnauthorizedIsFailure() async throws {
+        let server = FakeHTTPMCPServer()
+        server.acceptedTokens = ["secret"]
+        let manager = manager(server, nil)
+        await manager.waitForStartup(timeout: 5)
+        guard case .failed = await manager.statuses().first?.state else {
+            Issue.record("expected failed, got \(String(describing: await manager.statuses().first?.state))")
+            return
+        }
+        #expect(await manager.unavailableServers() == [ToolSourceStatus(name: "remote", reason: "failed to connect")])
+        await manager.shutdown()
+    }
+
+    @Test("concurrent calls on a server that needs authorization connect it once")
+    func concurrentCallsConnectOnce() async throws {
+        let server = FakeHTTPMCPServer()
+        server.acceptedTokens = ["good"]
+        let provider = SteppingTokenProvider(["bad"])
+        let manager = manager(server, provider)
+        await manager.waitForStartup(timeout: 5)
+        provider.setTokens(["good"])
+        let initializes = server.requests.filter { $0.body?["method"] == "initialize" }.count
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask { _ = try await manager.callTool(server: "remote", tool: "one", arguments: [:]) }
+            }
+            try await group.waitForAll()
+        }
+        #expect(server.requests.filter { $0.body?["method"] == "initialize" }.count == initializes + 1)
+        await manager.shutdown()
+    }
+
+    @Test("an authorization error from the provider itself is a failure, not a refusal")
+    func providerErrorIsNotRefusal() async throws {
+        final class FailingProvider: MCPAuthProvider, @unchecked Sendable {
+            func token() async throws -> String? { throw MCPAuthError.unauthorized("no session") }
+        }
+        let server = FakeHTTPMCPServer()
+        let url = url
+        let manager = MCPManager(
+            configs: [MCPServerConfig(name: "remote", transport: .http(url: url), startupTimeoutSeconds: 5)],
+            auth: ["remote": .provider(FailingProvider())],
+            reconnectPolicy: .none,
+            transportFactory: { config, auth in
+                guard case .http(let url, let headers) = config.transport else { throw MCPError.notConnected }
+                return MCPStreamableHTTPTransport(url: url, headers: headers, httpClient: server, auth: auth)
+            }
+        )
+        await manager.waitForStartup(timeout: 5)
+        guard case .failed = await manager.statuses().first?.state else {
+            Issue.record("expected failed, got \(String(describing: await manager.statuses().first?.state))")
+            return
+        }
+        #expect(server.requests.isEmpty)
+        #expect(await manager.unavailableServers() == [ToolSourceStatus(name: "remote", reason: "failed to connect")])
+        await manager.shutdown()
+    }
+
+    @Test("a released catalog unregisters its observer")
+    func catalogObserverReleased() async throws {
+        let server = FakeHTTPMCPServer()
+        let manager = manager(server, nil)
+        weak var released: ToolCatalog?
+        do {
+            let catalog = await manager.makeToolCatalog(searchWaitSeconds: 5)
+            released = catalog
+            await manager.waitForStartup(timeout: 5)
+            #expect(catalog.registeredTools.count == 2)
+        }
+        #expect(released == nil)
+        try await manager.addServer(MCPServerConfig(name: "second", transport: .http(url: url), startupTimeoutSeconds: 5))
+        await manager.waitForStartup(timeout: 5)
+        #expect(await waitUntil { await manager.observerCount == 0 })
         await manager.shutdown()
     }
 

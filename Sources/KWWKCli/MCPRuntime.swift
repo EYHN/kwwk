@@ -188,9 +188,8 @@ func registerMCPSlashCommand(_ registry: SlashCommandRegistry, runtime: MCPRunti
                 case .disconnected(let reason): state = "disconnected: \(reason)"
                 case .failed(let reason): state = "failed: \(reason)"
                 case .authorizationRequired:
-                    state = runtime.oauthProviders[status.name] != nil
-                        ? "needs sign-in: /mcp login \(status.name)"
-                        : "needs authorization"
+                    // Only servers with an OAuth provider get here.
+                    state = "needs sign-in: /mcp login \(status.name)"
                 case .closed: state = "closed"
                 }
                 let active = loaded.filter { $0 == status.name }.count

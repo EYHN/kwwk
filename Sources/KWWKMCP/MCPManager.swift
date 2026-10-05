@@ -20,8 +20,11 @@ public enum MCPServerState: Sendable, Hashable {
     /// Connecting failed. The manager retries in the background a few times,
     /// then once more on the next tool search or call.
     case failed(String)
-    /// The server needs authorization a person has to give. Its tools are
-    /// withdrawn and nothing reconnects until `reconnect(_:)`.
+    /// The server refused the credentials: a 401 its auth provider could not
+    /// recover from, or a 403 `insufficient_scope` while connecting. Its
+    /// tools are withdrawn and nothing reconnects in the background; a tool
+    /// search, or a `callTool`, connects again only once the provider has a
+    /// token other than the refused one.
     case authorizationRequired(String?)
     /// The manager was shut down.
     case closed
@@ -70,8 +73,15 @@ public struct MCPReconnectPolicy: Sendable, Hashable {
 ///
 /// - A dropped connection keeps its tools and reconnects in the background
 ///   (`MCPReconnectPolicy`); a call on it reconnects first.
-/// - A server that needs authorization (`MCPAuthError`) withdraws its tools
-///   and stays down until `reconnect(_:)`.
+/// - Only the server decides that it needs authorization: a 401 the auth
+///   provider cannot recover from, or a 403 `insufficient_scope` while
+///   connecting. Its tools are withdrawn, and it is not asked again until
+///   the provider has a token other than the refused one; each tool search
+///   checks (the provider decides what to cache). `reconnect(_:)` connects at
+///   once. A server without an auth provider that answers 401, and an auth
+///   provider failing by itself, are ordinary connection failures.
+/// - A call refused with 403 `insufficient_scope` fails alone
+///   (`MCPManagerError.insufficientScope`); the server stays connected.
 /// - Servers can be added, replaced and removed while running.
 /// - A tool call is never sent twice: a call that failed because the
 ///   connection dropped fails, and the next call reconnects.
@@ -89,6 +99,8 @@ public actor MCPManager {
         var client: MCPClient?
         var tools: [MCPTool] = []
         var serverInfo: MCPServerInfo?
+        /// What the server refused, while authorization is required.
+        var refused: MCPRefusedCredential?
         var connectTask: Task<MCPClient, Error>?
         var reconnectTask: Task<Void, Never>?
         /// Consecutive failed connection attempts.
@@ -163,21 +175,66 @@ public actor MCPManager {
     }
 
     /// Before a tool search: retry once each server whose background
-    /// reconnection gave up, then wait like `waitForStartup`. Servers that
-    /// need authorization are left alone.
+    /// reconnection gave up, and each server that needs authorization whose
+    /// auth provider has a new token, then wait like `waitForStartup`. The
+    /// providers are asked concurrently, within the same timeout.
     @discardableResult
     public func prepareForSearch(timeout: TimeInterval, cancellation: CancellationHandle? = nil) async -> Bool {
         start()
+        let deadline = Date().addingTimeInterval(timeout)
+        var refusedServers: [(name: String, generation: Int, auth: MCPTransportAuth, refused: MCPRefusedCredential?)] = []
         for name in order {
             guard let server = servers[name], server.connectTask == nil, server.reconnectTask == nil else { continue }
             switch server.state {
             case .failed, .disconnected:
                 _ = ensureConnecting(name)
+            case .authorizationRequired:
+                if let auth = server.auth { refusedServers.append((name, server.generation, auth, server.refused)) }
             default:
                 break
             }
         }
-        return await waitForConnections(timeout: timeout, cancellation: cancellation)
+        if !refusedServers.isEmpty {
+            let entries = refusedServers
+            let check = Task<[String], Error> {
+                await withTaskGroup(of: String?.self) { group in
+                    for entry in entries {
+                        group.addTask {
+                            await Self.hasNewCredential(entry.auth, refused: entry.refused) ? entry.name : nil
+                        }
+                    }
+                    var names: [String] = []
+                    for await name in group {
+                        if let name { names.append(name) }
+                    }
+                    return names
+                }
+            }
+            let renewed = (try? await MCPWait.value(
+                of: check, timeoutSeconds: timeout, cancellation: cancellation, what: "MCP credential check"
+            )) ?? []
+            for entry in refusedServers where renewed.contains(entry.name) {
+                // Unless something else happened to the server meanwhile.
+                guard let server = servers[entry.name], server.generation == entry.generation,
+                      case .authorizationRequired = server.state else { continue }
+                _ = ensureConnecting(entry.name)
+            }
+        }
+        return await waitForConnections(timeout: max(0, deadline.timeIntervalSinceNow), cancellation: cancellation)
+    }
+
+    /// Whether `auth` has a token other than the refused one. An OAuth
+    /// client's stored token is read without refreshing it.
+    private static func hasNewCredential(_ auth: MCPTransportAuth, refused: MCPRefusedCredential?) async -> Bool {
+        let token: String?
+        switch auth {
+        case .provider(let provider):
+            token = (try? await provider.token()) ?? nil
+        case .oauth(let provider, _):
+            token = (try? await provider.tokens(nil))?.accessToken
+        }
+        guard let token else { return false }
+        return token != refused?.token
     }
 
     private func waitForConnections(timeout: TimeInterval, cancellation: CancellationHandle?) async -> Bool {
@@ -273,7 +330,7 @@ public actor MCPManager {
     }
 
     /// Drop the current connection (if any) and connect again now, e.g.
-    /// after the user authorized a server that needed it.
+    /// when the host knows new credentials are in place.
     public func reconnect(_ name: String) async throws {
         guard !isShutDown else { throw MCPManagerError.shutDown }
         guard var server = servers[name] else { throw MCPManagerError.unknownServer(name) }
@@ -285,6 +342,7 @@ public actor MCPManager {
         server.generation = nextGeneration()
         let client = server.client
         server.client = nil
+        server.refused = nil
         servers[name] = server
         await client?.close()
         started = true
@@ -370,12 +428,18 @@ public actor MCPManager {
         toolObservers.removeAll { $0.id == id }
     }
 
+    /// Registered tool observers (tests).
+    var observerCount: Int { toolObservers.count }
+
     // MARK: - Tool calls
 
     /// Call a tool by its server-side name, waiting for (or re-establishing)
     /// the connection first. Used by the agent tools' `execute`. A server
-    /// that needs authorization fails at once with
-    /// `MCPManagerError.authorizationRequired`.
+    /// that needs authorization fails with
+    /// `MCPManagerError.authorizationRequired` without being asked, unless
+    /// its auth provider has a new token; then it is connected again first.
+    /// A call the server refuses for want of scope fails with
+    /// `MCPManagerError.insufficientScope` and leaves the server connected.
     public func callTool(
         server name: String,
         tool: String,
@@ -385,17 +449,26 @@ public actor MCPManager {
     ) async throws -> MCPCallToolResult {
         let client = try await client(for: name, cancellation: cancellation)
         let config = servers[name]?.config
+        let capture = MCPRefusalCapture()
         do {
-            return try await client.callTool(
-                name: tool,
-                arguments: arguments,
-                timeoutSeconds: config?.toolTimeoutSeconds,
-                maxTotalTimeoutSeconds: config?.toolMaxTotalTimeoutSeconds,
-                cancellation: cancellation,
-                onProgress: onProgress
-            )
+            return try await MCPRefusalCapture.$current.withValue(capture) {
+                try await client.callTool(
+                    name: tool,
+                    arguments: arguments,
+                    timeoutSeconds: config?.toolTimeoutSeconds,
+                    maxTotalTimeoutSeconds: config?.toolMaxTotalTimeoutSeconds,
+                    cancellation: cancellation,
+                    onProgress: onProgress
+                )
+            }
         } catch let error as MCPAuthError where error.requiresAuthorization {
-            requireAuthorization(name, client: client, error: error)
+            if case .insufficientScope(let scope, _) = error {
+                throw MCPManagerError.insufficientScope(name, scope)
+            }
+            guard let refused = capture.refusal, servers[name]?.auth != nil else {
+                throw MCPManagerError.unavailable(name, MCPClient.describe(error))
+            }
+            requireAuthorization(name, client: client, error: error, refused: refused)
             throw MCPManagerError.authorizationRequired(name)
         }
     }
@@ -404,8 +477,29 @@ public actor MCPManager {
     /// server's startup timeout).
     public func client(for name: String, cancellation: CancellationHandle? = nil) async throws -> MCPClient {
         guard !isShutDown else { throw MCPManagerError.shutDown }
-        guard let server = servers[name] else { throw MCPManagerError.unknownServer(name) }
-        if case .authorizationRequired = server.state { throw MCPManagerError.authorizationRequired(name) }
+        guard var server = servers[name] else { throw MCPManagerError.unknownServer(name) }
+        if case .authorizationRequired = server.state {
+            guard let auth = server.auth else { throw MCPManagerError.authorizationRequired(name) }
+            let refused = server.refused
+            let check = Task<Bool, Error> { await Self.hasNewCredential(auth, refused: refused) }
+            let renewed: Bool
+            do {
+                renewed = try await MCPWait.value(
+                    of: check,
+                    timeoutSeconds: server.config.startupTimeoutSeconds,
+                    cancellation: cancellation,
+                    what: "MCP credential check"
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                renewed = false
+            }
+            guard renewed else { throw MCPManagerError.authorizationRequired(name) }
+            // The server may have changed while the provider was asked.
+            guard let current = servers[name] else { throw MCPManagerError.unknownServer(name) }
+            server = current
+        }
         // A connection that dropped before its close was observed is stale.
         if case .connected = server.state, let client = server.client, await client.isConnected {
             return client
@@ -451,6 +545,7 @@ public actor MCPManager {
         guard let current = servers[name] else { throw MCPManagerError.unknownServer(name) }
         let config = current.config
         var client: MCPClient?
+        let capture = MCPRefusalCapture()
         do {
             let created = MCPClient(
                 transport: try transportFactory(config, current.auth),
@@ -467,16 +562,23 @@ public actor MCPManager {
                 guard let created else { return }
                 await self?.connectionDropped(name: name, client: created, error: error)
             }
-            try await created.connect(timeoutSeconds: config.startupTimeoutSeconds)
-            let tools = await created.supportsTools
-                ? try await created.listTools(timeoutSeconds: config.startupTimeoutSeconds)
-                : []
+            let tools = try await MCPRefusalCapture.$current.withValue(capture) {
+                try await created.connect(timeoutSeconds: config.startupTimeoutSeconds)
+                return await created.supportsTools
+                    ? try await created.listTools(timeoutSeconds: config.startupTimeoutSeconds)
+                    : []
+            }
             let info = await created.serverInfo
             guard !isShutDown, var server = servers[name], server.generation == generation else {
                 await created.close()
                 throw MCPManagerError.shutDown
             }
+            // Never two live connections: one this replaces is closed.
+            if let replaced = server.client, replaced !== created {
+                Task { await replaced.close() }
+            }
             server.client = created
+            server.refused = nil
             server.tools = tools
             server.serverInfo = info
             server.state = .connected
@@ -490,9 +592,11 @@ public actor MCPManager {
             if !isShutDown, var server = servers[name], server.generation == generation {
                 server.client = nil
                 server.connectTask = nil
-                if let authError = Self.authorizationError(in: error) {
-                    server.state = .authorizationRequired(authError.errorDescription)
+                if let refused = Self.refusal(error, capture: capture, auth: server.auth) {
+                    server.state = .authorizationRequired((error as? MCPAuthError)?.errorDescription)
+                    server.refused = refused
                     server.tools = []
+                    server.failures = 0
                     servers[name] = server
                     rebuildTools()
                 } else {
@@ -506,17 +610,22 @@ public actor MCPManager {
         }
     }
 
-    /// The authorization error inside `error`, if connecting failed for that.
-    static func authorizationError(in error: Error) -> MCPAuthError? {
-        if let auth = error as? MCPAuthError, auth.requiresAuthorization { return auth }
-        return nil
+    /// What the server refused, when `error` means it refused the
+    /// credentials: an authorization error the transport saw the server
+    /// answer, on a server with an auth provider. An authorization error the
+    /// provider raised itself, or a 401 to a server without a provider, is an
+    /// ordinary failure.
+    private static func refusal(_ error: Error, capture: MCPRefusalCapture, auth: MCPTransportAuth?) -> MCPRefusedCredential? {
+        guard auth != nil, let authError = error as? MCPAuthError, authError.requiresAuthorization else { return nil }
+        return capture.refusal
     }
 
-    private func requireAuthorization(_ name: String, client: MCPClient, error: MCPAuthError) {
+    private func requireAuthorization(_ name: String, client: MCPClient, error: MCPAuthError, refused: MCPRefusedCredential) {
         // Only the live connection's own failure counts: a late error from a
         // connection already replaced must not undo a reconnect.
         guard var server = servers[name], server.client === client else { return }
         server.state = .authorizationRequired(error.errorDescription)
+        server.refused = refused
         server.tools = []
         server.client = nil
         server.reconnectTask?.cancel()
@@ -638,6 +747,9 @@ public enum MCPManagerError: Error, LocalizedError, Sendable, Equatable {
     case duplicateServer(String)
     case unavailable(String, String)
     case authorizationRequired(String)
+    /// The server refused one call for want of scope (the scope it asked
+    /// for, if it said).
+    case insufficientScope(String, String?)
     case shutDown
 
     public var errorDescription: String? {
@@ -646,6 +758,9 @@ public enum MCPManagerError: Error, LocalizedError, Sendable, Equatable {
         case .duplicateServer(let name): return "MCP server \"\(name)\" already exists"
         case .unavailable(let name, let reason): return "MCP server \"\(name)\" is not available: \(reason)"
         case .authorizationRequired(let name): return "MCP server \"\(name)\" requires authorization."
+        case .insufficientScope(let name, let scope):
+            let detail = scope.map { " (scope: \($0))" } ?? ""
+            return "MCP server \"\(name)\" refused this call: the authorization lacks permission for it\(detail)."
         case .shutDown: return "MCP servers were shut down"
         }
     }

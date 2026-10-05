@@ -348,7 +348,8 @@ enum MCPCommand {
                     switch status?.state {
                     case .connected?: health = "✔ Connected (\(status?.toolCount ?? 0) tools)"
                     case .authorizationRequired?:
-                        health = entry.oauth != nil ? "! Needs authentication (kwwk mcp login \(name))" : "! Needs authorization"
+                        // Only servers with an OAuth provider get here.
+                        health = "! Needs authentication (kwwk mcp login \(name))"
                     case .failed(let reason)?, .disconnected(let reason)?:
                         health = "✘ Failed to connect: \(reason.split(whereSeparator: \.isNewline).first ?? "")"
                     case .connecting?: health = "… Still connecting"
