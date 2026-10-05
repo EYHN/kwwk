@@ -8,18 +8,20 @@ extension MCPManager {
 
     /// A `ToolCatalog` fed by this manager, ready to `bind(to:)` an agent:
     ///
-    /// - every connected server's tools are searchable through `tool_search`,
-    ///   and leave the catalog (and any agent that loaded them) when their
-    ///   server is removed or needs authorization;
+    /// - every server's tools are searchable through `tool_search` once it
+    ///   connected, and leave the catalog (and any agent that loaded them)
+    ///   when their server is removed;
     /// - its instructions are `promptSection()` as of now. Call
     ///   `catalog.setInstructions(await manager.promptSection())` after
     ///   adding or removing servers, when changing the system prompt is fine;
-    /// - `tool_search` first retries servers whose reconnection gave up and
-    ///   waits up to `searchWaitSeconds` for servers still connecting;
+    /// - `tool_search` first retries servers whose reconnection gave up or
+    ///   that need authorization, and waits up to `searchWaitSeconds` for
+    ///   servers still connecting;
     /// - `tool_search` names the servers that cannot provide tools when it
     ///   finds fewer than asked for.
     ///
-    /// Starts the manager.
+    /// The manager holds the catalog weakly: once the catalog is released,
+    /// its observer unregisters itself. Starts the manager.
     public func makeToolCatalog(searchWaitSeconds: TimeInterval = 30) async -> ToolCatalog {
         let catalog = ToolCatalog(
             instructions: promptSection(),
@@ -32,8 +34,26 @@ extension MCPManager {
             }
         )
         catalog.setTools(tools().map(\.tool))
-        onToolsChanged { tools in catalog.setTools(tools.map(\.tool)) }
+        let registration = ObserverRegistration()
+        registration.id = onToolsChanged { [weak self, weak catalog] tools in
+            guard let catalog else {
+                if let id = registration.id { await self?.removeObserver(id) }
+                return
+            }
+            catalog.setTools(tools.map(\.tool))
+        }
         start()
         return catalog
+    }
+}
+
+/// The id of an observer, readable from inside the observer itself.
+private final class ObserverRegistration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: UUID?
+
+    var id: UUID? {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
     }
 }

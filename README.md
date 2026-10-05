@@ -552,9 +552,12 @@ Authentication follows the MCP TypeScript SDK's two layers:
   `MCPOAuthClientRegistrationStore`, `MCPOAuthDiscoveryStore` and
   `MCPOAuthCredentialInvalidation` for the optional parts.
 
-A server that needs authorization withdraws its tools and waits; call
-`manager.reconnect("docs")` once the user authorized. A dropped connection
-keeps its tools and reconnects in the background. `addServer`,
+A server that needs authorization keeps the tools it offered and is not
+reconnected in the background; every `tool_search` and every call on it
+connects again and asks the auth provider for credentials, so new ones are
+picked up without telling the manager (cache in the provider if asking is
+expensive; `manager.reconnect("docs")` reconnects at once). A dropped
+connection keeps its tools and reconnects in the background. `addServer`,
 `updateServer` and `removeServer` change the set while running; call
 `catalog.setInstructions(await manager.promptSection())` when the system
 prompt may change. `resultLimits` caps what a tool result shows the model

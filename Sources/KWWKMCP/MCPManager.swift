@@ -20,8 +20,9 @@ public enum MCPServerState: Sendable, Hashable {
     /// Connecting failed. The manager retries in the background a few times,
     /// then once more on the next tool search or call.
     case failed(String)
-    /// The server needs authorization a person has to give. Its tools are
-    /// withdrawn and nothing reconnects until `reconnect(_:)`.
+    /// The server needs authorization the auth provider could not supply.
+    /// Tools it already offered stay; there is no background reconnection,
+    /// but every tool search and every call on it asks the provider again.
     case authorizationRequired(String?)
     /// The manager was shut down.
     case closed
@@ -70,8 +71,10 @@ public struct MCPReconnectPolicy: Sendable, Hashable {
 ///
 /// - A dropped connection keeps its tools and reconnects in the background
 ///   (`MCPReconnectPolicy`); a call on it reconnects first.
-/// - A server that needs authorization (`MCPAuthError`) withdraws its tools
-///   and stays down until `reconnect(_:)`.
+/// - A server that needs authorization (`MCPAuthError`) keeps the tools it
+///   offered but is not reconnected in the background; each tool search and
+///   each call on it connects again, asking the auth provider for fresh
+///   credentials (the provider decides what to cache).
 /// - Servers can be added, replaced and removed while running.
 /// - A tool call is never sent twice: a call that failed because the
 ///   connection dropped fails, and the next call reconnects.
@@ -163,15 +166,15 @@ public actor MCPManager {
     }
 
     /// Before a tool search: retry once each server whose background
-    /// reconnection gave up, then wait like `waitForStartup`. Servers that
-    /// need authorization are left alone.
+    /// reconnection gave up or that needs authorization, then wait like
+    /// `waitForStartup`.
     @discardableResult
     public func prepareForSearch(timeout: TimeInterval, cancellation: CancellationHandle? = nil) async -> Bool {
         start()
         for name in order {
             guard let server = servers[name], server.connectTask == nil, server.reconnectTask == nil else { continue }
             switch server.state {
-            case .failed, .disconnected:
+            case .failed, .disconnected, .authorizationRequired:
                 _ = ensureConnecting(name)
             default:
                 break
@@ -273,7 +276,7 @@ public actor MCPManager {
     }
 
     /// Drop the current connection (if any) and connect again now, e.g.
-    /// after the user authorized a server that needed it.
+    /// when the host knows new credentials are in place.
     public func reconnect(_ name: String) async throws {
         guard !isShutDown else { throw MCPManagerError.shutDown }
         guard var server = servers[name] else { throw MCPManagerError.unknownServer(name) }
@@ -370,11 +373,15 @@ public actor MCPManager {
         toolObservers.removeAll { $0.id == id }
     }
 
+    /// Registered tool observers (tests).
+    var observerCount: Int { toolObservers.count }
+
     // MARK: - Tool calls
 
     /// Call a tool by its server-side name, waiting for (or re-establishing)
     /// the connection first. Used by the agent tools' `execute`. A server
-    /// that needs authorization fails at once with
+    /// that needs authorization is connected again first; when the provider
+    /// still has no usable credentials the call fails with
     /// `MCPManagerError.authorizationRequired`.
     public func callTool(
         server name: String,
@@ -405,7 +412,6 @@ public actor MCPManager {
     public func client(for name: String, cancellation: CancellationHandle? = nil) async throws -> MCPClient {
         guard !isShutDown else { throw MCPManagerError.shutDown }
         guard let server = servers[name] else { throw MCPManagerError.unknownServer(name) }
-        if case .authorizationRequired = server.state { throw MCPManagerError.authorizationRequired(name) }
         // A connection that dropped before its close was observed is stale.
         if case .connected = server.state, let client = server.client, await client.isConnected {
             return client
@@ -492,7 +498,7 @@ public actor MCPManager {
                 server.connectTask = nil
                 if let authError = Self.authorizationError(in: error) {
                     server.state = .authorizationRequired(authError.errorDescription)
-                    server.tools = []
+                    server.failures = 0
                     servers[name] = server
                     rebuildTools()
                 } else {
@@ -517,7 +523,6 @@ public actor MCPManager {
         // connection already replaced must not undo a reconnect.
         guard var server = servers[name], server.client === client else { return }
         server.state = .authorizationRequired(error.errorDescription)
-        server.tools = []
         server.client = nil
         server.reconnectTask?.cancel()
         server.reconnectTask = nil
@@ -584,12 +589,7 @@ public actor MCPManager {
         if !isShutDown {
             for name in order {
                 guard let server = servers[name] else { continue }
-                switch server.state {
-                case .authorizationRequired, .closed:
-                    continue
-                default:
-                    break
-                }
+                if case .closed = server.state { continue }
                 for tool in server.tools where server.config.exposure(forTool: tool.name) != .hidden {
                     entries.append((name, tool))
                 }
