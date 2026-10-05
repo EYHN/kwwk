@@ -37,8 +37,14 @@ public struct MCPServerConfig: Sendable, Hashable {
     public var toolExposure: [String: MCPToolExposure]
     /// Bound on connecting (spawn + `initialize` + first `tools/list`).
     public var startupTimeoutSeconds: Double
-    /// Per-request timeout of tool calls and other requests.
+    /// Per-request timeout of tool calls and other requests. Progress
+    /// updates restart it.
     public var toolTimeoutSeconds: Double
+    /// Absolute bound of one tool call, progress or not. Nil means none.
+    public var toolMaxTotalTimeoutSeconds: Double?
+    /// One line about what the server offers, for the model (the system
+    /// prompt's server list).
+    public var description: String?
 
     public init(
         name: String,
@@ -46,7 +52,9 @@ public struct MCPServerConfig: Sendable, Hashable {
         exposure: MCPToolExposure = .deferred,
         toolExposure: [String: MCPToolExposure] = [:],
         startupTimeoutSeconds: Double = 30,
-        toolTimeoutSeconds: Double = MCPClient.defaultRequestTimeoutSeconds
+        toolTimeoutSeconds: Double = MCPClient.defaultRequestTimeoutSeconds,
+        toolMaxTotalTimeoutSeconds: Double? = nil,
+        description: String? = nil
     ) {
         self.name = name
         self.transport = transport
@@ -54,6 +62,8 @@ public struct MCPServerConfig: Sendable, Hashable {
         self.toolExposure = toolExposure
         self.startupTimeoutSeconds = startupTimeoutSeconds
         self.toolTimeoutSeconds = toolTimeoutSeconds
+        self.toolMaxTotalTimeoutSeconds = toolMaxTotalTimeoutSeconds
+        self.description = description
     }
 
     /// Effective exposure of one tool: its exact `toolExposure` entry, else

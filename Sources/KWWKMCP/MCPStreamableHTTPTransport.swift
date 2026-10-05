@@ -17,35 +17,73 @@ import FoundationNetworking
 /// `close()` aborts every in-flight request and deletes the session. When
 /// the server forgets the session (404), the inbound stream ends with
 /// `sessionExpired`, so the owner sees a dropped connection and reconnects.
+///
+/// With `auth`, every request carries the provider's bearer token. A 401
+/// calls the provider's `onUnauthorized` once and retries; a second 401
+/// fails with `MCPAuthError.unauthorizedAfterRetry`. A 403
+/// `insufficient_scope` runs step-up re-authorization for an OAuth client
+/// (at most `maxStepUpRetries` times per request) and otherwise fails with
+/// `MCPAuthError.insufficientScope`. Only requests the server refused are
+/// retried; nothing that ran is sent twice.
 public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable {
     public let url: URL
     public let headers: [String: String]
     public let requestTimeoutSeconds: Double
+    public let auth: MCPTransportAuth?
+    public let maxStepUpRetries: Int
 
     private let httpClient: any HTTPClient
+    private let authHTTPClient: any MCPAuthHTTPClient
+    private let authProvider: (any MCPAuthProvider)?
+    /// Shared by 401 recovery, proactive refresh and step-up.
+    private let authGate = MCPAuthRunGate()
     private let lock = NSLock()
     private var sessionId: String?
     private var protocolVersion: String?
     private var continuation: AsyncThrowingStream<JSONRPCMessage, Error>.Continuation?
     private var listenTask: Task<Void, Never>?
     private var closed = false
+    /// Scope accumulated from challenges and step-up (union).
+    private var scope: String?
+    private var resourceMetadataURL: URL?
     /// Cancelled by `close()`; every request carries it.
     private let lifetime = CancellationHandle()
 
     /// - Parameters:
-    ///   - headers: Extra request headers (e.g. `Authorization`).
+    ///   - headers: Extra request headers. A token from `auth` replaces any
+    ///     `Authorization` header here.
     ///   - httpClient: Injected for tests; defaults to a fresh URLSession client.
     ///   - requestTimeoutSeconds: Idle timeout of each POST.
+    ///   - auth: How to authenticate; nil sends `headers` only.
+    ///   - authHTTPClient: Client of the OAuth requests (discovery, tokens).
+    ///   - maxStepUpRetries: Step-up re-authorizations per request.
     public init(
         url: URL,
         headers: [String: String] = [:],
         httpClient: (any HTTPClient)? = nil,
-        requestTimeoutSeconds: Double = MCPClient.defaultRequestTimeoutSeconds
+        requestTimeoutSeconds: Double = MCPClient.defaultRequestTimeoutSeconds,
+        auth: MCPTransportAuth? = nil,
+        authHTTPClient: (any MCPAuthHTTPClient)? = nil,
+        maxStepUpRetries: Int = 1
     ) {
         self.url = url
         self.headers = headers
         self.httpClient = httpClient ?? URLSessionHTTPClient()
         self.requestTimeoutSeconds = requestTimeoutSeconds
+        self.auth = auth
+        let authHTTP = authHTTPClient ?? URLSessionMCPAuthHTTPClient()
+        self.authHTTPClient = authHTTP
+        switch auth {
+        case .provider(let provider):
+            self.authProvider = provider
+        case .oauth(let provider, let interactive):
+            self.authProvider = MCPOAuthAdapter(
+                provider: provider, serverURL: url, interactive: interactive, httpClient: authHTTP, gate: authGate
+            )
+        case nil:
+            self.authProvider = nil
+        }
+        self.maxStepUpRetries = max(0, maxStepUpRetries)
     }
 
     /// The session id assigned by the server, if any.
@@ -65,8 +103,13 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
     }
 
     public func send(_ message: JSONRPCMessage) async throws {
+        try await send(message, isAuthRetry: false, stepUpRetries: 0)
+    }
+
+    private func send(_ message: JSONRPCMessage, isAuthRetry: Bool, stepUpRetries: Int) async throws {
         let body = try message.encoded()
-        var requestHeaders = baseHeaders()
+        let token = try await currentToken()
+        var requestHeaders = baseHeaders(token: token)
         requestHeaders["Content-Type"] = "application/json"
         requestHeaders["Accept"] = "application/json, text/event-stream"
         let isInitialize: Bool
@@ -86,6 +129,19 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         let status = response.statusCode
         guard (200..<300).contains(status) else {
             let text = await Self.collectText(bytes, limit: 4_000)
+            if status == 401 {
+                try await handleUnauthorized(response: response, body: text, rejectedToken: token, isAuthRetry: isAuthRetry)
+                try checkStillWanted()
+                return try await send(message, isAuthRetry: true, stepUpRetries: stepUpRetries)
+            }
+            if status == 403 {
+                let challenge = MCPAuthChallenge(header: response.value(forHTTPHeaderField: "WWW-Authenticate"))
+                if challenge.error == "insufficient_scope" {
+                    try await stepUp(challenge: challenge, retries: stepUpRetries)
+                    try checkStillWanted()
+                    return try await send(message, isAuthRetry: isAuthRetry, stepUpRetries: stepUpRetries + 1)
+                }
+            }
             if status == 404, !isInitialize, requestHeaders["Mcp-Session-Id"] != nil {
                 finish(throwing: MCPError.sessionExpired)
                 throw MCPError.sessionExpired
@@ -106,6 +162,89 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
             for try await chunk in bytes { data.append(chunk) }
             guard !data.allSatisfy({ $0 == 0x20 || $0 == 0x0A || $0 == 0x0D || $0 == 0x09 }) else { return }
             yield(try JSONRPCMessage.decodeAll(data))
+        }
+    }
+
+    /// Finish an OAuth authorization started by this transport's provider
+    /// (`redirectToAuthorization`), from the callback's query parameters.
+    /// The caller checks `state` first.
+    public func finishAuthorization(callbackParameters: [String: String]) async throws {
+        guard let provider = auth?.oauthProvider else {
+            throw MCPAuthError.providerMisconfigured("finishAuthorization requires an OAuth client provider")
+        }
+        let (scope, metadataURL) = lock.withLock { (self.scope, self.resourceMetadataURL) }
+        try await MCPOAuth.finishAuthorization(
+            provider,
+            serverURL: url,
+            callbackParameters: callbackParameters,
+            scope: scope,
+            resourceMetadataURL: metadataURL,
+            httpClient: authHTTPClient
+        )
+    }
+
+    // MARK: - Auth
+
+    /// A refused request is retried only while its sender still waits: the
+    /// client cancels the sending task on timeout or cancellation, and a
+    /// request nobody waits for must not reach the server.
+    private func checkStillWanted() throws {
+        try Task.checkCancellation()
+        if lifetime.isCancelled { throw MCPError.connectionClosed(details: nil) }
+    }
+
+    private func currentToken() async throws -> String? {
+        guard let authProvider else { return nil }
+        return try await authProvider.token()
+    }
+
+    /// A 401: remember the challenge, then let the provider recover once.
+    private func handleUnauthorized(response: HTTPURLResponse, body: String, rejectedToken: String?, isAuthRetry: Bool) async throws {
+        let challenge = MCPAuthChallenge(header: response.value(forHTTPHeaderField: "WWW-Authenticate"))
+        lock.withLock {
+            if let metadataURL = challenge.resourceMetadataURL { resourceMetadataURL = metadataURL }
+            scope = MCPOAuth.scopeUnion(scope, challenge.scope)
+        }
+        guard let authProvider else {
+            let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw MCPAuthError.unauthorized(trimmed.isEmpty ? nil : "MCP server requires authorization: \(trimmed)")
+        }
+        guard !isAuthRetry else { throw MCPAuthError.unauthorizedAfterRetry }
+        try await authProvider.onUnauthorized(MCPUnauthorizedContext(
+            serverURL: url,
+            challenge: challenge,
+            rejectedToken: rejectedToken
+        ))
+    }
+
+    /// SEP-2350 step-up: re-authorize for the union of the scope requested
+    /// so far, the token's scope and the challenged scope, skipping refresh
+    /// when that union exceeds what the token was granted.
+    private func stepUp(challenge: MCPAuthChallenge, retries: Int) async throws {
+        guard let provider = auth?.oauthProvider, retries < maxStepUpRetries else {
+            throw MCPAuthError.insufficientScope(requiredScope: challenge.scope, description: challenge.errorDescription)
+        }
+        let tokens = try await provider.tokens(nil)
+        let (union, metadataURL): (String?, URL?) = lock.withLock {
+            if let metadataURL = challenge.resourceMetadataURL { resourceMetadataURL = metadataURL }
+            scope = MCPOAuth.scopeUnion(scope, tokens?.scope, challenge.scope)
+            return (scope, resourceMetadataURL)
+        }
+        let interactive = auth?.isInteractive ?? false
+        let url = url
+        let http = authHTTPClient
+        let result = try await authGate.run {
+            try await MCPOAuth.auth(provider, options: MCPOAuthOptions(
+                serverURL: url,
+                scope: union,
+                resourceMetadataURL: metadataURL,
+                forceReauthorization: MCPOAuth.isStrictScopeSuperset(union, of: tokens?.scope),
+                interactive: interactive,
+                httpClient: http
+            ))
+        }
+        guard result == .authorized else {
+            throw MCPAuthError.insufficientScope(requiredScope: union, description: challenge.errorDescription)
         }
     }
 
@@ -138,7 +277,13 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         guard session != nil else { return }
         // Best effort: tell the server the session is over. Servers that do
         // not support explicit termination answer 405.
-        let deleteHeaders = baseHeaders()
+        let storedToken: String?
+        if let adapter = authProvider as? MCPOAuthAdapter {
+            storedToken = try? await adapter.storedToken()
+        } else {
+            storedToken = try? await currentToken()
+        }
+        let deleteHeaders = baseHeaders(token: storedToken)
         if let (_, bytes) = try? await httpClient.stream(
             url: url, method: "DELETE", headers: deleteHeaders, body: nil,
             cancellation: nil, timeoutSeconds: 5
@@ -149,8 +294,12 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
 
     // MARK: - Internals
 
-    private func baseHeaders() -> [String: String] {
+    private func baseHeaders(token: String?) -> [String: String] {
         var result = headers
+        if let token {
+            for key in result.keys where key.lowercased() == "authorization" { result.removeValue(forKey: key) }
+            result["Authorization"] = "Bearer \(token)"
+        }
         lock.withLock {
             if let sessionId { result["Mcp-Session-Id"] = sessionId }
             if let protocolVersion { result["MCP-Protocol-Version"] = protocolVersion }
@@ -172,15 +321,23 @@ public final class MCPStreamableHTTPTransport: MCPTransport, @unchecked Sendable
         for message in messages { continuation.yield(message) }
     }
 
-    /// Server-to-client stream. Optional in the spec, so failures only end it.
-    private func listen() async {
-        var requestHeaders = baseHeaders()
-        requestHeaders["Accept"] = "text/event-stream"
+    /// Server-to-client stream. Optional in the spec, so failures only end
+    /// it. A 401 gets the provider's one recovery, like a request.
+    private func listen(isAuthRetry: Bool = false) async {
         do {
+            let token = try await currentToken()
+            var requestHeaders = baseHeaders(token: token)
+            requestHeaders["Accept"] = "text/event-stream"
             let (response, bytes) = try await httpClient.stream(
                 url: url, method: "GET", headers: requestHeaders, body: nil,
                 cancellation: lifetime, timeoutSeconds: 24 * 60 * 60
             )
+            if response.statusCode == 401, authProvider != nil, !isAuthRetry {
+                let text = await Self.collectText(bytes, limit: 4_000)
+                try await handleUnauthorized(response: response, body: text, rejectedToken: token, isAuthRetry: false)
+                await listen(isAuthRetry: true)
+                return
+            }
             let contentType = response.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
             guard (200..<300).contains(response.statusCode), contentType.contains("text/event-stream") else {
                 for try await _ in bytes {}

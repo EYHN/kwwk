@@ -14,11 +14,15 @@ public struct MCPAgentTool: Sendable {
 public enum MCPServerState: Sendable, Hashable {
     case connecting
     case connected
-    /// The connection dropped after it was established. The next tool call
-    /// reconnects.
+    /// The connection dropped after it was established. Its tools stay; the
+    /// manager reconnects in the background, and a tool call reconnects too.
     case disconnected(String)
-    /// Connecting failed. The next tool call of the server retries.
+    /// Connecting failed. The manager retries in the background a few times,
+    /// then once more on the next tool search or call.
     case failed(String)
+    /// The server needs authorization a person has to give. Its tools are
+    /// withdrawn and nothing reconnects until `reconnect(_:)`.
+    case authorizationRequired(String?)
     /// The manager was shut down.
     case closed
 }
@@ -32,27 +36,63 @@ public struct MCPServerStatus: Sendable, Hashable {
     public var serverInfo: MCPServerInfo?
 }
 
+/// Background reconnection after a dropped or failed connection.
+public struct MCPReconnectPolicy: Sendable, Hashable {
+    /// Background attempts after a drop or failure before giving up until
+    /// the next tool search or call.
+    public var maxAttempts: Int
+    public var initialDelaySeconds: Double
+    public var maxDelaySeconds: Double
+
+    public init(maxAttempts: Int = 5, initialDelaySeconds: Double = 1, maxDelaySeconds: Double = 30) {
+        self.maxAttempts = maxAttempts
+        self.initialDelaySeconds = initialDelaySeconds
+        self.maxDelaySeconds = maxDelaySeconds
+    }
+
+    public static let `default` = MCPReconnectPolicy()
+    /// No background reconnection.
+    public static let none = MCPReconnectPolicy(maxAttempts: 0)
+
+    func delay(afterFailures failures: Int) -> Double {
+        let exponent = Double(max(0, failures - 1))
+        return min(maxDelaySeconds, initialDelaySeconds * pow(2, exponent))
+    }
+}
+
 /// Owns the connections to a set of MCP servers and the agent tools they
 /// contribute.
 ///
 /// `start()` connects every server concurrently in the background. Tools
 /// appear once their server connected; observers registered with
-/// `onToolsChanged` hear about every change (servers connecting, servers
-/// announcing `tools/list_changed`, shutdown). A tool call on a server that
-/// is still connecting waits for it; a call on a server whose connection
-/// dropped or failed reconnects first.
+/// `onToolsChanged` hear about every change (servers connecting or going
+/// away, `tools/list_changed`, authorization being required, shutdown).
+///
+/// - A dropped connection keeps its tools and reconnects in the background
+///   (`MCPReconnectPolicy`); a call on it reconnects first.
+/// - A server that needs authorization (`MCPAuthError`) withdraws its tools
+///   and stays down until `reconnect(_:)`.
+/// - Servers can be added, replaced and removed while running.
+/// - A tool call is never sent twice: a call that failed because the
+///   connection dropped fails, and the next call reconnects.
 public actor MCPManager {
     public nonisolated let clientName: String
     public nonisolated let clientVersion: String
+    public nonisolated let reconnectPolicy: MCPReconnectPolicy
+    public nonisolated let resultLimits: MCPResultLimits
     private let transportFactory: MCPTransportFactory
 
     private struct Server {
         var config: MCPServerConfig
+        var auth: MCPTransportAuth?
         var state: MCPServerState = .connecting
         var client: MCPClient?
         var tools: [MCPTool] = []
         var serverInfo: MCPServerInfo?
         var connectTask: Task<MCPClient, Error>?
+        var reconnectTask: Task<Void, Never>?
+        /// Consecutive failed connection attempts.
+        var failures = 0
         var generation = 0
         /// Orders concurrent `tools/list` refreshes; only the newest applies.
         var toolsRevision = 0
@@ -66,23 +106,38 @@ public actor MCPManager {
     private var deliveryChain: Task<Void, Never>?
     private var started = false
     private var isShutDown = false
+    /// Source of `Server.generation` values, unique across the manager so a
+    /// server removed and added again never matches an old connect.
+    private var generationCounter = 0
+
+    private func nextGeneration() -> Int {
+        generationCounter += 1
+        return generationCounter
+    }
 
     /// - Parameters:
     ///   - configs: Servers to manage. Later duplicates of a name are ignored.
+    ///   - auth: Authentication per server name (HTTP servers).
+    ///   - resultLimits: How much of a tool result reaches the model.
     ///   - transportFactory: Builds transports; defaults to stdio / streamable
     ///     HTTP from the config.
     public init(
         configs: [MCPServerConfig],
+        auth: [String: MCPTransportAuth] = [:],
         clientName: String = "kwwk",
         clientVersion: String = "1.0.0",
-        transportFactory: @escaping MCPTransportFactory = MCPTransports.make
+        reconnectPolicy: MCPReconnectPolicy = .default,
+        resultLimits: MCPResultLimits = .default,
+        transportFactory: @escaping MCPTransportFactory = { try MCPTransports.make(for: $0, auth: $1) }
     ) {
         self.clientName = clientName
         self.clientVersion = clientVersion
+        self.reconnectPolicy = reconnectPolicy
+        self.resultLimits = resultLimits
         self.transportFactory = transportFactory
         for config in configs where servers[config.name] == nil {
             order.append(config.name)
-            servers[config.name] = Server(config: config)
+            servers[config.name] = Server(config: config, auth: auth[config.name])
         }
     }
 
@@ -104,6 +159,28 @@ public actor MCPManager {
     @discardableResult
     public func waitForStartup(timeout: TimeInterval, cancellation: CancellationHandle? = nil) async -> Bool {
         start()
+        return await waitForConnections(timeout: timeout, cancellation: cancellation)
+    }
+
+    /// Before a tool search: retry once each server whose background
+    /// reconnection gave up, then wait like `waitForStartup`. Servers that
+    /// need authorization are left alone.
+    @discardableResult
+    public func prepareForSearch(timeout: TimeInterval, cancellation: CancellationHandle? = nil) async -> Bool {
+        start()
+        for name in order {
+            guard let server = servers[name], server.connectTask == nil, server.reconnectTask == nil else { continue }
+            switch server.state {
+            case .failed, .disconnected:
+                _ = ensureConnecting(name)
+            default:
+                break
+            }
+        }
+        return await waitForConnections(timeout: timeout, cancellation: cancellation)
+    }
+
+    private func waitForConnections(timeout: TimeInterval, cancellation: CancellationHandle?) async -> Bool {
         let tasks = order.compactMap { servers[$0]?.connectTask }
         let all = Task<Void, Error> { [weak self] in
             for task in tasks { _ = try? await task.value }
@@ -131,25 +208,93 @@ public actor MCPManager {
             guard var server = servers[name] else { continue }
             server.connectTask?.cancel()
             server.connectTask = nil
-            server.generation += 1
+            server.reconnectTask?.cancel()
+            server.reconnectTask = nil
+            server.generation = nextGeneration()
             if let client = server.client { clients.append(client) }
             server.client = nil
             server.state = .closed
             servers[name] = server
         }
+        await closeAll(clients)
+        rebuildTools()
+        await deliveryChain?.value
+    }
+
+    private func closeAll(_ clients: [MCPClient]) async {
         await withTaskGroup(of: Void.self) { group in
             for client in clients {
                 group.addTask { await client.close() }
             }
         }
+    }
+
+    // MARK: - Changing servers
+
+    /// Add a server and start connecting it (once the manager started).
+    /// Fails when a server of that name exists.
+    public func addServer(_ config: MCPServerConfig, auth: MCPTransportAuth? = nil) throws {
+        guard !isShutDown else { throw MCPManagerError.shutDown }
+        guard servers[config.name] == nil else { throw MCPManagerError.duplicateServer(config.name) }
+        order.append(config.name)
+        servers[config.name] = Server(config: config, auth: auth)
+        if started { _ = ensureConnecting(config.name) }
+    }
+
+    /// Remove a server: close its connection and withdraw its tools.
+    public func removeServer(_ name: String) async {
+        guard var server = servers.removeValue(forKey: name) else { return }
+        order.removeAll { $0 == name }
+        server.connectTask?.cancel()
+        server.reconnectTask?.cancel()
+        let client = server.client
+        server.client = nil
         rebuildTools()
-        await deliveryChain?.value
+        await client?.close()
+    }
+
+    /// Replace a server's configuration and auth: the old connection closes
+    /// and its tools leave until the new one connects.
+    public func updateServer(_ config: MCPServerConfig, auth: MCPTransportAuth? = nil) async throws {
+        guard !isShutDown else { throw MCPManagerError.shutDown }
+        guard let existing = servers[config.name] else {
+            try addServer(config, auth: auth)
+            return
+        }
+        existing.connectTask?.cancel()
+        existing.reconnectTask?.cancel()
+        let client = existing.client
+        var server = Server(config: config, auth: auth)
+        server.generation = nextGeneration()
+        servers[config.name] = server
+        rebuildTools()
+        await client?.close()
+        if started { _ = ensureConnecting(config.name) }
+    }
+
+    /// Drop the current connection (if any) and connect again now, e.g.
+    /// after the user authorized a server that needed it.
+    public func reconnect(_ name: String) async throws {
+        guard !isShutDown else { throw MCPManagerError.shutDown }
+        guard var server = servers[name] else { throw MCPManagerError.unknownServer(name) }
+        server.connectTask?.cancel()
+        server.connectTask = nil
+        server.reconnectTask?.cancel()
+        server.reconnectTask = nil
+        server.failures = 0
+        server.generation = nextGeneration()
+        let client = server.client
+        server.client = nil
+        servers[name] = server
+        await client?.close()
+        started = true
+        _ = ensureConnecting(name)
     }
 
     // MARK: - Queries
 
-    /// Agent tools of all connected servers, hidden tools excluded, in config
-    /// order then server order.
+    /// Agent tools of the available servers, hidden tools excluded, in
+    /// config order then server order.
     public func tools() -> [MCPAgentTool] {
         agentTools
     }
@@ -165,6 +310,51 @@ public actor MCPManager {
                 serverInfo: server.serverInfo
             )
         }
+    }
+
+    /// Servers that cannot provide tools right now, with a short reason, for
+    /// `tool_search` to name. Servers still connecting, and servers whose
+    /// tools stay available while they reconnect, are not listed.
+    public func unavailableServers() -> [ToolSourceStatus] {
+        order.compactMap { name in
+            guard let server = servers[name] else { return nil }
+            switch server.state {
+            case .authorizationRequired:
+                return ToolSourceStatus(name: name, reason: "requires authorization")
+            case .failed where server.tools.isEmpty:
+                return ToolSourceStatus(name: name, reason: "failed to connect")
+            case .disconnected where server.tools.isEmpty:
+                return ToolSourceStatus(name: name, reason: "disconnected")
+            default:
+                return nil
+            }
+        }
+    }
+
+    /// The system-prompt section listing the servers: one line each, name
+    /// and description, no state. Built from configuration only.
+    public func promptSection() -> String? {
+        let configs = order.compactMap { servers[$0]?.config }
+            .filter { $0.exposure == .deferred || $0.toolExposure.values.contains(.deferred) }
+        return Self.renderPromptSection(configs)
+    }
+
+    /// The prompt section for `configs`.
+    public static func renderPromptSection(_ configs: [MCPServerConfig]) -> String? {
+        guard !configs.isEmpty else { return nil }
+        let lines = configs.map { config -> String in
+            guard let description = config.description?.split(whereSeparator: \.isNewline).first else {
+                return "- \(config.name)"
+            }
+            return "- \(config.name): \(description.prefix(250))"
+        }
+        return """
+        <mcp_servers>
+        These MCP servers provide tools named mcp__<server>__<tool> that are not loaded upfront. \
+        Use \(toolSearchToolName) to find and load them before calling them.
+        \(lines.joined(separator: "\n"))
+        </mcp_servers>
+        """
     }
 
     /// Register a handler called with the full tool list whenever it changes.
@@ -183,7 +373,9 @@ public actor MCPManager {
     // MARK: - Tool calls
 
     /// Call a tool by its server-side name, waiting for (or re-establishing)
-    /// the connection first. Used by the agent tools' `execute`.
+    /// the connection first. Used by the agent tools' `execute`. A server
+    /// that needs authorization fails at once with
+    /// `MCPManagerError.authorizationRequired`.
     public func callTool(
         server name: String,
         tool: String,
@@ -192,13 +384,20 @@ public actor MCPManager {
         onProgress: (@Sendable (MCPProgress) -> Void)? = nil
     ) async throws -> MCPCallToolResult {
         let client = try await client(for: name, cancellation: cancellation)
-        return try await client.callTool(
-            name: tool,
-            arguments: arguments,
-            timeoutSeconds: servers[name]?.config.toolTimeoutSeconds,
-            cancellation: cancellation,
-            onProgress: onProgress
-        )
+        let config = servers[name]?.config
+        do {
+            return try await client.callTool(
+                name: tool,
+                arguments: arguments,
+                timeoutSeconds: config?.toolTimeoutSeconds,
+                maxTotalTimeoutSeconds: config?.toolMaxTotalTimeoutSeconds,
+                cancellation: cancellation,
+                onProgress: onProgress
+            )
+        } catch let error as MCPAuthError where error.requiresAuthorization {
+            requireAuthorization(name, client: client, error: error)
+            throw MCPManagerError.authorizationRequired(name)
+        }
     }
 
     /// The connected client of a server, connecting if needed (bounded by the
@@ -206,6 +405,7 @@ public actor MCPManager {
     public func client(for name: String, cancellation: CancellationHandle? = nil) async throws -> MCPClient {
         guard !isShutDown else { throw MCPManagerError.shutDown }
         guard let server = servers[name] else { throw MCPManagerError.unknownServer(name) }
+        if case .authorizationRequired = server.state { throw MCPManagerError.authorizationRequired(name) }
         // A connection that dropped before its close was observed is stale.
         if case .connected = server.state, let client = server.client, await client.isConnected {
             return client
@@ -221,6 +421,9 @@ public actor MCPManager {
         } catch is CancellationError {
             throw CancellationError()
         } catch {
+            if case .authorizationRequired? = servers[name]?.state {
+                throw MCPManagerError.authorizationRequired(name)
+            }
             throw MCPManagerError.unavailable(name, MCPClient.describe(error))
         }
     }
@@ -230,7 +433,9 @@ public actor MCPManager {
     private func ensureConnecting(_ name: String) -> Task<MCPClient, Error>? {
         guard !isShutDown, var server = servers[name] else { return nil }
         if let task = server.connectTask { return task }
-        server.generation += 1
+        server.reconnectTask?.cancel()
+        server.reconnectTask = nil
+        server.generation = nextGeneration()
         let generation = server.generation
         server.state = .connecting
         let task = Task<MCPClient, Error> { [weak self] in
@@ -243,11 +448,12 @@ public actor MCPManager {
     }
 
     private func performConnect(name: String, generation: Int) async throws -> MCPClient {
-        guard let config = servers[name]?.config else { throw MCPManagerError.unknownServer(name) }
+        guard let current = servers[name] else { throw MCPManagerError.unknownServer(name) }
+        let config = current.config
         var client: MCPClient?
         do {
             let created = MCPClient(
-                transport: try transportFactory(config),
+                transport: try transportFactory(config, current.auth),
                 clientName: clientName,
                 clientVersion: clientVersion,
                 requestTimeoutSeconds: config.toolTimeoutSeconds
@@ -266,27 +472,86 @@ public actor MCPManager {
                 ? try await created.listTools(timeoutSeconds: config.startupTimeoutSeconds)
                 : []
             let info = await created.serverInfo
-            guard !isShutDown, var current = servers[name], current.generation == generation else {
+            guard !isShutDown, var server = servers[name], server.generation == generation else {
                 await created.close()
                 throw MCPManagerError.shutDown
             }
-            current.client = created
-            current.tools = tools
-            current.serverInfo = info
-            current.state = .connected
-            current.connectTask = nil
-            servers[name] = current
+            server.client = created
+            server.tools = tools
+            server.serverInfo = info
+            server.state = .connected
+            server.connectTask = nil
+            server.failures = 0
+            servers[name] = server
             rebuildTools()
             return created
         } catch {
             await client?.close()
-            if !isShutDown, var current = servers[name], current.generation == generation {
-                current.state = .failed(MCPClient.describe(error))
-                current.client = nil
-                current.connectTask = nil
-                servers[name] = current
+            if !isShutDown, var server = servers[name], server.generation == generation {
+                server.client = nil
+                server.connectTask = nil
+                if let authError = Self.authorizationError(in: error) {
+                    server.state = .authorizationRequired(authError.errorDescription)
+                    server.tools = []
+                    servers[name] = server
+                    rebuildTools()
+                } else {
+                    server.state = .failed(MCPClient.describe(error))
+                    server.failures += 1
+                    servers[name] = server
+                    scheduleReconnect(name)
+                }
             }
             throw error
+        }
+    }
+
+    /// The authorization error inside `error`, if connecting failed for that.
+    static func authorizationError(in error: Error) -> MCPAuthError? {
+        if let auth = error as? MCPAuthError, auth.requiresAuthorization { return auth }
+        return nil
+    }
+
+    private func requireAuthorization(_ name: String, client: MCPClient, error: MCPAuthError) {
+        // Only the live connection's own failure counts: a late error from a
+        // connection already replaced must not undo a reconnect.
+        guard var server = servers[name], server.client === client else { return }
+        server.state = .authorizationRequired(error.errorDescription)
+        server.tools = []
+        server.client = nil
+        server.reconnectTask?.cancel()
+        server.reconnectTask = nil
+        server.generation = nextGeneration()
+        servers[name] = server
+        rebuildTools()
+        Task { await client.close() }
+    }
+
+    private func scheduleReconnect(_ name: String) {
+        guard !isShutDown, var server = servers[name], server.reconnectTask == nil,
+              server.failures <= reconnectPolicy.maxAttempts, reconnectPolicy.maxAttempts > 0
+        else { return }
+        let failures = max(1, server.failures)
+        guard failures <= reconnectPolicy.maxAttempts else { return }
+        let delay = reconnectPolicy.delay(afterFailures: failures)
+        let generation = server.generation
+        server.reconnectTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.backgroundReconnect(name: name, generation: generation)
+        }
+        servers[name] = server
+    }
+
+    private func backgroundReconnect(name: String, generation: Int) {
+        guard var server = servers[name], server.generation == generation else { return }
+        server.reconnectTask = nil
+        servers[name] = server
+        switch server.state {
+        case .failed, .disconnected:
+            _ = ensureConnecting(name)
+        default:
+            break
         }
     }
 
@@ -307,7 +572,9 @@ public actor MCPManager {
         guard var server = servers[name], server.client === client, !isShutDown else { return }
         server.client = nil
         server.state = .disconnected(error.map(MCPClient.describe) ?? "Connection closed")
+        server.failures = 1
         servers[name] = server
+        scheduleReconnect(name)
     }
 
     // MARK: - Tools
@@ -317,6 +584,12 @@ public actor MCPManager {
         if !isShutDown {
             for name in order {
                 guard let server = servers[name] else { continue }
+                switch server.state {
+                case .authorizationRequired, .closed:
+                    continue
+                default:
+                    break
+                }
                 for tool in server.tools where server.config.exposure(forTool: tool.name) != .hidden {
                     entries.append((name, tool))
                 }
@@ -330,7 +603,8 @@ public actor MCPManager {
             let agentTool = MCPToolAdapter.makeAgentTool(
                 server: server,
                 tool: entry.tool,
-                name: names[index]
+                name: names[index],
+                limits: resultLimits
             ) { [weak self] toolName, arguments, cancellation, onProgress in
                 guard let self else { throw MCPManagerError.shutDown }
                 return try await self.callTool(
@@ -361,13 +635,17 @@ public actor MCPManager {
 /// Errors of `MCPManager` tool calls.
 public enum MCPManagerError: Error, LocalizedError, Sendable, Equatable {
     case unknownServer(String)
+    case duplicateServer(String)
     case unavailable(String, String)
+    case authorizationRequired(String)
     case shutDown
 
     public var errorDescription: String? {
         switch self {
         case .unknownServer(let name): return "Unknown MCP server \"\(name)\""
+        case .duplicateServer(let name): return "MCP server \"\(name)\" already exists"
         case .unavailable(let name, let reason): return "MCP server \"\(name)\" is not available: \(reason)"
+        case .authorizationRequired(let name): return "MCP server \"\(name)\" requires authorization."
         case .shutDown: return "MCP servers were shut down"
         }
     }

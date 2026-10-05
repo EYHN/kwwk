@@ -18,9 +18,9 @@ import KWWKAI
 /// timeout). Cancelled and timed-out requests send `notifications/cancelled`.
 public actor MCPClient {
     /// Protocol version requested in `initialize`.
-    public static let protocolVersion = "2025-06-18"
+    public static let protocolVersion = "2025-11-25"
     /// Versions accepted in the server's `initialize` answer.
-    public static let supportedProtocolVersions: Set<String> = ["2025-06-18", "2025-03-26", "2024-11-05"]
+    public static let supportedProtocolVersions: Set<String> = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
     public static let defaultRequestTimeoutSeconds: Double = 60
     public static let defaultConnectTimeoutSeconds: Double = 30
 
@@ -45,6 +45,8 @@ public actor MCPClient {
         let continuation: CheckedContinuation<JSONValue, Error>
         var timeoutSeconds: Double
         var timeoutTask: Task<Void, Never>?
+        /// Fires at the absolute deadline, which progress does not extend.
+        var deadlineTask: Task<Void, Never>?
         var sendTask: Task<Void, Never>?
         var cancelRegistration: CancellationRegistration?
         var onProgress: (@Sendable (MCPProgress) -> Void)?
@@ -205,6 +207,7 @@ public actor MCPClient {
         name: String,
         arguments: JSONValue,
         timeoutSeconds: Double? = nil,
+        maxTotalTimeoutSeconds: Double? = nil,
         cancellation: CancellationHandle? = nil,
         onProgress: (@Sendable (MCPProgress) -> Void)? = nil
     ) async throws -> MCPCallToolResult {
@@ -214,6 +217,7 @@ public actor MCPClient {
             method: "tools/call",
             params: ["name": .string(name), "arguments": args],
             timeoutSeconds: timeoutSeconds,
+            maxTotalTimeoutSeconds: maxTotalTimeoutSeconds,
             cancellation: cancellation,
             onProgress: onProgress
         )
@@ -225,11 +229,14 @@ public actor MCPClient {
         _ = try await request(method: "ping", params: nil, timeoutSeconds: timeoutSeconds)
     }
 
-    /// Send an arbitrary request and return its `result`.
+    /// Send an arbitrary request and return its `result`. `timeoutSeconds`
+    /// restarts on every progress update; `maxTotalTimeoutSeconds` bounds
+    /// the whole request regardless of progress.
     public func request(
         method: String,
         params: JSONValue?,
         timeoutSeconds: Double? = nil,
+        maxTotalTimeoutSeconds: Double? = nil,
         cancellation: CancellationHandle? = nil,
         onProgress: (@Sendable (MCPProgress) -> Void)? = nil
     ) async throws -> JSONValue {
@@ -265,6 +272,13 @@ public actor MCPClient {
                         return
                     } catch {
                         await self?.fail(id: id, error: error)
+                    }
+                }
+                if let total = maxTotalTimeoutSeconds {
+                    entry.deadlineTask = Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: UInt64(max(0, total) * 1_000_000_000))
+                        guard !Task.isCancelled else { return }
+                        await self?.deadlineReached(id: id, seconds: total)
                     }
                 }
                 pending[id] = entry
@@ -306,6 +320,12 @@ public actor MCPClient {
         finish(id: id, with: .failure(MCPError.timeout(method: entry.method, seconds: entry.timeoutSeconds)))
     }
 
+    private func deadlineReached(id: JSONRPCID, seconds: Double) {
+        guard let entry = pending[id] else { return }
+        sendCancelled(id: id, method: entry.method, reason: "Request exceeded its maximum total time")
+        finish(id: id, with: .failure(MCPError.timeout(method: entry.method, seconds: seconds)))
+    }
+
     private func cancelRequest(id: JSONRPCID, reason: String) {
         guard let entry = pending[id] else { return }
         sendCancelled(id: id, method: entry.method, reason: reason)
@@ -330,6 +350,7 @@ public actor MCPClient {
     private func finish(id: JSONRPCID, with result: Result<JSONValue, Error>) {
         guard let entry = pending.removeValue(forKey: id) else { return }
         entry.timeoutTask?.cancel()
+        entry.deadlineTask?.cancel()
         entry.cancelRegistration?.cancel()
         entry.sendTask?.cancel()
         entry.continuation.resume(with: result)

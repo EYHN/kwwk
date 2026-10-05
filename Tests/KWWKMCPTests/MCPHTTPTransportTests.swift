@@ -21,6 +21,11 @@ final class FakeHTTPMCPServer: HTTPClient, @unchecked Sendable {
     let sessionId = "session-123"
     /// Answer tools/list with an expired session once.
     var expireSession = false
+    /// When set, POSTs must carry one of these bearer tokens or get 401.
+    var acceptedTokens: Set<String>?
+    /// When set, tools/call needs one of these tokens or gets 403
+    /// insufficient_scope.
+    var scopedTokens: Set<String>?
 
     func stream(
         url: URL, method: String, headers: [String: String], body: Data?, cancellation: CancellationHandle?
@@ -37,6 +42,17 @@ final class FakeHTTPMCPServer: HTTPClient, @unchecked Sendable {
         }
         guard let json, case .string(let rpcMethod)? = json["method"] else {
             return respond(url, 400, [:], "bad request")
+        }
+        let bearer = headers["Authorization"].flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil }
+        if let acceptedTokens, !acceptedTokens.contains(bearer ?? "") {
+            return respond(url, 401, [
+                "WWW-Authenticate": #"Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource/mcp", scope="read""#,
+            ], "unauthorized")
+        }
+        if rpcMethod == "tools/call", let scopedTokens, !scopedTokens.contains(bearer ?? "") {
+            return respond(url, 403, [
+                "WWW-Authenticate": #"Bearer error="insufficient_scope", scope="write", error_description="needs write""#,
+            ], "forbidden")
         }
         let id = json["id"] ?? .null
         switch rpcMethod {
@@ -136,7 +152,7 @@ struct MCPHTTPTransportTests {
         let posts = requests.filter { $0.method == "POST" }
         let initialize = try #require(posts.first)
         #expect(initialize.body?["method"] == "initialize")
-        #expect(initialize.body?["params"]?["protocolVersion"] == "2025-06-18")
+        #expect(initialize.body?["params"]?["protocolVersion"] == "2025-11-25")
         #expect(initialize.body?["params"]?["clientInfo"]?["name"] == "kwwk")
         #expect(initialize.headers["Accept"] == "application/json, text/event-stream")
         #expect(initialize.headers["Authorization"] == "Bearer t")
