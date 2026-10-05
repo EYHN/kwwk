@@ -82,8 +82,9 @@ The kwwk TUI connects to [Model Context Protocol](https://modelcontextprotocol.i
 servers listed in `~/.kwwk/mcp.json`, using the usual `mcpServers` shape.
 `kwwk -p` and the SDK never read this file; SDK callers build an
 `MCPManager` from configs they pass in.
-Both stdio and Streamable HTTP servers are supported. SSE-only servers and
-OAuth are not.
+Both stdio and Streamable HTTP servers are supported; SSE-only servers are
+not. HTTP servers sign in with OAuth (MCP authorization, 2025-11-25) unless
+their entry sends its own `Authorization` header or sets `"oauth": false`.
 
 ```json
 {
@@ -113,6 +114,24 @@ servers that are still connecting. Set `exposure` on a server, or map tools
 with `*` globs in `toolExposure`, to `hidden` to keep tools out entirely.
 Subagents that can write, edit or run commands get `tool_search` over the
 same MCP tools (loading for themselves); read-only subagents get none.
+
+A server that needs a sign-in shows as such in `/mcp`; run
+`/mcp login <server>` to authorize it in the browser and `/mcp logout
+<server>` to forget it. kwwk registers itself with the server's
+authorization server (dynamic client registration, or a client ID metadata
+document when you set `oauth.clientMetadataUrl`), listens on
+`http://127.0.0.1:<port>/callback` for the redirect, and keeps the tokens in
+`~/.kwwk/mcp-oauth.json` (mode 0600), refreshing them as needed. An `oauth`
+object may set `clientName`, `scope`, a pre-registered `clientId` /
+`clientSecret`, `clientMetadataUrl` and a fixed `callbackPort`.
+
+When `tool_search` finds fewer tools than asked for, it names the servers
+that cannot provide any right now (for example "Not connected: docs
+(requires authorization)"). A tool result larger than about 25k tokens is
+cut; the whole result is written under `~/.kwwk/mcp-results` and the
+model is told where. `toolMaxTotalTimeout` bounds a tool call even while it
+reports progress. Compaction unloads MCP tools that were not called since
+the previous compaction; `tool_search` finds them again.
 
 A project can also define servers in `.kwwk/mcp.json`; its entries replace
 user entries of the same name. The file is only read when
@@ -477,6 +496,49 @@ let agent = Agent(initialState: AgentInitialState(
 try await agent.prompt("Is it warmer in Tokyo or Oslo right now?")
 ```
 
+### MCP servers
+
+`KWWKMCP` is an MCP client for any host. Build an `MCPManager` from server
+configs, turn it into a `ToolCatalog`, and bind the catalog to an agent: the
+agent gets `tool_search`, the server list in its system prompt, and every
+tool it loads.
+
+```swift
+import KWWKMCP
+
+let manager = MCPManager(configs: [
+    MCPServerConfig(
+        name: "docs",
+        transport: .http(url: URL(string: "https://example.com/mcp")!),
+        description: "Product docs and issue tracker"
+    ),
+], auth: ["docs": .provider(MyTokenProvider())])
+let catalog = await manager.makeToolCatalog()
+catalog.bind(to: agent)
+```
+
+Authentication follows the MCP TypeScript SDK's two layers:
+
+- `MCPAuthProvider` (`token()`, `onUnauthorized(_:)`) for hosts that own
+  their credentials. The transport sends the token on every request; a 401
+  calls `onUnauthorized` once and retries.
+- `MCPOAuthClientProvider` for a full OAuth client: discovery (RFC 9728,
+  RFC 8414), client ID metadata documents or dynamic registration, PKCE,
+  resource indicators, `iss` checks, refresh and 403 `insufficient_scope`
+  step-up, all driven by `MCPOAuth.auth`. The provider stores what the flow
+  produces and sends the user to the authorization page; finish with
+  `MCPOAuth.finishAuthorization` and the callback's query parameters. Adopt
+  `MCPOAuthClientRegistrationStore`, `MCPOAuthDiscoveryStore` and
+  `MCPOAuthCredentialInvalidation` for the optional parts.
+
+A server that needs authorization withdraws its tools and waits; call
+`manager.reconnect("docs")` once the user authorized. A dropped connection
+keeps its tools and reconnects in the background. `addServer`,
+`updateServer` and `removeServer` change the set while running; call
+`catalog.setInstructions(await manager.promptSection())` when the system
+prompt may change. `resultLimits` caps what a tool result shows the model
+and can spill the rest (`MCPDirectoryResultSpill`).
+
 ### Hooks — audit, redact, short-circuit
 
 `beforeRunEnd` is an optional host completion policy on `AgentOptions` / `Agent`.
@@ -649,7 +711,7 @@ Antigravity provider groups stay absent.
 
 - `Sources/KWWKAI` — model clients, OAuth, provider adapters
 - `Sources/KWWKAgent` — tool-using agent loop and built-in tools
-- `Sources/KWWKMCP` — MCP client SDK: stdio / Streamable HTTP transports, server manager, tool adapter (reads no config files)
+- `Sources/KWWKMCP` — MCP client SDK: stdio / Streamable HTTP transports, MCP authorization (OAuth), server manager, tool catalog binding, tool adapter (reads no config files)
 - `Sources/KWWKCli` — interactive TUI, slash commands, rendering
 - `Sources/kwwk` — the executable entry point
 - `Tests/` — XCTest suites for each module
