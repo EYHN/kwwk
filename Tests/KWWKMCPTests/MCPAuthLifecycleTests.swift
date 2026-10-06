@@ -384,7 +384,7 @@ struct MCPAuthLifecycleTests {
         ])
         let converted = try await MCPToolAdapter.convert(
             server: "s", tool: "t", result: result,
-            limits: MCPResultLimits(maxTokens: 100, imageTokens: 50, spill: spill)
+            limits: MCPResultLimits(maxTokens: 100, imageTokens: 50, spill: spill, files: nil)
         )
         guard case .text(let shown)? = converted.content.first, case .text(let note)? = converted.content.last else {
             Issue.record("unexpected blocks \(converted.content)")

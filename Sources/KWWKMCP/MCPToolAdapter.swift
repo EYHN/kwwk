@@ -118,18 +118,28 @@ public struct MCPResultLimits: Sendable {
     /// `imageTokens`. Nil means no limit.
     public var maxTokens: Int?
     public var imageTokens: Int
-    /// Receives results over the limit; without it the rest is dropped.
+    /// Receives results over the limit; nil drops the rest. Defaults to
+    /// ``temporaryDirectory``.
     public var spill: (any MCPResultSpill)?
     /// Receives every image, audio clip and binary resource of a result; the
-    /// model is told where each went. Without it binary content that the
-    /// model cannot view is dropped.
+    /// model is told where each went. Nil keeps images inline only and drops
+    /// binary content the model cannot view. Defaults to
+    /// ``temporaryDirectory``.
     public var files: (any MCPResultFiles)?
+
+    /// Where results go unless the host chooses: one private directory per
+    /// process under the system temp directory, created on the first write
+    /// (0700, files 0600), left for the system to clean. A host whose agent
+    /// runs its tools elsewhere (another sandbox or machine) must pass a
+    /// directory those tools can reach, since the model is given its paths.
+    public static let temporaryDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("kwwk-mcp-\(UUID().uuidString)", isDirectory: true)
 
     public init(
         maxTokens: Int? = 25_000,
         imageTokens: Int = 1_600,
-        spill: (any MCPResultSpill)? = nil,
-        files: (any MCPResultFiles)? = nil
+        spill: (any MCPResultSpill)? = MCPDirectoryResultSpill(directory: MCPResultLimits.temporaryDirectory),
+        files: (any MCPResultFiles)? = MCPDirectoryResultFiles(directory: MCPResultLimits.temporaryDirectory)
     ) {
         self.maxTokens = maxTokens
         self.imageTokens = imageTokens
@@ -211,8 +221,8 @@ public enum MCPToolAdapter {
         return .object(object)
     }
 
-    /// Convert a `tools/call` result. Results with `isError` throw
-    /// `MCPToolCallError` carrying the server's message.
+    /// Convert a `tools/call` result, saving nothing. Results with `isError`
+    /// throw `MCPToolCallError` carrying the server's message.
     public static func convert(server: String, tool: String, result: MCPCallToolResult) throws -> AgentToolResult {
         try finish(server: server, tool: tool, result: result, blocks: modelBlocks(result, saved: [:]))
     }

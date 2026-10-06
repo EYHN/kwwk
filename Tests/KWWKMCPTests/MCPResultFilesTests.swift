@@ -73,14 +73,36 @@ struct MCPResultFilesTests {
         #expect(files.saved.map(\.mimeType) == ["image/svg+xml", "audio/wav", "application/pdf", "image/png"])
     }
 
-    @Test("without a store binary content reads as before, and an unviewable image is left out")
+    @Test("by default results are saved in a private directory under the system temp directory")
+    func defaultTemporaryDirectory() async throws {
+        let directory = MCPResultLimits.temporaryDirectory
+        #expect(directory.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        #expect(directory.lastPathComponent.hasPrefix("kwwk-mcp-"))
+        let png = Data("default-\(UUID().uuidString)".utf8).base64EncodedString()
+        let converted = try await MCPToolAdapter.convert(
+            server: "s", tool: "t",
+            result: MCPCallToolResult(content: [.image(data: png, mimeType: "image/png")]),
+            limits: .default
+        )
+        let note = try #require(texts(converted).last)
+        let path = String(try #require(note.components(separatedBy: " saved at ").last).dropLast())
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        #expect(path.hasPrefix(directory.path + "/"))
+        #expect(FileManager.default.contents(atPath: path) == Data(base64Encoded: png))
+        let permissions = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? Int
+        #expect(permissions == 0o700)
+    }
+
+    @Test("with saving turned off binary content reads as before, and an unviewable image is left out")
     func withoutStore() async throws {
         let result = MCPCallToolResult(content: [
             .image(data: Self.png, mimeType: "image/png"),
             .image(data: "PHN2Zy8+", mimeType: "image/svg+xml"),
             .audio(data: "AAAA", mimeType: "audio/wav"),
         ])
-        let converted = try await MCPToolAdapter.convert(server: "s", tool: "t", result: result, limits: .default)
+        let converted = try await MCPToolAdapter.convert(
+            server: "s", tool: "t", result: result, limits: MCPResultLimits(spill: nil, files: nil)
+        )
         #expect(converted.content.count == 3)
         #expect(texts(converted) == [
             "[Image (image/svg+xml, 6 B) omitted]",
