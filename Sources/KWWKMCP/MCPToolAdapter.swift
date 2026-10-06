@@ -104,23 +104,52 @@ public protocol MCPResultSpill: Sendable {
     func spill(_ result: MCPSpilledResult) async throws -> String
 }
 
-/// How much of one MCP tool result reaches the model.
-public struct MCPResultLimits: Sendable {
+/// Keeps the binary content of tool results — images, audio, binary
+/// resources — as files, so the agent can hand them on (attach, upload, pass
+/// to another tool) instead of only looking at them.
+public protocol MCPResultFiles: Sendable {
+    /// Store `data`; return where the model can read it (e.g. a path).
+    func save(_ data: Data, mimeType: String, server: String, tool: String) async throws -> String
+}
+
+/// How an MCP tool result reaches the model: how much of it is shown, and
+/// where what is not shown inline is kept.
+public struct MCPResultOptions: Sendable {
     /// Estimated tokens: text counts 4 characters per token, each image
     /// `imageTokens`. Nil means no limit.
     public var maxTokens: Int?
     public var imageTokens: Int
-    /// Receives results over the limit; without it the rest is dropped.
+    /// Receives results over the limit; nil drops the rest. Defaults to
+    /// ``temporaryDirectory``.
     public var spill: (any MCPResultSpill)?
+    /// Receives every image, audio clip and binary resource of a result; the
+    /// model is told where each went. Nil keeps images inline only and drops
+    /// binary content the model cannot view. Defaults to
+    /// ``temporaryDirectory``.
+    public var files: (any MCPResultFiles)?
 
-    public init(maxTokens: Int? = 25_000, imageTokens: Int = 1_600, spill: (any MCPResultSpill)? = nil) {
+    /// Where results go unless the host chooses: one private directory per
+    /// process under the system temp directory, created on the first write
+    /// (0700, files 0600), left for the system to clean. A host whose agent
+    /// runs its tools elsewhere (another sandbox or machine) must pass a
+    /// directory those tools can reach, since the model is given its paths.
+    public static let temporaryDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("kwwk-mcp-\(UUID().uuidString)", isDirectory: true)
+
+    public init(
+        maxTokens: Int? = 25_000,
+        imageTokens: Int = 1_600,
+        spill: (any MCPResultSpill)? = MCPDirectoryResultSpill(directory: MCPResultOptions.temporaryDirectory),
+        files: (any MCPResultFiles)? = MCPDirectoryResultFiles(directory: MCPResultOptions.temporaryDirectory)
+    ) {
         self.maxTokens = maxTokens
         self.imageTokens = imageTokens
         self.spill = spill
+        self.files = files
     }
 
-    public static let `default` = MCPResultLimits()
-    public static let unlimited = MCPResultLimits(maxTokens: nil)
+    public static let `default` = MCPResultOptions()
+    public static let unlimited = MCPResultOptions(maxTokens: nil)
 }
 
 /// Adapts MCP tools and results to kwwk agent tools.
@@ -138,7 +167,7 @@ public enum MCPToolAdapter {
         server: String,
         tool: MCPTool,
         name: String,
-        limits: MCPResultLimits = .default,
+        options: MCPResultOptions = .default,
         call: @escaping Caller
     ) -> AgentTool {
         let toolName = tool.name
@@ -162,7 +191,7 @@ public enum MCPToolAdapter {
                 progress = nil
             }
             let result = try await call(toolName, args, cancellation, progress)
-            return try await convert(server: server, tool: toolName, result: result, limits: limits)
+            return try await convert(server: server, tool: toolName, result: result, options: options)
         }
     }
 
@@ -193,30 +222,65 @@ public enum MCPToolAdapter {
         return .object(object)
     }
 
-    /// Convert a `tools/call` result. Results with `isError` throw
-    /// `MCPToolCallError` carrying the server's message.
+    /// Convert a `tools/call` result, saving nothing. Results with `isError`
+    /// throw `MCPToolCallError` carrying the server's message.
     public static func convert(server: String, tool: String, result: MCPCallToolResult) throws -> AgentToolResult {
-        try finish(server: server, tool: tool, result: result, blocks: modelBlocks(result))
+        try finish(server: server, tool: tool, result: result, blocks: modelBlocks(result, saved: [:]))
     }
 
-    /// Convert a `tools/call` result within `limits`: text beyond the limit
-    /// is cut and images beyond it are left out; the whole result goes to
-    /// `limits.spill` and the model is told where.
+    /// Convert a `tools/call` result under `options`: every binary block is
+    /// saved through `options.files` and the model told where; text beyond
+    /// the limit is cut and images beyond it are left out, the whole result
+    /// going to `options.spill`.
     public static func convert(
         server: String,
         tool: String,
         result: MCPCallToolResult,
-        limits: MCPResultLimits
+        options: MCPResultOptions
     ) async throws -> AgentToolResult {
-        var blocks = modelBlocks(result)
-        if let maxTokens = limits.maxTokens, estimatedTokens(blocks, imageTokens: limits.imageTokens) > maxTokens {
-            blocks = await limit(blocks, server: server, tool: tool, maxTokens: maxTokens, limits: limits)
+        let saved = await saveFiles(result, server: server, tool: tool, files: options.files)
+        var blocks = modelBlocks(result, saved: saved)
+        if let maxTokens = options.maxTokens, estimatedTokens(blocks, imageTokens: options.imageTokens) > maxTokens {
+            let locations = result.content.indices.compactMap { saved[$0] }
+            blocks = await limit(blocks, server: server, tool: tool, maxTokens: maxTokens, options: options, saved: locations)
         }
         return try finish(server: server, tool: tool, result: result, blocks: blocks)
     }
 
-    private static func modelBlocks(_ result: MCPCallToolResult) -> [ToolResultBlock] {
-        var blocks = result.content.flatMap(contentBlocks(_:))
+    /// The binary payload of a content block: images, audio, and embedded
+    /// resources that are not text.
+    private static func binary(_ block: MCPContentBlock) -> (data: String, mimeType: String)? {
+        switch block {
+        case .image(let data, let mimeType), .audio(let data, let mimeType):
+            return (data, mimeType)
+        case .resource(_, let mimeType, nil, let blob?) where !isTextMimeType(mimeType):
+            return (blob, mimeType ?? "application/octet-stream")
+        default:
+            return nil
+        }
+    }
+
+    /// Saves every binary block through `files`; returns where each went, by
+    /// content index. A block that fails to save is simply not listed.
+    private static func saveFiles(
+        _ result: MCPCallToolResult,
+        server: String,
+        tool: String,
+        files: (any MCPResultFiles)?
+    ) async -> [Int: String] {
+        guard let files else { return [:] }
+        var saved: [Int: String] = [:]
+        for (index, block) in result.content.enumerated() {
+            guard let payload = binary(block), let data = Data(base64Encoded: payload.data) else { continue }
+            if let location = try? await files.save(data, mimeType: payload.mimeType, server: server, tool: tool) {
+                saved[index] = location
+            }
+        }
+        return saved
+    }
+
+    private static func modelBlocks(_ result: MCPCallToolResult, saved: [Int: String]) -> [ToolResultBlock] {
+        var blocks = result.content.enumerated().flatMap { contentBlocks($1, savedAt: saved[$0]) }
         let hasText = blocks.contains { if case .text = $0 { return true } else { return false } }
         if !hasText, let structured = result.structuredContent {
             blocks.insert(.text(TextContent(text: structured.mcpJSONText(pretty: true))), at: 0)
@@ -259,7 +323,8 @@ public enum MCPToolAdapter {
         server: String,
         tool: String,
         maxTokens: Int,
-        limits: MCPResultLimits
+        options: MCPResultOptions,
+        saved: [String]
     ) async -> [ToolResultBlock] {
         var budget = maxTokens * 4
         var kept: [ToolResultBlock] = []
@@ -279,8 +344,8 @@ public enum MCPToolAdapter {
                     kept.append(.text(TextContent(text: part)))
                 }
             case .image(let image):
-                if budget >= limits.imageTokens * 4 {
-                    budget -= limits.imageTokens * 4
+                if budget >= options.imageTokens * 4 {
+                    budget -= options.imageTokens * 4
                     kept.append(block)
                 } else {
                     omittedImages.append((image.data, image.mimeType))
@@ -289,12 +354,16 @@ public enum MCPToolAdapter {
         }
         var note = "[MCP result over the size limit: showing \(shownCharacters) of \(totalCharacters) characters"
         if !omittedImages.isEmpty { note += ", \(omittedImages.count) image\(omittedImages.count == 1 ? "" : "s") left out" }
-        if let spill = limits.spill,
+        // Images already saved as files need no second copy in the spill;
+        // their paths may have been cut with the text, so list them again.
+        if let spill = options.spill,
            let location = try? await spill.spill(MCPSpilledResult(
-               server: server, tool: tool, text: allText.joined(separator: "\n\n"), images: omittedImages
+               server: server, tool: tool, text: allText.joined(separator: "\n\n"),
+               images: saved.isEmpty ? omittedImages : []
            )) {
             note += ". The full result is at \(location)"
         }
+        if !saved.isEmpty { note += ". Its files are at \(saved.joined(separator: ", "))" }
         note += ".]"
         kept.append(.text(TextContent(text: note)))
         return kept
@@ -302,27 +371,35 @@ public enum MCPToolAdapter {
 
     /// Model-facing blocks of one MCP content block.
     public static func contentBlocks(_ block: MCPContentBlock) -> [ToolResultBlock] {
+        contentBlocks(block, savedAt: nil)
+    }
+
+    /// Model-facing blocks of one MCP content block whose binary payload, if
+    /// any, was saved at `location`: an image the model can view is shown
+    /// and followed by where it was saved; other binary content is replaced
+    /// by a line saying what it was and where it went.
+    static func contentBlocks(_ block: MCPContentBlock, savedAt location: String?) -> [ToolResultBlock] {
         switch block {
         case .text(let text):
             return [.text(TextContent(text: text))]
         case .image(let data, let mimeType):
-            return [.image(ImageContent(data: data, mimeType: mimeType))]
+            return imageBlocks(data: data, mimeType: mimeType, label: "Image", savedAt: location)
         case .audio(let data, let mimeType):
-            let bytes = Data(base64Encoded: data)?.count ?? data.count * 3 / 4
-            return [.text(TextContent(text: "[Audio content (\(mimeType), \(formatSize(bytes))) omitted]"))]
+            return [.text(TextContent(text: "[Audio content (\(mimeType), \(formatSize(byteCount(data))))\(outcome(location))]"))]
         case .resource(let uri, let mimeType, let text, let blob):
             if let text {
                 return [.text(TextContent(text: text))]
             }
-            if let blob, let mimeType, mimeType.lowercased().hasPrefix("image/") {
-                return [.image(ImageContent(data: blob, mimeType: mimeType))]
+            if let blob, let mimeType, mimeType.lowercased().hasPrefix("image/"), !isTextMimeType(mimeType) {
+                return imageBlocks(data: blob, mimeType: mimeType, label: "Image resource \(uri)", savedAt: location)
             }
             if let blob, let data = Data(base64Encoded: blob), isTextMimeType(mimeType),
                let decoded = String(data: data, encoding: .utf8) {
                 return [.text(TextContent(text: decoded))]
             }
-            let size = blob.flatMap { Data(base64Encoded: $0)?.count }.map { ", \(formatSize($0))" } ?? ""
-            return [.text(TextContent(text: "[Binary resource \(uri) (\(mimeType ?? "unknown type")\(size))]"))]
+            let size = blob.map { ", \(formatSize(byteCount($0)))" } ?? ""
+            let saved = location.map { " saved at \($0)" } ?? ""
+            return [.text(TextContent(text: "[Binary resource \(uri) (\(mimeType ?? "unknown type")\(size))\(saved)]"))]
         case .resourceLink(let uri, let name, let title, let description, let mimeType):
             var text = "[Resource \(uri)"
             if let label = title ?? name { text += " \"\(label)\"" }
@@ -333,6 +410,35 @@ public enum MCPToolAdapter {
         case .unknown(let json):
             return [.text(TextContent(text: json.mcpJSONText()))]
         }
+    }
+
+    /// An image the model can view, then where it was saved; one it cannot
+    /// (SVG, TIFF…) only as a line.
+    private static func imageBlocks(data: String, mimeType: String, label: String, savedAt location: String?) -> [ToolResultBlock] {
+        guard isViewableImage(mimeType) else {
+            return [.text(TextContent(text: "[\(label) (\(mimeType), \(formatSize(byteCount(data))))\(outcome(location))]"))]
+        }
+        var blocks: [ToolResultBlock] = [.image(ImageContent(data: data, mimeType: mimeType))]
+        if let location {
+            blocks.append(.text(TextContent(text: "[\(label) saved at \(location)]")))
+        }
+        return blocks
+    }
+
+    private static func outcome(_ location: String?) -> String {
+        location.map { " saved at \($0)" } ?? " omitted"
+    }
+
+    private static func byteCount(_ base64: String) -> Int {
+        Data(base64Encoded: base64)?.count ?? base64.count * 3 / 4
+    }
+
+    /// Image types every provider accepts inline.
+    static func isViewableImage(_ mimeType: String) -> Bool {
+        let type = mimeType.split(separator: ";").first.map {
+            $0.trimmingCharacters(in: .whitespaces).lowercased()
+        } ?? ""
+        return ["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"].contains(type)
     }
 
     static func isTextMimeType(_ mimeType: String?) -> Bool {
@@ -390,5 +496,62 @@ public struct MCPDirectoryResultSpill: MCPResultSpill {
         else { throw MCPError.protocolError("Could not write \(url.path)") }
         defer { try? handle.close() }
         try handle.write(contentsOf: data)
+    }
+}
+
+/// Saves binary result content into a directory as
+/// `<server>-<tool>-<sha256 prefix>.<ext>`, so the same bytes from the same
+/// tool land in one file however often they come back.
+public struct MCPDirectoryResultFiles: MCPResultFiles {
+    public var directory: URL
+
+    public init(directory: URL) {
+        self.directory = directory
+    }
+
+    public func save(_ data: Data, mimeType: String, server: String, tool: String) async throws -> String {
+        // Results may hold private data: a 0700 directory and 0600 files.
+        if !FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.createDirectory(
+                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]
+            )
+        }
+        let digest = SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
+        let name = "\(MCPToolNaming.sanitize(server))-\(MCPToolNaming.sanitize(tool))-\(digest).\(Self.fileExtension(for: mimeType))"
+        let url = directory.appendingPathComponent(name)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            // Written aside and moved in, so a reader never sees half a file.
+            let partial = directory.appendingPathComponent(".\(name).\(UUID().uuidString.prefix(8))")
+            guard FileManager.default.createFile(atPath: partial.path, contents: data, attributes: [.posixPermissions: 0o600]) else {
+                throw MCPError.protocolError("Could not write \(partial.path)")
+            }
+            do {
+                try FileManager.default.moveItem(at: partial, to: url)
+            } catch {
+                try? FileManager.default.removeItem(at: partial)
+                // Another call saved the same bytes first.
+                if !FileManager.default.fileExists(atPath: url.path) { throw error }
+            }
+        }
+        return url.path
+    }
+
+    /// The usual extension for a MIME type: its subtype, with the common
+    /// spellings normalized; `bin` when there is nothing usable.
+    static func fileExtension(for mimeType: String) -> String {
+        let type = mimeType.split(separator: ";").first.map {
+            $0.trimmingCharacters(in: .whitespaces).lowercased()
+        } ?? ""
+        let known: [String: String] = [
+            "image/jpeg": "jpg", "image/jpg": "jpg", "image/svg+xml": "svg", "image/x-icon": "ico",
+            "image/vnd.microsoft.icon": "ico", "audio/mpeg": "mp3", "audio/x-wav": "wav", "audio/wave": "wav",
+            "audio/mp4": "m4a", "application/octet-stream": "bin", "application/zip": "zip",
+            "application/gzip": "gz", "text/plain": "txt",
+        ]
+        if let ext = known[type] { return ext }
+        guard let subtype = type.split(separator: "/").last.map(String.init) else { return "bin" }
+        let base = subtype.split(separator: "+").first.map(String.init) ?? subtype
+        let ext = MCPToolNaming.sanitize(base.hasPrefix("x-") ? String(base.dropFirst(2)) : base)
+        return ext.isEmpty || ext.count > 10 ? "bin" : ext
     }
 }

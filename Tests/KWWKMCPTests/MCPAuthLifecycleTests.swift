@@ -368,7 +368,7 @@ struct MCPAuthLifecycleTests {
     }
 
     @Test("results over the limit are cut, images left out, and the whole result spilled")
-    func resultLimits() async throws {
+    func resultOptions() async throws {
         final class Spill: MCPResultSpill, @unchecked Sendable {
             var received: MCPSpilledResult?
             func spill(_ result: MCPSpilledResult) async throws -> String {
@@ -384,7 +384,7 @@ struct MCPAuthLifecycleTests {
         ])
         let converted = try await MCPToolAdapter.convert(
             server: "s", tool: "t", result: result,
-            limits: MCPResultLimits(maxTokens: 100, imageTokens: 50, spill: spill)
+            options: MCPResultOptions(maxTokens: 100, imageTokens: 50, spill: spill, files: nil)
         )
         guard case .text(let shown)? = converted.content.first, case .text(let note)? = converted.content.last else {
             Issue.record("unexpected blocks \(converted.content)")
@@ -398,7 +398,7 @@ struct MCPAuthLifecycleTests {
         #expect(spill.received?.images.count == 1)
         // Within the limit nothing changes.
         let small = try await MCPToolAdapter.convert(
-            server: "s", tool: "t", result: MCPCallToolResult(content: [.text("hi")]), limits: .default
+            server: "s", tool: "t", result: MCPCallToolResult(content: [.text("hi")]), options: .default
         )
         #expect(small.content.count == 1)
     }
