@@ -4,11 +4,11 @@ import KWWKAI
 /// ceiling providers use when `StreamOptions.maxTokens` is automatic.
 enum AgentRequestBudget {
     static func inputTokens(for model: Model) -> Int {
-        max(1, max(1, model.contextWindow) - outputReserveTokens(for: model))
+        max(1, max(1, model.effectiveContextWindow) - outputReserveTokens(for: model))
     }
 
     static func outputReserveTokens(for model: Model) -> Int {
-        let window = max(1, model.contextWindow)
+        let window = max(1, model.effectiveContextWindow)
         if let automaticLimit = OutputTokenPolicy.automaticLimit(for: model) {
             return min(max(1, automaticLimit), window)
         }

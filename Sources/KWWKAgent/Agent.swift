@@ -984,6 +984,7 @@ extension Agent {
               threshold > 0 else {
             return nil
         }
+        await refreshContextWindows()
 
         var measuredContext = context
         let forced: Bool
@@ -1144,6 +1145,25 @@ extension Agent {
         return replacement
     }
 
+    /// Asks the provider what window the live model (and a separate summary
+    /// model) is served at on this account before a request is planned. The
+    /// answer is cached per model (``ContextWindows``), so this costs a round
+    /// trip at most once per refresh interval, and only for providers that
+    /// publish a per-account model list.
+    private func refreshContextWindows() async {
+        let resolver = authResolver
+        let sessionId = self.sessionId
+        var models = [state.model]
+        if let compactionModel, compactionModel != state.model {
+            models.append(compactionModel)
+        }
+        for model in models {
+            await ContextWindows.shared.refreshIfNeeded(model: model) {
+                try await resolver?(model, sessionId)
+            }
+        }
+    }
+
     private func automaticRecoveryTarget(
         model: Model,
         threshold: Double,
@@ -1152,7 +1172,7 @@ extension Agent {
         // Tiny windows are test doubles rather than usable LLM contexts; keep
         // their historic trigger behavior without imposing an impossible
         // structured-recap headroom target.
-        let window = model.contextWindow
+        let window = model.effectiveContextWindow
         guard window >= 1_024 else { return nil }
         let triggerRatio = min(0.95, max(0.05, threshold))
         let recoveryRatio = min(0.95, max(0.1, recoveryRatio))

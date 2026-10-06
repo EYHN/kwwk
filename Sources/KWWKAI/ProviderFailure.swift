@@ -148,7 +148,11 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         let text = [providerCode, rawStopReason, message, upstreamMessage].compactMap { $0 }.joined(separator: " ").lowercased()
         // The outer HTTP response governs nested transport prose. Overflow is
         // a distinct recovery only for an input rejection, never auth/limits.
-        if status == 401 || status == 403 { return .authentication }
+        if status == 401 || status == 403 {
+            // Kimi refuses an over-plan context as 401; it is an input
+            // rejection, so it takes the shrinking path, not a login error.
+            return ProviderContextLimit.isPlanContextLimit(text) ? .contextOverflow : .authentication
+        }
         if status == nil || status == 400 || status == 413,
            ProviderContextLimit.isInputOverflow(text) { return .contextOverflow }
         if let status, (400..<500).contains(status), status != 408, status != 429 { return .invalidRequest }

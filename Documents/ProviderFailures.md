@@ -64,3 +64,38 @@ partial native output nor a failed request replaces the source transcript.
 explicitly opts into synthetic native-compaction and persisted-payload replay
 checks with existing logins. Claude's synthetic input exceeds its 50k trigger;
 no project data or tools are sent. Error messages are bounded and redacted.
+
+## Context windows the provider reports
+
+A catalog window describes the model; the window a request is served at can
+depend on the account. Kimi For Coding lists `k3` at 1M (models.dev), reports
+262,144 in the account's own `GET /coding/v1/models` on a Plus plan, and refuses
+anything larger with HTTP 401 `authentication_error` "Your current plan supports
+only k3 up to 256K context" (measured 2026-10-07). Planning against the catalog
+figure meant compaction never fired before every request was refused.
+
+`ContextWindows` keeps, per model (provider, id, base URL), what the provider
+has reported, and `Model.effectiveContextWindow` is what every planning path
+reads: preflight thresholds, input budgets, recovery targets, summary chunk
+budgets and the automatic output limit. It only ever lowers the model's own
+`contextWindow`, which already carries any host ceiling.
+
+- **Discovery.** Providers with a per-account model list register a lookup;
+  `kimi-coding` is built in and reads `context_length` from `{baseURL}/v1/models`
+  with the request's bearer, as Kimi's own CLI does. The Agent refreshes it
+  before planning a request, at most hourly (five minutes after a failure);
+  concurrent callers share one lookup and the latest answer wins, so a plan
+  change is picked up.
+- **Rejection.** A context-overflow failure that states its limit records it
+  (`ProviderContextLimit.reportedLimit(in:)`; shapes follow the provider
+  examples pi-mono collects). Rejections only lower and last for the process.
+  The live-turn overflow path and the summary chunk retry record before they
+  shrink, so recovery aims below the stated limit.
+
+Kimi's plan refusal is classified as `contextOverflow` despite its 401 status
+(`ProviderContextLimit.isPlanContextLimit`); any other 401/403 stays
+`authentication`. Kimi's 400 "exceeded model token limit" is an overflow too.
+
+Opt-in live check with a stored Kimi login: `KWWK_LIVE_KIMI_CONTEXT=1 swift test
+--filter LiveKimiContextWindowTests`. The over-window request is refused before
+generation.

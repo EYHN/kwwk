@@ -341,7 +341,7 @@ enum ContextCompactionPipeline {
         // chunk on long histories.
         var pending = [transformed]
         var providerBudget: Int?
-        let minimumBudget = min(16_384, max(1_024, request.summaryModel.contextWindow / 8))
+        let minimumBudget = min(16_384, max(1_024, request.summaryModel.effectiveContextWindow / 8))
         while !pending.isEmpty {
             try checkCancellation(request.cancellation)
             let plannedBudget = try CompactionSummaryGenerator.availableTranscriptTokens(
@@ -382,6 +382,7 @@ enum ContextCompactionPipeline {
                 try checkCancellation(request.cancellation)
                 guard !(error is CancellationError),
                       ProviderFailure.capture(error).category == .contextOverflow else { throw error }
+                ContextWindows.shared.recordRejection(ProviderFailure.capture(error), for: request.summaryModel)
                 // Halve the serialized input actually sent, not an inflated
                 // catalog allowance. Only the failed chunk is replayed; keep
                 // the accumulator from all successfully summarized chunks.
@@ -525,7 +526,7 @@ enum ContextCompactionPipeline {
             : doubledWithoutOverflow(max(1, request.config.summaryWordTarget))
         let maximum = max(
             CompactionRecapRenderer.minimumUsefulTokenBudget,
-            request.contextModel.contextWindow / 2
+            request.contextModel.effectiveContextWindow / 2
         )
         let boundedConfigured = min(
             max(requested, CompactionRecapRenderer.minimumUsefulTokenBudget),

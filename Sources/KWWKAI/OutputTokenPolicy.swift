@@ -42,7 +42,7 @@ public enum OutputTokenPolicy {
     /// Highest safe limit this model/route may claim. This also supplies a
     /// deterministic fallback for malformed metadata (`maxTokens >= context`).
     public static func maximumAllowedLimit(for model: Model) -> Int {
-        let contextWindow = max(1, model.contextWindow)
+        let contextWindow = max(1, model.effectiveContextWindow)
         let contextCeiling = max(1, contextWindow - 1)
 
         let modelCeiling: Int

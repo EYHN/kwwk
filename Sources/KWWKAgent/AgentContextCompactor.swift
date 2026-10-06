@@ -85,12 +85,12 @@ public enum AgentContextCompactionOutcome: Sendable, Equatable {
 public enum AgentContextCompactor {
     public static func currentUsage(messages: [Message], model: Model) -> AgentContextUsage {
         let estimate = ContextTokenEstimator.estimate(messages: messages, model: model)
-        return AgentContextUsage(tokens: estimate.effective, window: model.contextWindow)
+        return AgentContextUsage(tokens: estimate.effective, window: model.effectiveContextWindow)
     }
 
     public static func currentUsage(context: AgentContext, model: Model) -> AgentContextUsage {
         let estimate = ContextTokenEstimator.estimate(context: context, model: model)
-        return AgentContextUsage(tokens: estimate.effective, window: model.contextWindow)
+        return AgentContextUsage(tokens: estimate.effective, window: model.effectiveContextWindow)
     }
 
     public static func shouldCompact(

@@ -251,8 +251,8 @@ enum CompactionSummaryGenerator {
             tools: []
         )
         let fixedTokens = ContextTokenEstimator.estimate(context: fixedContext).locallyEstimated
-        let safetyMargin = min(256, max(32, model.contextWindow / 100))
-        let available = model.contextWindow - outputTokens - fixedTokens - safetyMargin
+        let safetyMargin = min(256, max(32, model.effectiveContextWindow / 100))
+        let available = model.effectiveContextWindow - outputTokens - fixedTokens - safetyMargin
         guard available > 0 else {
             throw AgentContextCompactionError.summaryInputTooLarge
         }
@@ -271,7 +271,7 @@ enum CompactionSummaryGenerator {
             tools: []
         )
         let inputTokens = ContextTokenEstimator.estimate(context: context).locallyEstimated
-        guard inputTokens + outputTokens <= model.contextWindow else {
+        guard inputTokens + outputTokens <= model.effectiveContextWindow else {
             throw AgentContextCompactionError.summaryInputTooLarge
         }
     }
@@ -293,7 +293,7 @@ enum CompactionSummaryGenerator {
         } else {
             desired = AgentRequestBudget.outputReserveTokens(for: model)
         }
-        return min(max(1, desired), max(1, model.contextWindow - 1))
+        return min(max(1, desired), max(1, model.effectiveContextWindow - 1))
     }
 
     private static func summaryText(from result: AssistantMessage) throws -> String {

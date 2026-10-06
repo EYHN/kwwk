@@ -872,7 +872,11 @@ public enum AgentLoop {
 
                 if requestModel.api != "cursor-agent",
                    final.stopReason == .error,
-                   final.providerFailure?.category == .contextOverflow {
+                   let failure = final.providerFailure,
+                   failure.category == .contextOverflow {
+                    // A stated limit lowers the window this model is planned
+                    // against, so the recovery compaction aims below it.
+                    ContextWindows.shared.recordRejection(failure, for: requestModel)
                     await inlineAttempt.invalidateAndWait(reason: "context-overflow")
                     throw ProviderContextOverflow(
                         assistant: final,
@@ -922,6 +926,7 @@ public enum AgentLoop {
                 let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
                 if requestModel.api != "cursor-agent",
                    ProviderFailure.capture(error).category == .contextOverflow {
+                    ContextWindows.shared.recordRejection(ProviderFailure.capture(error), for: requestModel)
                     let discarded = cursorResults.drain()
                     turnToolState.rollbackLeases(for: discarded.map(\.toolCallId))
                     let assistant = AssistantMessage(
