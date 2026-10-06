@@ -61,13 +61,14 @@ final class MCPRuntime: Sendable {
             // Background runs only refresh; `/mcp login` signs in.
             auth[entry.server.name] = .oauth(provider, interactive: false)
         }
-        let spill = MCPDirectoryResultSpill(
-            directory: URL(fileURLWithPath: homeDirectory).appendingPathComponent(".kwwk/mcp-results")
-        )
+        let results = URL(fileURLWithPath: homeDirectory).appendingPathComponent(".kwwk/mcp-results")
         let manager = entries.isEmpty ? nil : MCPManager(
             configs: entries.map(\.server),
             auth: auth,
-            resultLimits: MCPResultLimits(spill: spill)
+            resultLimits: MCPResultLimits(
+                spill: MCPDirectoryResultSpill(directory: results),
+                files: MCPDirectoryResultFiles(directory: results)
+            )
         )
         let searchWait = entries.map(\.server.startupTimeoutSeconds).max() ?? 0
         self.manager = manager
