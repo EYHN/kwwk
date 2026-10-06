@@ -112,8 +112,9 @@ public protocol MCPResultFiles: Sendable {
     func save(_ data: Data, mimeType: String, server: String, tool: String) async throws -> String
 }
 
-/// How much of one MCP tool result reaches the model.
-public struct MCPResultLimits: Sendable {
+/// How an MCP tool result reaches the model: how much of it is shown, and
+/// where what is not shown inline is kept.
+public struct MCPResultOptions: Sendable {
     /// Estimated tokens: text counts 4 characters per token, each image
     /// `imageTokens`. Nil means no limit.
     public var maxTokens: Int?
@@ -138,8 +139,8 @@ public struct MCPResultLimits: Sendable {
     public init(
         maxTokens: Int? = 25_000,
         imageTokens: Int = 1_600,
-        spill: (any MCPResultSpill)? = MCPDirectoryResultSpill(directory: MCPResultLimits.temporaryDirectory),
-        files: (any MCPResultFiles)? = MCPDirectoryResultFiles(directory: MCPResultLimits.temporaryDirectory)
+        spill: (any MCPResultSpill)? = MCPDirectoryResultSpill(directory: MCPResultOptions.temporaryDirectory),
+        files: (any MCPResultFiles)? = MCPDirectoryResultFiles(directory: MCPResultOptions.temporaryDirectory)
     ) {
         self.maxTokens = maxTokens
         self.imageTokens = imageTokens
@@ -147,8 +148,8 @@ public struct MCPResultLimits: Sendable {
         self.files = files
     }
 
-    public static let `default` = MCPResultLimits()
-    public static let unlimited = MCPResultLimits(maxTokens: nil)
+    public static let `default` = MCPResultOptions()
+    public static let unlimited = MCPResultOptions(maxTokens: nil)
 }
 
 /// Adapts MCP tools and results to kwwk agent tools.
@@ -166,7 +167,7 @@ public enum MCPToolAdapter {
         server: String,
         tool: MCPTool,
         name: String,
-        limits: MCPResultLimits = .default,
+        options: MCPResultOptions = .default,
         call: @escaping Caller
     ) -> AgentTool {
         let toolName = tool.name
@@ -190,7 +191,7 @@ public enum MCPToolAdapter {
                 progress = nil
             }
             let result = try await call(toolName, args, cancellation, progress)
-            return try await convert(server: server, tool: toolName, result: result, limits: limits)
+            return try await convert(server: server, tool: toolName, result: result, options: options)
         }
     }
 
@@ -227,21 +228,21 @@ public enum MCPToolAdapter {
         try finish(server: server, tool: tool, result: result, blocks: modelBlocks(result, saved: [:]))
     }
 
-    /// Convert a `tools/call` result within `limits`: every binary block is
-    /// saved through `limits.files` and the model told where; text beyond
+    /// Convert a `tools/call` result under `options`: every binary block is
+    /// saved through `options.files` and the model told where; text beyond
     /// the limit is cut and images beyond it are left out, the whole result
-    /// going to `limits.spill`.
+    /// going to `options.spill`.
     public static func convert(
         server: String,
         tool: String,
         result: MCPCallToolResult,
-        limits: MCPResultLimits
+        options: MCPResultOptions
     ) async throws -> AgentToolResult {
-        let saved = await saveFiles(result, server: server, tool: tool, files: limits.files)
+        let saved = await saveFiles(result, server: server, tool: tool, files: options.files)
         var blocks = modelBlocks(result, saved: saved)
-        if let maxTokens = limits.maxTokens, estimatedTokens(blocks, imageTokens: limits.imageTokens) > maxTokens {
+        if let maxTokens = options.maxTokens, estimatedTokens(blocks, imageTokens: options.imageTokens) > maxTokens {
             let locations = result.content.indices.compactMap { saved[$0] }
-            blocks = await limit(blocks, server: server, tool: tool, maxTokens: maxTokens, limits: limits, saved: locations)
+            blocks = await limit(blocks, server: server, tool: tool, maxTokens: maxTokens, options: options, saved: locations)
         }
         return try finish(server: server, tool: tool, result: result, blocks: blocks)
     }
@@ -322,7 +323,7 @@ public enum MCPToolAdapter {
         server: String,
         tool: String,
         maxTokens: Int,
-        limits: MCPResultLimits,
+        options: MCPResultOptions,
         saved: [String]
     ) async -> [ToolResultBlock] {
         var budget = maxTokens * 4
@@ -343,8 +344,8 @@ public enum MCPToolAdapter {
                     kept.append(.text(TextContent(text: part)))
                 }
             case .image(let image):
-                if budget >= limits.imageTokens * 4 {
-                    budget -= limits.imageTokens * 4
+                if budget >= options.imageTokens * 4 {
+                    budget -= options.imageTokens * 4
                     kept.append(block)
                 } else {
                     omittedImages.append((image.data, image.mimeType))
@@ -355,7 +356,7 @@ public enum MCPToolAdapter {
         if !omittedImages.isEmpty { note += ", \(omittedImages.count) image\(omittedImages.count == 1 ? "" : "s") left out" }
         // Images already saved as files need no second copy in the spill;
         // their paths may have been cut with the text, so list them again.
-        if let spill = limits.spill,
+        if let spill = options.spill,
            let location = try? await spill.spill(MCPSpilledResult(
                server: server, tool: tool, text: allText.joined(separator: "\n\n"),
                images: saved.isEmpty ? omittedImages : []

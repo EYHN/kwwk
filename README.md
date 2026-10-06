@@ -563,8 +563,11 @@ with 403 `insufficient_scope` fails alone. A dropped
 connection keeps its tools and reconnects in the background. `addServer`,
 `updateServer` and `removeServer` change the set while running; call
 `catalog.setInstructions(await manager.promptSection())` when the system
-prompt may change. `resultLimits` caps what a tool result shows the model
-and can spill the rest (`MCPDirectoryResultSpill`).
+prompt may change. `resultOptions` caps what a tool result shows the model,
+spills the rest, and saves images and other binary content as files the
+model is given paths to; by default both go to a private directory under the
+system temp directory (`MCPDirectoryResultSpill`, `MCPDirectoryResultFiles`;
+pass `nil` to keep results inline only).
 
 ### Hooks — audit, redact, short-circuit
 

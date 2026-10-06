@@ -65,7 +65,7 @@ final class MCPRuntime: Sendable {
         let manager = entries.isEmpty ? nil : MCPManager(
             configs: entries.map(\.server),
             auth: auth,
-            resultLimits: MCPResultLimits(
+            resultOptions: MCPResultOptions(
                 spill: MCPDirectoryResultSpill(directory: results),
                 files: MCPDirectoryResultFiles(directory: results)
             )

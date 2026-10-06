@@ -89,7 +89,7 @@ public actor MCPManager {
     public nonisolated let clientName: String
     public nonisolated let clientVersion: String
     public nonisolated let reconnectPolicy: MCPReconnectPolicy
-    public nonisolated let resultLimits: MCPResultLimits
+    public nonisolated let resultOptions: MCPResultOptions
     private let transportFactory: MCPTransportFactory
 
     private struct Server {
@@ -130,7 +130,8 @@ public actor MCPManager {
     /// - Parameters:
     ///   - configs: Servers to manage. Later duplicates of a name are ignored.
     ///   - auth: Authentication per server name (HTTP servers).
-    ///   - resultLimits: How much of a tool result reaches the model.
+    ///   - resultOptions: How tool results reach the model and where their
+    ///     files and overflow are kept.
     ///   - transportFactory: Builds transports; defaults to stdio / streamable
     ///     HTTP from the config.
     public init(
@@ -139,13 +140,13 @@ public actor MCPManager {
         clientName: String = "kwwk",
         clientVersion: String = "1.0.0",
         reconnectPolicy: MCPReconnectPolicy = .default,
-        resultLimits: MCPResultLimits = .default,
+        resultOptions: MCPResultOptions = .default,
         transportFactory: @escaping MCPTransportFactory = { try MCPTransports.make(for: $0, auth: $1) }
     ) {
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.reconnectPolicy = reconnectPolicy
-        self.resultLimits = resultLimits
+        self.resultOptions = resultOptions
         self.transportFactory = transportFactory
         for config in configs where servers[config.name] == nil {
             order.append(config.name)
@@ -713,7 +714,7 @@ public actor MCPManager {
                 server: server,
                 tool: entry.tool,
                 name: names[index],
-                limits: resultLimits
+                options: resultOptions
             ) { [weak self] toolName, arguments, cancellation, onProgress in
                 guard let self else { throw MCPManagerError.shutDown }
                 return try await self.callTool(

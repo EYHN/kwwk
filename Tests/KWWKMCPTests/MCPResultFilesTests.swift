@@ -34,7 +34,7 @@ struct MCPResultFilesTests {
         let files = Files()
         let result = MCPCallToolResult(content: [.text("Frame 1"), .image(data: Self.png, mimeType: "image/png")])
         let converted = try await MCPToolAdapter.convert(
-            server: "figma", tool: "get_screenshot", result: result, limits: MCPResultLimits(files: files)
+            server: "figma", tool: "get_screenshot", result: result, options: MCPResultOptions(files: files)
         )
         #expect(converted.content.count == 3)
         guard case .image(let image) = converted.content[1] else {
@@ -60,7 +60,7 @@ struct MCPResultFilesTests {
             .resource(uri: "file:///a.png", mimeType: "image/png", text: nil, blob: Self.png),
         ])
         let converted = try await MCPToolAdapter.convert(
-            server: "s", tool: "t", result: result, limits: MCPResultLimits(files: files)
+            server: "s", tool: "t", result: result, options: MCPResultOptions(files: files)
         )
         let lines = texts(converted)
         #expect(lines.contains("[Image (image/svg+xml, 6 B) saved at /files/s-t-1]"))
@@ -75,14 +75,14 @@ struct MCPResultFilesTests {
 
     @Test("by default results are saved in a private directory under the system temp directory")
     func defaultTemporaryDirectory() async throws {
-        let directory = MCPResultLimits.temporaryDirectory
+        let directory = MCPResultOptions.temporaryDirectory
         #expect(directory.path.hasPrefix(FileManager.default.temporaryDirectory.path))
         #expect(directory.lastPathComponent.hasPrefix("kwwk-mcp-"))
         let png = Data("default-\(UUID().uuidString)".utf8).base64EncodedString()
         let converted = try await MCPToolAdapter.convert(
             server: "s", tool: "t",
             result: MCPCallToolResult(content: [.image(data: png, mimeType: "image/png")]),
-            limits: .default
+            options: .default
         )
         let note = try #require(texts(converted).last)
         let path = String(try #require(note.components(separatedBy: " saved at ").last).dropLast())
@@ -101,7 +101,7 @@ struct MCPResultFilesTests {
             .audio(data: "AAAA", mimeType: "audio/wav"),
         ])
         let converted = try await MCPToolAdapter.convert(
-            server: "s", tool: "t", result: result, limits: MCPResultLimits(spill: nil, files: nil)
+            server: "s", tool: "t", result: result, options: MCPResultOptions(spill: nil, files: nil)
         )
         #expect(converted.content.count == 3)
         #expect(texts(converted) == [
@@ -127,7 +127,7 @@ struct MCPResultFilesTests {
         ])
         let converted = try await MCPToolAdapter.convert(
             server: "s", tool: "t", result: result,
-            limits: MCPResultLimits(maxTokens: 100, imageTokens: 50, spill: spill, files: files)
+            options: MCPResultOptions(maxTokens: 100, imageTokens: 50, spill: spill, files: files)
         )
         let note = try #require(texts(converted).last)
         #expect(note.contains("1 image left out"))
