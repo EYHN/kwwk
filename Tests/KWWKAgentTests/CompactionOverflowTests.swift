@@ -71,6 +71,23 @@ struct CompactionOverflowTests {
         #expect(calls.allSatisfy { $0.text == calls.first?.text })
     }
 
+    @Test("Kimi's plan refusal shrinks the summary input like any overflow")
+    func kimiPlanRefusalShrinks() async {
+        let log = OverflowLog()
+        let result = await compact([
+            .user(UserMessage(text: String(repeating: " payload", count: 14_000))),
+            .user(UserMessage(text: "retained tail")),
+        ], log: log, limit: 9_000, kimiPlanRefusal: true)
+        guard case .success = result else {
+            Issue.record("Expected recovery from the plan refusal, got \(result)")
+            return
+        }
+        let calls = await log.calls
+        #expect(calls.first?.accepted == false)
+        #expect(calls.last?.accepted == true)
+        #expect(calls.last!.tokens < calls.first!.tokens)
+    }
+
     @Test("persistent overflow stops at the minimum budget")
     func stopsAtFloor() async {
         let log = OverflowLog()
@@ -101,7 +118,7 @@ struct CompactionOverflowTests {
     private func compact(
         _ messages: [Message], log: OverflowLog, limit: Int, thrown: Bool = false, nested: Bool = false,
         reason: String = "This model's maximum prompt length is 500000 but the request contains 536700 tokens.",
-        cancelOnResponse: CancellationHandle? = nil
+        cancelOnResponse: CancellationHandle? = nil, kimiPlanRefusal: Bool = false
     ) async -> Result<AgentContextCompactionResult, AgentContextCompactionFailure> {
         // Completed turns may be evicted; unanswered user messages must stay.
         let history = messages.dropLast().flatMap { message in
@@ -125,7 +142,9 @@ struct CompactionOverflowTests {
                 let accepted = tokens <= limit
                 await log.append(text: text, tokens: tokens, accepted: accepted)
                 cancelOnResponse?.cancel()
-                let failure: ProviderFailure? = !accepted && nested ? ProviderFailure.payload(.object([
+                let failure: ProviderFailure? = !accepted && kimiPlanRefusal
+                    ? ProviderFailure(message: kimiPlanRefusalMessage, httpStatus: 401)
+                    : !accepted && nested ? ProviderFailure.payload(.object([
                     "error": .object(["message": .string("Provider returned error"), "code": .int(400),
                                       "metadata": .object(["raw": .string(reason)])]),
                 ])) : nil
@@ -147,6 +166,9 @@ struct CompactionOverflowTests {
         )
     }
 }
+
+/// Kimi For Coding's over-plan refusal (HTTP 401), captured 2026-10-07.
+private let kimiPlanRefusalMessage = #"{"error":{"type":"authentication_error","message":"Your current plan supports only k3 up to 256K context. 1M context is available on higher-tier Kimi Code plans."},"type":"error"}"#
 
 private struct OverflowError: LocalizedError {
     let reason: String

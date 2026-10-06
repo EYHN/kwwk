@@ -64,3 +64,10 @@ partial native output nor a failed request replaces the source transcript.
 explicitly opts into synthetic native-compaction and persisted-payload replay
 checks with existing logins. Claude's synthetic input exceeds its 50k trigger;
 no project data or tools are sent. Error messages are bounded and redacted.
+
+Kimi For Coding refuses an over-plan context with HTTP 401
+`authentication_error` ("Your current plan supports only k3 up to 256K
+context…"). `ProviderContextLimit.isPlanContextLimit` recognises that wording,
+so it classifies as `contextOverflow` and takes the shrinking path (live-turn
+compact-and-retry, summary chunk halving). Every other 401/403 stays
+`authentication`.
