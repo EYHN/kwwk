@@ -333,12 +333,14 @@ struct BackgroundTaskManagerTests {
         let manager = BackgroundTaskManager(outputDir: outputDir)
         let startedAt = Date()
 
+        // The launch blocks far longer than the bound so a blocked spawn can
+        // never pass, while slow shared CI runners keep ample headroom.
         let (taskId, _) = await manager.spawn(
-            runner: BlockingLaunchRunner(delayMs: 500),
+            runner: BlockingLaunchRunner(delayMs: 2_000),
             sessionId: "s1"
         )
 
-        #expect(Date().timeIntervalSince(startedAt) < 0.25)
+        #expect(Date().timeIntervalSince(startedAt) < 1.0)
         #expect(await manager.get(taskId)?.status == .running)
         try? await manager.kill(taskId)
     }
@@ -351,19 +353,21 @@ struct BackgroundTaskManagerTests {
         let probe = BlockingSpecProbe()
         let spawn = Task {
             await manager.spawn(
-                runner: BlockingSpecRunner(delayMs: 500, probe: probe),
+                runner: BlockingSpecRunner(delayMs: 2_000, probe: probe),
                 sessionId: "s1"
             )
         }
         let entered = await awaitUntil(1_000) { probe.hasEntered() }
         #expect(entered)
 
+        // Same shape as above: the spec getter blocks for 2s, the query must
+        // return well within 1s.
         let queryStartedAt = Date()
         #expect(await manager.list(sessionId: "s1").isEmpty)
-        #expect(Date().timeIntervalSince(queryStartedAt) < 0.25)
+        #expect(Date().timeIntervalSince(queryStartedAt) < 1.0)
 
         let (taskId, _) = await spawn.value
-        let finished = await awaitUntil(1_000) {
+        let finished = await awaitUntil(3_000) {
             await manager.get(taskId)?.status == .completed
         }
         #expect(finished)
