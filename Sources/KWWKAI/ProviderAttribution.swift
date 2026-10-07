@@ -19,6 +19,7 @@ public enum ProviderAttribution {
         "anthropic": "Anthropic",
         "amazon-bedrock": "Amazon Bedrock",
         "ant-ling": "Ant Ling",
+        "azure": "Azure",
         "azure-openai-responses": "Azure OpenAI Responses",
         "cerebras": "Cerebras",
         "chatgpt-codex": "ChatGPT Codex",

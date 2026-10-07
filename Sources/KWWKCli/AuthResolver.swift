@@ -170,7 +170,7 @@ func resolveEnvAuth(
         }
         // Azure OpenAI / Cloudflare authenticate via a key plus extra config
         // (endpoint / account+gateway ids) and ride bespoke ProviderVariants.
-        if provider == "azure-openai-responses" {
+        if provider == "azure" {
             guard let azure = EnvAPIKeys.azure(env: environment) else { continue }
             return await registerAzureEnv(azure, modelOverride: forcedId)
         }
@@ -235,10 +235,10 @@ private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?)
         endpoint: endpoint, apiVersion: azure.apiVersion, apiKey: azure.apiKey
     ))
     let modelId = modelOverride ?? "gpt-5.5"
-    let catalog = ModelsCatalog.model(provider: "azure-openai-responses", id: modelId)
+    let catalog = ModelsCatalog.model(provider: "azure", id: modelId)
     let model = Model(
         id: modelId, name: catalog?.name ?? modelId,
-        api: "azure-openai-responses", provider: "azure-openai-responses",
+        api: "azure-openai-responses", provider: "azure",
         baseURL: azure.baseURL, reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 128_000
