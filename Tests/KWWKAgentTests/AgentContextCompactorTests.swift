@@ -553,7 +553,7 @@ struct AgentContextCompactorTests {
     }
 
     @Test("incremental compaction updates the prior summary instead of resummarizing it as chat")
-    func compactAgentUsesIncrementalSummaryPrompt() async {
+    func compactAgentUsesIncrementalSummaryPrompt() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
         let capture = SummaryStreamCapture()
@@ -604,6 +604,17 @@ struct AgentContextCompactorTests {
         #expect(snapshot.prompt.contains("## Previously Compacted Active-Turn Prefix"))
         #expect(snapshot.prompt.contains("prior active <prefix>"))
         #expect(snapshot.prompt.contains("older update"))
+        // The task comes after the records, and the request ends on it: a
+        // model that finds nothing after an agent transcript carries on as
+        // that agent instead of summarizing.
+        let recordsEnd = try #require(snapshot.prompt.range(of: "</conversation_records_jsonl>"))
+        let records = try #require(snapshot.prompt.range(of: "<conversation_records_jsonl>"))
+        let update = try #require(snapshot.prompt.range(of: "older update"))
+        let task = try #require(snapshot.prompt.range(of: "prior_summary_json_string"))
+        #expect(records.upperBound <= update.lowerBound)
+        #expect(update.upperBound <= recordsEnd.lowerBound)
+        #expect(recordsEnd.upperBound <= task.lowerBound)
+        #expect(snapshot.prompt.hasSuffix("## Goal through ## Additional Notes."))
         #expect(!snapshot.prompt.contains("latest exact request"))
         #expect(!snapshot.prompt.contains("<kwwk-compaction"))
         #expect(!snapshot.prompt.contains("<file-operations>"))

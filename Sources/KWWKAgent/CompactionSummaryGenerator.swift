@@ -50,7 +50,7 @@ enum CompactionSummaryGenerator {
             limits: request.config.transcriptLimits,
             maxTokens: transcriptBudget
         )
-        let userPrompt = prompt.userPrefix + transcript
+        let userPrompt = prompt.user(records: transcript)
         let context = Context(
             systemPrompt: prompt.system,
             messages: [.user(UserMessage(content: [.text(TextContent(text: userPrompt))]))],
@@ -144,10 +144,26 @@ enum CompactionSummaryGenerator {
         return "\(owner)::kwwk-compaction-summary::\(UUID().uuidString)"
     }
 
+    /// The user message is `userPrefix + records + userSuffix`. The task and
+    /// any prior summary sit *after* the records, as in pi and omp: a model
+    /// that reads hundreds of KB of agent transcript and finds nothing after
+    /// it tends to carry on as that agent. Kimi k3 measured on a real 160k
+    /// context did exactly that every time — it thought "let me poll the
+    /// background task", had no tools, and ended its turn with no text.
     private struct Prompt {
         let system: String
         let userPrefix: String
+        let userSuffix: String
+
+        var fixedText: String { userPrefix + userSuffix }
+
+        func user(records: String) -> String {
+            userPrefix + records + userSuffix
+        }
     }
+
+    private static let recordsOpenTag = "<conversation_records_jsonl>\n"
+    private static let recordsCloseTag = "\n</conversation_records_jsonl>\n\n"
 
     private static func makePrompt(
         config: AgentContextCompactionConfig,
@@ -156,12 +172,15 @@ enum CompactionSummaryGenerator {
     ) -> Prompt {
         switch kind {
         case .activeTurnPrefix:
-            var instructions = "Summarize this prefix of the current turn for the agent that will receive its raw suffix."
+            var instructions = """
+            Summarize the records above: they are a prefix of the current turn, \
+            for the agent that will receive its raw suffix.
+            """
             if let previous = previousSummary, !previous.isEmpty {
                 instructions += """
 
 
-                Update this prior prefix summary with the next ordered records. Preserve still-valid facts.
+                Update this prior prefix summary with these next ordered records. Preserve still-valid facts.
                 prior_prefix_summary_json_string = \(jsonStringLiteral(previous))
                 """
             }
@@ -177,19 +196,22 @@ enum CompactionSummaryGenerator {
                 Preserve exact tool calls, results, errors, paths, partial edits, and state needed to continue,
                 including any raw suffix that follows. Target under \(max(50, config.summaryWordTarget / 2)) words.
                 """,
-                userPrefix: instructions + "\n\nconversation_records_jsonl:\n"
+                userPrefix: "Records of an agent turn to summarize. The task follows them.\n\n" + recordsOpenTag,
+                userSuffix: recordsCloseTag + instructions + "\n\n" + finalReminder(
+                    sections: "## Original Request, ## Early Progress, ## Context for Continuation"
+                )
             )
 
         case .history:
             var instructions: String
             if let previous = previousSummary, !previous.isEmpty {
                 instructions = """
-                Update the prior durable summary with the newly evicted records. Preserve still-valid facts,
+                Update the prior durable summary with the newly evicted records above. Preserve still-valid facts,
                 revise progress and next steps, and remove only facts that the new records explicitly supersede.
                 prior_summary_json_string = \(jsonStringLiteral(previous))
                 """
             } else {
-                instructions = "Create the first durable summary from the evicted records."
+                instructions = "Create the first durable summary from the evicted records above."
             }
             return Prompt(
                 system: """
@@ -214,9 +236,21 @@ enum CompactionSummaryGenerator {
                 Prefer current state and decisions over narration or hidden reasoning.
                 Target under \(max(1, config.summaryWordTarget)) words without dropping load-bearing facts.
                 """,
-                userPrefix: instructions + "\n\nconversation_records_jsonl:\n"
+                userPrefix: "Conversation records to summarize. The task follows them.\n\n" + recordsOpenTag,
+                userSuffix: recordsCloseTag + instructions + "\n\n" + finalReminder(
+                    sections: "## Goal through ## Additional Notes"
+                )
             )
         }
+    }
+
+    /// The last words of every summary request. The records end wherever the
+    /// agent stopped — often mid-task — so the request has to end on the job.
+    private static func finalReminder(sections: String) -> String {
+        """
+        The records are over. Do not continue the conversation, act as the agent, or call tools. \
+        Write the summary now, using exactly the sections \(sections).
+        """
     }
 
     /// Exact transcript allowance for the next summary request. The prior
@@ -247,7 +281,7 @@ enum CompactionSummaryGenerator {
     ) throws -> Int {
         let fixedContext = AgentContext(
             systemPrompt: prompt.system,
-            messages: [.user(UserMessage(text: prompt.userPrefix))],
+            messages: [.user(UserMessage(text: prompt.fixedText))],
             tools: []
         )
         let fixedTokens = ContextTokenEstimator.estimate(context: fixedContext).locallyEstimated
