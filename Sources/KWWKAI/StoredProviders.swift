@@ -279,6 +279,8 @@ public func registerStored(
         return await registerGitHubCopilot(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "cursor":
         return await registerCursor(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
+    case "devin":
+        return await registerDevin(manager: manager, modelOverride: modelOverride, primeToken: primeToken)
     case "kimi-coding":
         return await registerKimiCoding(manager: manager, creds: creds, modelOverride: modelOverride, primeToken: primeToken)
     case "xai":
@@ -571,6 +573,44 @@ private func registerCursor(
         model: model,
         modelLabel: "\(modelId) · Cursor",
         authResolver: oauthResolver(manager: manager, providerId: "cursor", scheme: .bearer)
+    )
+}
+
+// MARK: - Devin (OAuth session token)
+
+private func registerDevin(
+    manager: OAuthManager,
+    modelOverride: String? = nil,
+    primeToken: Bool = true
+) async -> ResolvedAuth {
+    // Devin session tokens never refresh; priming just surfaces an expired
+    // login early for the active provider.
+    if primeToken {
+        _ = try? await manager.apiKey(for: "devin")
+    }
+    await APIRegistry.shared.register(DevinAgentProvider(), scope: "devin")
+    let model = devinModel(id: modelOverride ?? DevinModels.defaultModelId)
+    return ResolvedAuth(
+        model: model,
+        modelLabel: "\(model.id) · Devin",
+        authResolver: oauthResolver(manager: manager, providerId: "devin", scheme: .bearer)
+    )
+}
+
+/// The catalog row for a Devin model id, or a usable fallback for ids the
+/// bundled catalog doesn't carry (accounts see different rosters).
+public func devinModel(id: String) -> Model {
+    if let catalog = ModelsCatalog.model(provider: "devin", id: id) { return catalog }
+    return Model(
+        id: id,
+        name: id,
+        api: "devin-agent",
+        provider: "devin",
+        baseURL: DevinWire.defaultBaseURL,
+        reasoning: true,
+        input: [.text],
+        contextWindow: 200_000,
+        maxTokens: 64_000
     )
 }
 

@@ -235,6 +235,27 @@ public struct CursorOAuthProvider: OAuthProvider {
     }
 }
 
+// MARK: - Devin
+//
+// Devin's browser sign-in (`OAuthLogin.loginDevin`) yields a long-lived
+// session token with no refresh token, stored with `refresh == ""`. The
+// manager therefore never calls `refresh` (an expired refresh-less entry
+// surfaces `OAuthError.expired`); the provider exists so `apiKey(for:)`
+// recognizes the id.
+
+public struct DevinOAuthProvider: OAuthProvider {
+    public let id = "devin"
+    public let name = "Devin"
+
+    public init() {}
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        throw OAuthError.refreshFailed("devin session tokens cannot be refreshed; run /login devin again")
+    }
+}
+
 // MARK: - Kimi For Coding (Moonshot coding plan)
 //
 // Kimi's coding-plan auth is an OAuth device-authorization grant against
@@ -456,6 +477,20 @@ public enum OpenRouterOAuth {
     public static let authorizeURL = URL(string: "https://openrouter.ai/auth")!
     public static let keysURL = URL(string: "https://openrouter.ai/api/v1/auth/keys")!
     public static let callbackPort: UInt16 = 53693
+}
+
+/// Constants for the Devin browser sign-in (mirrors oh-my-pi's
+/// `compat/rules/auth/devin.kdl`).
+public enum DevinOAuth {
+    public static let authorizeURL = URL(string: "https://app.devin.ai/auth/cli/continue")!
+    public static let tokenURL = URL(string: "https://api.devin.ai/auth/cli/token")!
+    public static let callbackPort: UInt16 = 59653
+    public static let callbackHost = "127.0.0.1"
+    public static let callbackPath = "/callback"
+    public static let apiEndpoint = "https://api.devin.ai"
+    public static let enterpriseURL = "https://app.devin.ai"
+    /// Expiry used when the session token carries no JWT `exp` (one year).
+    public static let fallbackLifetimeMs: Int64 = 31_536_000_000
 }
 
 /// Constants for the Z.AI GLM Coding Plan browser sign-in (mirrors

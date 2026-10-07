@@ -40,6 +40,11 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "devin",
+        display: "Devin (Windsurf / Cognition subscription)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "kimi-coding",
         display: "Kimi For Coding (Moonshot coding plan)",
         flow: .oauth
@@ -285,6 +290,8 @@ func runOAuthFlow(providerId: String) async throws {
             return try await OAuthLogin.loginGitHubCopilot(callbacks: callbacks)
         case "cursor":
             return try await OAuthLogin.loginCursor(callbacks: callbacks)
+        case "devin":
+            return try await OAuthLogin.loginDevin(callbacks: callbacks)
         case "kimi-coding":
             return try await OAuthLogin.loginKimiCoding(callbacks: callbacks)
         case "xai":

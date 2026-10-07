@@ -3,8 +3,8 @@
 A Swift-native coding agent with two faces:
 
 - **`kwwk`** — an interactive coding CLI (TUI) that drives your existing
-  Anthropic, ChatGPT (Codex), GitHub Copilot, Cursor, Kimi For Coding,
-  xAI Grok, Z.AI GLM Coding Plan, or OpenRouter account — or an API key
+  Anthropic, ChatGPT (Codex), GitHub Copilot, Cursor, Devin, Kimi For
+  Coding, xAI Grok, Z.AI GLM Coding Plan, or OpenRouter account — or an API key
   for Anthropic, OpenAI, Google (Gemini), OpenRouter, or any
   OpenAI-compatible endpoint.
 - **`KWWKAgent` / `KWWKAI`** — the agent runtime underneath, exposed as
@@ -59,7 +59,7 @@ Credentials come from the OAuth store at `~/.kwwk/oauth.json`; if no login
 exists, the CLI checks supported API-key environment variables. With
 neither configured, kwwk starts logged out — launch it and run `/login`
 to sign in to a provider (browser sign-in for ChatGPT Codex, Copilot,
-Claude Code, Cursor, Kimi For Coding, xAI Grok, the Z.AI GLM Coding Plan,
+Claude Code, Cursor, Devin, Kimi For Coding, xAI Grok, the Z.AI GLM Coding Plan,
 or OpenRouter; or an API key for Anthropic, OpenAI, Google (Gemini),
 OpenRouter, or any OpenAI-compatible endpoint).
 
@@ -703,8 +703,8 @@ in-session `/login` command uses.
 
 ### Updating the model catalog
 
-There are two bundled catalogs, and a sync should regenerate BOTH —
-don't update one without the other:
+There are three bundled catalogs, and a sync should regenerate ALL of
+them — don't update one without the others:
 
 1. `Sources/KWWKAI/Resources/models.json` — every regular provider,
    generated from pi-mono's `packages/ai/src/models.generated.ts`.
@@ -712,6 +712,12 @@ don't update one without the other:
    subscription models, pulled live from Cursor's `GetUsableModels` RPC
    (there is no runtime model sync; this file is the authoritative
    Cursor catalog).
+3. `Sources/KWWKAI/Resources/devin-models.json` — the Devin subscription
+   models, pulled live from Codeium Cascade's `GetCliModelConfigs` RPC,
+   with per-effort model uids collapsed into one model per family. The
+   roster is account-scoped, so generate it with an account whose plan
+   exposes what kwwk should ship. `--seed-only` writes just the curated
+   SWE-1.6 pair for builds without a Devin account.
 
 ```sh
 # In the pi-mono checkout, materialize the generated provider JSON first.
@@ -720,6 +726,7 @@ node packages/ai/scripts/generate-models.ts
 # In the kwwk checkout, use that exact pi-mono checkout as the input.
 swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts
 swift run kwwk-generate-cursor-models
+swift run kwwk-generate-devin-models
 swift test
 ```
 
@@ -731,6 +738,8 @@ Git-ignored upstream, so the pi-mono generator must run in that checkout before
 `kwwk-generate-cursor-models` authenticates via `CURSOR_ACCESS_TOKEN`,
 an existing `cursor` login in `~/.kwwk/oauth.json`, or — with neither
 present — an interactive browser login it persists for next time.
+`kwwk-generate-devin-models` works the same way with `DEVIN_API_KEY` and
+the `devin` login.
 
 The catalog tests assert unsupported Google Gemini CLI and Google
 Antigravity provider groups stay absent.

@@ -138,7 +138,7 @@ struct KwwkCLI {
         """)
     }
 
-    /// Exercise both SwiftPM resource catalogs through `Bundle.module` without
+    /// Exercise the SwiftPM resource catalogs through `Bundle.module` without
     /// resolving credentials or constructing a provider. Homebrew runs this
     /// against the installed executable so a bottle missing its sidecar
     /// `kwwk_KWWKAI.bundle` fails before publication.
@@ -152,6 +152,12 @@ struct KwwkCLI {
         guard ModelsCatalog.model(provider: "cursor", id: "default") != nil else {
             FileHandle.standardError.write(Data(
                 "kwwk: self-test failed: Cursor model catalog is missing\n".utf8
+            ))
+            Foundation.exit(1)
+        }
+        guard ModelsCatalog.model(provider: "devin", id: DevinModels.defaultModelId) != nil else {
+            FileHandle.standardError.write(Data(
+                "kwwk: self-test failed: Devin model catalog is missing\n".utf8
             ))
             Foundation.exit(1)
         }

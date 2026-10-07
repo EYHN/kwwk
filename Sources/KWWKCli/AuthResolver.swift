@@ -170,7 +170,7 @@ func resolveEnvAuth(
         }
         // Azure OpenAI / Cloudflare authenticate via a key plus extra config
         // (endpoint / account+gateway ids) and ride bespoke ProviderVariants.
-        if provider == "azure-openai-responses" {
+        if provider == "azure" {
             guard let azure = EnvAPIKeys.azure(env: environment) else { continue }
             return await registerAzureEnv(azure, modelOverride: forcedId)
         }
@@ -190,6 +190,14 @@ func resolveEnvAuth(
         if provider == "cursor" {
             guard let token = EnvAPIKeys.apiKey(for: "cursor", env: environment), !token.isEmpty else { continue }
             return await registerCursorEnv(token: token, modelOverride: forcedId)
+        }
+        // Devin rides its own Connect wire (devin-agent); the env var carries
+        // a session token (or legacy Windsurf API key) used as-is.
+        if provider == "devin" {
+            guard let token = EnvAPIKeys.apiKey(for: "devin", env: environment), !token.isEmpty else { continue }
+            await APIRegistry.shared.register(DevinAgentProvider(defaultAPIKey: token), scope: "devin")
+            let model = devinModel(id: forcedId ?? DevinModels.defaultModelId)
+            return ResolvedAuth(model: model, modelLabel: "\(model.id) · Devin (env)", authResolver: nil)
         }
         guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
@@ -227,10 +235,10 @@ private func registerAzureEnv(_ azure: EnvAPIKeys.Azure, modelOverride: String?)
         endpoint: endpoint, apiVersion: azure.apiVersion, apiKey: azure.apiKey
     ))
     let modelId = modelOverride ?? "gpt-5.5"
-    let catalog = ModelsCatalog.model(provider: "azure-openai-responses", id: modelId)
+    let catalog = ModelsCatalog.model(provider: "azure", id: modelId)
     let model = Model(
         id: modelId, name: catalog?.name ?? modelId,
-        api: "azure-openai-responses", provider: "azure-openai-responses",
+        api: "azure-openai-responses", provider: "azure",
         baseURL: azure.baseURL, reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         contextWindow: catalog?.contextWindow ?? 200_000, maxTokens: catalog?.maxTokens ?? 128_000

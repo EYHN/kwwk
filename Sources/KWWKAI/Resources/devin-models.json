@@ -1,0 +1,2067 @@
+[
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1047576,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 8
+    },
+    "id" : "MODEL_CHAT_GPT_4_1_2025_04_14",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 32768,
+    "name" : "GPT-4.1",
+    "provider" : "devin",
+    "reasoning" : false
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "modelRouter" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.1,
+      "cacheWrite" : 0,
+      "input" : 0.5,
+      "output" : 2
+    },
+    "id" : "adaptive",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Adaptive",
+    "provider" : "devin",
+    "reasoning" : false
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 1,
+      "cacheWrite" : 0,
+      "input" : 10,
+      "output" : 50
+    },
+    "id" : "claude-fable-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Fable 5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-5-fable-high",
+      "low" : "claude-5-fable-low",
+      "max" : "claude-5-fable-max",
+      "medium" : "claude-5-fable-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-5-fable-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.25,
+      "cacheWrite" : 0,
+      "input" : 10,
+      "output" : 50
+    },
+    "id" : "claude-fable-5-1",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Fable 5.1",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-fable-5-1-high",
+      "low" : "claude-fable-5-1-low",
+      "max" : "claude-fable-5-1-max",
+      "medium" : "claude-fable-5-1-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-fable-5-1-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.1,
+      "cacheWrite" : 0,
+      "input" : 1,
+      "output" : 5
+    },
+    "id" : "claude-haiku-4-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Haiku 4.5",
+    "provider" : "devin",
+    "reasoning" : false,
+    "thinkingLevelMap" : {
+      "high" : null,
+      "low" : null,
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : "MODEL_PRIVATE_11",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 25
+    },
+    "id" : "claude-opus-4-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Opus 4.5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "MODEL_CLAUDE_4_5_OPUS_THINKING",
+      "low" : null,
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : "MODEL_CLAUDE_4_5_OPUS",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 25
+    },
+    "id" : "claude-opus-4-6",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 4.6",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-4-6-thinking",
+      "low" : null,
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : "claude-opus-4-6",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 25
+    },
+    "id" : "claude-opus-4-6-1m",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 4.6 1M",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-4-6-thinking-1m",
+      "low" : null,
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : "claude-opus-4-6-1m",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 25
+    },
+    "id" : "claude-opus-4-7",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 4.7",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-4-7-high",
+      "low" : "claude-opus-4-7-low",
+      "max" : "claude-opus-4-7-max",
+      "medium" : "claude-opus-4-7-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-4-7-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 25
+    },
+    "id" : "claude-opus-4-8",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 4.8",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-4-8-high",
+      "low" : "claude-opus-4-8-low",
+      "max" : "claude-opus-4-8-max",
+      "medium" : "claude-opus-4-8-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-4-8-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 1,
+      "cacheWrite" : 0,
+      "input" : 10,
+      "output" : 50
+    },
+    "id" : "claude-opus-4-8-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 4.8 Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-4-8-high-fast",
+      "low" : "claude-opus-4-8-low-fast",
+      "max" : "claude-opus-4-8-max-fast",
+      "medium" : "claude-opus-4-8-medium-fast",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-4-8-xhigh-fast"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 25
+    },
+    "id" : "claude-opus-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-5-high",
+      "low" : "claude-opus-5-low",
+      "max" : "claude-opus-5-max",
+      "medium" : "claude-opus-5-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-5-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 4,
+      "output" : 20
+    },
+    "id" : "claude-opus-5-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 5.5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-5-5-high",
+      "low" : "claude-opus-5-5-low",
+      "max" : "claude-opus-5-5-max",
+      "medium" : "claude-opus-5-5-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-5-5-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.4,
+      "cacheWrite" : 0,
+      "input" : 8,
+      "output" : 40
+    },
+    "id" : "claude-opus-5-5-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 5.5 Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-5-5-high-fast",
+      "low" : "claude-opus-5-5-low-fast",
+      "max" : "claude-opus-5-5-max-fast",
+      "medium" : "claude-opus-5-5-medium-fast",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-5-5-xhigh-fast"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 1,
+      "cacheWrite" : 0,
+      "input" : 10,
+      "output" : 50
+    },
+    "id" : "claude-opus-5-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Opus 5 Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-opus-5-high-fast",
+      "low" : "claude-opus-5-low-fast",
+      "max" : "claude-opus-5-max-fast",
+      "medium" : "claude-opus-5-medium-fast",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-opus-5-xhigh-fast"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.3,
+      "cacheWrite" : 0,
+      "input" : 3,
+      "output" : 15
+    },
+    "id" : "claude-sonnet-4-6",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Sonnet 4.6",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-sonnet-4-6-thinking",
+      "low" : null,
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : "claude-sonnet-4-6",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.3,
+      "cacheWrite" : 0,
+      "input" : 3,
+      "output" : 15
+    },
+    "id" : "claude-sonnet-4-6-1m",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Sonnet 4.6 1M",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-sonnet-4-6-thinking-1m",
+      "low" : null,
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : "claude-sonnet-4-6-1m",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 10
+    },
+    "id" : "claude-sonnet-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Sonnet 5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-sonnet-5-high",
+      "low" : "claude-sonnet-5-low",
+      "max" : "claude-sonnet-5-max",
+      "medium" : "claude-sonnet-5-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-sonnet-5-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 10
+    },
+    "id" : "claude-sonnet-5-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Sonnet 5.5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-sonnet-5-5-high",
+      "low" : "claude-sonnet-5-5-low",
+      "max" : "claude-sonnet-5-5-max",
+      "medium" : "claude-sonnet-5-5-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-sonnet-5-5-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.007,
+      "cacheWrite" : 0,
+      "input" : 0.22,
+      "output" : 0.66
+    },
+    "id" : "deepseek-v4-1-flash",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 384000,
+    "name" : "DeepSeek V4.1 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "deepseek-v4-1-flash-high",
+      "low" : null,
+      "max" : "deepseek-v4-1-flash-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.028,
+      "cacheWrite" : 0,
+      "input" : 0.14,
+      "output" : 0.28
+    },
+    "id" : "deepseek-v4-flash",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 384000,
+    "name" : "DeepSeek V4 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "deepseek-v4-flash-high",
+      "low" : null,
+      "max" : "deepseek-v4-flash-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.044,
+      "cacheWrite" : 0,
+      "input" : 1.32,
+      "output" : 3.96
+    },
+    "id" : "deepseek-v4-pro",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 384000,
+    "name" : "DeepSeek V4 Pro",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "deepseek-v4-pro-high",
+      "low" : null,
+      "max" : "deepseek-v4-pro-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 12
+    },
+    "id" : "gemini-3-1-pro",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65535,
+    "name" : "Gemini 3.1 Pro",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gemini-3-1-pro-high",
+      "low" : "gemini-3-1-pro-low",
+      "max" : null,
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.15,
+      "cacheWrite" : 0,
+      "input" : 1.5,
+      "output" : 9
+    },
+    "id" : "gemini-3-5-flash",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65535,
+    "name" : "Gemini 3.5 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gemini-3-5-flash-high",
+      "low" : "gemini-3-5-flash-low",
+      "max" : null,
+      "medium" : "gemini-3-5-flash-medium",
+      "minimal" : "gemini-3-5-flash-minimal",
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.15,
+      "cacheWrite" : 0,
+      "input" : 1.5,
+      "output" : 7.5
+    },
+    "id" : "gemini-3-6-flash",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65535,
+    "name" : "Gemini 3.6 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gemini-3-6-flash-high",
+      "low" : "gemini-3-6-flash-low",
+      "max" : null,
+      "medium" : "gemini-3-6-flash-medium",
+      "minimal" : "gemini-3-6-flash-minimal",
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.075,
+      "cacheWrite" : 0,
+      "input" : 0.75,
+      "output" : 3.75
+    },
+    "id" : "gemini-3-7-flash",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65535,
+    "name" : "Gemini 3.7 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gemini-3-7-flash-high",
+      "low" : "gemini-3-7-flash-low",
+      "max" : null,
+      "medium" : "gemini-3-7-flash-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.075,
+      "cacheWrite" : 0,
+      "input" : 0.75,
+      "output" : 3.75
+    },
+    "id" : "gemini-3-8-flash",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65535,
+    "name" : "Gemini 3.8 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gemini-3-8-flash-high",
+      "low" : "gemini-3-8-flash-low",
+      "max" : null,
+      "medium" : "gemini-3-8-flash-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.05,
+      "cacheWrite" : 0,
+      "input" : 0.5,
+      "output" : 3
+    },
+    "id" : "gemini-3-flash",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65535,
+    "name" : "Gemini 3 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "MODEL_GOOGLE_GEMINI_3_0_FLASH_HIGH",
+      "low" : "MODEL_GOOGLE_GEMINI_3_0_FLASH_LOW",
+      "max" : null,
+      "medium" : "MODEL_GOOGLE_GEMINI_3_0_FLASH_MEDIUM",
+      "minimal" : "MODEL_GOOGLE_GEMINI_3_0_FLASH_MINIMAL",
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.26,
+      "cacheWrite" : 0,
+      "input" : 1.4,
+      "output" : 4.4
+    },
+    "id" : "glm-5-2",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GLM-5.2",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "glm-5-2",
+      "low" : null,
+      "max" : "glm-5-2-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : "glm-5-2-none",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.26,
+      "cacheWrite" : 0,
+      "input" : 1.4,
+      "output" : 4.4
+    },
+    "id" : "glm-5-2-1m",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GLM-5.2 1M",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "glm-5-2-1m",
+      "low" : null,
+      "max" : "glm-5-2-max-1m",
+      "medium" : null,
+      "minimal" : null,
+      "off" : "glm-5-2-none-1m",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.26,
+      "cacheWrite" : 0,
+      "input" : 1.4,
+      "output" : 4.4
+    },
+    "id" : "glm-5-3-1m",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GLM-5.3 1M",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "glm-5-3-high",
+      "low" : "glm-5-3-low",
+      "max" : "glm-5-3-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.029,
+      "cacheWrite" : 0,
+      "input" : 0.15,
+      "output" : 0.5
+    },
+    "id" : "glm-5-3-flash-1m",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GLM-5.3 Flash 1M",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "glm-5-3-flash-high",
+      "low" : "glm-5-3-flash-low",
+      "max" : "glm-5-3-flash-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 272000,
+    "cost" : {
+      "cacheRead" : 0.125,
+      "cacheWrite" : 0,
+      "input" : 1.25,
+      "output" : 10
+    },
+    "id" : "gpt-5-1",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.1",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "MODEL_PRIVATE_15",
+      "low" : "MODEL_PRIVATE_13",
+      "max" : null,
+      "medium" : "MODEL_PRIVATE_14",
+      "minimal" : null,
+      "off" : "MODEL_PRIVATE_12",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 384000,
+    "cost" : {
+      "cacheRead" : 0.175,
+      "cacheWrite" : 0,
+      "input" : 1.75,
+      "output" : 14
+    },
+    "id" : "gpt-5-2",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.2",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "MODEL_GPT_5_2_HIGH",
+      "low" : "MODEL_GPT_5_2_LOW",
+      "max" : null,
+      "medium" : "MODEL_GPT_5_2_MEDIUM",
+      "minimal" : null,
+      "off" : "MODEL_GPT_5_2_NONE",
+      "xhigh" : "MODEL_GPT_5_2_XHIGH"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 400000,
+    "cost" : {
+      "cacheRead" : 0.175,
+      "cacheWrite" : 0,
+      "input" : 1.75,
+      "output" : 14
+    },
+    "id" : "gpt-5-3-codex",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.3-Codex",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-3-codex-high",
+      "low" : "gpt-5-3-codex-low",
+      "max" : null,
+      "medium" : "gpt-5-3-codex-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-5-3-codex-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 400000,
+    "cost" : {
+      "cacheRead" : 0.35,
+      "cacheWrite" : 0,
+      "input" : 3.5,
+      "output" : 28
+    },
+    "id" : "gpt-5-3-codex-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.3-Codex Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-3-codex-high-priority",
+      "low" : "gpt-5-3-codex-low-priority",
+      "max" : null,
+      "medium" : "gpt-5-3-codex-medium-priority",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-5-3-codex-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 272000,
+    "cost" : {
+      "cacheRead" : 0.25,
+      "cacheWrite" : 0,
+      "input" : 2.5,
+      "output" : 15
+    },
+    "id" : "gpt-5-4",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.4",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-4-high",
+      "low" : "gpt-5-4-low",
+      "max" : null,
+      "medium" : "gpt-5-4-medium",
+      "minimal" : null,
+      "off" : "gpt-5-4-none",
+      "xhigh" : "gpt-5-4-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 272000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 30
+    },
+    "id" : "gpt-5-4-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.4 Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-4-high-priority",
+      "low" : "gpt-5-4-low-priority",
+      "max" : null,
+      "medium" : "gpt-5-4-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-5-4-none-priority",
+      "xhigh" : "gpt-5-4-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 400000,
+    "cost" : {
+      "cacheRead" : 0.075,
+      "cacheWrite" : 0,
+      "input" : 0.75,
+      "output" : 4.5
+    },
+    "id" : "gpt-5-4-mini",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.4 Mini",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-4-mini-high",
+      "low" : "gpt-5-4-mini-low",
+      "max" : null,
+      "medium" : "gpt-5-4-mini-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-5-4-mini-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 272000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 5,
+      "output" : 30
+    },
+    "id" : "gpt-5-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-5-high",
+      "low" : "gpt-5-5-low",
+      "max" : null,
+      "medium" : "gpt-5-5-medium",
+      "minimal" : null,
+      "off" : "gpt-5-5-none",
+      "xhigh" : "gpt-5-5-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 272000,
+    "cost" : {
+      "cacheRead" : 1.25,
+      "cacheWrite" : 0,
+      "input" : 12.5,
+      "output" : 75
+    },
+    "id" : "gpt-5-5-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.5 Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-5-high-priority",
+      "low" : "gpt-5-5-low-priority",
+      "max" : null,
+      "medium" : "gpt-5-5-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-5-5-none-priority",
+      "xhigh" : "gpt-5-5-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.02,
+      "cacheWrite" : 0,
+      "input" : 0.2,
+      "output" : 1.2
+    },
+    "id" : "gpt-5-6-luna",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.6 Luna",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-6-luna-high",
+      "low" : "gpt-5-6-luna-low",
+      "max" : "gpt-5-6-luna-max",
+      "medium" : "gpt-5-6-luna-medium",
+      "minimal" : null,
+      "off" : "gpt-5-6-luna-none",
+      "xhigh" : "gpt-5-6-luna-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.04,
+      "cacheWrite" : 0,
+      "input" : 0.4,
+      "output" : 2.4
+    },
+    "id" : "gpt-5-6-luna-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.6 Luna Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-6-luna-high-priority",
+      "low" : "gpt-5-6-luna-low-priority",
+      "max" : "gpt-5-6-luna-max-priority",
+      "medium" : "gpt-5-6-luna-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-5-6-luna-none-priority",
+      "xhigh" : "gpt-5-6-luna-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.4,
+      "cacheWrite" : 0,
+      "input" : 4,
+      "output" : 20
+    },
+    "id" : "gpt-5-6-sol",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.6 Sol",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-6-sol-high",
+      "low" : "gpt-5-6-sol-low",
+      "max" : "gpt-5-6-sol-max",
+      "medium" : "gpt-5-6-sol-medium",
+      "minimal" : null,
+      "off" : "gpt-5-6-sol-none",
+      "xhigh" : "gpt-5-6-sol-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.8,
+      "cacheWrite" : 0,
+      "input" : 8,
+      "output" : 40
+    },
+    "id" : "gpt-5-6-sol-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.6 Sol Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-6-sol-high-priority",
+      "low" : "gpt-5-6-sol-low-priority",
+      "max" : "gpt-5-6-sol-max-priority",
+      "medium" : "gpt-5-6-sol-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-5-6-sol-none-priority",
+      "xhigh" : "gpt-5-6-sol-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 12
+    },
+    "id" : "gpt-5-6-terra",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.6 Terra",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-6-terra-high",
+      "low" : "gpt-5-6-terra-low",
+      "max" : "gpt-5-6-terra-max",
+      "medium" : "gpt-5-6-terra-medium",
+      "minimal" : null,
+      "off" : "gpt-5-6-terra-none",
+      "xhigh" : "gpt-5-6-terra-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.4,
+      "cacheWrite" : 0,
+      "input" : 4,
+      "output" : 24
+    },
+    "id" : "gpt-5-6-terra-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-5.6 Terra Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-5-6-terra-high-priority",
+      "low" : "gpt-5-6-terra-low-priority",
+      "max" : "gpt-5-6-terra-max-priority",
+      "medium" : "gpt-5-6-terra-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-5-6-terra-none-priority",
+      "xhigh" : "gpt-5-6-terra-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.1,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 10
+    },
+    "id" : "gpt-6-1-sol",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6.1 Sol",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-1-sol-high",
+      "low" : "gpt-6-1-sol-low",
+      "max" : "gpt-6-1-sol-max",
+      "medium" : "gpt-6-1-sol-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-6-1-sol-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 4,
+      "output" : 20
+    },
+    "id" : "gpt-6-1-sol-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6.1 Sol Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-1-sol-high-priority",
+      "low" : "gpt-6-1-sol-low-priority",
+      "max" : "gpt-6-1-sol-max-priority",
+      "medium" : "gpt-6-1-sol-medium-priority",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-6-1-sol-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 1,
+      "cacheWrite" : 0,
+      "input" : 10,
+      "output" : 50
+    },
+    "id" : "gpt-6-astra",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6 Astra",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-astra-high",
+      "low" : "gpt-6-astra-low",
+      "max" : "gpt-6-astra-max",
+      "medium" : "gpt-6-astra-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-6-astra-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 2,
+      "cacheWrite" : 0,
+      "input" : 20,
+      "output" : 100
+    },
+    "id" : "gpt-6-astra-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6 Astra Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-astra-high-priority",
+      "low" : "gpt-6-astra-low-priority",
+      "max" : "gpt-6-astra-max-priority",
+      "medium" : "gpt-6-astra-medium-priority",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-6-astra-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.01,
+      "cacheWrite" : 0,
+      "input" : 0.1,
+      "output" : 0.5
+    },
+    "id" : "gpt-6-luna",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6 Luna",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-luna-high",
+      "low" : "gpt-6-luna-low",
+      "max" : "gpt-6-luna-max",
+      "medium" : "gpt-6-luna-medium",
+      "minimal" : null,
+      "off" : "gpt-6-luna-none",
+      "xhigh" : "gpt-6-luna-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.02,
+      "cacheWrite" : 0,
+      "input" : 0.2,
+      "output" : 1
+    },
+    "id" : "gpt-6-luna-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6 Luna Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-luna-high-priority",
+      "low" : "gpt-6-luna-low-priority",
+      "max" : "gpt-6-luna-max-priority",
+      "medium" : "gpt-6-luna-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-6-luna-none-priority",
+      "xhigh" : "gpt-6-luna-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 10
+    },
+    "id" : "gpt-6-sol",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6 Sol",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-sol-high",
+      "low" : "gpt-6-sol-low",
+      "max" : "gpt-6-sol-max",
+      "medium" : "gpt-6-sol-medium",
+      "minimal" : null,
+      "off" : "gpt-6-sol-none",
+      "xhigh" : "gpt-6-sol-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.4,
+      "cacheWrite" : 0,
+      "input" : 4,
+      "output" : 20
+    },
+    "id" : "gpt-6-sol-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6 Sol Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-sol-high-priority",
+      "low" : "gpt-6-sol-low-priority",
+      "max" : "gpt-6-sol-max-priority",
+      "medium" : "gpt-6-sol-medium-priority",
+      "minimal" : null,
+      "off" : "gpt-6-sol-none-priority",
+      "xhigh" : "gpt-6-sol-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 500000,
+    "cost" : {
+      "cacheRead" : 0.3,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 6
+    },
+    "id" : "grok-4-5",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 100000,
+    "name" : "Grok 4.5",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "grok-4-5-high",
+      "low" : "grok-4-5-low",
+      "max" : null,
+      "medium" : "grok-4-5-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 500000,
+    "cost" : {
+      "cacheRead" : 0.3,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 6
+    },
+    "id" : "grok-4-6",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 100000,
+    "name" : "Grok 4.6",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "grok-4-6-high",
+      "low" : "grok-4-6-low",
+      "max" : null,
+      "medium" : "grok-4-6-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "grok-4-6-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 500000,
+    "cost" : {
+      "cacheRead" : 0.5,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 6
+    },
+    "id" : "grok-4-7",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 100000,
+    "name" : "Grok 4.7",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "grok-4-7-high",
+      "low" : "grok-4-7-low",
+      "max" : null,
+      "medium" : "grok-4-7-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "grok-4-7-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.26,
+      "cacheWrite" : 0,
+      "input" : 1.4,
+      "output" : 4.4
+    },
+    "id" : "inkling",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 131072,
+    "name" : "Inkling",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "inkling-high",
+      "low" : "inkling-low",
+      "max" : "inkling-max",
+      "medium" : "inkling-medium",
+      "minimal" : null,
+      "off" : "inkling-none",
+      "xhigh" : "inkling-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 262144,
+    "cost" : {
+      "cacheRead" : 0.16,
+      "cacheWrite" : 0,
+      "input" : 0.95,
+      "output" : 4
+    },
+    "id" : "kimi-k2-6",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 8192,
+    "name" : "Kimi K2.6",
+    "provider" : "devin",
+    "reasoning" : true
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 262144,
+    "cost" : {
+      "cacheRead" : 0.19,
+      "cacheWrite" : 0,
+      "input" : 0.95,
+      "output" : 4
+    },
+    "id" : "kimi-k2-7",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 16000,
+    "name" : "Kimi K2.7",
+    "provider" : "devin",
+    "reasoning" : true
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.3,
+      "cacheWrite" : 0,
+      "input" : 3,
+      "output" : 15
+    },
+    "id" : "kimi-k3",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 131072,
+    "name" : "Kimi K3",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "kimi-k3-high",
+      "low" : "kimi-k3-low",
+      "max" : "kimi-k3-max",
+      "medium" : null,
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.12,
+      "cacheWrite" : 0,
+      "input" : 0.6,
+      "output" : 2.4
+    },
+    "id" : "nemotron-3-ultra",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 32768,
+    "name" : "Nemotron 3 Ultra",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "nemotron-3-ultra-high",
+      "low" : null,
+      "max" : null,
+      "medium" : "nemotron-3-ultra-medium",
+      "minimal" : null,
+      "off" : "nemotron-3-ultra-none",
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 0.5,
+      "output" : 2.5
+    },
+    "id" : "swe-1-6",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "SWE-1.6",
+    "provider" : "devin",
+    "reasoning" : true
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 0.5,
+      "output" : 2.5
+    },
+    "id" : "swe-1-6-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "SWE-1.6 Fast",
+    "provider" : "devin",
+    "reasoning" : true
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 262000,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 0.5,
+      "output" : 2.5
+    },
+    "id" : "swe-1-7",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "SWE-1.7",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : null,
+      "low" : null,
+      "max" : "swe-1-7",
+      "medium" : "swe-1-7-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 202752,
+    "cost" : {
+      "cacheRead" : 1,
+      "cacheWrite" : 0,
+      "input" : 2.5,
+      "output" : 12.5
+    },
+    "id" : "swe-1-7-lightning",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 96000,
+    "name" : "SWE-1.7 Lightning",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : null,
+      "low" : null,
+      "max" : "swe-1-7-lightning",
+      "medium" : "swe-1-7-lightning-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 262000,
+    "cost" : {
+      "cacheRead" : 0.075,
+      "cacheWrite" : 0.75,
+      "input" : 0.75,
+      "output" : 3.75
+    },
+    "id" : "swe-2",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "SWE-2",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "swe-2-high",
+      "low" : null,
+      "max" : "swe-2-max",
+      "medium" : "swe-2-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  }
+]
