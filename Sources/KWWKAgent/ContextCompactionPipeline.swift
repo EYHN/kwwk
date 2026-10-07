@@ -380,8 +380,7 @@ enum ContextCompactionPipeline {
                 )
             } catch {
                 try checkCancellation(request.cancellation)
-                guard !(error is CancellationError),
-                      ProviderFailure.capture(error).category == .contextOverflow else { throw error }
+                guard !(error is CancellationError), shrinksOnFailure(error) else { throw error }
                 // Halve the serialized input actually sent, not an inflated
                 // catalog allowance. Only the failed chunk is replayed; keep
                 // the accumulator from all successfully summarized chunks.
@@ -395,6 +394,20 @@ enum ContextCompactionPipeline {
             }
         }
         return accumulator
+    }
+
+    /// Failures a smaller chunk can fix: the provider refusing the input as
+    /// too large, and a summary that came back with no text. Kimi For Coding's
+    /// k3 does the latter intermittently on long transcripts: an AirBuild
+    /// agent lost 28 turns to it on 2026-10-05/06, in runs of attempts over
+    /// the same history, between successful compactions of similar size.
+    /// Retrying a smaller slice changes the request instead of replaying it.
+    private static func shrinksOnFailure(_ error: Error) -> Bool {
+        if let compaction = error as? AgentContextCompactionError,
+           case .emptySummary = compaction {
+            return true
+        }
+        return ProviderFailure.capture(error).category == .contextOverflow
     }
 
     private static func makeReplacement(

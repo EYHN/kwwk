@@ -71,3 +71,9 @@ context…"). `ProviderContextLimit.isPlanContextLimit` recognises that wording,
 so it classifies as `contextOverflow` and takes the shrinking path (live-turn
 compact-and-retry, summary chunk halving). Every other 401/403 stays
 `authentication`.
+
+A summary that comes back as a clean stop with no text (`emptySummary`) takes
+the same path as an input overflow: the failed chunk is halved and retried,
+down to the same minimum budget, keeping every chunk already summarized. Kimi
+For Coding's k3 answers some long summaries this way; the halved chunk changes
+the request instead of replaying it.

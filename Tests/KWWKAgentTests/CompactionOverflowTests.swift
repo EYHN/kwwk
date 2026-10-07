@@ -88,6 +88,42 @@ struct CompactionOverflowTests {
         #expect(calls.last!.tokens < calls.first!.tokens)
     }
 
+    @Test("an empty summary shrinks the chunk and retries")
+    func emptySummaryShrinks() async {
+        let log = OverflowLog()
+        let result = await compact([
+            .user(UserMessage(text: String(repeating: " payload", count: 14_000))),
+            .user(UserMessage(text: "retained tail")),
+        ], log: log, limit: 9_000, emptyWhenRejected: true)
+        guard case .success = result else {
+            Issue.record("Expected recovery from an empty summary, got \(result)")
+            return
+        }
+        let calls = await log.calls
+        #expect(calls.first?.accepted == false)
+        #expect(calls.last?.accepted == true)
+        #expect(calls.last!.tokens < calls.first!.tokens)
+    }
+
+    @Test("persistently empty summaries stop at the minimum budget")
+    func persistentEmptySummaryStopsAtFloor() async {
+        let log = OverflowLog()
+        let result = await compact([
+            .user(UserMessage(text: String(repeating: " payload", count: 14_000))),
+            .user(UserMessage(text: "tail")),
+        ], log: log, limit: 0, emptyWhenRejected: true)
+        guard case .failure(.failed(let reason)) = result else {
+            Issue.record("Expected a terminal empty summary, got \(result)")
+            return
+        }
+        #expect(reason == AgentContextCompactionError.emptySummary.localizedDescription)
+        let calls = await log.calls
+        #expect(calls.count > 1 && calls.count < 8)
+        for (previous, next) in zip(calls, calls.dropFirst()) {
+            #expect(next.tokens < previous.tokens)
+        }
+    }
+
     @Test("persistent overflow stops at the minimum budget")
     func stopsAtFloor() async {
         let log = OverflowLog()
@@ -118,7 +154,8 @@ struct CompactionOverflowTests {
     private func compact(
         _ messages: [Message], log: OverflowLog, limit: Int, thrown: Bool = false, nested: Bool = false,
         reason: String = "This model's maximum prompt length is 500000 but the request contains 536700 tokens.",
-        cancelOnResponse: CancellationHandle? = nil, kimiPlanRefusal: Bool = false
+        cancelOnResponse: CancellationHandle? = nil, kimiPlanRefusal: Bool = false,
+        emptyWhenRejected: Bool = false
     ) async -> Result<AgentContextCompactionResult, AgentContextCompactionFailure> {
         // Completed turns may be evicted; unanswered user messages must stay.
         let history = messages.dropLast().flatMap { message in
@@ -153,6 +190,15 @@ struct CompactionOverflowTests {
                     throw OverflowError(reason: reason)
                 }
                 let pair = AssistantMessageStream.makeStream()
+                if !accepted && emptyWhenRejected {
+                    // A clean stop with no text, as Kimi k3 answers some summaries.
+                    pair.continuation.end(AssistantMessage(
+                        content: [.text(TextContent(text: ""))],
+                        api: model.api, provider: model.provider, model: model.id,
+                        stopReason: .stop
+                    ))
+                    return pair.stream
+                }
                 pair.continuation.end(AssistantMessage(
                     content: accepted ? [.text(TextContent(text: "durable-summary"))] : [],
                     api: model.api, provider: model.provider, model: model.id,
