@@ -85,6 +85,25 @@ struct ProviderFailureParityTests {
         #expect(!ProviderFailure.capture(NSError(domain: NSURLErrorDomain, code: code,
                                                userInfo: [NSLocalizedDescriptionKey: "connection timed out"])).isRetryable)
     }
+    // Codex over Linux URLSession: chatgpt.com dropped the SSE body mid-turn.
+    @Test func curlTransferClosedIsTransport() {
+        let curl = "transfer closed with outstanding read data remaining"
+        let inner = NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown, userInfo: [NSLocalizedDescriptionKey: curl])
+        let outer = NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown, userInfo: [NSUnderlyingErrorKey: inner])
+        #expect(ProviderFailure.capture(outer).category == .transport)
+        let described = NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown,
+                                userInfo: [NSUnderlyingErrorKey: inner, NSLocalizedDescriptionKey: curl])
+        #expect(ProviderFailure.capture(described).isRetryable)
+        let logged = #"Error Domain=NSURLErrorDomain Code=-1 "(null)"UserInfo={NSUnderlyingError=Error Domain=NSURLErrorDomain Code=-1 "(null)"UserInfo={NSLocalizedDescription=transfer closed with outstanding read data remaining}, NSErrorFailingURLStringKey=https://chatgpt.com/backend-api/codex/responses, NSErrorFailingURLKey=https://chatgpt.com/backend-api/codex/responses, NSLocalizedDescription=transfer closed with outstanding read data remaining}"#
+        #expect(ProviderFailure(message: logged).isRetryable)
+        #expect(ProviderFailure(message: "curl: (92) HTTP/2 stream 1 was not closed cleanly: INTERNAL_ERROR (err 2)",
+                                transportDomain: NSURLErrorDomain, transportCode: NSURLErrorUnknown).isRetryable)
+        // A bare -1 stays terminal; only curl's interruption wording opens it.
+        #expect(!ProviderFailure.capture(NSError(domain: NSURLErrorDomain, code: NSURLErrorUnknown,
+                                                 userInfo: [NSLocalizedDescriptionKey: "connection timed out"])).isRetryable)
+        #expect(!ProviderFailure(message: "Error Domain=NSURLErrorDomain Code=-1 \"(null)\"").isRetryable)
+    }
+
     @Test func underlyingTransportAndPermanentOuter() {
         let timeout = NSError(domain: NSURLErrorDomain, code: -1001)
         let wrapper = NSError(domain: "Proxy", code: 1, userInfo: [NSUnderlyingErrorKey: timeout])

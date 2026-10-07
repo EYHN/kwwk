@@ -70,8 +70,18 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
             failure.message = String(describing: error)
             return failure
         }
-        return Self(message: (error as? LocalizedError)?.errorDescription ?? String(describing: error),
-                    transportDomain: ns.domain, transportCode: ns.code)
+        var message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
+        // Linux URLSession reports unmapped curl failures as a bare -1 whose
+        // only evidence is curl's text, sometimes on the underlying error.
+        if ns.domain == NSURLErrorDomain, ns.code == NSURLErrorUnknown {
+            let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+            for detail in [ns.userInfo[NSLocalizedDescriptionKey] as? String,
+                           underlying?.userInfo[NSLocalizedDescriptionKey] as? String].compactMap({ $0 })
+            where !message.contains(detail) {
+                message += ": \(detail)"
+            }
+        }
+        return Self(message: message, transportDomain: ns.domain, transportCode: ns.code)
     }
 
     /// Parse only recognized fields; never persist headers, credentials or an
@@ -177,6 +187,7 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         if domain?.lowercased() == NSURLErrorDomain.lowercased(), let code {
             if code == -999 { return .cancelled }
             if code == -1001 { return .timeout }
+            if code == NSURLErrorUnknown, Self.isCurlTransferInterrupted(text) { return .transport }
             return [-1003, -1004, -1005, -1006, -1009].contains(code) ? .transport : .invalidRequest
         }
         if domain?.lowercased() == NSPOSIXErrorDomain.lowercased() {
@@ -221,6 +232,14 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
                      "aborted", "out_of_range", "unimplemented", "internal", "unavailable", "data_loss", "unauthenticated"]
         if let index = Int(raw), names.indices.contains(index) { return names[index] }
         return raw.lowercased()
+    }
+
+    /// curl's own wording for a connection that dropped mid-response
+    /// (CURLE_PARTIAL_FILE, an HTTP/2 stream reset). FoundationNetworking has
+    /// no URLError for these and surfaces them as NSURLErrorUnknown.
+    private static func isCurlTransferInterrupted(_ text: String) -> Bool {
+        ["transfer closed with", "was not closed cleanly", "stream error in the http/2 framing layer"]
+            .contains(where: text.contains)
     }
 
     private static func isTransientLimit(_ text: String) -> Bool {
