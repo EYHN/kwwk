@@ -16,6 +16,7 @@ let package = Package(
         .executable(name: "kwwk", targets: ["kwwk"]),
         .executable(name: "kwwk-generate-models", targets: ["kwwk-generate-models"]),
         .executable(name: "kwwk-generate-cursor-models", targets: ["kwwk-generate-cursor-models"]),
+        .executable(name: "kwwk-generate-devin-models", targets: ["kwwk-generate-devin-models"]),
     ],
     dependencies: [
         // swift-crypto's `Crypto` module is source-compatible with Apple's
@@ -35,9 +36,17 @@ let package = Package(
         .package(url: "https://github.com/the-swift-collective/libwebp.git", from: "1.4.1"),
     ],
     targets: [
+        // System zlib for gzip framing on the Devin (Codeium Cascade) Connect
+        // wire. Apple SDKs ship it; Linux needs zlib1g-dev.
+        .systemLibrary(
+            name: "CZlib",
+            path: "Sources/CZlib",
+            providers: [.apt(["zlib1g-dev"])]
+        ),
         .target(
             name: "KWWKAI",
             dependencies: [
+                "CZlib",
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
@@ -89,6 +98,11 @@ let package = Package(
             name: "kwwk-generate-cursor-models",
             dependencies: ["KWWKAI"],
             path: "Scripts/GenerateCursorModels"
+        ),
+        .executableTarget(
+            name: "kwwk-generate-devin-models",
+            dependencies: ["KWWKAI"],
+            path: "Scripts/GenerateDevinModels"
         ),
         .testTarget(
             name: "KWWKAITests",

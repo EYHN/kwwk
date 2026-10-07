@@ -191,6 +191,14 @@ func resolveEnvAuth(
             guard let token = EnvAPIKeys.apiKey(for: "cursor", env: environment), !token.isEmpty else { continue }
             return await registerCursorEnv(token: token, modelOverride: forcedId)
         }
+        // Devin rides its own Connect wire (devin-agent); the env var carries
+        // a session token (or legacy Windsurf API key) used as-is.
+        if provider == "devin" {
+            guard let token = EnvAPIKeys.apiKey(for: "devin", env: environment), !token.isEmpty else { continue }
+            await APIRegistry.shared.register(DevinAgentProvider(defaultAPIKey: token), scope: "devin")
+            let model = devinModel(id: forcedId ?? DevinModels.defaultModelId)
+            return ResolvedAuth(model: model, modelLabel: "\(model.id) · Devin (env)", authResolver: nil)
+        }
         guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
         guard await registerEnvProviders(for: provider, apiKey: key) else { continue }

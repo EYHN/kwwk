@@ -320,6 +320,7 @@ public actor OAuthManager {
             OpenAICodexOAuthProvider(),
             GitHubCopilotOAuthProvider(),
             CursorOAuthProvider(),
+            DevinOAuthProvider(),
             KimiCodingOAuthProvider(),
             XaiOAuthProvider(),
         ]

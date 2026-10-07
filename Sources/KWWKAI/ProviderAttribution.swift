@@ -26,6 +26,7 @@ public enum ProviderAttribution {
         "cloudflare-ai-gateway": "Cloudflare AI Gateway",
         "cloudflare-workers-ai": "Cloudflare Workers AI",
         "deepseek": "DeepSeek",
+        "devin": "Devin",
         "fireworks": "Fireworks",
         "github-copilot": "GitHub Copilot",
         "google": "Google Gemini",

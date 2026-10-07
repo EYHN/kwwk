@@ -597,6 +597,79 @@ public enum OAuthLogin {
         return OAuthCredentials(access: key, refresh: "", expires: .max)
     }
 
+    // MARK: - Devin (browser PKCE callback flow)
+    //
+    // Ported from oh-my-pi's `auth/devin.kdl` (`login "oauth-code"`): a PKCE
+    // authorization-code grant against app.devin.ai with a loopback callback
+    // on 127.0.0.1:59653, then a JSON code exchange at api.devin.ai that
+    // returns a long-lived session token. There is no refresh token — the
+    // expiry comes from the token's JWT `exp` (falling back to one year) and
+    // the user re-runs `/login devin` when it lapses.
+
+    public static func loginDevin(
+        port: UInt16 = DevinOAuth.callbackPort,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        let pkce = PKCE.random()
+        let state = UUID().uuidString.lowercased()
+        let server = try OAuthCallbackServer(port: port, path: DevinOAuth.callbackPath)
+        defer { server.stop() }
+        let redirectURI = "http://\(DevinOAuth.callbackHost):\(port)\(DevinOAuth.callbackPath)"
+
+        var comps = URLComponents(url: DevinOAuth.authorizeURL, resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "redirect_uri", value: redirectURI),
+            URLQueryItem(name: "code_challenge", value: pkce.challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "prompt", value: "select_account"),
+        ]
+        callbacks.onAuthURL(comps.url!)
+        callbacks.onProgress("Sign in to Devin in your browser — waiting for the callback on \(redirectURI)…")
+
+        let params = try await server.waitForCallback()
+        if let error = params["error"], !error.isEmpty {
+            let description = params["error_description"].map { ": \($0)" } ?? ""
+            throw OAuthError.invalidResponse("devin authorization failed: \(error)\(description)")
+        }
+        if let returned = params["state"], returned != state {
+            throw OAuthError.invalidResponse("devin callback state mismatch")
+        }
+        guard let code = params["code"], !code.isEmpty else {
+            throw OAuthError.invalidResponse("devin callback had no code")
+        }
+
+        callbacks.onProgress("exchanging authorization code for a Devin session token…")
+        let (response, responseBody) = try await client.request(
+            url: DevinOAuth.tokenURL,
+            method: "POST",
+            headers: ["content-type": "application/json", "accept": "application/json"],
+            body: try JSONSerialization.data(withJSONObject: [
+                "code": code,
+                "code_verifier": pkce.verifier,
+            ])
+        )
+        if response.statusCode >= 400 {
+            throw OAuthError.refreshFailed("devin token exchange \(response.statusCode): \(String(data: responseBody, encoding: .utf8) ?? "")")
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: responseBody) as? [String: Any],
+              let token = obj["token"] as? String, !token.isEmpty else {
+            throw OAuthError.invalidResponse("devin token exchange response carried no token")
+        }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return OAuthCredentials(
+            access: token,
+            refresh: "",
+            expires: OAuth.jwtExpiryMillis(token) ?? (now + DevinOAuth.fallbackLifetimeMs),
+            extras: [
+                "apiEndpoint": .string(DevinOAuth.apiEndpoint),
+                "enterpriseUrl": .string(DevinOAuth.enterpriseURL),
+            ]
+        )
+    }
+
     // MARK: - Z.AI GLM Coding Plan (browser sign-in)
     //
     // Ported from oh-my-pi's `zai.ts` (ZCode's desktop "Individual Plan"

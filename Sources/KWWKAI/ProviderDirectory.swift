@@ -114,6 +114,13 @@ public let providerDirectory: [ProviderDescriptor] = [
         formTitle: nil
     ),
     ProviderDescriptor(
+        storeId: "devin",
+        scope: "devin",
+        catalogKey: "devin",
+        displayName: "Devin",
+        formTitle: nil
+    ),
+    ProviderDescriptor(
         storeId: "kimi-coding",
         scope: "kimi-coding",
         catalogKey: "kimi-coding",

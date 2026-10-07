@@ -1,0 +1,46 @@
+[
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "swe-1-6",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "SWE-1.6",
+    "provider" : "devin",
+    "reasoning" : true
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 200000,
+    "cost" : {
+      "cacheRead" : 0.03,
+      "cacheWrite" : 0,
+      "input" : 0.3,
+      "output" : 1.5
+    },
+    "id" : "swe-1-6-fast",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 128000,
+    "name" : "SWE-1.6 Fast",
+    "provider" : "devin",
+    "reasoning" : true
+  }
+]

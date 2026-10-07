@@ -67,23 +67,30 @@ public enum ModelsCatalog {
         // models.json would win). There is no runtime model sync for Cursor —
         // the bundled file is the authoritative catalog.
         if out["cursor"] == nil {
-            let cursor = loadCursorCatalog()
+            let cursor = loadBundledArray("cursor-models")
             if !cursor.isEmpty { out["cursor"] = cursor }
+        }
+        // Devin's catalog is credential-scoped and likewise ships as its own
+        // pre-generated resource (`kwwk-generate-devin-models`).
+        if out["devin"] == nil {
+            let devin = loadBundledArray("devin-models")
+            if !devin.isEmpty { out["devin"] = devin }
         }
         return out
     }
 
-    /// Load the static Cursor catalog from `Resources/cursor-models.json`
-    /// (a plain `[Model]` array). Regenerate with:
+    /// Load a static per-provider catalog bundled as a plain `[Model]` array
+    /// (`Resources/<name>.json`). Regenerate with:
     ///
     ///   swift run kwwk-generate-cursor-models
-    private static func loadCursorCatalog() -> [String: Model] {
-        guard let url = Bundle.module.url(forResource: "cursor-models", withExtension: "json") else {
-            fatalError("ModelsCatalog: bundled resource cursor-models.json is missing from the build")
+    ///   swift run kwwk-generate-devin-models
+    private static func loadBundledArray(_ name: String) -> [String: Model] {
+        guard let url = Bundle.module.url(forResource: name, withExtension: "json") else {
+            fatalError("ModelsCatalog: bundled resource \(name).json is missing from the build")
         }
         guard let data = try? Data(contentsOf: url),
               let models = try? JSONDecoder().decode([Model].self, from: data) else {
-            fatalError("ModelsCatalog: bundled cursor-models.json is unreadable")
+            fatalError("ModelsCatalog: bundled \(name).json is unreadable")
         }
         return Dictionary(uniqueKeysWithValues: models.map { ($0.id, $0) })
     }
