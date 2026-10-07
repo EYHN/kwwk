@@ -1,7 +1,14 @@
 import Foundation
-import CZlib
+#if canImport(zlib)
+// The Apple SDK's own zlib module; the vendored headers would collide with
+// it inside one module graph (swift-nio already pulls the SDK module in).
+import zlib
+#else
+import ZLibC
+#endif
 
-/// gzip (RFC 1952) compression over the system zlib. The Devin Connect wire
+/// gzip (RFC 1952) compression over zlib (the SDK module on Apple platforms,
+/// the vendored `ZLibC` on Linux). The Devin Connect wire
 /// gzips request frames (`connect-content-encoding: gzip`) and may gzip
 /// response frames and unary bodies, so both directions are needed.
 enum Gzip {

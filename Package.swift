@@ -34,19 +34,20 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.0"),
         .package(url: "https://github.com/troughton/Cstb.git", from: "1.0.6"),
         .package(url: "https://github.com/the-swift-collective/libwebp.git", from: "1.4.1"),
+        // Vendored zlib (already in the graph through libpng) for gzip framing
+        // on the Devin Connect wire, used on Linux only. A private module map
+        // over the system zlib.h clashes with both this module and the Apple
+        // SDK's `zlib` module in any package graph that loads either.
+        .package(url: "https://github.com/the-swift-collective/zlib.git", from: "1.3.1"),
     ],
     targets: [
-        // System zlib for gzip framing on the Devin (Codeium Cascade) Connect
-        // wire. Apple SDKs ship it; Linux needs zlib1g-dev.
-        .systemLibrary(
-            name: "CZlib",
-            path: "Sources/CZlib",
-            providers: [.apt(["zlib1g-dev"])]
-        ),
         .target(
             name: "KWWKAI",
             dependencies: [
-                "CZlib",
+                // Apple platforms use the SDK's own `zlib` module (swift-nio
+                // already loads it); the vendored headers would collide with
+                // it inside one module graph. Linux has no SDK module.
+                .product(name: "ZLibC", package: "zlib", condition: .when(platforms: [.linux])),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
