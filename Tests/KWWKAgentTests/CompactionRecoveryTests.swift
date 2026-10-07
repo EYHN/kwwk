@@ -233,6 +233,30 @@ struct CompactionRecoveryTests {
         #expect(agent.state.messages.compactMap(assistantTextValue).contains("provider success"))
     }
 
+    @Test("Kimi's plan refusal compacts and retries instead of failing as a login error")
+    func kimiPlanRefusalCompactsAndRetries() async throws {
+        let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
+            FauxModelDefinition(id: "kimi-plan-refusal-model", contextWindow: 4_000)
+        ]))
+        defer { faux.unregister() }
+        let model = faux.getModel()
+        let router = RecoveryStreamRouter(mode: .kimiPlanRefusalThenSucceed)
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(systemPrompt: "main-system", model: model, messages: shortHistory(model: model)),
+            streamFn: recoveryStream(router: router)
+        ))
+
+        try await agent.prompt("retry after the plan refusal")
+
+        let snapshot = await router.snapshot()
+        try #require(snapshot.mainContexts.count == 2)
+        #expect(snapshot.summaryCalls == 1)
+        #expect(contextText(snapshot.mainContexts[1]).contains("<previous-session-summary>"))
+        #expect(contextText(snapshot.mainContexts[1]).contains("retry after the plan refusal"))
+        #expect(agent.state.messages.compactMap(assistantError).isEmpty)
+        #expect(agent.state.messages.compactMap(assistantTextValue).contains("provider success"))
+    }
+
     @Test("explicitly disabling auto compact also disables overflow recovery")
     func disabledAutoCompactDoesNotRecoverOverflow() async throws {
         let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [
@@ -599,6 +623,7 @@ private enum RecoveryMode: Sendable {
     case overflowThenSucceed
     case throwOverflowThenSucceed
     case alwaysOverflow
+    case kimiPlanRefusalThenSucceed
 }
 
 private enum OverflowCompactionCancellation: CaseIterable, Sendable {
@@ -666,6 +691,21 @@ private actor RecoveryStreamRouter {
             shouldOverflow = false
         case .alwaysOverflow:
             shouldOverflow = true
+        case .kimiPlanRefusalThenSucceed:
+            if attempt == 1 {
+                // Kimi For Coding's over-plan answer, captured 2026-10-07.
+                let refusal = #"{"error":{"type":"authentication_error","message":"Your current plan supports only k3 up to 256K context. 1M context is available on higher-tier Kimi Code plans."},"type":"error"}"#
+                return AssistantMessage(
+                    content: [],
+                    api: model.api,
+                    provider: model.provider,
+                    model: model.id,
+                    stopReason: .error,
+                    errorMessage: refusal,
+                    failure: ProviderFailure(message: refusal, httpStatus: 401)
+                )
+            }
+            shouldOverflow = false
         }
         if shouldOverflow {
             return AssistantMessage(

@@ -37,7 +37,7 @@ public enum ProviderContextLimit {
             "prompt tokens exceed",
             "request is too large for this model",
         ]
-        if exactSignals.contains(where: normalized.contains) {
+        if exactSignals.contains(where: normalized.contains) || isPlanContextLimit(normalized) {
             return true
         }
 
@@ -67,5 +67,18 @@ public enum ProviderContextLimit {
         return normalized.contains("input token")
             && normalized.contains("exceed")
             && describesTokenCount
+    }
+
+    /// An input rejection that arrives as an authorization failure: the
+    /// account's plan serves the model at a smaller window than the request
+    /// needs. Kimi For Coding answers an over-window k3 request with HTTP 401
+    /// `authentication_error` "Your current plan supports only k3 up to 256K
+    /// context. 1M context is available on higher-tier Kimi Code plans."
+    /// (measured 2026-10-07). Replaying it never helps; shrinking the input does.
+    public static func isPlanContextLimit(_ message: String) -> Bool {
+        message.lowercased().range(
+            of: #"supports only .{1,80}? up to \d+(?:\.\d+)?\s*[km]\s+context"#,
+            options: .regularExpression
+        ) != nil
     }
 }
