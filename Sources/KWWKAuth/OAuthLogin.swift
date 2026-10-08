@@ -12,10 +12,9 @@ import FoundationNetworking
 public enum OAuthLogin {
 
     /// Hooks the orchestrator calls as the flow progresses. The SDK does not
-    /// print, launch a browser or bind a port on its own — the embedding app
-    /// decides how (the kwwk CLI supplies terminal implementations and a NIO
-    /// listener in `Login.swift`; an app supplies a presenter and its own
-    /// listener).
+    /// print or launch a browser on its own — the embedding app decides how.
+    /// Redirect flows default to a NIO loopback listener; an app may supply
+    /// its own listener and browser presenter.
     public struct Callbacks: Sendable {
         /// Called with a page the user must open, when no `browser` presenter
         /// is set. The CLI prints and opens it here.
@@ -27,8 +26,9 @@ public enum OAuthLogin {
         /// Shows pages and runs the flow's waiting work beside them. Nil runs
         /// the work after handing the page to `onAuthURL`.
         public var browser: (any OAuthBrowserPresenter)?
-        /// Builds the listener a redirect flow binds. Nil makes every
-        /// redirect flow fail with `OAuthLoginError.noLoopbackListener`.
+        /// Builds the listener a redirect flow binds. Defaults to the shared
+        /// NIO listener. Explicit nil opts out and makes redirect flows fail
+        /// with `OAuthLoginError.noLoopbackListener`.
         public var loopback: OAuthLoopbackFactory?
 
         public init(
@@ -36,7 +36,7 @@ public enum OAuthLogin {
             onProgress: @escaping @Sendable (String) -> Void,
             onUserCode: (@Sendable (_ code: String, _ verificationURL: URL) async -> Void)? = nil,
             browser: (any OAuthBrowserPresenter)? = nil,
-            loopback: OAuthLoopbackFactory? = nil
+            loopback: OAuthLoopbackFactory? = OAuthLogin.nioLoopback
         ) {
             self.onAuthURL = onAuthURL
             self.onProgress = onProgress

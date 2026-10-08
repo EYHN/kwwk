@@ -318,7 +318,8 @@ extension OAuthCallbackServer: OAuthLoopbackListener {
 }
 
 extension OAuthLogin {
-    /// The NIO-backed listener the CLI hands every redirect flow.
+    /// The default NIO-backed listener. Hosts can supply their own factory
+    /// through `Callbacks` without changing any provider flow.
     public static let nioLoopback: OAuthLoopbackFactory = { host, port, path in
         try OAuthCallbackServer(
             port: port, path: path, redirectHost: host, surfacesProviderErrors: true

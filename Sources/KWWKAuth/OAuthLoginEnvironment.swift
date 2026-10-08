@@ -1,8 +1,8 @@
 import Foundation
 
 // The parts of a sign-in that differ per host app. kwwk's CLI prints the URL
-// and binds a NIO listener; an iOS/Mac app presents a web-authentication
-// sheet and binds its own listener. The flows in `OAuthLogin` stay the same
+// and uses the default NIO listener; an iOS/Mac app presents a
+// web-authentication sheet and may bind its own listener. The flows stay the same
 // for both and reach the host only through these seams.
 
 /// A loopback HTTP listener a browser sign-in redirects back to.

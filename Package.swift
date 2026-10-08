@@ -10,7 +10,7 @@ let package = Package(
     ],
     products: [
         // Provider sign-in, token refresh and subscription usage with no
-        // NIO or image stack behind it, for apps (AirBuild's iOS/Mac client,
+        // agent or image stack behind it, for apps (AirBuild's iOS/Mac client,
         // its backend) that need the vendor wire knowledge but not the agent
         // runtime. KWWKAI re-exports it, so `import KWWKAI` sees all of it.
         .library(name: "KWWKAuth", targets: ["KWWKAuth"]),
@@ -50,6 +50,8 @@ let package = Package(
             name: "KWWKAuth",
             dependencies: [
                 .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
             path: "Sources/KWWKAuth"
         ),
@@ -63,7 +65,6 @@ let package = Package(
                 .product(name: "ZLibC", package: "zlib", condition: .when(platforms: [.linux])),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIO", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOHTTP2", package: "swift-nio-http2"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "stb_image", package: "Cstb"),

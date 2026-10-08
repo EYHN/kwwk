@@ -537,8 +537,7 @@ struct DevinOAuthLoginTests {
                     _ = try? await URLSession.shared.data(from: callback)
                 }
             },
-            onProgress: { _ in },
-            loopback: OAuthLogin.nioLoopback
+            onProgress: { _ in }
         )
         let creds = try await OAuthLogin.loginDevin(port: port, callbacks: callbacks, client: client)
         #expect(creds.access == token)

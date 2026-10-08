@@ -176,10 +176,13 @@ struct LoginSeamTests {
         #expect(credentials.refresh == "")
     }
 
-    @Test("A redirect flow with no loopback says so")
+    @Test("A redirect flow with an explicitly disabled loopback says so")
     func noLoopback() async throws {
+        let callbacks = OAuthLogin.Callbacks(
+            onAuthURL: { _ in }, onProgress: { _ in }, loopback: nil
+        )
         await #expect(throws: OAuthLoginError.noLoopbackListener) {
-            _ = try await OAuthLogin.loginOpenAICodex(callbacks: quietCallbacksBase, client: QueuedHTTPClient([]))
+            _ = try await OAuthLogin.loginOpenAICodex(callbacks: callbacks, client: QueuedHTTPClient([]))
         }
     }
 

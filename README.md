@@ -187,10 +187,12 @@ Then depend on the libraries you need:
   message / tool types.
 - **`KWWKAgent`** — the turn/tool loop, built-in coding tools, hooks.
 - **`KWWKAuth`** — provider sign-in, token refresh and subscription usage
-  alone, with no NIO or image stack: for an app or a server that needs the
+  alone, with no agent or image stack: for an app or a server that needs the
   vendor wire protocols but not the agent runtime. `KWWKAI` re-exports it.
-  Redirect sign-ins take the host's loopback listener and browser presenter
-  through `OAuthLogin.Callbacks` (the CLI passes `OAuthLogin.nioLoopback`).
+  Redirect sign-ins default to the shared NIO loopback listener on Apple
+  and Linux, including the original two-hook `KWWKAI` API. Hosts can replace
+  it and supply their own browser presenter through `OAuthLogin.Callbacks`.
+  An explicit `loopback: nil` opts out of the default listener.
   This includes Claude Pro/Max: `OAuthLogin.loginAnthropic`,
   `AnthropicOAuthProvider` and `AnthropicUsageReader` share the same lightweight
   module. Usage keeps shared windows and model-scoped weekly limits separate.

@@ -4,7 +4,7 @@ import FoundationNetworking
 #endif
 
 // Claude uses the same host-supplied browser and loopback as the other
-// providers. The CLI supplies NIO; an embedding app supplies its own listener.
+// providers. The default listener is NIO; an app may supply its own.
 extension OAuthLogin {
     // MARK: - Anthropic
 
