@@ -241,7 +241,8 @@ func terminalLoginCallbacks() -> OAuthLogin.Callbacks {
         },
         onProgress: { msg in
             FileHandle.standardError.write(Data("\(msg)\n".utf8))
-        }
+        },
+        loopback: OAuthLogin.nioLoopback
     )
 }
 

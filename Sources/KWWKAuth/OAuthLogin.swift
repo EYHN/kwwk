@@ -11,75 +11,39 @@ import FoundationNetworking
 /// redirect ports differ.
 public enum OAuthLogin {
 
-    /// Hooks the orchestrator calls as the flow progresses. Both are required:
-    /// the SDK does not print to stderr or launch a browser on its own — the
-    /// embedding app decides how to surface the auth URL and progress (the
-    /// kwwk CLI supplies terminal implementations in `Login.swift`).
+    /// Hooks the orchestrator calls as the flow progresses. The SDK does not
+    /// print, launch a browser or bind a port on its own — the embedding app
+    /// decides how (the kwwk CLI supplies terminal implementations and a NIO
+    /// listener in `Login.swift`; an app supplies a presenter and its own
+    /// listener).
     public struct Callbacks: Sendable {
+        /// Called with a page the user must open, when no `browser` presenter
+        /// is set. The CLI prints and opens it here.
         public var onAuthURL: @Sendable (URL) -> Void
         public var onProgress: @Sendable (String) -> Void
+        /// Called once per device flow, before its verification page opens,
+        /// with the code the user confirms there.
+        public var onUserCode: (@Sendable (_ code: String, _ verificationURL: URL) async -> Void)?
+        /// Shows pages and runs the flow's waiting work beside them. Nil runs
+        /// the work after handing the page to `onAuthURL`.
+        public var browser: (any OAuthBrowserPresenter)?
+        /// Builds the listener a redirect flow binds. Nil makes every
+        /// redirect flow fail with `OAuthLoginError.noLoopbackListener`.
+        public var loopback: OAuthLoopbackFactory?
 
         public init(
             onAuthURL: @escaping @Sendable (URL) -> Void,
-            onProgress: @escaping @Sendable (String) -> Void
+            onProgress: @escaping @Sendable (String) -> Void,
+            onUserCode: (@Sendable (_ code: String, _ verificationURL: URL) async -> Void)? = nil,
+            browser: (any OAuthBrowserPresenter)? = nil,
+            loopback: OAuthLoopbackFactory? = nil
         ) {
             self.onAuthURL = onAuthURL
             self.onProgress = onProgress
+            self.onUserCode = onUserCode
+            self.browser = browser
+            self.loopback = loopback
         }
-    }
-
-    // MARK: - Anthropic
-
-    public static func loginAnthropic(
-        callbacks: Callbacks,
-        client: HTTPClient = URLSessionHTTPClient()
-    ) async throws -> OAuthCredentials {
-        let pkce = PKCE.random()
-        let port: UInt16 = 53692
-        let server = try OAuthCallbackServer(port: port)
-        defer { server.stop() }
-
-        let scope = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
-        let redirect = server.redirectURI
-        var comps = URLComponents(string: "https://claude.ai/oauth/authorize")!
-        comps.queryItems = [
-            URLQueryItem(name: "code", value: "true"),
-            URLQueryItem(name: "client_id", value: "9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
-            URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "redirect_uri", value: redirect),
-            URLQueryItem(name: "scope", value: scope),
-            URLQueryItem(name: "code_challenge", value: pkce.challenge),
-            URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "state", value: pkce.verifier),
-        ]
-
-        callbacks.onAuthURL(comps.url!)
-        callbacks.onProgress("waiting for Anthropic callback on \(redirect)…")
-
-        let params = try await server.waitForCallback()
-        guard let code = params["code"] else {
-            throw OAuthError.invalidResponse("anthropic callback had no code")
-        }
-        let state = params["state"]
-        if let state, state != pkce.verifier {
-            throw OAuthError.invalidResponse("anthropic OAuth state mismatch")
-        }
-
-        callbacks.onProgress("exchanging authorization code…")
-        let body: [String: Any] = [
-            "grant_type": "authorization_code",
-            "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
-            "code": code,
-            "state": state ?? pkce.verifier,
-            "redirect_uri": redirect,
-            "code_verifier": pkce.verifier,
-        ]
-        let response = try await postJSON(
-            url: URL(string: "https://platform.claude.com/v1/oauth/token")!,
-            body: body,
-            client: client
-        )
-        return credentials(from: response, fallbackRefresh: nil)
     }
 
     // MARK: - OpenAI Codex
@@ -90,8 +54,8 @@ public enum OAuthLogin {
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
         let state = PKCE.randomHex()
-        let port: UInt16 = 1455
-        let server = try OAuthCallbackServer(port: port, path: "/auth/callback")
+        // OpenAI registered exactly this redirect for the Codex CLI's client.
+        let server = try await openLoopback(callbacks, port: 1455, path: "/auth/callback")
         defer { server.stop() }
 
         var comps = URLComponents(string: "https://auth.openai.com/oauth/authorize")!
@@ -104,15 +68,17 @@ public enum OAuthLogin {
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state),
         ]
-        callbacks.onAuthURL(comps.url!)
         callbacks.onProgress("waiting for ChatGPT callback on \(server.redirectURI)…")
 
-        let params = try await server.waitForCallback()
-        guard let code = params["code"] else {
-            throw OAuthError.invalidResponse("codex callback had no code")
+        let params = try await present(comps.url!, callbacks: callbacks) {
+            try await server.waitForCallback()
         }
-        if params["state"] != state {
+        try checkCallbackError(params, provider: "codex")
+        guard params["state"] == state else {
             throw OAuthError.invalidResponse("codex OAuth state mismatch")
+        }
+        guard let code = params["code"], !code.isEmpty else {
+            throw OAuthError.invalidResponse("codex callback had no code")
         }
 
         callbacks.onProgress("exchanging authorization code…")
@@ -136,6 +102,11 @@ public enum OAuthLogin {
             throw OAuthError.refreshFailed("codex exchange \(response.statusCode): \(String(data: body, encoding: .utf8) ?? "")")
         }
         let json = try OAuth.decodeTokenResponse(body)
+        // `offline_access` is requested; a grant without a refresh token
+        // would die at its first expiry, so it is refused here.
+        guard let refresh = json.refreshToken, !refresh.isEmpty else {
+            throw OAuthError.invalidResponse("codex token response missing refresh token")
+        }
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         var extras: [String: JSONValue] = [:]
         if let accountId = OpenAICodexOAuthProvider.extractAccountId(fromJWT: json.accessToken) {
@@ -143,7 +114,7 @@ public enum OAuthLogin {
         }
         return OAuthCredentials(
             access: json.accessToken,
-            refresh: json.refreshToken ?? "",
+            refresh: refresh,
             expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
             extras: extras
         )
@@ -171,11 +142,20 @@ public enum OAuthLogin {
             URLQueryItem(name: "mode", value: "login"),
             URLQueryItem(name: "redirectTarget", value: "cli"),
         ]
-        callbacks.onAuthURL(comps.url!)
         callbacks.onProgress("waiting for Cursor browser authentication…")
+        return try await present(comps.url!, callbacks: callbacks) {
+            try await pollCursor(uuid: uuid, verifier: pkce.verifier, client: client)
+        }
+    }
 
-        // Poll with exponential backoff (1s → 10s, ×1.2), up to 150 attempts.
-        // A 404 means "still pending"; 3 consecutive hard errors aborts.
+    /// Polls with exponential backoff (1s → 10s, ×1.2), up to 150 attempts.
+    /// A 404 — or a 200 that carries no token yet — means "still pending";
+    /// 3 consecutive hard errors abort.
+    private static func pollCursor(
+        uuid: String,
+        verifier: String,
+        client: HTTPClient
+    ) async throws -> OAuthCredentials {
         var delayMs: UInt64 = 1000
         let maxDelayMs: UInt64 = 10_000
         var consecutiveErrors = 0
@@ -183,56 +163,56 @@ public enum OAuthLogin {
         for _ in 0..<150 {
             try Task.checkCancellation()
             try await Task.sleep(nanoseconds: delayMs * 1_000_000)
+            delayMs = min(delayMs * 12 / 10, maxDelayMs)
 
             var poll = URLComponents(string: "https://api2.cursor.sh/auth/poll")!
             poll.queryItems = [
                 URLQueryItem(name: "uuid", value: uuid),
-                URLQueryItem(name: "verifier", value: pkce.verifier),
+                URLQueryItem(name: "verifier", value: verifier),
             ]
+            let response: HTTPURLResponse
+            let body: Data
             do {
-                let (response, body) = try await client.request(
+                (response, body) = try await client.request(
                     url: poll.url!, method: "GET",
                     headers: ["accept": "application/json"], body: nil
                 )
-                if response.statusCode == 404 {
-                    consecutiveErrors = 0
-                    delayMs = min(delayMs * 12 / 10, maxDelayMs)
-                    continue
-                }
-                if response.statusCode >= 400 {
-                    consecutiveErrors += 1
-                    if consecutiveErrors >= 3 {
-                        throw OAuthError.refreshFailed("cursor poll \(response.statusCode)")
-                    }
-                    delayMs = min(delayMs * 12 / 10, maxDelayMs)
-                    continue
-                }
-                guard let obj = try JSONSerialization.jsonObject(with: body) as? [String: Any],
-                      let access = obj["accessToken"] as? String, !access.isEmpty else {
-                    // 200 with no token yet — keep polling.
-                    consecutiveErrors = 0
-                    delayMs = min(delayMs * 12 / 10, maxDelayMs)
-                    continue
-                }
-                let refresh = obj["refreshToken"] as? String ?? ""
-                let now = Int64(Date().timeIntervalSince1970 * 1000)
-                return OAuthCredentials(
-                    access: access,
-                    refresh: refresh.isEmpty ? access : refresh,
-                    expires: OAuth.jwtExpiryMillis(access) ?? (now + 60 * 60 * 1000)
-                )
             } catch is CancellationError {
                 throw CancellationError()
-            } catch let error as OAuthError {
-                throw error
             } catch {
                 consecutiveErrors += 1
                 if consecutiveErrors >= 3 {
                     throw OAuthError.transport("cursor auth polling failed: \(error.localizedDescription)")
                 }
+                continue
             }
+            if response.statusCode == 404 {
+                consecutiveErrors = 0
+                continue
+            }
+            if response.statusCode >= 400 {
+                consecutiveErrors += 1
+                if consecutiveErrors >= 3 {
+                    throw OAuthError.refreshFailed("cursor poll \(response.statusCode)")
+                }
+                continue
+            }
+            consecutiveErrors = 0
+            guard let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+                  let access = obj["accessToken"] as? String, !access.isEmpty else {
+                continue
+            }
+            let refresh = obj["refreshToken"] as? String ?? ""
+            let now = Int64(Date().timeIntervalSince1970 * 1000)
+            return OAuthCredentials(
+                access: access,
+                refresh: refresh.isEmpty ? access : refresh,
+                // A token without a JWT `exp` gets an hour, minus the same
+                // 5-minute margin every other expiry carries.
+                expires: OAuth.jwtExpiryMillis(access) ?? (now + 55 * 60 * 1000)
+            )
         }
-        throw OAuthError.transport("cursor authentication timed out")
+        throw OAuthLoginError.timedOut
     }
 
     // MARK: - GitHub Copilot (device flow)
@@ -272,9 +252,21 @@ public enum OAuthLogin {
         }
         let interval = (obj["interval"] as? Int) ?? 5
 
-        callbacks.onAuthURL(verifyURL)
+        await callbacks.onUserCode?(userCode, verifyURL)
         callbacks.onProgress("enter code in your browser: \(userCode)")
+        return try await present(verifyURL, callbacks: callbacks) {
+            try await pollGitHubCopilot(
+                clientID: clientID, deviceCode: deviceCode, interval: interval, client: client
+            )
+        }
+    }
 
+    private static func pollGitHubCopilot(
+        clientID: String,
+        deviceCode: String,
+        interval: Int,
+        client: HTTPClient
+    ) async throws -> OAuthCredentials {
         // Poll for the access token.
         let pollURL = URL(string: "https://github.com/login/oauth/access_token")!
         let deadline = Date().addingTimeInterval(15 * 60)
@@ -324,18 +316,21 @@ public enum OAuthLogin {
     // `auth.kimi.com`: POST `/api/oauth/device_authorization` for a one-time
     // user code, hand the verification URL to the browser, and poll
     // `/api/oauth/token` until the user approves. Mirrors oh-my-pi's
-    // `loginKimi`. Every request carries the `X-Msh-*` device headers.
+    // `loginKimi`. Every request carries the `X-Msh-*` device headers, and
+    // Kimi binds the grant to `X-Msh-Device-Id`: the id is returned in
+    // `extras.deviceId` so whoever refreshes the login sends the same one.
 
     public static func loginKimiCoding(
         clientID: String = KimiOAuth.clientID,
         host: URL = KimiOAuth.host,
-        // Injectable for tests; the default persists one at
-        // `~/.kwwk/kimi-device-id`.
-        deviceId: String? = nil,
+        // The device fingerprint. Nil uses this machine's, with the id
+        // persisted at `~/.kwwk/kimi-device-id`; an app passes its own.
+        identity: KimiDeviceIdentity? = nil,
         callbacks: Callbacks,
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
-        var headers = KimiOAuth.commonHeaders(deviceId: deviceId)
+        let identity = identity ?? .host()
+        var headers = KimiOAuth.commonHeaders(identity: identity)
         headers["accept"] = "application/json"
         headers["content-type"] = "application/x-www-form-urlencoded"
 
@@ -349,82 +344,35 @@ public enum OAuthLogin {
         if deviceResponse.statusCode >= 400 {
             throw OAuthError.refreshFailed("kimi device code \(deviceResponse.statusCode): \(String(data: deviceBody, encoding: .utf8) ?? "")")
         }
-        guard let obj = try JSONSerialization.jsonObject(with: deviceBody) as? [String: Any],
-              let userCode = obj["user_code"] as? String,
-              let deviceCode = obj["device_code"] as? String,
-              let verifyURLString = (obj["verification_uri_complete"] as? String)
-                ?? (obj["verification_uri"] as? String),
-              let verifyURL = URL(string: verifyURLString) else {
-            throw OAuthError.invalidResponse("kimi device code response")
-        }
-        var intervalSec = (obj["interval"] as? Int).flatMap { $0 >= 0 ? $0 : nil } ?? 5
-        let expiresInSec = (obj["expires_in"] as? Int) ?? 15 * 60
+        let grant = try DeviceGrant(deviceBody, provider: "kimi", requireHTTPS: false)
 
-        callbacks.onAuthURL(verifyURL)
-        callbacks.onProgress("enter code in your browser: \(userCode)")
+        var credentials = try await runDeviceFlow(
+            grant,
+            provider: "kimi",
+            tokenURL: host.appendingPathComponent("api/oauth/token"),
+            headers: headers,
+            clientID: clientID,
+            defaultTokenLifetime: 15 * 60,
+            callbacks: callbacks,
+            client: client
+        )
+        credentials.extras["deviceId"] = .string(identity.deviceId)
+        return credentials
+    }
 
-        // Poll for the token until the user approves (or the code expires).
-        // Transient HTTP failures with non-JSON bodies (gateway errors, …)
-        // are retried; only 3 consecutive ones abort the flow, so a blip
-        // can't kill an authorization the user is mid-way through.
-        let pollURL = host.appendingPathComponent("api/oauth/token")
-        let deadline = Date().addingTimeInterval(TimeInterval(expiresInSec))
-        var consecutiveErrors = 0
-        while Date() < deadline {
-            try await Task.sleep(nanoseconds: UInt64(intervalSec) * 1_000_000_000)
-            let (pollResponse, pollBody) = try await client.request(
-                url: pollURL,
-                method: "POST",
-                headers: headers,
-                body: Data(OAuth.urlEncodedForm([
-                    "client_id": clientID,
-                    "device_code": deviceCode,
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                ]).utf8)
-            )
-            guard let polled = try? JSONSerialization.jsonObject(with: pollBody) as? [String: Any] else {
-                if pollResponse.statusCode >= 400 {
-                    consecutiveErrors += 1
-                    if consecutiveErrors >= 3 {
-                        throw OAuthError.refreshFailed("kimi device flow: HTTP \(pollResponse.statusCode)")
-                    }
-                }
-                continue
-            }
-            consecutiveErrors = 0
-            if let err = polled["error"] as? String {
-                switch err {
-                case "authorization_pending":
-                    continue
-                case "slow_down":
-                    intervalSec += 5
-                    if let serverInterval = polled["interval"] as? Int, serverInterval > intervalSec {
-                        intervalSec = serverInterval
-                    }
-                    continue
-                case "expired_token":
-                    throw OAuthError.refreshFailed("kimi device authorization expired")
-                case "access_denied":
-                    throw OAuthError.refreshFailed("kimi device authorization denied")
-                default:
-                    let description = (polled["error_description"] as? String).map { ": \($0)" } ?? ""
-                    throw OAuthError.refreshFailed("kimi device flow: \(err)\(description)")
-                }
-            }
-            if pollResponse.statusCode < 400, let access = polled["access_token"] as? String {
-                guard let refresh = polled["refresh_token"] as? String, !refresh.isEmpty else {
-                    throw OAuthError.invalidResponse("kimi token response missing refresh token")
-                }
-                let expiresIn = (polled["expires_in"] as? Int) ?? 15 * 60
-                let now = Int64(Date().timeIntervalSince1970 * 1000)
-                return OAuthCredentials(
-                    access: access,
-                    refresh: refresh,
-                    expires: now + Int64(expiresIn) * 1000 - 5 * 60 * 1000
-                )
-            }
-        }
-        throw OAuthError.transport("kimi device flow timed out")
+    /// Kept for callers that only pin the device id; the rest of the
+    /// fingerprint is this machine's.
+    public static func loginKimiCoding(
+        clientID: String = KimiOAuth.clientID,
+        host: URL = KimiOAuth.host,
+        deviceId: String?,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        try await loginKimiCoding(
+            clientID: clientID, host: host, identity: .host(deviceId: deviceId),
+            callbacks: callbacks, client: client
+        )
     }
 
     // MARK: - xAI Grok (device flow)
@@ -459,48 +407,122 @@ public enum OAuthLogin {
         if deviceResponse.statusCode >= 400 {
             throw OAuthError.refreshFailed("xai device code \(deviceResponse.statusCode): \(String(data: deviceBody, encoding: .utf8) ?? "")")
         }
-        guard let obj = try JSONSerialization.jsonObject(with: deviceBody) as? [String: Any],
-              let userCode = obj["user_code"] as? String,
-              let deviceCode = obj["device_code"] as? String,
-              let verifyURLString = (obj["verification_uri_complete"] as? String)
-                ?? (obj["verification_uri"] as? String),
-              let verifyURL = URL(string: verifyURLString),
-              // The verification URI is handed to the browser; refuse anything
-              // a malicious response could use to make `open` launch a
-              // non-https handler.
-              verifyURL.scheme == "https" else {
-            throw OAuthError.invalidResponse("xai device code response")
+        // The verification URI is handed to the browser; refuse anything a
+        // malicious response could use to launch a non-https handler.
+        let grant = try DeviceGrant(deviceBody, provider: "xai", requireHTTPS: true)
+
+        return try await runDeviceFlow(
+            grant,
+            provider: "xai",
+            tokenURL: XaiOAuth.tokenURL,
+            headers: headers,
+            clientID: clientID,
+            defaultTokenLifetime: 3600,
+            callbacks: callbacks,
+            client: client
+        )
+    }
+
+    // MARK: - RFC 8628 device grant
+
+    /// The device-authorization answer the user approves against.
+    struct DeviceGrant: Sendable {
+        let userCode: String
+        let deviceCode: String
+        let verificationURL: URL
+        /// Seconds between polls. RFC 8628 allows 0 (no minimum wait); only
+        /// negative or malformed values fall back to the default.
+        let interval: Int
+        let expiresIn: Int
+
+        init(_ body: Data, provider: String, requireHTTPS: Bool) throws {
+            guard let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
+                  let userCode = obj["user_code"] as? String,
+                  let deviceCode = obj["device_code"] as? String,
+                  let verifyURLString = (obj["verification_uri_complete"] as? String)
+                    ?? (obj["verification_uri"] as? String),
+                  let verifyURL = URL(string: verifyURLString),
+                  !requireHTTPS || verifyURL.scheme == "https" else {
+                throw OAuthError.invalidResponse("\(provider) device code response")
+            }
+            self.userCode = userCode
+            self.deviceCode = deviceCode
+            self.verificationURL = verifyURL
+            self.interval = (obj["interval"] as? Int).flatMap { $0 >= 0 ? $0 : nil } ?? 5
+            self.expiresIn = (obj["expires_in"] as? Int) ?? 15 * 60
         }
-        // RFC 8628 allows interval 0 (no minimum wait); reject only negative
-        // or malformed values.
-        var intervalSec = (obj["interval"] as? Int).flatMap { $0 >= 0 ? $0 : nil } ?? 5
-        let expiresInSec = (obj["expires_in"] as? Int) ?? 15 * 60
+    }
 
-        callbacks.onAuthURL(verifyURL)
-        callbacks.onProgress("enter code in your browser: \(userCode)")
-
-        // Poll for the token until the user approves (or the code expires).
-        // Transient HTTP failures with non-JSON bodies (gateway errors, …)
-        // are retried; only 3 consecutive ones abort the flow.
-        let deadline = Date().addingTimeInterval(TimeInterval(expiresInSec))
-        var consecutiveErrors = 0
-        while Date() < deadline {
-            try await Task.sleep(nanoseconds: UInt64(intervalSec) * 1_000_000_000)
-            let (pollResponse, pollBody) = try await client.request(
-                url: XaiOAuth.tokenURL,
-                method: "POST",
+    /// Shows the code, opens the verification page, and polls the token
+    /// endpoint until the user approves, declines or the code expires.
+    static func runDeviceFlow(
+        _ grant: DeviceGrant,
+        provider: String,
+        tokenURL: URL,
+        headers: [String: String],
+        clientID: String,
+        defaultTokenLifetime: Int,
+        callbacks: Callbacks,
+        client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        await callbacks.onUserCode?(grant.userCode, grant.verificationURL)
+        callbacks.onProgress("enter code in your browser: \(grant.userCode)")
+        return try await present(grant.verificationURL, callbacks: callbacks) {
+            try await pollDeviceToken(
+                grant,
+                provider: provider,
+                tokenURL: tokenURL,
                 headers: headers,
-                body: Data(OAuth.urlEncodedForm([
-                    "client_id": clientID,
-                    "device_code": deviceCode,
-                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                ]).utf8)
+                clientID: clientID,
+                defaultTokenLifetime: defaultTokenLifetime,
+                client: client
             )
-            guard let polled = try? JSONSerialization.jsonObject(with: pollBody) as? [String: Any] else {
-                if pollResponse.statusCode >= 400 {
+        }
+    }
+
+    private static func pollDeviceToken(
+        _ grant: DeviceGrant,
+        provider: String,
+        tokenURL: URL,
+        headers: [String: String],
+        clientID: String,
+        defaultTokenLifetime: Int,
+        client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let form = Data(OAuth.urlEncodedForm([
+            "client_id": clientID,
+            "device_code": grant.deviceCode,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+        ]).utf8)
+        let deadline = Date().addingTimeInterval(TimeInterval(grant.expiresIn))
+        var interval = grant.interval
+        // A gateway blip — a thrown request or a non-JSON error page — must
+        // not kill an approval the user is halfway through; only three in a
+        // row give up.
+        var consecutiveErrors = 0
+
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+            let response: HTTPURLResponse
+            let body: Data
+            do {
+                (response, body) = try await client.request(
+                    url: tokenURL, method: "POST", headers: headers, body: form
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                consecutiveErrors += 1
+                if consecutiveErrors >= 3 {
+                    throw OAuthError.transport("\(provider) device flow: \(error.localizedDescription)")
+                }
+                continue
+            }
+            guard let polled = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+                if response.statusCode >= 400 {
                     consecutiveErrors += 1
                     if consecutiveErrors >= 3 {
-                        throw OAuthError.refreshFailed("xai device flow: HTTP \(pollResponse.statusCode)")
+                        throw OAuthError.refreshFailed("\(provider) device flow: HTTP \(response.statusCode)")
                     }
                 }
                 continue
@@ -511,28 +533,28 @@ public enum OAuthLogin {
                 case "authorization_pending":
                     continue
                 case "slow_down":
-                    intervalSec += 5
-                    if let serverInterval = polled["interval"] as? Int, serverInterval > intervalSec {
-                        intervalSec = serverInterval
+                    interval += 5
+                    if let serverInterval = polled["interval"] as? Int, serverInterval > interval {
+                        interval = serverInterval
                     }
                     continue
                 case "expired_token":
-                    throw OAuthError.refreshFailed("xai device authorization expired")
+                    throw OAuthLoginError.timedOut
                 case "access_denied", "authorization_denied":
-                    throw OAuthError.refreshFailed("xai device authorization denied")
+                    throw OAuthLoginError.cancelled
                 default:
                     let description = (polled["error_description"] as? String).map { ": \($0)" } ?? ""
-                    throw OAuthError.refreshFailed("xai device flow: \(err)\(description)")
+                    throw OAuthLoginError.denied("\(provider) \(err)\(description)")
                 }
             }
-            if pollResponse.statusCode < 400, let access = polled["access_token"] as? String {
-                // `offline_access` is in the requested scope, so the initial
-                // grant must carry a refresh token — without one the login
-                // would silently die at first expiry.
+            if response.statusCode < 400, let access = polled["access_token"] as? String {
+                // `offline_access` is in the requested scope, so the grant
+                // must carry a refresh token — without one the login would
+                // silently die at first expiry.
                 guard let refresh = polled["refresh_token"] as? String, !refresh.isEmpty else {
-                    throw OAuthError.invalidResponse("xai token response missing refresh token")
+                    throw OAuthError.invalidResponse("\(provider) token response missing refresh token")
                 }
-                let expiresIn = (polled["expires_in"] as? Int) ?? 3600
+                let expiresIn = (polled["expires_in"] as? Int) ?? defaultTokenLifetime
                 let now = Int64(Date().timeIntervalSince1970 * 1000)
                 return OAuthCredentials(
                     access: access,
@@ -541,7 +563,7 @@ public enum OAuthLogin {
                 )
             }
         }
-        throw OAuthError.transport("xai device flow timed out")
+        throw OAuthLoginError.timedOut
     }
 
     // MARK: - OpenRouter (PKCE callback flow)
@@ -559,7 +581,7 @@ public enum OAuthLogin {
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
-        let server = try OAuthCallbackServer(port: port)
+        let server = try await openLoopback(callbacks, port: port)
         defer { server.stop() }
 
         var comps = URLComponents(url: OpenRouterOAuth.authorizeURL, resolvingAgainstBaseURL: false)!
@@ -568,10 +590,12 @@ public enum OAuthLogin {
             URLQueryItem(name: "code_challenge", value: pkce.challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
         ]
-        callbacks.onAuthURL(comps.url!)
         callbacks.onProgress("waiting for OpenRouter callback on \(server.redirectURI)…")
 
-        let params = try await server.waitForCallback()
+        let params = try await present(comps.url!, callbacks: callbacks) {
+            try await server.waitForCallback()
+        }
+        try checkCallbackError(params, provider: "openrouter")
         guard let code = params["code"], !code.isEmpty else {
             throw OAuthError.invalidResponse("openrouter callback had no code")
         }
@@ -613,9 +637,12 @@ public enum OAuthLogin {
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
         let state = UUID().uuidString.lowercased()
-        let server = try OAuthCallbackServer(port: port, path: DevinOAuth.callbackPath)
+        // Devin registered the numeric loopback host, not `localhost`.
+        let server = try await openLoopback(
+            callbacks, host: DevinOAuth.callbackHost, port: port, path: DevinOAuth.callbackPath
+        )
         defer { server.stop() }
-        let redirectURI = "http://\(DevinOAuth.callbackHost):\(port)\(DevinOAuth.callbackPath)"
+        let redirectURI = server.redirectURI
 
         var comps = URLComponents(url: DevinOAuth.authorizeURL, resolvingAgainstBaseURL: false)!
         comps.queryItems = [
@@ -626,15 +653,13 @@ public enum OAuthLogin {
             URLQueryItem(name: "state", value: state),
             URLQueryItem(name: "prompt", value: "select_account"),
         ]
-        callbacks.onAuthURL(comps.url!)
         callbacks.onProgress("Sign in to Devin in your browser — waiting for the callback on \(redirectURI)…")
 
-        let params = try await server.waitForCallback()
-        if let error = params["error"], !error.isEmpty {
-            let description = params["error_description"].map { ": \($0)" } ?? ""
-            throw OAuthError.invalidResponse("devin authorization failed: \(error)\(description)")
+        let params = try await present(comps.url!, callbacks: callbacks) {
+            try await server.waitForCallback()
         }
-        if let returned = params["state"], returned != state {
+        try checkCallbackError(params, provider: "devin")
+        guard params["state"] == state else {
             throw OAuthError.invalidResponse("devin callback state mismatch")
         }
         guard let code = params["code"], !code.isEmpty else {
@@ -662,7 +687,7 @@ public enum OAuthLogin {
         return OAuthCredentials(
             access: token,
             refresh: "",
-            expires: OAuth.jwtExpiryMillis(token) ?? (now + DevinOAuth.fallbackLifetimeMs),
+            expires: OAuth.jwtExpiryMillis(token) ?? (now + DevinOAuth.fallbackLifetimeMs - 5 * 60 * 1000),
             extras: [
                 "apiEndpoint": .string(DevinOAuth.apiEndpoint),
                 "enterpriseUrl": .string(DevinOAuth.enterpriseURL),
@@ -687,7 +712,7 @@ public enum OAuthLogin {
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         let state = PKCE.randomHex()
-        let server = try OAuthCallbackServer(port: port)
+        let server = try await openLoopback(callbacks, port: port)
         defer { server.stop() }
         let redirect = server.redirectURI
 
@@ -698,10 +723,12 @@ public enum OAuthLogin {
             URLQueryItem(name: "client_id", value: clientID),
             URLQueryItem(name: "state", value: state),
         ]
-        callbacks.onAuthURL(comps.url!)
         callbacks.onProgress("waiting for Z.AI callback on \(redirect)…")
 
-        let params = try await server.waitForCallback()
+        let params = try await present(comps.url!, callbacks: callbacks) {
+            try await server.waitForCallback()
+        }
+        try checkCallbackError(params, provider: "zai")
         guard let code = params["code"], !code.isEmpty else {
             throw OAuthError.invalidResponse("zai callback had no code")
         }
@@ -868,7 +895,7 @@ public enum OAuthLogin {
 
     // MARK: - JSON helpers
 
-    private static func postJSON(
+    package static func postJSON(
         url: URL,
         body: [String: Any],
         client: HTTPClient
@@ -886,7 +913,7 @@ public enum OAuthLogin {
         return try OAuth.decodeTokenResponse(responseBody)
     }
 
-    private static func credentials(
+    package static func credentials(
         from response: OAuth.TokenResponse,
         fallbackRefresh: String?
     ) -> OAuthCredentials {

@@ -1,50 +1,5 @@
 import Foundation
 
-// MARK: - Anthropic
-
-public struct AnthropicOAuthProvider: OAuthProvider {
-    public let id = "anthropic"
-    public let name = "Anthropic (Claude Pro/Max)"
-    public let tokenURL: URL
-    public let clientID: String
-
-    public init(
-        tokenURL: URL = URL(string: "https://platform.claude.com/v1/oauth/token")!,
-        clientID: String = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-    ) {
-        self.tokenURL = tokenURL
-        self.clientID = clientID
-    }
-
-    public func refresh(
-        _ credentials: OAuthCredentials, using client: HTTPClient
-    ) async throws -> OAuthCredentials {
-        let body: [String: Any] = [
-            "grant_type": "refresh_token",
-            "client_id": clientID,
-            "refresh_token": credentials.refresh,
-        ]
-        let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let (response, responseBody) = try await client.request(
-            url: tokenURL, method: "POST",
-            headers: ["content-type": "application/json", "accept": "application/json"],
-            body: bodyData
-        )
-        if response.statusCode >= 400 {
-            let bodyText = String(data: responseBody, encoding: .utf8) ?? ""
-            throw OAuthError.refreshFailed("anthropic \(response.statusCode): \(bodyText)")
-        }
-        let json = try OAuth.decodeTokenResponse(responseBody)
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        return OAuthCredentials(
-            access: json.accessToken,
-            refresh: json.refreshToken ?? credentials.refresh,
-            expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
-            extras: credentials.extras
-        )
-    }
-}
-
 // MARK: - OpenAI Codex
 
 public struct OpenAICodexOAuthProvider: OAuthProvider {
@@ -69,19 +24,18 @@ public struct OpenAICodexOAuthProvider: OAuthProvider {
             "refresh_token": credentials.refresh,
             "client_id": clientID,
         ])
-        let (response, responseBody) = try await client.request(
-            url: tokenURL, method: "POST",
-            headers: [
-                "content-type": "application/x-www-form-urlencoded",
-                "accept": "application/json",
-            ],
-            body: Data(form.utf8)
-        )
-        if response.statusCode >= 400 {
-            let bodyText = String(data: responseBody, encoding: .utf8) ?? ""
-            throw OAuthError.refreshFailed("openai-codex \(response.statusCode): \(bodyText)")
+        let (response, responseBody) = try await OAuthRefreshError.request(provider: id) {
+            try await client.request(
+                url: tokenURL, method: "POST",
+                headers: [
+                    "content-type": "application/x-www-form-urlencoded",
+                    "accept": "application/json",
+                ],
+                body: Data(form.utf8)
+            )
         }
-        let json = try OAuth.decodeTokenResponse(responseBody)
+        try OAuthRefreshError.check(provider: id, response: response, body: responseBody)
+        let json = try OAuthRefreshError.decodeToken(provider: id, responseBody)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         var extras = credentials.extras
         if let accountId = Self.extractAccountId(fromJWT: json.accessToken) {
@@ -97,7 +51,7 @@ public struct OpenAICodexOAuthProvider: OAuthProvider {
 
     /// Extract the ChatGPT account id from the access token JWT claim. Codex
     /// requests route by account id, so we cache it on refresh.
-    static func extractAccountId(fromJWT token: String) -> String? {
+    public static func extractAccountId(fromJWT token: String) -> String? {
         let parts = token.split(separator: ".")
         guard parts.count >= 2 else { return nil }
         let payload = String(parts[1])
@@ -112,7 +66,7 @@ public struct OpenAICodexOAuthProvider: OAuthProvider {
         }
         // Claim path used by pi: "https://api.openai.com/auth".chatgpt_account_id
         if let claim = obj["https://api.openai.com/auth"] as? [String: Any],
-           let id = claim["chatgpt_account_id"] as? String {
+           let id = claim["chatgpt_account_id"] as? String, !id.isEmpty {
             return id
         }
         return nil
@@ -205,21 +159,23 @@ public struct CursorOAuthProvider: OAuthProvider {
     public func refresh(
         _ credentials: OAuthCredentials, using client: HTTPClient
     ) async throws -> OAuthCredentials {
-        let (response, body) = try await client.request(
-            url: refreshURL, method: "POST",
-            headers: [
-                "authorization": "Bearer \(credentials.refresh)",
-                "content-type": "application/json",
-            ],
-            body: Data("{}".utf8)
-        )
-        if response.statusCode >= 400 {
-            let text = String(data: body, encoding: .utf8) ?? ""
-            throw OAuthError.refreshFailed("cursor \(response.statusCode): \(text)")
+        let (response, body) = try await OAuthRefreshError.request(provider: id) {
+            try await client.request(
+                url: refreshURL, method: "POST",
+                headers: [
+                    "authorization": "Bearer \(credentials.refresh)",
+                    "content-type": "application/json",
+                ],
+                body: Data("{}".utf8)
+            )
         }
-        guard let obj = try JSONSerialization.jsonObject(with: body) as? [String: Any],
+        try OAuthRefreshError.check(provider: id, response: response, body: body)
+        guard let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
               let access = obj["accessToken"] as? String, !access.isEmpty else {
-            throw OAuthError.invalidResponse("cursor refresh missing accessToken")
+            throw OAuthRefreshError(
+                providerId: id, kind: .unavailable, status: response.statusCode,
+                detail: "cursor refresh missing accessToken"
+            )
         }
         let newRefresh: String = {
             if let r = obj["refreshToken"] as? String, !r.isEmpty { return r }
@@ -268,45 +224,89 @@ public struct KimiCodingOAuthProvider: OAuthProvider {
     public let name = "Kimi For Coding"
     public let tokenURL: URL
     public let clientID: String
-    /// Injectable for tests; the default persists one at
+    /// The fingerprint sent when the credentials don't name their own device
+    /// id. Nil uses this machine's, with the id persisted at
     /// `~/.kwwk/kimi-device-id`.
-    public let deviceId: String?
+    public let identity: KimiDeviceIdentity?
 
     public init(
         tokenURL: URL = URL(string: "https://auth.kimi.com/api/oauth/token")!,
         clientID: String = KimiOAuth.clientID,
-        deviceId: String? = nil
+        identity: KimiDeviceIdentity? = nil
     ) {
         self.tokenURL = tokenURL
         self.clientID = clientID
-        self.deviceId = deviceId
+        self.identity = identity
+    }
+
+    /// Kept for callers that only pin the id.
+    public init(
+        tokenURL: URL = URL(string: "https://auth.kimi.com/api/oauth/token")!,
+        clientID: String = KimiOAuth.clientID,
+        deviceId: String?
+    ) {
+        self.init(tokenURL: tokenURL, clientID: clientID, identity: deviceId.map { .host(deviceId: $0) })
     }
 
     public func refresh(
         _ credentials: OAuthCredentials, using client: HTTPClient
     ) async throws -> OAuthCredentials {
+        // Kimi binds the grant to the device id it was approved on, so the
+        // id the login recorded wins over this provider's default; a login
+        // that recorded none gets the default written back, so every later
+        // refresh — wherever it runs — sends the same one.
+        var identity = identity ?? .host()
+        if case .string(let recorded)? = credentials.extras["deviceId"], !recorded.isEmpty {
+            identity.deviceId = recorded
+        }
         let form = OAuth.urlEncodedForm([
             "grant_type": "refresh_token",
             "refresh_token": credentials.refresh,
             "client_id": clientID,
         ])
-        var headers = KimiOAuth.commonHeaders(deviceId: deviceId)
+        var headers = KimiOAuth.commonHeaders(identity: identity)
         headers["content-type"] = "application/x-www-form-urlencoded"
         headers["accept"] = "application/json"
-        let (response, body) = try await client.request(
-            url: tokenURL, method: "POST", headers: headers, body: Data(form.utf8)
-        )
-        if response.statusCode >= 400 {
-            let text = String(data: body, encoding: .utf8) ?? ""
-            throw OAuthError.refreshFailed("kimi-coding \(response.statusCode): \(text)")
+        let (response, body) = try await OAuthRefreshError.request(provider: id) {
+            try await client.request(url: tokenURL, method: "POST", headers: headers, body: Data(form.utf8))
         }
-        let json = try OAuth.decodeTokenResponse(body)
+        try OAuthRefreshError.check(provider: id, response: response, body: body)
+        let json = try OAuthRefreshError.decodeToken(provider: id, body)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
+        var extras = credentials.extras
+        extras["deviceId"] = .string(identity.deviceId)
         return OAuthCredentials(
             access: json.accessToken,
             refresh: json.refreshToken ?? credentials.refresh,
             expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
-            extras: credentials.extras
+            extras: extras
+        )
+    }
+}
+
+/// The device fingerprint Kimi's endpoints check on every login and refresh
+/// (`X-Msh-Device-*`). A refresh must present the device id its login did.
+public struct KimiDeviceIdentity: Sendable, Equatable {
+    public var deviceId: String
+    public var deviceName: String
+    public var deviceModel: String
+    public var osVersion: String
+
+    public init(deviceId: String, deviceName: String, deviceModel: String, osVersion: String) {
+        self.deviceId = deviceId
+        self.deviceName = deviceName
+        self.deviceModel = deviceModel
+        self.osVersion = osVersion
+    }
+
+    /// This machine: its host name, OS and CPU, and `deviceId` — or, when
+    /// nil, the id persisted at `~/.kwwk/kimi-device-id`.
+    public static func host(deviceId: String? = nil) -> KimiDeviceIdentity {
+        KimiDeviceIdentity(
+            deviceId: deviceId ?? KimiOAuth.persistentDeviceId(),
+            deviceName: ProcessInfo.processInfo.hostName,
+            deviceModel: KimiOAuth.deviceModel(),
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString
         )
     }
 }
@@ -326,14 +326,19 @@ public enum KimiOAuth {
     /// the default persists a random id at `~/.kwwk/kimi-device-id` so the
     /// device fingerprint is stable across logins.
     public static func commonHeaders(deviceId: String? = nil) -> [String: String] {
+        commonHeaders(identity: .host(deviceId: deviceId))
+    }
+
+    /// Headers for Kimi OAuth endpoints, carrying `identity`.
+    public static func commonHeaders(identity: KimiDeviceIdentity) -> [String: String] {
         [
             "User-Agent": "KimiCLI/\(cliVersion)",
             "X-Msh-Platform": "kimi_cli",
             "X-Msh-Version": cliVersion,
-            "X-Msh-Device-Name": sanitized(ProcessInfo.processInfo.hostName),
-            "X-Msh-Device-Model": sanitized(deviceModel()),
-            "X-Msh-Os-Version": sanitized(ProcessInfo.processInfo.operatingSystemVersionString),
-            "X-Msh-Device-Id": sanitized(deviceId ?? persistentDeviceId()),
+            "X-Msh-Device-Name": sanitized(identity.deviceName),
+            "X-Msh-Device-Model": sanitized(identity.deviceModel),
+            "X-Msh-Os-Version": sanitized(identity.osVersion),
+            "X-Msh-Device-Id": sanitized(identity.deviceId),
         ]
     }
 
@@ -347,9 +352,11 @@ public enum KimiOAuth {
         return result.isEmpty ? "unknown" : result
     }
 
-    private static func deviceModel() -> String {
+    static func deviceModel() -> String {
         #if os(macOS)
         let system = "macOS"
+        #elseif os(iOS)
+        let system = "iOS"
         #elseif os(Linux)
         let system = "Linux"
         #else
@@ -375,7 +382,7 @@ public enum KimiOAuth {
 
     /// Read (or create, 0600) the stable device id beside the OAuth store.
     /// Best-effort: an unwritable directory falls back to one id per process.
-    static func persistentDeviceId(
+    package static func persistentDeviceId(
         at url: URL = OAuthStore.defaultURL()
             .deletingLastPathComponent()
             .appendingPathComponent("kimi-device-id")
@@ -434,19 +441,18 @@ public struct XaiOAuthProvider: OAuthProvider {
             "refresh_token": credentials.refresh,
             "client_id": clientID,
         ])
-        let (response, body) = try await client.request(
-            url: tokenURL, method: "POST",
-            headers: [
-                "content-type": "application/x-www-form-urlencoded",
-                "accept": "application/json",
-            ],
-            body: Data(form.utf8)
-        )
-        if response.statusCode >= 400 {
-            let text = String(data: body, encoding: .utf8) ?? ""
-            throw OAuthError.refreshFailed("xai \(response.statusCode): \(text)")
+        let (response, body) = try await OAuthRefreshError.request(provider: id) {
+            try await client.request(
+                url: tokenURL, method: "POST",
+                headers: [
+                    "content-type": "application/x-www-form-urlencoded",
+                    "accept": "application/json",
+                ],
+                body: Data(form.utf8)
+            )
         }
-        let json = try OAuth.decodeTokenResponse(body)
+        try OAuthRefreshError.check(provider: id, response: response, body: body)
+        let json = try OAuthRefreshError.decodeToken(provider: id, body)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         return OAuthCredentials(
             access: json.accessToken,
@@ -514,11 +520,11 @@ public enum ZaiOAuth {
 
 // MARK: - Helpers
 
-enum OAuth {
+package enum OAuth {
     /// Decode a JWT's `exp` claim (Unix seconds) into an expiry in Unix
     /// milliseconds, subtracting a 5-minute safety margin so callers refresh
     /// slightly early. Returns nil for non-JWT / unparseable tokens.
-    static func jwtExpiryMillis(_ token: String) -> Int64? {
+    package static func jwtExpiryMillis(_ token: String) -> Int64? {
         let parts = token.split(separator: ".")
         guard parts.count == 3 else { return nil }
         var payload = String(parts[1])
@@ -537,11 +543,11 @@ enum OAuth {
         return Int64(exp * 1000) - 5 * 60 * 1000
     }
 
-    struct TokenResponse: Decodable {
-        let accessToken: String
-        let refreshToken: String?
-        let expiresIn: Int
-        let scope: String?
+    package struct TokenResponse: Decodable {
+        package let accessToken: String
+        package let refreshToken: String?
+        package let expiresIn: Int
+        package let scope: String?
 
         enum CodingKeys: String, CodingKey {
             case accessToken = "access_token"
@@ -553,7 +559,7 @@ enum OAuth {
         /// `expires_in` is optional per RFC 6749 §4.2.2 and xAI omits it when
         /// the lifetime is the default; fall back to one hour rather than
         /// failing the whole token decode.
-        init(from decoder: Decoder) throws {
+        package init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             accessToken = try c.decode(String.self, forKey: .accessToken)
             refreshToken = try c.decodeIfPresent(String.self, forKey: .refreshToken)
@@ -562,7 +568,7 @@ enum OAuth {
         }
     }
 
-    static func decodeTokenResponse(_ data: Data) throws -> TokenResponse {
+    package static func decodeTokenResponse(_ data: Data) throws -> TokenResponse {
         do {
             return try JSONDecoder().decode(TokenResponse.self, from: data)
         } catch {
@@ -571,7 +577,7 @@ enum OAuth {
         }
     }
 
-    static func urlEncodedForm(_ params: [String: String]) -> String {
+    package static func urlEncodedForm(_ params: [String: String]) -> String {
         params.keys.sorted().map { key -> String in
             let v = params[key] ?? ""
             let encKey = key.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? key

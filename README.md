@@ -186,6 +186,11 @@ Then depend on the libraries you need:
 - **`KWWKAI`** — model clients, provider registry, streaming, OAuth,
   message / tool types.
 - **`KWWKAgent`** — the turn/tool loop, built-in coding tools, hooks.
+- **`KWWKAuth`** — provider sign-in, token refresh and subscription usage
+  alone, with no NIO or image stack: for an app or a server that needs the
+  vendor wire protocols but not the agent runtime. `KWWKAI` re-exports it.
+  Redirect sign-ins take the host's loopback listener and browser presenter
+  through `OAuthLogin.Callbacks` (the CLI passes `OAuthLogin.nioLoopback`).
 
 The SDK does not read `~/.kwwk` or process environment variables by
 default. Pass credentials, session stores, context files, and skill

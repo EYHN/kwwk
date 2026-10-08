@@ -14,6 +14,14 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     public let path: String
     public let successHTML: String
     public let errorHTML: String
+    /// The host named in `redirectURI`. The listener binds 127.0.0.1 either
+    /// way; a provider that registered the numeric host (Devin) needs it
+    /// spelled that way in the authorize request.
+    public let redirectHost: String
+    /// Resolve a redirect that carries `error=` with its parameters, so the
+    /// flow can tell a user's "deny" from a failure. Off keeps the original
+    /// behavior: such a redirect throws `OAuthError.invalidResponse`.
+    public let surfacesProviderErrors: Bool
 
     private let group: MultiThreadedEventLoopGroup
     private let lock = NSLock()
@@ -32,12 +40,16 @@ public final class OAuthCallbackServer: @unchecked Sendable {
         port: UInt16,
         path: String = "/callback",
         successHTML: String = OAuthCallbackServer.defaultSuccessHTML,
-        errorHTML: String = OAuthCallbackServer.defaultErrorHTML
+        errorHTML: String = OAuthCallbackServer.defaultErrorHTML,
+        redirectHost: String = "localhost",
+        surfacesProviderErrors: Bool = false
     ) throws {
         self.port = port
         self.path = path
         self.successHTML = successHTML
         self.errorHTML = errorHTML
+        self.redirectHost = redirectHost
+        self.surfacesProviderErrors = surfacesProviderErrors
         self.group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     }
 
@@ -51,7 +63,7 @@ public final class OAuthCallbackServer: @unchecked Sendable {
     }
 
     public var redirectURI: String {
-        "http://localhost:\(port)\(path)"
+        "http://\(redirectHost):\(port)\(path)"
     }
 
     /// Start listening. Idempotent.
@@ -252,7 +264,11 @@ private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable 
         }
         if let err = params["error"] {
             write(context: context, status: .badRequest, html: server.errorHTMLFilled(err))
-            server.resolveError(.invalidResponse(err))
+            if server.surfacesProviderErrors {
+                server.resolveSuccess(params)
+            } else {
+                server.resolveError(.invalidResponse(err))
+            }
             return
         }
         // Only a request that actually carries the authorization `code`
@@ -290,5 +306,22 @@ private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable 
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
         context.close(promise: nil)
+    }
+}
+
+// MARK: - Loopback for `OAuthLogin`
+
+extension OAuthCallbackServer: OAuthLoopbackListener {
+    public func listen() async throws {
+        try await startAsync()
+    }
+}
+
+extension OAuthLogin {
+    /// The NIO-backed listener the CLI hands every redirect flow.
+    public static let nioLoopback: OAuthLoopbackFactory = { host, port, path in
+        try OAuthCallbackServer(
+            port: port, path: path, redirectHost: host, surfacesProviderErrors: true
+        )
     }
 }

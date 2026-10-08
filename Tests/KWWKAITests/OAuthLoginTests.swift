@@ -239,7 +239,7 @@ struct OAuthLoginShapeTests {
             status: 400,
             body: #"{"error":"access_denied"}"#
         ))
-        await #expect(throws: OAuthError.self) {
+        await #expect(throws: OAuthLoginError.cancelled) {
             _ = try await OAuthLogin.loginKimiCoding(
                 clientID: "test-client",
                 deviceId: "test-device",
@@ -330,7 +330,7 @@ struct OAuthLoginShapeTests {
             status: 400,
             body: #"{"error":"authorization_denied"}"#
         ))
-        await #expect(throws: OAuthError.self) {
+        await #expect(throws: OAuthLoginError.cancelled) {
             _ = try await OAuthLogin.loginXai(
                 clientID: "test-client",
                 callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
@@ -403,7 +403,8 @@ struct OAuthLoginShapeTests {
                     authURL.set(url)
                     self.fireCallback(port: port, query: "code=OR-CODE")
                 },
-                onProgress: { _ in }
+                onProgress: { _ in },
+                loopback: OAuthLogin.nioLoopback
             ),
             client: client
         )
@@ -442,7 +443,8 @@ struct OAuthLoginShapeTests {
                 port: port,
                 callbacks: OAuthLogin.Callbacks(
                     onAuthURL: { _ in self.fireCallback(port: port, query: "code=OR-CODE") },
-                    onProgress: { _ in }
+                    onProgress: { _ in },
+                    loopback: OAuthLogin.nioLoopback
                 ),
                 client: client
             )
@@ -494,7 +496,8 @@ struct OAuthLoginShapeTests {
                     authURL.set(url)
                     self.fireZaiCallback(port: port, authURL: url, code: "ZAI-CODE")
                 },
-                onProgress: { _ in }
+                onProgress: { _ in },
+                loopback: OAuthLogin.nioLoopback
             ),
             client: client
         )
@@ -574,7 +577,8 @@ struct OAuthLoginShapeTests {
             port: port,
             callbacks: OAuthLogin.Callbacks(
                 onAuthURL: { url in self.fireZaiCallback(port: port, authURL: url, code: "C") },
-                onProgress: { _ in }
+                onProgress: { _ in },
+                loopback: OAuthLogin.nioLoopback
             ),
             client: client
         )
@@ -594,7 +598,8 @@ struct OAuthLoginShapeTests {
                 port: port,
                 callbacks: OAuthLogin.Callbacks(
                     onAuthURL: { url in self.fireZaiCallback(port: port, authURL: url, code: "C") },
-                    onProgress: { _ in }
+                    onProgress: { _ in },
+                    loopback: OAuthLogin.nioLoopback
                 ),
                 client: client
             )
@@ -612,7 +617,8 @@ struct OAuthLoginShapeTests {
                 port: port,
                 callbacks: OAuthLogin.Callbacks(
                     onAuthURL: { _ in self.fireCallback(port: port, query: "code=C&state=WRONG") },
-                    onProgress: { _ in }
+                    onProgress: { _ in },
+                    loopback: OAuthLogin.nioLoopback
                 ),
                 client: client
             )

@@ -9,6 +9,11 @@ let package = Package(
         .macCatalyst(.v17),
     ],
     products: [
+        // Provider sign-in, token refresh and subscription usage with no
+        // NIO or image stack behind it, for apps (AirBuild's iOS/Mac client,
+        // its backend) that need the vendor wire knowledge but not the agent
+        // runtime. KWWKAI re-exports it, so `import KWWKAI` sees all of it.
+        .library(name: "KWWKAuth", targets: ["KWWKAuth"]),
         .library(name: "KWWKAI", targets: ["KWWKAI"]),
         .library(name: "KWWKAgent", targets: ["KWWKAgent"]),
         .library(name: "KWWKCli", targets: ["KWWKCli"]),
@@ -42,8 +47,16 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "KWWKAuth",
+            dependencies: [
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            path: "Sources/KWWKAuth"
+        ),
+        .target(
             name: "KWWKAI",
             dependencies: [
+                "KWWKAuth",
                 // Apple platforms use the SDK's own `zlib` module (swift-nio
                 // already loads it); the vendored headers would collide with
                 // it inside one module graph. Linux has no SDK module.
@@ -106,8 +119,13 @@ let package = Package(
             path: "Scripts/GenerateDevinModels"
         ),
         .testTarget(
+            name: "KWWKAuthTests",
+            dependencies: ["KWWKAuth"],
+            path: "Tests/KWWKAuthTests"
+        ),
+        .testTarget(
             name: "KWWKAITests",
-            dependencies: ["KWWKAI", "KWWKGenerateModelsCore"],
+            dependencies: ["KWWKAI", "KWWKAuth", "KWWKGenerateModelsCore"],
             path: "Tests/KWWKAITests"
         ),
         .testTarget(
