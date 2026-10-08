@@ -152,7 +152,7 @@ struct OAuthLoginShapeTests {
         let authURL = CapturedURL()
         let creds = try await OAuthLogin.loginKimiCoding(
             clientID: "test-client",
-            deviceId: "test-device",
+            identity: .host(deviceId: "test-device"),
             callbacks: OAuthLogin.Callbacks(
                 onAuthURL: { authURL.set($0) },
                 onProgress: { _ in }
@@ -199,7 +199,7 @@ struct OAuthLoginShapeTests {
         ))
         let creds = try await OAuthLogin.loginKimiCoding(
             clientID: "test-client",
-            deviceId: "test-device",
+            identity: .host(deviceId: "test-device"),
             callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
             client: client
         )
@@ -220,7 +220,7 @@ struct OAuthLoginShapeTests {
         await #expect(throws: OAuthError.self) {
             _ = try await OAuthLogin.loginKimiCoding(
                 clientID: "test-client",
-                deviceId: "test-device",
+                identity: .host(deviceId: "test-device"),
                 callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
                 client: client
             )
@@ -242,7 +242,7 @@ struct OAuthLoginShapeTests {
         await #expect(throws: OAuthLoginError.cancelled) {
             _ = try await OAuthLogin.loginKimiCoding(
                 clientID: "test-client",
-                deviceId: "test-device",
+                identity: .host(deviceId: "test-device"),
                 callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
                 client: client
             )
@@ -263,7 +263,7 @@ struct OAuthLoginShapeTests {
         await #expect(throws: OAuthError.self) {
             _ = try await OAuthLogin.loginKimiCoding(
                 clientID: "test-client",
-                deviceId: "test-device",
+                identity: .host(deviceId: "test-device"),
                 callbacks: OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in }),
                 client: client
             )

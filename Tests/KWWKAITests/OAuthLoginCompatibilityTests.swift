@@ -13,8 +13,7 @@ struct OAuthLoginCompatibilityTests {
     ])
     func defaultLoopback(host: String, port: UInt16, path: String) async throws {
         let callbacks = KWWKAI.OAuthLogin.Callbacks(onAuthURL: { _ in }, onProgress: { _ in })
-        let factory = try #require(callbacks.loopback)
-        let listener = try factory(host, port, path)
+        let listener = try callbacks.loopback(host, port, path)
         defer { listener.stop() }
         #expect(listener.redirectURI == "http://\(host):\(port)\(path)")
         try await listener.listen()
@@ -37,22 +36,10 @@ struct OAuthLoginCompatibilityTests {
                 )
             }
         )
-        let factory = try #require(callbacks.loopback)
-        let listener = try factory("127.0.0.1", 53994, "/custom")
+        let listener = try callbacks.loopback("127.0.0.1", 53994, "/custom")
         defer { listener.stop() }
         let server = try #require(listener as? OAuthCallbackServer)
         #expect(server.successHTML == "custom")
         #expect(server.redirectURI == "http://127.0.0.1:53994/custom")
-    }
-
-    @Test("An explicit nil still opts out of the default listener")
-    func explicitNil() async throws {
-        let callbacks = OAuthLogin.Callbacks(
-            onAuthURL: { _ in }, onProgress: { _ in }, loopback: nil
-        )
-        #expect(callbacks.loopback == nil)
-        await #expect(throws: OAuthLoginError.noLoopbackListener) {
-            _ = try await OAuthLogin.loginOpenAICodex(callbacks: callbacks)
-        }
     }
 }

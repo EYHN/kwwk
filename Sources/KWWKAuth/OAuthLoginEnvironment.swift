@@ -52,15 +52,12 @@ public enum OAuthLoginError: Error, LocalizedError, Equatable, Sendable {
     case timedOut
     /// The provider refused the authorization for a reason of its own.
     case denied(String)
-    /// A redirect flow ran without a loopback listener to receive it.
-    case noLoopbackListener
 
     public var errorDescription: String? {
         switch self {
         case .cancelled: "sign-in was cancelled"
         case .timedOut: "sign-in timed out before it was approved"
         case .denied(let reason): "the provider refused the sign-in: \(reason)"
-        case .noLoopbackListener: "this sign-in needs a loopback listener and none was configured"
         }
     }
 }
@@ -88,10 +85,7 @@ extension OAuthLogin {
         port: UInt16,
         path: String = "/callback"
     ) async throws -> any OAuthLoopbackListener {
-        guard let loopback = callbacks.loopback else {
-            throw OAuthLoginError.noLoopbackListener
-        }
-        let listener = try loopback(host, port, path)
+        let listener = try callbacks.loopback(host, port, path)
         do {
             try await listener.listen()
         } catch {

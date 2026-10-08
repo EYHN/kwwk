@@ -1,5 +1,44 @@
 import Foundation
 
+// MARK: - Anthropic
+
+public struct AnthropicOAuthProvider: OAuthProvider {
+    public let id = "anthropic"
+    public let name = "Anthropic (Claude Pro/Max)"
+    public let tokenURL: URL
+    public let clientID: String
+
+    public init(
+        tokenURL: URL = URL(string: "https://platform.claude.com/v1/oauth/token")!,
+        clientID: String = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    ) {
+        self.tokenURL = tokenURL
+        self.clientID = clientID
+    }
+
+    public func refresh(
+        _ credentials: OAuthCredentials, using client: HTTPClient
+    ) async throws -> OAuthCredentials {
+        let body: [String: Any] = [
+            "grant_type": "refresh_token",
+            "client_id": clientID,
+            "refresh_token": credentials.refresh,
+        ]
+        let json = try await OAuthRefreshError.postForToken(
+            provider: id, url: tokenURL,
+            headers: ["content-type": "application/json", "accept": "application/json"],
+            body: try JSONSerialization.data(withJSONObject: body), client: client
+        )
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        return OAuthCredentials(
+            access: json.accessToken,
+            refresh: json.refreshToken ?? credentials.refresh,
+            expires: now + Int64(json.expiresIn * 1000) - 5 * 60 * 1000,
+            extras: credentials.extras
+        )
+    }
+}
+
 // MARK: - OpenAI Codex
 
 public struct OpenAICodexOAuthProvider: OAuthProvider {
@@ -24,18 +63,11 @@ public struct OpenAICodexOAuthProvider: OAuthProvider {
             "refresh_token": credentials.refresh,
             "client_id": clientID,
         ])
-        let (response, responseBody) = try await OAuthRefreshError.request(provider: id) {
-            try await client.request(
-                url: tokenURL, method: "POST",
-                headers: [
-                    "content-type": "application/x-www-form-urlencoded",
-                    "accept": "application/json",
-                ],
-                body: Data(form.utf8)
-            )
-        }
-        try OAuthRefreshError.check(provider: id, response: response, body: responseBody)
-        let json = try OAuthRefreshError.decodeToken(provider: id, responseBody)
+        let json = try await OAuthRefreshError.postForToken(
+            provider: id, url: tokenURL,
+            headers: ["content-type": "application/x-www-form-urlencoded", "accept": "application/json"],
+            body: Data(form.utf8), client: client
+        )
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         var extras = credentials.extras
         if let accountId = Self.extractAccountId(fromJWT: json.accessToken) {
@@ -159,17 +191,11 @@ public struct CursorOAuthProvider: OAuthProvider {
     public func refresh(
         _ credentials: OAuthCredentials, using client: HTTPClient
     ) async throws -> OAuthCredentials {
-        let (response, body) = try await OAuthRefreshError.request(provider: id) {
-            try await client.request(
-                url: refreshURL, method: "POST",
-                headers: [
-                    "authorization": "Bearer \(credentials.refresh)",
-                    "content-type": "application/json",
-                ],
-                body: Data("{}".utf8)
-            )
-        }
-        try OAuthRefreshError.check(provider: id, response: response, body: body)
+        let (response, body) = try await OAuthRefreshError.post(
+            provider: id, url: refreshURL,
+            headers: ["authorization": "Bearer \(credentials.refresh)", "content-type": "application/json"],
+            body: Data("{}".utf8), client: client
+        )
         guard let obj = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any],
               let access = obj["accessToken"] as? String, !access.isEmpty else {
             throw OAuthRefreshError(
@@ -239,15 +265,6 @@ public struct KimiCodingOAuthProvider: OAuthProvider {
         self.identity = identity
     }
 
-    /// Kept for callers that only pin the id.
-    public init(
-        tokenURL: URL = URL(string: "https://auth.kimi.com/api/oauth/token")!,
-        clientID: String = KimiOAuth.clientID,
-        deviceId: String?
-    ) {
-        self.init(tokenURL: tokenURL, clientID: clientID, identity: deviceId.map { .host(deviceId: $0) })
-    }
-
     public func refresh(
         _ credentials: OAuthCredentials, using client: HTTPClient
     ) async throws -> OAuthCredentials {
@@ -267,11 +284,9 @@ public struct KimiCodingOAuthProvider: OAuthProvider {
         var headers = KimiOAuth.commonHeaders(identity: identity)
         headers["content-type"] = "application/x-www-form-urlencoded"
         headers["accept"] = "application/json"
-        let (response, body) = try await OAuthRefreshError.request(provider: id) {
-            try await client.request(url: tokenURL, method: "POST", headers: headers, body: Data(form.utf8))
-        }
-        try OAuthRefreshError.check(provider: id, response: response, body: body)
-        let json = try OAuthRefreshError.decodeToken(provider: id, body)
+        let json = try await OAuthRefreshError.postForToken(
+            provider: id, url: tokenURL, headers: headers, body: Data(form.utf8), client: client
+        )
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         var extras = credentials.extras
         extras["deviceId"] = .string(identity.deviceId)
@@ -321,13 +336,6 @@ public enum KimiOAuth {
     /// Keep in sync with the `User-Agent` header on the bundled `kimi-coding`
     /// catalog models.
     static let cliVersion = "1.5"
-
-    /// Headers for Kimi OAuth endpoints. `deviceId` is injectable for tests;
-    /// the default persists a random id at `~/.kwwk/kimi-device-id` so the
-    /// device fingerprint is stable across logins.
-    public static func commonHeaders(deviceId: String? = nil) -> [String: String] {
-        commonHeaders(identity: .host(deviceId: deviceId))
-    }
 
     /// Headers for Kimi OAuth endpoints, carrying `identity`.
     public static func commonHeaders(identity: KimiDeviceIdentity) -> [String: String] {
@@ -441,18 +449,11 @@ public struct XaiOAuthProvider: OAuthProvider {
             "refresh_token": credentials.refresh,
             "client_id": clientID,
         ])
-        let (response, body) = try await OAuthRefreshError.request(provider: id) {
-            try await client.request(
-                url: tokenURL, method: "POST",
-                headers: [
-                    "content-type": "application/x-www-form-urlencoded",
-                    "accept": "application/json",
-                ],
-                body: Data(form.utf8)
-            )
-        }
-        try OAuthRefreshError.check(provider: id, response: response, body: body)
-        let json = try OAuthRefreshError.decodeToken(provider: id, body)
+        let json = try await OAuthRefreshError.postForToken(
+            provider: id, url: tokenURL,
+            headers: ["content-type": "application/x-www-form-urlencoded", "accept": "application/json"],
+            body: Data(form.utf8), client: client
+        )
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         return OAuthCredentials(
             access: json.accessToken,

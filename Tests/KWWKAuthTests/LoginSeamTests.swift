@@ -176,16 +176,6 @@ struct LoginSeamTests {
         #expect(credentials.refresh == "")
     }
 
-    @Test("A redirect flow with an explicitly disabled loopback says so")
-    func noLoopback() async throws {
-        let callbacks = OAuthLogin.Callbacks(
-            onAuthURL: { _ in }, onProgress: { _ in }, loopback: nil
-        )
-        await #expect(throws: OAuthLoginError.noLoopbackListener) {
-            _ = try await OAuthLogin.loginOpenAICodex(callbacks: callbacks, client: QueuedHTTPClient([]))
-        }
-    }
-
     @Test("A device flow shows its code before the verification page opens")
     func deviceCodeFirst() async throws {
         let client = QueuedHTTPClient([

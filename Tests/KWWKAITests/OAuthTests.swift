@@ -212,7 +212,7 @@ struct KimiCodingOAuthTests {
         {"access_token":"kimi-new","refresh_token":"kimi-refresh-2","expires_in":3600}
         """#
         let client = StubResponseClient(body: Data(body.utf8))
-        let updated = try await KimiCodingOAuthProvider(deviceId: "test-device").refresh(
+        let updated = try await KimiCodingOAuthProvider(identity: .host(deviceId: "test-device")).refresh(
             OAuthCredentials(access: "old", refresh: "kimi-refresh-1", expires: 0),
             using: client
         )
@@ -239,7 +239,7 @@ struct KimiCodingOAuthTests {
     func kimiRefreshKeepsOldToken() async throws {
         let body = #"{"access_token":"kimi-new","expires_in":3600}"#
         let client = StubResponseClient(body: Data(body.utf8))
-        let updated = try await KimiCodingOAuthProvider(deviceId: "test-device").refresh(
+        let updated = try await KimiCodingOAuthProvider(identity: .host(deviceId: "test-device")).refresh(
             OAuthCredentials(access: "old", refresh: "keep-me", expires: 0),
             using: client
         )

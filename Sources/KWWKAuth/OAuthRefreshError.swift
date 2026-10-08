@@ -56,14 +56,19 @@ public struct OAuthRefreshError: Error, LocalizedError, Sendable, Equatable {
 
     // MARK: - Helpers the refresh providers share
 
-    /// Runs the refresh request, reporting a transport failure as
-    /// `.unavailable` instead of letting a raw `URLError` escape.
-    package static func request(
+    /// POSTs a refresh request. A transport failure is `.unavailable` rather
+    /// than a raw `URLError`; an error status is classified.
+    package static func post(
         provider: String,
-        _ send: () async throws -> (HTTPURLResponse, Data)
+        url: URL,
+        headers: [String: String],
+        body: Data,
+        client: HTTPClient
     ) async throws -> (HTTPURLResponse, Data) {
+        let response: HTTPURLResponse
+        let data: Data
         do {
-            return try await send()
+            (response, data) = try await client.request(url: url, method: "POST", headers: headers, body: body)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -72,23 +77,28 @@ public struct OAuthRefreshError: Error, LocalizedError, Sendable, Equatable {
                 detail: error.localizedDescription
             )
         }
-    }
-
-    /// Throws the classified failure for an error status.
-    package static func check(provider: String, response: HTTPURLResponse, body: Data) throws {
         if response.statusCode >= 400 {
-            throw classify(providerId: provider, status: response.statusCode, body: body)
+            throw classify(providerId: provider, status: response.statusCode, body: data)
         }
+        return (response, data)
     }
 
-    /// Decodes a standard token answer; an unreadable one is `.unavailable`.
-    package static func decodeToken(provider: String, _ body: Data) throws -> OAuth.TokenResponse {
+    /// `post`, then the standard token answer; an unreadable one is
+    /// `.unavailable`.
+    package static func postForToken(
+        provider: String,
+        url: URL,
+        headers: [String: String],
+        body: Data,
+        client: HTTPClient
+    ) async throws -> OAuth.TokenResponse {
+        let (_, data) = try await post(provider: provider, url: url, headers: headers, body: body, client: client)
         do {
-            return try JSONDecoder().decode(OAuth.TokenResponse.self, from: body)
+            return try JSONDecoder().decode(OAuth.TokenResponse.self, from: data)
         } catch {
             throw OAuthRefreshError(
                 providerId: provider, kind: .unavailable, status: nil,
-                detail: "unreadable token response: \(String((String(data: body, encoding: .utf8) ?? "").prefix(300)))"
+                detail: "unreadable token response: \(String((String(data: data, encoding: .utf8) ?? "").prefix(300)))"
             )
         }
     }

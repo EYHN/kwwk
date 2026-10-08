@@ -192,7 +192,6 @@ Then depend on the libraries you need:
   Redirect sign-ins default to the shared NIO loopback listener on Apple
   and Linux, including the original two-hook `KWWKAI` API. Hosts can replace
   it and supply their own browser presenter through `OAuthLogin.Callbacks`.
-  An explicit `loopback: nil` opts out of the default listener.
   This includes Claude Pro/Max: `OAuthLogin.loginAnthropic`,
   `AnthropicOAuthProvider` and `AnthropicUsageReader` share the same lightweight
   module. Usage keeps shared windows and model-scoped weekly limits separate.
