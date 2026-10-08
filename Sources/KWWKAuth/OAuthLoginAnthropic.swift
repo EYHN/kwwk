@@ -3,8 +3,8 @@ import Foundation
 import FoundationNetworking
 #endif
 
-// The Anthropic sign-in stays beside the NIO callback server it binds; the
-// other provider flows live in `KWWKAuth` with an injectable loopback.
+// Claude uses the same host-supplied browser and loopback as the other
+// providers. The CLI supplies NIO; an embedding app supplies its own listener.
 extension OAuthLogin {
     // MARK: - Anthropic
 
@@ -13,8 +13,8 @@ extension OAuthLogin {
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
-        let port: UInt16 = 53692
-        let server = try OAuthCallbackServer(port: port)
+        let provider = AnthropicOAuthProvider()
+        let server = try await openLoopback(callbacks, port: 53692)
         defer { server.stop() }
 
         let scope = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"
@@ -22,7 +22,7 @@ extension OAuthLogin {
         var comps = URLComponents(string: "https://claude.ai/oauth/authorize")!
         comps.queryItems = [
             URLQueryItem(name: "code", value: "true"),
-            URLQueryItem(name: "client_id", value: "9d1c250a-e61b-44d9-88ed-5944d1962f5e"),
+            URLQueryItem(name: "client_id", value: provider.clientID),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "redirect_uri", value: redirect),
             URLQueryItem(name: "scope", value: scope),
@@ -31,32 +31,37 @@ extension OAuthLogin {
             URLQueryItem(name: "state", value: pkce.verifier),
         ]
 
-        callbacks.onAuthURL(comps.url!)
         callbacks.onProgress("waiting for Anthropic callback on \(redirect)…")
 
-        let params = try await server.waitForCallback()
-        guard let code = params["code"] else {
+        let params = try await present(comps.url!, callbacks: callbacks) {
+            try await server.waitForCallback()
+        }
+        try checkCallbackError(params, provider: "anthropic")
+        guard let code = params["code"], !code.isEmpty else {
             throw OAuthError.invalidResponse("anthropic callback had no code")
         }
-        let state = params["state"]
-        if let state, state != pkce.verifier {
+        guard params["state"] == pkce.verifier else {
             throw OAuthError.invalidResponse("anthropic OAuth state mismatch")
         }
 
         callbacks.onProgress("exchanging authorization code…")
         let body: [String: Any] = [
             "grant_type": "authorization_code",
-            "client_id": "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+            "client_id": provider.clientID,
             "code": code,
-            "state": state ?? pkce.verifier,
+            "state": pkce.verifier,
             "redirect_uri": redirect,
             "code_verifier": pkce.verifier,
         ]
         let response = try await postJSON(
-            url: URL(string: "https://platform.claude.com/v1/oauth/token")!,
+            url: provider.tokenURL,
             body: body,
             client: client
         )
-        return credentials(from: response, fallbackRefresh: nil)
+        guard !response.accessToken.isEmpty,
+              let refresh = response.refreshToken, !refresh.isEmpty else {
+            throw OAuthError.invalidResponse("anthropic token response missing credentials")
+        }
+        return credentials(from: response, fallbackRefresh: refresh)
     }
 }

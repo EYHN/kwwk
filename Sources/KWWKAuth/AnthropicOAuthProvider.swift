@@ -25,16 +25,15 @@ public struct AnthropicOAuthProvider: OAuthProvider {
             "refresh_token": credentials.refresh,
         ]
         let bodyData = try JSONSerialization.data(withJSONObject: body)
-        let (response, responseBody) = try await client.request(
-            url: tokenURL, method: "POST",
-            headers: ["content-type": "application/json", "accept": "application/json"],
-            body: bodyData
-        )
-        if response.statusCode >= 400 {
-            let bodyText = String(data: responseBody, encoding: .utf8) ?? ""
-            throw OAuthError.refreshFailed("anthropic \(response.statusCode): \(bodyText)")
+        let (response, responseBody) = try await OAuthRefreshError.request(provider: id) {
+            try await client.request(
+                url: tokenURL, method: "POST",
+                headers: ["content-type": "application/json", "accept": "application/json"],
+                body: bodyData
+            )
         }
-        let json = try OAuth.decodeTokenResponse(responseBody)
+        try OAuthRefreshError.check(provider: id, response: response, body: responseBody)
+        let json = try OAuthRefreshError.decodeToken(provider: id, responseBody)
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         return OAuthCredentials(
             access: json.accessToken,

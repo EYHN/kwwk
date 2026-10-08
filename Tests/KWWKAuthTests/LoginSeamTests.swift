@@ -1,4 +1,5 @@
 import Foundation
+import Crypto
 import Testing
 import KWWKAuth
 
@@ -19,6 +20,84 @@ struct LoginSeamTests {
             return loopback
         }
         return callbacks
+    }
+
+    @Test("Claude binds its registered redirect and exchanges the verifier through the app's presenter")
+    func anthropicThroughSeams() async throws {
+        let client = QueuedHTTPClient([
+            .response(status: 200, body: #"{"access_token":"a","refresh_token":"r","expires_in":28800}"#),
+        ])
+        let presenter = RecordingPresenter()
+        let made = LoopbackBox()
+        let before = Int64(Date().timeIntervalSince1970 * 1000)
+        let credentials = try await OAuthLogin.loginAnthropic(
+            callbacks: callbacks(presenter: presenter, params: ["code": "the-code"], made: made),
+            client: client
+        )
+        let loopback = try #require(made.value)
+        #expect(loopback.redirectURI == "http://localhost:53692/callback")
+        #expect(loopback.listened && loopback.stopped)
+        let url = try #require(presenter.shown.first)
+        let query = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
+        let state = try #require(query.first { $0.name == "state" }?.value)
+        #expect(query.first { $0.name == "redirect_uri" }?.value == loopback.redirectURI)
+        #expect(query.first { $0.name == "code_challenge" }?.value == PKCE.base64URL(Data(SHA256.hash(data: Data(state.utf8)))))
+        let request = try #require(client.requests.first)
+        let data = try #require(request.body)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(body["state"] == state)
+        #expect(body["code_verifier"] == state)
+        #expect(body["code"] == "the-code")
+        #expect(body["redirect_uri"] == loopback.redirectURI)
+        #expect(credentials.refresh == "r")
+        #expect(credentials.expires >= before + (28800 - 300) * 1000)
+        #expect(credentials.expires <= Int64(Date().timeIntervalSince1970 * 1000) + (28800 - 300) * 1000)
+    }
+
+    @Test("Claude refuses missing or mismatched state and empty codes before exchanging", arguments: [
+        ["code": "c"], ["code": "c", "state": "wrong"], ["code": "", "state": "wrong"],
+    ])
+    func anthropicInvalidCallback(params: [String: String]) async throws {
+        let client = QueuedHTTPClient([])
+        let made = LoopbackBox()
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginAnthropic(
+                callbacks: callbacks(presenter: RecordingPresenter(), params: params, echoState: false, made: made),
+                client: client
+            )
+        }
+        #expect(client.requestCount == 0)
+        #expect(made.value?.stopped == true)
+    }
+
+    @Test("Claude authorization denial cancels and releases the listener")
+    func anthropicDenied() async throws {
+        let made = LoopbackBox()
+        let client = QueuedHTTPClient([])
+        await #expect(throws: OAuthLoginError.cancelled) {
+            _ = try await OAuthLogin.loginAnthropic(
+                callbacks: callbacks(presenter: RecordingPresenter(), params: ["error": "access_denied"], made: made),
+                client: client
+            )
+        }
+        #expect(made.value?.stopped == true)
+        #expect(client.requestCount == 0)
+    }
+
+    @Test("Claude grants must carry access and refresh tokens", arguments: [
+        #"{"access_token":"a"}"#,
+        #"{"access_token":"a","refresh_token":""}"#,
+        #"{"access_token":"","refresh_token":"r"}"#,
+    ])
+    func anthropicNeedsCredentials(body: String) async throws {
+        let made = LoopbackBox()
+        await #expect(throws: OAuthError.self) {
+            _ = try await OAuthLogin.loginAnthropic(
+                callbacks: callbacks(presenter: RecordingPresenter(), params: ["code": "c"], made: made),
+                client: QueuedHTTPClient([.response(status: 200, body: body)])
+            )
+        }
+        #expect(made.value?.stopped == true)
     }
 
     @Test("Codex binds the registered redirect, shows the page through the presenter and keeps the account id")

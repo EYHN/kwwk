@@ -21,10 +21,11 @@ struct RefreshErrorTests {
     }
 
     @Test("A refused grant parks the login; 429, 5xx, transport and unreadable answers do not", arguments: [
-        "openai-codex", "kimi-coding", "xai", "cursor",
+        "anthropic", "openai-codex", "kimi-coding", "xai", "cursor",
     ])
     func classification(providerId: String) async throws {
         let provider: any OAuthProvider = switch providerId {
+        case "anthropic": AnthropicOAuthProvider()
         case "openai-codex": OpenAICodexOAuthProvider()
         case "kimi-coding": KimiCodingOAuthProvider(identity: .init(deviceId: "d", deviceName: "n", deviceModel: "m", osVersion: "o"))
         case "xai": XaiOAuthProvider()
@@ -39,6 +40,25 @@ struct RefreshErrorTests {
         #expect(await refreshError(provider, .response(status: 503, body: "busy"))?.kind == .unavailable)
         #expect(await refreshError(provider, .failure(URLError(.timedOut)))?.kind == .unavailable)
         #expect(await refreshError(provider, .response(status: 200, body: "<html>"))?.kind == .unavailable)
+    }
+
+    @Test("Claude rotations retain extras, use the returned refresh token and apply the expiry margin")
+    func anthropicRotation() async throws {
+        let before = Int64(Date().timeIntervalSince1970 * 1000)
+        let stale = OAuthCredentials(access: "old", refresh: "r-old", expires: 0, extras: ["owner": "kept"])
+        let client = QueuedHTTPClient([
+            .response(status: 200, body: #"{"access_token":"new","refresh_token":"r-new","expires_in":28800}"#),
+        ])
+        let refreshed = try await AnthropicOAuthProvider().refresh(stale, using: client)
+        #expect(refreshed.access == "new")
+        #expect(refreshed.refresh == "r-new")
+        #expect(refreshed.extras == stale.extras)
+        #expect(refreshed.expires >= before + (28800 - 300) * 1000)
+        #expect(refreshed.expires <= Int64(Date().timeIntervalSince1970 * 1000) + (28800 - 300) * 1000)
+        let data = try #require(client.requests.first?.body)
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(body["refresh_token"] == stale.refresh)
+        #expect(body["grant_type"] == "refresh_token")
     }
 
     @Test("A token answer without expires_in gets an hour")
@@ -182,8 +202,10 @@ struct UsageTests {
         let now = Date(timeIntervalSince1970: 1_790_000_000)
         #expect(OAuthUsage.retryAfterSeconds("12.2", now: now) == 13)
         #expect(OAuthUsage.retryAfterSeconds("999999", now: now) == 86_400)
+        #expect(OAuthUsage.retryAfterSeconds("1e100", now: now) == 86_400)
         #expect(OAuthUsage.retryAfterSeconds("Mon, 21 Sep 2026 14:14:20 GMT", now: now) == 60)
-        #expect(OAuthUsage.retryAfterSeconds("soon", now: now) == 120)
-        #expect(OAuthUsage.retryAfterSeconds(nil, now: now) == 120)
+        for invalid in [nil, "soon", "-1", "nan", "0"] as [String?] {
+            #expect(OAuthUsage.retryAfterSeconds(invalid, now: now) == 120)
+        }
     }
 }

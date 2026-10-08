@@ -79,6 +79,7 @@ public enum OAuthUsage {
     /// The providers whose subscriptions expose a usage endpoint kwwk reads.
     public static let readers: [String: any OAuthUsageReader] = Dictionary(
         uniqueKeysWithValues: ([
+            AnthropicUsageReader(),
             OpenAICodexUsageReader(),
             KimiCodingUsageReader(),
         ] as [any OAuthUsageReader]).map { ($0.providerId, $0) }

@@ -191,6 +191,11 @@ Then depend on the libraries you need:
   vendor wire protocols but not the agent runtime. `KWWKAI` re-exports it.
   Redirect sign-ins take the host's loopback listener and browser presenter
   through `OAuthLogin.Callbacks` (the CLI passes `OAuthLogin.nioLoopback`).
+  This includes Claude Pro/Max: `OAuthLogin.loginAnthropic`,
+  `AnthropicOAuthProvider` and `AnthropicUsageReader` share the same lightweight
+  module. Usage keeps shared windows and model-scoped weekly limits separate.
+  The host owns credential storage and refresh locking; usage only reads the
+  access token.
 
 The SDK does not read `~/.kwwk` or process environment variables by
 default. Pass credentials, session stores, context files, and skill
