@@ -490,6 +490,60 @@ struct OpenAIResponsesTests {
         #expect((json?["prompt_cache_key"] as? String)?.count == 64)
     }
 
+    @Test("ChatGPT Codex never gets a temperature, 24h retention or a tier other than priority")
+    func codexDropsRefusedFields() async throws {
+        var codex = Self.model
+        codex.api = "chatgpt-codex"
+        func body(_ model: Model, _ options: StreamOptions) async throws -> [String: Any]? {
+            let client = StubSSEClient(body: Self.textSSE)
+            let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+            _ = provider.stream(
+                model: model, context: Context(messages: [.user(UserMessage(text: "hi"))]), options: options
+            )
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            return try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        }
+        let refused = StreamOptions(temperature: 0.5, cacheRetention: .long, sessionId: "s", serviceTier: .flex)
+        let sent = try await body(codex, refused)
+        #expect(sent?["temperature"] == nil)
+        #expect(sent?["prompt_cache_retention"] == nil)
+        #expect(sent?["service_tier"] == nil)
+        #expect(sent?["prompt_cache_key"] as? String == "s")
+        #expect(try await body(codex, StreamOptions(serviceTier: .priority))?["service_tier"] as? String == "priority")
+        // The public API still takes all three.
+        let openai = try await body(Self.model, refused)
+        #expect(openai?["temperature"] as? Double == 0.5)
+        #expect(openai?["prompt_cache_retention"] as? String == "24h")
+        #expect(openai?["service_tier"] as? String == "flex")
+    }
+
+    @Test("a call id over 64 characters is hashed the same on the call and its output")
+    func longCallIdBounded() async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let foreign = "toolu_" + String(repeating: "a", count: 90)
+        let assistant = AssistantMessage(
+            content: [.toolCall(ToolCall(id: foreign, name: "calc", arguments: ["a": 1]))],
+            api: "openai-responses", provider: "openai", model: "gpt-5", stopReason: .toolUse
+        )
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [
+                .user(UserMessage(text: "compute")),
+                .assistant(assistant),
+                .toolResult(ToolResultMessage(toolCallId: foreign, toolName: "calc", content: [.text(TextContent(text: "1"))])),
+            ]),
+            options: nil
+        )
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        let json = try JSONSerialization.jsonObject(with: client.lastRequest?.body ?? Data()) as? [String: Any]
+        let input = json?["input"] as? [[String: Any]]
+        let call = input?[1]["call_id"] as? String
+        #expect(call?.count == 64)
+        #expect(call == input?[2]["call_id"] as? String)
+        #expect(OpenAIResponsesProvider.boundCallId("call_1") == "call_1")
+    }
+
     @Test("represents tool_result as function_call_output in the input array")
     func toolResultEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)

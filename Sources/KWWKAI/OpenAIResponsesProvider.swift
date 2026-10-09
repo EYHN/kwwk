@@ -884,11 +884,15 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
         ) {
             root["max_output_tokens"] = .int(maxTokens)
         }
-        if let temp = options?.temperature { root["temperature"] = .double(temp) }
+        // The ChatGPT Codex backend answers 400 "Unsupported parameter" to a
+        // temperature and to any service tier but priority (measured
+        // 2026-10-09), so neither reaches it.
+        let codex = model.api == "chatgpt-codex"
+        if let temp = options?.temperature, !codex { root["temperature"] = .double(temp) }
         // Processing-tier pass-through (pi openai-responses.ts:253-255). Cost
         // multipliers are computed downstream in AgentLoop, which has no
         // service-tier awareness, so only the request field is ported here.
-        if let serviceTier = options?.serviceTier {
+        if let serviceTier = options?.serviceTier, !codex || serviceTier == .priority {
             root["service_tier"] = .string(serviceTier.rawValue)
         }
         if let sys = context.systemPrompt, !sys.isEmpty {
@@ -968,7 +972,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
            let sid = OpenAICompletionsProvider.clampOpenAIPromptCacheKey(options?.sessionId) {
             root["prompt_cache_key"] = .string(sid)
         }
-        if retention == .long, model.compat?.supportsLongCacheRetention != false {
+        if retention == .long, !codex, model.compat?.supportsLongCacheRetention != false {
             root["prompt_cache_retention"] = .string("24h")
         }
         // Don't persist responses server-side — kwwk replays the full input each
@@ -1038,6 +1042,16 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
     /// Each element is a typed item (`reasoning`, `message`, `function_call`,
     /// or `function_call_output`). Assistant messages with tool calls expand
     /// into multiple items.
+    /// A call id as the Responses API takes one: as it is when it fits its
+    /// 64 characters (400 `string_above_max_length` otherwise), else the
+    /// sha256 of it in hex — 64 characters. A transcript carried over from
+    /// another provider can hold longer ids; hashing the same id the same way
+    /// keeps each call paired with its output.
+    static func boundCallId(_ id: String) -> String {
+        guard id.count > 64 else { return id }
+        return SHA256.hash(data: Data(id.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
     private static func encodeInput(
         context: Context,
         model: Model,
@@ -1110,7 +1124,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                         }()
                         out.append(.object([
                             "type": .string("function_call"),
-                            "call_id": .string(tc.id),
+                            "call_id": .string(boundCallId(tc.id)),
                             "name": .string(tc.name),
                             "arguments": .string(argsString),
                         ]))
@@ -1132,7 +1146,7 @@ public final class OpenAIResponsesProvider: APIProvider, APIProviderSessionLifec
                     : []
                 out.append(.object([
                     "type": .string("function_call_output"),
-                    "call_id": .string(tr.toolCallId),
+                    "call_id": .string(boundCallId(tr.toolCallId)),
                     "output": .string(text.isEmpty && !imageParts.isEmpty ? "(see attached image)" : text),
                 ]))
                 // `function_call_output.output` is a plain string on every
