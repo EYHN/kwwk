@@ -20,7 +20,7 @@ struct RefreshErrorTests {
         }
     }
 
-    @Test("A refused grant parks the login; 429, 5xx, transport and unreadable answers do not", arguments: [
+    @Test("A refused grant parks the login; a 403, 429, 5xx, transport and unreadable answers do not", arguments: [
         "anthropic", "openai-codex", "kimi-coding", "xai", "cursor",
     ])
     func classification(providerId: String) async throws {
@@ -36,6 +36,7 @@ struct RefreshErrorTests {
         #expect(rejected?.status == 400)
         #expect(rejected?.providerId == providerId)
         #expect(await refreshError(provider, .response(status: 401, body: "{}"))?.kind == .rejected)
+        #expect(await refreshError(provider, .response(status: 403, body: "<html>Just a moment...</html>"))?.kind == .unavailable)
         #expect(await refreshError(provider, .response(status: 429, body: "{}"))?.kind == .unavailable)
         #expect(await refreshError(provider, .response(status: 503, body: "busy"))?.kind == .unavailable)
         #expect(await refreshError(provider, .failure(URLError(.timedOut)))?.kind == .unavailable)

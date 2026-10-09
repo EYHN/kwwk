@@ -23,6 +23,10 @@ final class CursorStreamState: @unchecked Sendable {
 
     private var outputTokens = 0
     private var sawTokenDelta = false
+    /// What the turn's TurnEndedUpdate said it used; wins over the
+    /// delta/checkpoint estimate when present. A step that ends on a tool
+    /// call gets none, so the estimate stays the fallback.
+    private var turnUsage: Usage?
     private var stopReason: StopReason = .stop
 
     init(api: String, model: Model) {
@@ -245,6 +249,22 @@ final class CursorStreamState: @unchecked Sendable {
         }
     }
 
+    /// Cursor counts `input` as the whole prompt, cache reads and writes
+    /// included; kwwk's `input` is the uncached rest, as every other provider
+    /// reports it.
+    func applyTurnEnded(input: Int, output: Int, cacheRead: Int, cacheWrite: Int, reasoning: Int) {
+        guard input > 0 || output > 0 else { return }
+        lock.withLock {
+            turnUsage = Usage(
+                input: max(input - cacheRead - cacheWrite, 0),
+                output: output,
+                cacheRead: cacheRead,
+                cacheWrite: cacheWrite,
+                reasoning: reasoning
+            )
+        }
+    }
+
     // MARK: - Finalization
 
     /// Emit end events for any blocks still open at end of stream.
@@ -275,9 +295,8 @@ final class CursorStreamState: @unchecked Sendable {
     }
 
     private func usageLocked() -> Usage {
-        var usage = Usage()
-        usage.output = outputTokens
-        usage.totalTokens = outputTokens
+        var usage = turnUsage ?? Usage(output: outputTokens)
+        usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite
         usage.cost = calculateCost(model: model, usage: usage)
         return usage
     }

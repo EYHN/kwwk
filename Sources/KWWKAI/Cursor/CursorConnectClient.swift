@@ -45,8 +45,21 @@ enum CursorConnectResponse {
         }
         guard let error = obj["error"] as? [String: Any] else { return nil }
         let code = error["code"] as? String ?? "unknown"
-        let message = error["message"] as? String ?? "Unknown error"
-        return CursorConnectError.grpc(status: code, message: message)
+        return CursorConnectError.grpc(status: code, message: message(of: error) ?? code)
+    }
+
+    /// Cursor's top-level `message` is often the bare word "Error"; what it
+    /// means — "Model not available", a region refusal — sits in
+    /// `details[].debug.details.{title,detail}`. The last such detail wins
+    /// over the generic word.
+    static func message(of error: [String: Any]) -> String? {
+        var message = (error["message"] as? String).flatMap { $0 == "Error" || $0.isEmpty ? nil : $0 }
+        for detail in error["details"] as? [[String: Any]] ?? [] {
+            let debug = (detail["debug"] as? [String: Any])?["details"] as? [String: Any] ?? [:]
+            let parts = [debug["title"], debug["detail"]].compactMap { $0 as? String }.filter { !$0.isEmpty }
+            if !parts.isEmpty { message = parts.joined(separator: ": ") }
+        }
+        return message
     }
 }
 

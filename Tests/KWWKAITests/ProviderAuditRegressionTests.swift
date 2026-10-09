@@ -58,6 +58,20 @@ struct ProviderAuditRegressionTests {
         #expect(failure.isRetryable)
     }
 
+    @Test func connectEndStreamReadsDebugDetail() throws {
+        let body = Data(#"{"error":{"code":"not_found","message":"Error","details":[{"type":"aiserver.v1.ErrorDetails","debug":{"error":"ERROR_BAD_MODEL_NAME","details":{"title":"AI Model Not Found","detail":"Model name is not valid: \"gpt-5.5\""}}}]}}"#.utf8)
+        guard case .grpc(let status, let message)? = CursorConnectResponse.errorFromEndStream(body) else {
+            Issue.record("no error"); return
+        }
+        #expect(status == "not_found")
+        #expect(message == #"AI Model Not Found: Model name is not valid: "gpt-5.5""#)
+        let bare = Data(#"{"error":{"code":"internal","message":"Error"}}"#.utf8)
+        guard case .grpc(_, let fallback)? = CursorConnectResponse.errorFromEndStream(bare) else {
+            Issue.record("no error"); return
+        }
+        #expect(fallback == "internal")
+    }
+
     @Test func stringSSEErrorRetainsPaymentStatus() async {
         let client = StubSSEClient(body: "data: {\"error\":\"temporarily unavailable\",\"status\":402,\"request_id\":\"req-test\"}\n\n")
         let result = await OpenAICompletionsProvider(client: client).stream(

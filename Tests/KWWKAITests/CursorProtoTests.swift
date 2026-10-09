@@ -686,6 +686,19 @@ struct CursorStreamStateTests {
         withoutDeltas.applyCheckpointUsedTokens(321)
         #expect(withoutDeltas.finalize().usage.output == 321)
     }
+
+    @Test("TurnEnded's counts win, with the cache taken out of input")
+    func turnEndedUsage() {
+        let state = makeState()
+        state.addOutputTokens(10)
+        state.applyCheckpointUsedTokens(8842)
+        state.applyTurnEnded(input: 8838, output: 4, cacheRead: 0, cacheWrite: 8834, reasoning: 0)
+        let usage = state.finalize().usage
+        #expect(usage.input == 4)
+        #expect(usage.output == 4)
+        #expect(usage.cacheWrite == 8834)
+        #expect(usage.totalTokens == 8842)
+    }
 }
 
 @Suite("Cursor model routing")
