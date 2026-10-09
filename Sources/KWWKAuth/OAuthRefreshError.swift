@@ -42,10 +42,13 @@ public struct OAuthRefreshError: Error, LocalizedError, Sendable, Equatable {
         return "\(providerId) refresh failed: \(detail)"
     }
 
-    /// A 4xx other than 429 refuses the grant itself; everything else — 429,
-    /// 5xx — is the provider's moment, not the login's end.
+    /// Only 400 (`invalid_grant`) and 401 refuse the grant itself — what
+    /// every provider here answers a dead refresh token with (measured
+    /// 2026-10-09). Anything else is the provider's moment, not the login's
+    /// end: 429, 5xx, and a 403, which from auth.openai.com or
+    /// platform.claude.com is as likely the bot check in front of them.
     public static func classify(providerId: String, status: Int, body: Data) -> OAuthRefreshError {
-        let kind: Kind = (400..<500).contains(status) && status != 429 ? .rejected : .unavailable
+        let kind: Kind = status == 400 || status == 401 ? .rejected : .unavailable
         return OAuthRefreshError(
             providerId: providerId,
             kind: kind,
