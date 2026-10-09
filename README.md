@@ -186,6 +186,17 @@ Then depend on the libraries you need:
 - **`KWWKAI`** — model clients, provider registry, streaming, OAuth,
   message / tool types.
 - **`KWWKAgent`** — the turn/tool loop, built-in coding tools, hooks.
+- **`KWWKAuth`** — provider sign-in, token refresh and subscription usage
+  alone, with no agent or image stack: for an app or a server that needs the
+  vendor wire protocols but not the agent runtime. `KWWKAI` re-exports it.
+  Redirect sign-ins default to the shared NIO loopback listener on Apple
+  and Linux, including the original two-hook `KWWKAI` API. Hosts can replace
+  it and supply their own browser presenter through `OAuthLogin.Callbacks`.
+  This includes Claude Pro/Max: `OAuthLogin.loginAnthropic`,
+  `AnthropicOAuthProvider` and `AnthropicUsageReader` share the same lightweight
+  module. Usage keeps shared windows and model-scoped weekly limits separate.
+  The host owns credential storage and refresh locking; usage only reads the
+  access token.
 
 The SDK does not read `~/.kwwk` or process environment variables by
 default. Pass credentials, session stores, context files, and skill
