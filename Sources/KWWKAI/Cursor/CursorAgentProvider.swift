@@ -19,7 +19,11 @@ import Crypto
 /// `cursorExecResolved` so the loop does not run it a second time.
 public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle, @unchecked Sendable {
     public static let defaultBaseHost = "api2.cursor.sh"
-    public static let defaultClientVersion = "cli-2026.01.09-231024f"
+    /// The cursor-agent release the API is told it is talking to. Cursor
+    /// turns away versions it no longer supports, so this tracks a recent
+    /// release (magpie's fallback as of 2026-10-09) rather than the one this
+    /// provider was first written against.
+    public static let defaultClientVersion = "cli-2026.09.23-86fc751"
 
     /// kwwk tool names that Cursor provides natively — they are reachable via
     /// the exec channel and must not be double-advertised as MCP tools.
@@ -325,7 +329,18 @@ public final class CursorAgentProvider: APIProvider, APIProviderSessionLifecycle
             if let tokens = firstInt32Field(field.value.asData, number: 1) {
                 state.addOutputTokens(Int(tokens))
             }
-        case 14: // turn_ended
+        case 14: // turn_ended: TurnEndedUpdate { input=1 output=2 cache_read=3 cache_write=4 reasoning=5 }
+            if let bytes = field.value.asData {
+                var counts: [Int: Int] = [:]
+                var reader = ProtoReader(bytes)
+                while let f = reader.next() {
+                    if case .varint(let v) = f.value { counts[f.number] = Int(clamping: v) }
+                }
+                state.applyTurnEnded(
+                    input: counts[1] ?? 0, output: counts[2] ?? 0,
+                    cacheRead: counts[3] ?? 0, cacheWrite: counts[4] ?? 0, reasoning: counts[5] ?? 0
+                )
+            }
             return true
         default:
             break
