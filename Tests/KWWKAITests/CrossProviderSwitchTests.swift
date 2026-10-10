@@ -333,6 +333,22 @@ struct CrossProviderSwitchTests {
         #expect(ids.calls == ids.results)         // result id rewritten to match
     }
 
+    // MARK: - Foreign id outside Anthropic's alphabet → Anthropic
+
+    @Test("devin id with '.' and ':' is sanitized to Anthropic's tool_use id pattern and stays linked")
+    func devinIdAcrossSwitchToAnthropic() async throws {
+        let client = StubSSEClient(body: Self.anthropicDone)
+        let provider = AnthropicProvider(client: client, defaultAPIKey: "sk-test")
+        let body = try await Self.capture(
+            provider, client, model: Self.anthropic(),
+            messages: Self.foreignTurn(provider: "devin", api: "devin-agent", model: "swe-src",
+                                       toolId: "functions.read:0")
+        )
+        let ids = Self.anthropicToolIds(body)
+        #expect(ids.calls == ["functions_read_0"])
+        #expect(ids.calls == ids.results)
+    }
+
     // MARK: - Switch to OpenAI Responses (normalize inside makeRequest)
 
     @Test("switch to openai-responses: foreign thinking downgraded to output text, ids truncated and linked")

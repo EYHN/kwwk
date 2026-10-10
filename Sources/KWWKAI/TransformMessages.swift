@@ -159,26 +159,25 @@ public enum TransformMessages {
 
     // MARK: - Tool-call id normalization
 
-    /// Normalize a single tool-call id the way pi's `normalizeToolCallId` does:
-    /// - Pipe-delimited ids (Responses-API origin) → take the segment before the
-    ///   first `|`, replace any char outside `[a-zA-Z0-9_-]` with `_`, truncate 40.
-    /// - Otherwise, for `openai` provider only, truncate to 40 chars.
-    /// - Otherwise pass through unchanged.
+    /// Normalize a single foreign tool-call id so any target accepts it:
+    /// - Pipe-delimited ids (Responses-API origin) keep only the segment before
+    ///   the first `|` (pi's `normalizeToolCallId`).
+    /// - Every char outside `[a-zA-Z0-9_-]` becomes `_`. Anthropic rejects any
+    ///   other `tool_use.id` with a 400, and providers such as Devin or Kimi
+    ///   mint ids with `.` or `:`; a switch to Claude must not wedge the session.
+    /// - `openai` caps ids at 40 chars.
     static func normalizeId(_ id: String, model: Model) -> String {
-        if let pipe = id.firstIndex(of: "|") {
-            let callId = String(id[..<pipe])
-            let sanitized = String(callId.map { c -> Character in
-                let isAllowed = (c.isASCII && c.isLetter)
-                    || (c.isASCII && c.isNumber)
-                    || c == "_" || c == "-"
-                return isAllowed ? c : "_"
-            })
+        let callId = id.firstIndex(of: "|").map { String(id[..<$0]) } ?? id
+        let sanitized = String(callId.map { c -> Character in
+            let isAllowed = (c.isASCII && c.isLetter)
+                || (c.isASCII && c.isNumber)
+                || c == "_" || c == "-"
+            return isAllowed ? c : "_"
+        })
+        if id.contains("|") || model.provider == "openai" {
             return String(sanitized.prefix(40))
         }
-        if model.provider == "openai" {
-            return id.count > 40 ? String(id.prefix(40)) : id
-        }
-        return id
+        return sanitized
     }
 
     /// Normalize tool-call ids on cross-model assistant turns and propagate the
