@@ -1144,8 +1144,10 @@ final class OpenAICompletionsState: @unchecked Sendable {
             return [:]
         }()
         // DeepSeek exposes cache hits via `prompt_cache_hit_tokens` instead of
-        // `prompt_tokens_details.cached_tokens`.
-        let cacheRead = intOf(promptDetails["cached_tokens"]) ?? intOf(obj["prompt_cache_hit_tokens"]) ?? 0
+        // `prompt_tokens_details.cached_tokens`, Moonshot via a top-level
+        // `cached_tokens`.
+        let cacheRead = intOf(promptDetails["cached_tokens"]) ?? intOf(obj["prompt_cache_hit_tokens"])
+            ?? intOf(obj["cached_tokens"]) ?? 0
         let cacheWrite = intOf(promptDetails["cache_write_tokens"]) ?? 0
         let output = intOf(obj["completion_tokens"]) ?? 0
         let completionDetails: [String: JSONValue] = {

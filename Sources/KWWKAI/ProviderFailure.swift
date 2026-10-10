@@ -165,6 +165,10 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         }
         if status == nil || status == 400 || status == 413,
            ProviderContextLimit.isInputOverflow(text) { return .contextOverflow }
+        // Anthropic answers an API key with no credit as 400
+        // invalid_request_error "Your credit balance is too low…". Kept to
+        // that wording: a 400 that merely mentions billing is a bad request.
+        if status == 400, text.contains("credit balance is too low") { return .quota }
         if let status, (400..<500).contains(status), status != 408, status != 429 { return .invalidRequest }
         switch providerCode?.lowercased() {
         case "canceled", "cancelled": return .cancelled
@@ -176,7 +180,9 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         let code = transportCode ?? Self.match(#"\bdomain\s*=\s*(?:NSURLErrorDomain|NSPOSIXErrorDomain)\s+code\s*=\s*(-?\d+)\b"#, in: message).flatMap(Int.init)
         if ["refusal", "content_filter", "sensitive", "safety", "guardrail_intervened", "prohibited_content", "blocklist", "recitation", "spii"].contains(where: text.contains) { return .refusal }
         if ["insufficient_quota", "out of budget", "available balance", "billing", "monthly quota", "daily quota", "insufficient credits", "credits exhausted",
-            "monthly usage limit", "usage limit reached", "usage_limit_reached", "gousagelimiterror", "freeusagelimiterror"].contains(where: text.contains) { return .quota }
+            "monthly usage limit", "usage limit reached", "usage_limit_reached", "gousagelimiterror", "freeusagelimiterror",
+            // Z.ai / Zhipu 429 code 1113: no balance or no plan behind the key.
+            "insufficient balance", "no resource package", "余额不足", "请充值"].contains(where: text.contains) { return .quota }
         // An actual concurrency/short-window cap is backpressure, not spent
         // account credit. Match cap signals, not benign concurrency wording.
         if Self.isTransientLimit(text) { return .rateLimit }

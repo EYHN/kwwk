@@ -599,7 +599,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             // via a `disable_parallel_tool_use` flag. The default remains
             // parallel-on, so we only emit the block when the caller picks a
             // non-default choice OR disables parallel.
-            if let toolChoice = buildToolChoice(options) {
+            if let toolChoice = buildToolChoice(options, model: model) {
                 root["tool_choice"] = toolChoice
             }
         }
@@ -676,7 +676,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
             "description": tool.description,
         ]
         if supportsEager { entry["eager_input_streaming"] = true }
-        if let params = anyFromJSONValue(tool.parameters) {
+        if let params = anyFromJSONValue(ToolSchemaRoot.objectRoot(tool.parameters)) {
             entry["input_schema"] = params
         }
         return entry
@@ -754,19 +754,33 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         }
     }
 
-    private static func buildToolChoice(_ options: StreamOptions?) -> [String: Any]? {
+    static func buildToolChoice(_ options: StreamOptions?, model: Model) -> [String: Any]? {
         let choice = options?.toolChoice
         let parallelOff = options?.parallelToolCalls == false
         if choice == nil && !parallelOff { return nil }
+        let forced = !refusesForcedToolChoice(model.id)
         var out: [String: Any]
         switch choice ?? .auto {
         case .auto: out = ["type": "auto"]
         case .none: out = ["type": "none"]
-        case .required: out = ["type": "any"]
-        case .tool(let name): out = ["type": "tool", "name": name]
+        case .required: out = forced ? ["type": "any"] : ["type": "auto"]
+        case .tool(let name): out = forced ? ["type": "tool", "name": name] : ["type": "auto"]
         }
         if parallelOff { out["disable_parallel_tool_use"] = true }
         return out
+    }
+
+    /// Claude Opus 5.5, Sonnet 5.5 and Fable 5.1 answer 400 `tool_choice:
+    /// type "tool" and "any" are not supported for this model`; Fable 5,
+    /// Opus 5, Sonnet 5 and everything 4.x still take a forced choice
+    /// (measured 2026-10-10). So a Claude from 5.1 on gets `auto`, which
+    /// calls the tool when it is the only one offered — as the agent loop's
+    /// terminal turn offers it.
+    static func refusesForcedToolChoice(_ modelId: String) -> Bool {
+        let pattern = #/claude-[a-z]+-(\d)[-.](\d{1,2})(?!\d)/#
+        guard let match = modelId.lowercased().firstMatch(of: pattern),
+              let major = Int(match.1), let minor = Int(match.2) else { return false }
+        return (major, minor) >= (5, 1)
     }
 
     private static func encodeMessage(_ message: Message, allowEmptySignature: Bool, fallbackEnabled: Bool) -> [String: Any]? {

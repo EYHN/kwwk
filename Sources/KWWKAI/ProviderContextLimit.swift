@@ -36,6 +36,22 @@ public enum ProviderContextLimit {
             "maximum input length exceeded",
             "prompt tokens exceed",
             "request is too large for this model",
+            // The rest are other vendors' own words for the same refusal,
+            // as pi and magpie collected them from real replies: Groq,
+            // OpenRouter, Together, llama.cpp, LM Studio, MiniMax,
+            // Kimi/Moonshot, z.ai (code 1261), Ollama, DashScope, Volcengine.
+            "reduce the length of the messages",
+            "maximum allowed input length",
+            "longer than the model's context length",
+            "available context size",
+            "greater than the context length",
+            "context window exceeds limit",
+            "exceeded model token limit",
+            "configured context size",
+            "prompt exceeds max length",
+            "exceeded max context length",
+            "range of input length should be",
+            "input exceeds the context limit",
         ]
         if exactSignals.contains(where: normalized.contains) || isPlanContextLimit(normalized) {
             return true
@@ -44,6 +60,22 @@ public enum ProviderContextLimit {
         // xAI's OpenAI-compatible endpoint reports both limits this way.
         if normalized.range(
             of: #"maximum prompt length is \d+.*request contains \d+ tokens"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        // Copilot: "prompt token count of 2000 exceeds the limit of 1000".
+        if normalized.range(
+            of: #"prompt token count of [\d,]+ exceeds the limit"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+
+        // Zhipu words it in Chinese: "输入内容超过模型最大上下文长度".
+        if normalized.range(
+            of: #"上下文(长度)?(超|过长)|超(过|出)(了)?(模型)?(的)?(最大)?上下文"#,
             options: .regularExpression
         ) != nil {
             return true
