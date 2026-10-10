@@ -352,7 +352,11 @@ private func registerCodex(
         // Codex rejects max_output_tokens — setting to 0 skips emitting
         // the field in the request body regardless of what the catalog
         // reports.
-        maxTokens: 0
+        maxTokens: 0,
+        // Codex answers 400 to an effort the model does not take —
+        // "minimal" on every model — so the catalog's map decides what a
+        // level is sent as.
+        thinkingLevelMap: catalogEntry?.thinkingLevelMap
     )
 
     return ResolvedAuth(

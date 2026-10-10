@@ -270,14 +270,19 @@ public final class DevinAgentProvider: APIProvider, @unchecked Sendable {
         // rejects JSON-Schema type arrays with an opaque `invalid_argument`.
         let googleSchema = isGeminiUid(model.id) || isGeminiUid(chatModelUid)
         let tools = (context.tools ?? []).map { tool -> DevinProto.ChatToolDefinition in
-            let schema = googleSchema ? normalizeSchemaForGoogle(tool.parameters) : tool.parameters
+            // Devin's Claude models answer 502 to a union at a schema's root.
+            let parameters = ToolSchemaRoot.objectRoot(tool.parameters)
+            let schema = googleSchema ? normalizeSchemaForGoogle(parameters) : parameters
             return DevinProto.ChatToolDefinition(
                 name: tool.name,
                 description: tool.description,
                 jsonSchemaString: jsonString(schema)
             )
         }
-        let temperature = options?.temperature ?? 0.4
+        // Devin answers 400 "an internal error occurred" to a temperature
+        // of exactly 0 on every model; 1e-6 is as near greedy as it takes.
+        let requested = options?.temperature ?? 0.4
+        let temperature = requested == 0 ? 1e-6 : requested
         let maxTokens = options?.maxTokens ?? (model.maxTokens > 0 ? model.maxTokens : 64_000)
         return DevinProto.GetChatMessageRequest(
             metadata: DevinWire.cliMetadata(apiKey: apiKey, userJwt: userJwt),
