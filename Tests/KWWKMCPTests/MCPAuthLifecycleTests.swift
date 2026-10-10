@@ -361,7 +361,7 @@ struct MCPAuthLifecycleTests {
             }
         )
         await manager.start()
-        #expect(await waitUntil(timeout: 5) { await manager.statuses().first?.state == .connected })
+        #expect(await waitUntil(timeout: 20) { await manager.statuses().first?.state == .connected })
         #expect(attempts.values.count == 3)
         #expect(await manager.tools().count == 2)
         await manager.shutdown()

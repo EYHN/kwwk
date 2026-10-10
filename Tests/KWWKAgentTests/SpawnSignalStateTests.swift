@@ -79,11 +79,13 @@ struct SpawnSignalStateTests {
 
     @Test("kill -TERM $$ ends the command")
     func selfTermKills() async throws {
-        let run = try await runFromHostileThread("kill -TERM $$; sleep 5; echo survived")
+        // A command that survived its own SIGTERM sleeps 30 s, so the bound
+        // only has to sit under that; a loaded CI runner took 5.3 s once.
+        let run = try await runFromHostileThread("kill -TERM $$; sleep 30; echo survived")
         #expect(!run.output.contains("survived"))
         #expect(run.outcome.summary == "exit \(SIGTERM) (signal)")
         #expect(exitCode(run.outcome) == Int(SIGTERM))
-        #expect(run.elapsed < 4)
+        #expect(run.elapsed < 15)
     }
 
     @Test("timeout 1 sleep 30 returns promptly")
@@ -102,7 +104,7 @@ struct SpawnSignalStateTests {
         echo "kill=$?"
         """
         let run = try await runFromHostileThread(command)
-        #expect(run.elapsed < 8, "took \(run.elapsed)s")
+        #expect(run.elapsed < 15, "took \(run.elapsed)s")
         #expect(run.output.contains("kill=143"), "\(run.output)")
         if run.output.contains("timeout=") {
             #expect(run.output.contains("timeout=124"), "\(run.output)")
@@ -115,6 +117,6 @@ struct SpawnSignalStateTests {
         // With SIGPIPE ignored `yes` would see EPIPE and print an error;
         // with the default it dies quietly.
         #expect(!run.output.lowercased().contains("broken pipe"), "\(run.output)")
-        #expect(run.elapsed < 4)
+        #expect(run.elapsed < 15)
     }
 }

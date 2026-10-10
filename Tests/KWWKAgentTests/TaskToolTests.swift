@@ -123,7 +123,7 @@ struct TaskToolTests {
         let unregister = await manager.registerDeliveryConsumer(consumer)
         defer { Task { await unregister() } }
         let (slowId, _) = await manager.spawn(
-            runner: TaskDelayedRunner(label: "slow", delayMs: 2_000),
+            runner: TaskDelayedRunner(label: "slow", delayMs: 10_000),
             sessionId: "s1"
         )
         let (fastId, _) = await manager.spawn(
@@ -142,14 +142,16 @@ struct TaskToolTests {
             "poll",
             .object([
                 "task_ids": .array([.string(slowId), .string(fastId)]),
-                "timeout_seconds": .int(5),
+                "timeout_seconds": .int(20),
             ]),
             nil,
             nil
         )
         let elapsed = Date().timeIntervalSince(start)
 
-        #expect(elapsed < 1.2, "poll waited for the slow task: \(elapsed)s")
+        // The slow task takes 10 s, so a poll that waited for it can never
+        // pass, while a loaded CI runner (1.5 s seen for a 250 ms task) can.
+        #expect(elapsed < 5, "poll waited for the slow task: \(elapsed)s")
         guard case .object(let details) = result.details ?? .null else {
             Issue.record("missing result details")
             return
