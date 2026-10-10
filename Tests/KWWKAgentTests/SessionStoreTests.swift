@@ -248,6 +248,9 @@ struct SessionStoreTests {
 
         try await store.append(id: "old", cwd: "/proj", message: userMsg("old"))
         try await store.append(id: "other", cwd: "/elsewhere", message: userMsg("nope"))
+        // "Most recent" is read off the files' timestamps; two appends inside
+        // one tick tie, and the tie went to "old" on a fast run.
+        try await Task.sleep(nanoseconds: 50_000_000)
         try await store.append(id: "new", cwd: "/proj", message: userMsg("new"))
 
         let latest = await store.latestForCwd("/proj")

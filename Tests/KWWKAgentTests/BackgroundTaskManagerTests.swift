@@ -336,11 +336,11 @@ struct BackgroundTaskManagerTests {
         // The launch blocks far longer than the bound so a blocked spawn can
         // never pass, while slow shared CI runners keep ample headroom.
         let (taskId, _) = await manager.spawn(
-            runner: BlockingLaunchRunner(delayMs: 2_000),
+            runner: BlockingLaunchRunner(delayMs: 6_000),
             sessionId: "s1"
         )
 
-        #expect(Date().timeIntervalSince(startedAt) < 1.0)
+        #expect(Date().timeIntervalSince(startedAt) < 3.0)
         #expect(await manager.get(taskId)?.status == .running)
         try? await manager.kill(taskId)
     }
