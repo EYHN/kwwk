@@ -141,6 +141,8 @@ internal struct SubagentParentSnapshot: Sendable {
     var allowedModelOverrides: [Model]
     /// The parent's deferred tools; children that may mutate inherit them.
     var toolCatalog: ToolCatalog?
+    /// Host tools handed to every child that may mutate, as they are.
+    var sharedTools: [AgentTool] = []
 }
 
 internal final class SubagentParentBox: @unchecked Sendable {
@@ -165,6 +167,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
     private let availableSkills: [Skill]
     private let fallbackFileAccessPolicy: FileAccessPolicy
     private let allowedModelOverrides: [Model]
+    private let sharedTools: [AgentTool]
 
     init(
         childCwd: String,
@@ -182,7 +185,8 @@ internal final class SubagentParentBox: @unchecked Sendable {
         projectContextFiles: [(path: String, content: String)],
         availableSkills: [Skill],
         fallbackFileAccessPolicy: FileAccessPolicy,
-        allowedModelOverrides: [Model]
+        allowedModelOverrides: [Model],
+        sharedTools: [AgentTool] = []
     ) {
         self.childCwd = childCwd
         self.fallbackModel = fallbackModel
@@ -200,6 +204,7 @@ internal final class SubagentParentBox: @unchecked Sendable {
         self.availableSkills = availableSkills
         self.fallbackFileAccessPolicy = fallbackFileAccessPolicy
         self.allowedModelOverrides = allowedModelOverrides
+        self.sharedTools = sharedTools
     }
 
     func attach(_ agent: Agent) {
@@ -225,7 +230,8 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     availableSkills: availableSkills,
                     fileAccessPolicy: fallbackFileAccessPolicy,
                     allowedModelOverrides: allowedModelOverrides,
-                    toolCatalog: nil
+                    toolCatalog: nil,
+                    sharedTools: sharedTools
                 )
             }
             return SubagentParentSnapshot(
@@ -252,7 +258,8 @@ internal final class SubagentParentBox: @unchecked Sendable {
                     fallback: fallbackFileAccessPolicy
                 ),
                 allowedModelOverrides: allowedModelOverrides,
-                toolCatalog: agent.state.toolCatalog
+                toolCatalog: agent.state.toolCatalog,
+                sharedTools: sharedTools
             )
         }
     }
@@ -2154,7 +2161,12 @@ internal struct SubagentInvocationRunner: Sendable {
         )
         tools.append(createSubagentYieldTool(capture: yieldCapture))
         // A child that may change things gets the parent's deferred tools
-        // (e.g. MCP); a read-only one must not, since they can do anything.
+        // (e.g. MCP) and the host's shared tools; a read-only one must not,
+        // since they can do anything.
+        if selectedTools.isMutating {
+            let builtIn = Set(tools.map(\.name))
+            tools += parent.sharedTools.filter { !builtIn.contains($0.name) }
+        }
         let toolCatalog = selectedTools.isMutating ? parent.toolCatalog?.makeChild() : nil
         if let toolCatalog {
             toolCatalog.restore(from: resumeMessages ?? [])
