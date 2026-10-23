@@ -3,11 +3,14 @@ import Foundation
 import FoundationNetworking
 #endif
 
-/// Development-time fetch of Cursor's usable-model list via the
-/// `GetUsableModels` unary RPC, with each id's window and image input from
-/// the model picker (`AvailableModels`). This is NOT called at runtime — kwwk ships a
-/// static Cursor catalog (`Resources/cursor-models.json`); this helper only
-/// backs the `kwwk-generate-cursor-models` script that regenerates it.
+/// Cursor's usable-model list via the `GetUsableModels` unary RPC, with
+/// each id's window and image input from the model picker
+/// (`AvailableModels`). kwwk itself never lists models at runtime: it reads
+/// the static Cursor catalog it ships (`Resources/cursor-models.json`), and
+/// `fetchUsableModels` backs the `kwwk-generate-cursor-models` script that
+/// regenerates it. A host that needs an account's own list calls
+/// ``CursorModels/fetch(credentials:host:clientVersion:client:)``, which
+/// asks the same and reads the reply as a runtime caller needs.
 public enum CursorModelCatalog {
     public enum FetchError: Error, LocalizedError {
         case http(Int, String)
@@ -21,9 +24,10 @@ public enum CursorModelCatalog {
         }
     }
 
-    /// Fetch usable Cursor models for the account behind `apiKey`. Unlike the
-    /// Run stream, `GetUsableModels` is a plain proto unary POST
-    /// (`application/proto`) so a regular HTTP client suffices.
+    /// Fetch usable Cursor models for the account behind `apiKey`, for the
+    /// generate script. Unlike the Run stream, `GetUsableModels` is a plain
+    /// proto unary POST (`application/proto`) so a regular HTTP client
+    /// suffices.
     public static func fetchUsableModels(
         apiKey: String,
         host: String = CursorAgentProvider.defaultBaseHost,

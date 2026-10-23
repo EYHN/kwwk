@@ -725,8 +725,8 @@ them — don't update one without the others:
 2. `Sources/KWWKAI/Resources/cursor-models.json` — the Cursor
    subscription models, pulled live from Cursor's `GetUsableModels` RPC,
    each with the context window and image input Cursor's model picker
-   (`AvailableModels`) gives its id (there is no runtime model sync; this
-   file is the authoritative Cursor catalog).
+   (`AvailableModels`) gives its id (kwwk never syncs it at runtime; this
+   file is the Cursor catalog kwwk runs on).
 3. `Sources/KWWKAI/Resources/devin-models.json` — the Devin subscription
    models, pulled live from Codeium Cascade's `GetCliModelConfigs` RPC,
    with per-effort model uids collapsed into one model per family. The
@@ -755,6 +755,14 @@ an existing `cursor` login in `~/.kwwk/oauth.json`, or — with neither
 present — an interactive browser login it persists for next time.
 `kwwk-generate-devin-models` works the same way with `DEVIN_API_KEY` and
 the `devin` login.
+
+A host that serves several Cursor logins and needs each account's own list
+at runtime calls `CursorModels.fetch(credentials:)`. It asks what the
+script asks and returns the same models, plus whether the picker's windows
+could be applied (`pickerApplied`). A refusal throws a `ProviderFailure`
+with Cursor's code and `Retry-After`, a team served in one region only is
+listed on the agent API Cursor names for it, and an account with no models
+gets an empty list rather than an error.
 
 The catalog tests assert unsupported Google Gemini CLI and Google
 Antigravity provider groups stay absent.
