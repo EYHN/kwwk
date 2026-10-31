@@ -208,6 +208,13 @@ public func registerStored(
         )
     case "zai", "zai-coding-cn":
         return await registerZai(storeId: storeId, creds: creds, modelOverride: modelOverride)
+    case OpenCodePlan.go.id, OpenCodePlan.zen.id:
+        return await registerOpenCode(
+            plan: OpenCodePlan.plan(id: storeId)!,
+            apiKey: creds.access,
+            modelOverride: modelOverride,
+            defaultModel: stringExtra(creds, "defaultModel")
+        )
     default:
         notice("stored credentials for '\(storeId)' aren't wired up; skipping.")
         return nil

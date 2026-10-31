@@ -332,6 +332,26 @@ struct OpenAIResponsesTests {
         #expect(tools?.first?["name"] as? String == "calc")
     }
 
+    // ChatGPT's Codex backend refuses `"metadata": {}` as an unsupported
+    // parameter; an empty dictionary says nothing, so it is never sent.
+    @Test("metadata is sent only when it has entries", arguments: [false, true])
+    func metadataEncoding(hasMetadata: Bool) async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAIResponsesProvider(client: client, webSocketClient: nil, defaultAPIKey: "k")
+        let metadata: [String: JSONValue] = hasMetadata ? ["user": "u-1"] : [:]
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(metadata: metadata)
+        )
+        for _ in 0..<200 where client.lastRequest == nil {
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        let body = try #require(client.lastRequest?.body)
+        let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+        #expect((json?["metadata"] as? [String: String]) == (hasMetadata ? ["user": "u-1"] : nil))
+    }
+
     @Test("OpenRouter Responses omits the automatic output cap and honors an explicit cap")
     func openRouterOutputCapPolicy() async throws {
         var model = Self.model

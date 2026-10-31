@@ -190,6 +190,20 @@ public let providerDirectory: [ProviderDescriptor] = [
         displayName: "Z.AI Coding Plan (China)",
         formTitle: "Z.AI API key (China)"
     ),
+    ProviderDescriptor(
+        storeId: "opencode-go",
+        scope: "opencode-go",
+        catalogKey: "opencode-go",
+        displayName: "OpenCode Go",
+        formTitle: "OpenCode Go API key"
+    ),
+    ProviderDescriptor(
+        storeId: "opencode",
+        scope: "opencode",
+        catalogKey: "opencode",
+        displayName: "OpenCode Zen",
+        formTitle: "OpenCode Zen API key"
+    ),
 ]
 
 /// Descriptor for a store id, or nil for unknown / `env:` sentinel ids —

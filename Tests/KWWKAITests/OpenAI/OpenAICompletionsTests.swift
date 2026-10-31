@@ -216,6 +216,21 @@ struct OpenAICompletionsTests {
         #expect(messages?[3]["tool_call_id"] as? String == "call_1")
     }
 
+    @Test("metadata is sent only when it has entries", arguments: [false, true])
+    func metadataEncoding(hasMetadata: Bool) async throws {
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
+        let metadata: [String: JSONValue] = hasMetadata ? ["user": "u-1"] : [:]
+        _ = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(metadata: metadata)
+        )
+        await Self.waitForRequest(client)
+        let json = try Self.decodeBody(client)
+        #expect((json["metadata"] as? [String: String]) == (hasMetadata ? ["user": "u-1"] : nil))
+    }
+
     @Test("prompt cache key is clamped and gated by provider compatibility")
     func promptCacheKeyEncoding() async throws {
         let client = StubSSEClient(body: Self.textSSE)

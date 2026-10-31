@@ -333,6 +333,21 @@ struct GoogleGeminiTests {
         #expect(try await Self.sentThinkingConfig(model, .medium)?["thinkingLevel"] as? String == "MEDIUM")
     }
 
+    // gemini-4-argon answers a budget with 400 "Thinking budget is not
+    // supported for this model. Use thinking level instead."
+    @Test("Gemini 4 is asked by level, off at the lowest it lists")
+    func gemini4TakesALevel() async throws {
+        let model = Self.levelModel("gemini-4-argon", [
+            "off": nil, "minimal": nil, "low": "low", "medium": "medium", "high": "high", "xhigh": nil, "max": nil,
+        ])
+        let off = try await Self.sentThinkingConfig(model, nil)
+        #expect(off?["thinkingLevel"] as? String == "LOW")
+        #expect(off?["thinkingBudget"] == nil)
+        let high = try await Self.sentThinkingConfig(model, .high)
+        #expect(high?["thinkingLevel"] as? String == "HIGH")
+        #expect(high?["thinkingBudget"] == nil)
+    }
+
     @Test("a level the catalog lists, or a model it does not describe, goes as before")
     func listedLevelsUnchanged() async throws {
         let flash = Self.levelModel("gemini-3.5-flash", [

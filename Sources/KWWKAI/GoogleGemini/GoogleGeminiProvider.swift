@@ -422,8 +422,15 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
     private static func isGemma4(_ id: String) -> Bool {
         id.range(of: #"gemma-?4"#, options: .regularExpression) != nil
     }
+    /// Gemini 4 takes a level as Gemini 3 does, and answers a budget with
+    /// 400 "Thinking budget is not supported for this model. Use thinking
+    /// level instead." (gemini-4-argon, through OpenCode's gateway).
+    private static func isGemini4(_ id: String) -> Bool {
+        id.range(of: #"gemini-4([.-]|$)"#, options: .regularExpression) != nil
+    }
+
     private static func usesThinkingLevel(_ id: String) -> Bool {
-        isGemini3Pro(id) || isGemini3Flash(id) || isGemma4(id)
+        isGemini3Pro(id) || isGemini3Flash(id) || isGemma4(id) || isGemini4(id)
     }
 
     /// Map a reasoning level to a Gemini `thinkingLevel` string, mirroring pi's
@@ -497,7 +504,7 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
     private static func disabledThinkingConfig(_ model: Model) -> [String: Any] {
         let lower = model.id.lowercased()
         if isGemini3Pro(lower) { return ["thinkingLevel": catalogThinkingLevel("LOW", model: model)] }
-        if isGemini3Flash(lower) || isGemma4(lower) {
+        if isGemini3Flash(lower) || isGemma4(lower) || isGemini4(lower) {
             return ["thinkingLevel": catalogThinkingLevel("MINIMAL", model: model)]
         }
         // Gemini 2.5 Pro cannot stop thinking: Google answers a budget of 0

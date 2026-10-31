@@ -33,6 +33,8 @@ struct ProviderDirectoryTests {
         ("xai", "xai", "xai", "xAI Grok", nil),
         ("zai", "zai", "zai", "Z.AI Coding Plan", nil),
         ("zai-coding-cn", "zai-coding-cn", "zai-coding-cn", "Z.AI Coding Plan (China)", "Z.AI API key (China)"),
+        ("opencode-go", "opencode-go", "opencode-go", "OpenCode Go", "OpenCode Go API key"),
+        ("opencode", "opencode", "opencode", "OpenCode Zen", "OpenCode Zen API key"),
     ]
 
     @Test("directory order is the stored-provider priority order")
