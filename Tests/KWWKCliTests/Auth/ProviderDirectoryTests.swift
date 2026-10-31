@@ -29,6 +29,7 @@ struct ProviderDirectoryTests {
         ("workbuddy", "workbuddy", "workbuddy", "WorkBuddy", nil),
         ("workbuddy-ai", "workbuddy-ai", "workbuddy-ai", "WorkBuddy AI", nil),
         ("kimi-coding", "kimi-coding", "kimi-coding", "Kimi For Coding", nil),
+        ("kimi-coding-ai", "kimi-coding-ai", "kimi-coding-ai", "Kimi For Coding Global", nil),
         ("xai", "xai", "xai", "xAI Grok", nil),
         ("zai", "zai", "zai", "Z.AI Coding Plan", nil),
         ("zai-coding-cn", "zai-coding-cn", "zai-coding-cn", "Z.AI Coding Plan (China)", "Z.AI API key (China)"),

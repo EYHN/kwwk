@@ -78,6 +78,11 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "kimi-coding-ai",
+        display: "Kimi For Coding Global (kimi.ai coding plan)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "xai",
         display: "xAI Grok (SuperGrok / X Premium subscription)",
         flow: .oauth

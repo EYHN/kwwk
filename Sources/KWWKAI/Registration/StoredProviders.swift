@@ -191,8 +191,9 @@ public func registerStored(
             modelOverride: modelOverride,
             primeToken: primeToken
         )
-    case "kimi-coding":
+    case KimiSite.china.id, KimiSite.global.id:
         return await registerKimiCoding(
+            site: KimiSite.site(id: storeId)!,
             manager: manager,
             creds: creds,
             modelOverride: modelOverride,
@@ -536,6 +537,7 @@ public func devinModel(id: String) -> Model {
 // MARK: - Kimi For Coding (OAuth device flow)
 
 private func registerKimiCoding(
+    site: KimiSite = .china,
     manager: OAuthManager,
     creds: OAuthCredentials,
     modelOverride: String? = nil,
@@ -544,7 +546,7 @@ private func registerKimiCoding(
     // Prime the token only for the active provider; the resolver refreshes
     // lazily on the first request for the others.
     if primeToken {
-        _ = try? await manager.apiKey(for: "kimi-coding")
+        _ = try? await manager.apiKey(for: site.id)
     }
 
     // Kimi's coding endpoint speaks anthropic-messages but authenticates with
@@ -552,10 +554,10 @@ private func registerKimiCoding(
     // OAuth token per request; the header builder covers any static-key path.
     await APIRegistry.shared.register(AnthropicProvider(
         authHeaderBuilder: { key in ["Authorization": bearerHeaderValue(key)] }
-    ), scope: "kimi-coding")
+    ), scope: site.id)
 
     let modelId = modelOverride ?? "kimi-for-coding"
-    let catalog = ModelsCatalog.model(provider: "kimi-coding", id: modelId)
+    let catalog = ModelsCatalog.model(provider: site.id, id: modelId)
     // Uncatalogued ids still need the thinking wire shape every bundled
     // kimi-coding model pins (adaptive thinking, unsigned thinking blocks).
     let fallbackCompat: ModelCompat = {
@@ -568,8 +570,8 @@ private func registerKimiCoding(
         id: modelId,
         name: catalog?.name ?? modelId,
         api: "anthropic-messages",
-        provider: "kimi-coding",
-        baseURL: catalog?.baseURL ?? "https://api.kimi.com/coding",
+        provider: site.id,
+        baseURL: catalog?.baseURL ?? site.apiBaseURL,
         reasoning: catalog?.reasoning ?? true,
         input: catalog?.input ?? [.text, .image],
         cost: catalog?.cost ?? ModelCost(),
@@ -583,8 +585,8 @@ private func registerKimiCoding(
     )
     return ResolvedAuth(
         model: model,
-        modelLabel: "\(modelId) · Kimi For Coding",
-        authResolver: oauthResolver(manager: manager, providerId: "kimi-coding", scheme: .bearer)
+        modelLabel: "\(modelId) · \(site.name)",
+        authResolver: oauthResolver(manager: manager, providerId: site.id, scheme: .bearer)
     )
 }
 

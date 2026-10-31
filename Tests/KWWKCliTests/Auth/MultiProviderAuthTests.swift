@@ -276,6 +276,44 @@ struct MultiProviderAuthTests {
         }
     }
 
+    @Test("registerStored wires global Kimi to its own endpoint and credential scope")
+    func registerStoredGlobalKimi() async throws {
+        try await withSharedAPIRegistry {
+            await APIRegistry.shared.unregisterScope("kimi-coding-ai")
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("kwwk-kimi-global-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let store = try OAuthStore(url: dir.appendingPathComponent("oauth.json"))
+            try await store.set(OAuthCredentials(
+                access: "global-kimi-token",
+                refresh: "global-kimi-refresh",
+                expires: .max
+            ), for: "kimi-coding-ai")
+
+            let resolved = try await registerStored(
+                storeId: "kimi-coding-ai",
+                store: store,
+                modelOverride: "k3.1-pro",
+                context1m: false
+            )
+            let model = try #require(resolved?.model)
+            let china = try #require(ModelsCatalog.model(provider: "kimi-coding", id: "k3.1-pro"))
+            #expect(model.id == "k3.1-pro")
+            #expect(model.provider == "kimi-coding-ai")
+            #expect(model.api == "anthropic-messages")
+            #expect(model.baseURL == "https://api.kimi.ai/coding")
+            #expect(model.contextWindow == china.contextWindow)
+            #expect(model.thinkingLevelMap == china.thinkingLevelMap)
+            #expect(resolved?.modelLabel == "k3.1-pro · Kimi For Coding Global")
+            #expect(try await resolved?.authResolver?(model, nil)?.token == "global-kimi-token")
+            let scoped = await APIRegistry.shared.provider(scope: "kimi-coding-ai", api: "anthropic-messages")
+            #expect(scoped is AnthropicProvider)
+            // Child-model overrides resolve in the global catalog too.
+            #expect(ModelsCatalog.model(provider: "kimi-coding-ai", id: "kimi-for-coding")?.baseURL == "https://api.kimi.ai/coding")
+            await APIRegistry.shared.unregisterScope("kimi-coding-ai")
+        }
+    }
+
     @Test("registerStored wires an xAI Grok login onto the bearer completions wire")
     func registerStoredXaiGrok() async throws {
         try await withSharedAPIRegistry {

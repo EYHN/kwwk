@@ -93,6 +93,17 @@ public enum ModelsCatalog {
         for provider in ["workbuddy", "workbuddy-ai"] where out[provider] == nil {
             out[provider] = loadBundledArray("\(provider)-models")
         }
+        // Kimi's two regions share model capabilities. Only the credential
+        // scope and coding endpoint differ; keeping the China rows as the
+        // source also lets subagents resolve overrides under the global site.
+        if out[KimiSite.global.id] == nil, let china = out[KimiSite.china.id] {
+            out[KimiSite.global.id] = china.mapValues { model in
+                var global = model
+                global.provider = KimiSite.global.id
+                global.baseURL = KimiSite.global.apiBaseURL
+                return global
+            }
+        }
         return out
     }
 

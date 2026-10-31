@@ -65,7 +65,7 @@ struct LiveCredentialRejectionTests {
     }
 
     static let ids = (ProcessInfo.processInfo.environment["KWWK_LIVE_IDS"]
-        ?? "openai-codex,anthropic,github-copilot,cursor,devin,kimi-coding,xai,kiro,qoder,qoder-cn,workbuddy,workbuddy-ai")
+        ?? "openai-codex,anthropic,github-copilot,cursor,devin,kimi-coding,kimi-coding-ai,xai,kiro,qoder,qoder-cn,workbuddy,workbuddy-ai")
         .split(separator: ",").map(String.init)
 
     struct Outcome {

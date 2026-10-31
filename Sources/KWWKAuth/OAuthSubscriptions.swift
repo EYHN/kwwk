@@ -38,7 +38,8 @@ public enum OAuthSubscriptions {
         Provider(id: QoderSite.cn.id, name: QoderSite.cn.name, upkeep: .refreshed),
         Provider(id: WorkBuddySite.china.id, name: WorkBuddySite.china.name, upkeep: .refreshed),
         Provider(id: WorkBuddySite.international.id, name: WorkBuddySite.international.name, upkeep: .refreshed),
-        Provider(id: "kimi-coding", name: "Kimi For Coding", upkeep: .refreshed),
+        Provider(id: KimiSite.china.id, name: KimiSite.china.name, upkeep: .refreshed),
+        Provider(id: KimiSite.global.id, name: KimiSite.global.name, upkeep: .refreshed),
         Provider(id: "xai", name: "Grok", upkeep: .refreshed),
         Provider(id: "zai", name: "Z.ai Coding Plan", upkeep: .permanent),
         Provider(id: ZaiSite.china.id, name: "BigModel Coding Plan", upkeep: .permanent),
@@ -90,8 +91,13 @@ public enum OAuthSubscriptions {
             return try await OAuthLogin.loginWorkBuddy(site: .china, callbacks: callbacks, client: client)
         case WorkBuddySite.international.id:
             return try await OAuthLogin.loginWorkBuddy(site: .international, callbacks: callbacks, client: client)
-        case "kimi-coding":
-            return try await OAuthLogin.loginKimiCoding(identity: kimiIdentity, callbacks: callbacks, client: client)
+        case KimiSite.china.id, KimiSite.global.id:
+            return try await OAuthLogin.loginKimiCoding(
+                site: KimiSite.site(id: providerId)!,
+                identity: kimiIdentity,
+                callbacks: callbacks,
+                client: client
+            )
         case "xai":
             return try await OAuthLogin.loginXai(callbacks: callbacks, client: client)
         case ZaiSite.global.id:
@@ -122,7 +128,8 @@ public enum OAuthSubscriptions {
         case QoderSite.cn.id: QoderOAuthProvider(site: .cn)
         case WorkBuddySite.china.id: WorkBuddyOAuthProvider(site: .china)
         case WorkBuddySite.international.id: WorkBuddyOAuthProvider(site: .international)
-        case "kimi-coding": KimiCodingOAuthProvider(identity: kimiIdentity)
+        case KimiSite.china.id, KimiSite.global.id:
+            KimiCodingOAuthProvider(site: KimiSite.site(id: providerId)!, identity: kimiIdentity)
         case "xai": XaiOAuthProvider()
         default: nil
         }

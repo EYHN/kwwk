@@ -262,6 +262,21 @@ struct LoginSeamTests {
         // Non-ASCII is stripped from header values.
         #expect(client.header("X-Msh-Device-Name", request: 0) == "Adas iPhone")
     }
+
+    @Test("Global Kimi signs in at auth.kimi.ai through the subscription dispatcher")
+    func globalKimiLogin() async throws {
+        let client = QueuedHTTPClient([
+            .response(status: 200, body: #"{"device_code":"DC","user_code":"UC","verification_uri":"https://www.kimi.ai/device","interval":0,"expires_in":900}"#),
+            .response(status: 200, body: #"{"access_token":"global-token","refresh_token":"global-refresh","expires_in":900}"#),
+        ])
+        let credentials = try await OAuthSubscriptions.login(
+            providerId: KimiSite.global.id,
+            callbacks: quietCallbacksBase,
+            client: client
+        )
+        #expect(credentials.access == "global-token")
+        #expect(client.requests.map(\.url).allSatisfy { $0.host() == "auth.kimi.ai" })
+    }
 }
 
 final class LoopbackBox: @unchecked Sendable {

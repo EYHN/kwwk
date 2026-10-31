@@ -117,6 +117,21 @@ struct KimiDeviceRefreshTests {
         #expect(client.header("X-Msh-Device-Id", request: 0) == "fallback-id")
         #expect(refreshed.extras["deviceId"] == .string("fallback-id"))
     }
+
+    @Test("Global Kimi refreshes at auth.kimi.ai under its own provider id")
+    func globalRefresh() async throws {
+        let provider = KimiCodingOAuthProvider(site: .global, identity: fallback)
+        let client = QueuedHTTPClient([
+            .response(status: 200, body: #"{"access_token":"ka2","refresh_token":"kr2","expires_in":900}"#),
+        ])
+        _ = try await provider.refresh(
+            OAuthCredentials(access: "ka", refresh: "kr", expires: 0),
+            using: client
+        )
+        #expect(provider.id == "kimi-coding-ai")
+        #expect(provider.name == "Kimi For Coding Global")
+        #expect(client.requests.first?.url.absoluteString == "https://auth.kimi.ai/api/oauth/token")
+    }
 }
 
 @Suite("Subscription usage")
@@ -187,6 +202,117 @@ struct UsageTests {
         #expect(windows[1].window == .sevenDay)
         #expect(windows[1].usedPercent == 25)
         #expect(windows[1].resetsAt == 1_790_003_600_000)
+    }
+
+    @Test("Kimi: current ratios add monthly pools beside the short windows")
+    func kimiCurrentPools() throws {
+        let windows = KimiCodingUsageReader.windows(from: [
+            "usages": [
+                "limit_5h": ["used_ratio": 0.125, "reset_time": "2026-10-02T12:00:00Z"],
+                "limit_7d": ["used_ratio": "0.5"],
+                "limit_month_total": ["used_ratio": 0.75],
+                "limit_month_code": ["used_ratio": 0.25],
+            ],
+        ])
+        #expect(windows.map(\.window) == [.fiveHour, .sevenDay, .primary, .primary])
+        #expect(windows.map(\.usedPercent) == [12.5, 50, 75, 25])
+        #expect(windows[2].windowSeconds == nil)
+        #expect(windows[3].limitID == "month_code")
+        #expect(windows[3].limitName == "Kimi Code")
+    }
+
+    @Test("Kimi: a stale zero ratio keeps the live counter in the same window")
+    func kimiStaleRatio() throws {
+        let windows = KimiCodingUsageReader.windows(from: [
+            "limits": [[
+                "window": ["duration": 300, "timeUnit": "TIME_UNIT_MINUTE"],
+                "detail": ["limit": "100", "used": "100", "resetTime": "2026-09-18T18:33:41.100062Z"],
+            ]],
+            "usages": [
+                "limit_5h": ["used_ratio": 0, "reset_time": "2026-09-18T18:33:40Z"],
+            ],
+        ])
+        let fiveHour = try #require(windows.first { $0.window == .fiveHour })
+        #expect(fiveHour.usedPercent == 100)
+    }
+
+    @Test("Kimi: reset transitions choose the later window in either direction")
+    func kimiResetTransitions() throws {
+        let windows = KimiCodingUsageReader.windows(from: [
+            "usage": ["limit": "100", "used": "100", "resetTime": "2026-09-24T02:09:07.465054Z"],
+            "limits": [[
+                "window": ["duration": 300, "timeUnit": "TIME_UNIT_MINUTE"],
+                "detail": ["limit": "100", "used": "100", "resetTime": "2026-09-22T01:09:07.465054Z"],
+            ]],
+            "usages": [
+                "limit_5h": ["used_ratio": 0, "reset_time": "2026-09-21T01:09:06Z"],
+                "limit_7d": ["used_ratio": 0, "reset_time": "2026-10-01T02:09:06Z"],
+            ],
+        ])
+        #expect(windows.first { $0.window == .fiveHour }?.usedPercent == 100)
+        #expect(windows.first { $0.window == .sevenDay }?.usedPercent == 0)
+    }
+
+    @Test("Kimi: a future reset cannot lower an active window before rollover")
+    func kimiResetTransitionBeforeRollover() throws {
+        let now = Date(timeIntervalSince1970: 1_790_064_000) // 2026-09-23 12:00 UTC
+        let windows = KimiCodingUsageReader.windows(from: [
+            "usage": ["limit": "100", "used": "100", "resetTime": "2026-09-24T02:09:07.465054Z"],
+            "usages": [
+                "limit_7d": ["used_ratio": 0, "reset_time": "2026-10-01T02:09:06Z"],
+            ],
+        ], now: now)
+        #expect(windows.first { $0.window == .sevenDay }?.usedPercent == 100)
+    }
+
+    @Test("Kimi: an earlier future ratio cannot clear a later live counter")
+    func kimiEarlierFutureRatioKeepsCounter() throws {
+        let now = Date(timeIntervalSince1970: 1_790_064_000)
+        let windows = KimiCodingUsageReader.windows(from: [
+            "usage": ["limit": "100", "used": "100", "resetTime": "2026-09-24T14:00:00Z"],
+            "usages": [
+                "limit_7d": ["used_ratio": 0, "reset_time": "2026-09-24T13:00:00Z"],
+            ],
+        ], now: now)
+        let sevenDay = try #require(windows.first { $0.window == .sevenDay })
+        #expect(sevenDay.usedPercent == 100)
+        #expect(sevenDay.resetsAt != nil)
+    }
+
+    @Test("Kimi: one-sided resets preserve recovery time and the strongest constraint")
+    func kimiOneSidedResets() throws {
+        let now = Date(timeIntervalSince1970: 1_790_064_000)
+        for legacyUsed in [90, 100] {
+            let windows = KimiCodingUsageReader.windows(from: [
+                "usage": ["limit": "100", "used": legacyUsed],
+                "usages": [
+                    "limit_7d": ["used_ratio": 1.0, "reset_time": "2026-09-24T02:09:06Z"],
+                ],
+            ], now: now)
+            let sevenDay = try #require(windows.first { $0.window == .sevenDay })
+            #expect(sevenDay.usedPercent == 100)
+            #expect(sevenDay.resetsAt != nil)
+        }
+    }
+
+    @Test("Kimi: a missing reset keeps the more exhausted reading")
+    func kimiMissingReset() throws {
+        let windows = KimiCodingUsageReader.windows(from: [
+            "usage": ["limit": "100", "used": "100"],
+            "usages": ["limit_7d": ["used_ratio": 0]],
+        ])
+        #expect(windows.first { $0.window == .sevenDay }?.usedPercent == 100)
+    }
+
+    @Test("Global Kimi usage is read at api.kimi.ai under its own provider id")
+    func globalUsageRequest() async throws {
+        let reader = KimiCodingUsageReader(site: .global)
+        _ = try await reader.usage(
+            OAuthCredentials(access: "global-token", refresh: "", expires: .max),
+            using: QueuedHTTPClient([.response(status: 200, body: "{}")])
+        )
+        #expect(reader.providerId == "kimi-coding-ai")
+        #expect(reader.url.absoluteString == "https://api.kimi.ai/coding/v1/usages")
     }
 
     @Test("A 429 carries its Retry-After; other failures are unavailable")

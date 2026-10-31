@@ -459,6 +459,22 @@ public enum OAuthLogin {
     // `extras.deviceId` so whoever refreshes the login sends the same one.
 
     public static func loginKimiCoding(
+        site: KimiSite,
+        clientID: String = KimiOAuth.clientID,
+        identity: KimiDeviceIdentity? = nil,
+        callbacks: Callbacks,
+        client: HTTPClient = URLSessionHTTPClient()
+    ) async throws -> OAuthCredentials {
+        try await loginKimiCoding(
+            clientID: clientID,
+            host: site.authHost,
+            identity: identity,
+            callbacks: callbacks,
+            client: client
+        )
+    }
+
+    public static func loginKimiCoding(
         clientID: String = KimiOAuth.clientID,
         host: URL = KimiOAuth.host,
         // The device fingerprint. Nil uses this machine's, with the id

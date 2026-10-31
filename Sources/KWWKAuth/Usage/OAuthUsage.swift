@@ -81,7 +81,8 @@ public enum OAuthUsage {
         uniqueKeysWithValues: ([
             AnthropicUsageReader(),
             OpenAICodexUsageReader(),
-            KimiCodingUsageReader(),
+            KimiCodingUsageReader(site: .china),
+            KimiCodingUsageReader(site: .global),
             KiroUsageReader(),
             QoderUsageReader(site: .global),
             QoderUsageReader(site: .cn),
@@ -281,21 +282,24 @@ public struct OpenAICodexUsageReader: OAuthUsageReader {
 
 // MARK: - Kimi For Coding (Moonshot coding plan)
 
-/// `GET https://api.kimi.com/coding/v1/usages`, the endpoint the Kimi CLI's
-/// `/usage` command reads with nothing but the Bearer token.
+/// `GET <site>/coding/v1/usages`, the endpoint the Kimi CLI's `/usage`
+/// command reads with nothing but the Bearer token. China uses api.kimi.com;
+/// global uses api.kimi.ai.
 ///
 /// The payload is loosely specified and the CLI parses it tolerantly, so this
 /// does too: `limits` rows carry a `window` (`duration` + `timeUnit`) and a
 /// `detail` with `limit` and either `used` or `remaining`; a top-level
-/// `usage` object is the weekly summary. Resets arrive as ISO timestamps —
-/// sometimes with nanosecond fractions — or as seconds-until under a handful
-/// of spellings.
+/// `usage` object is the weekly summary. Current `usages` entries add ratios
+/// and monthly pools. Resets arrive as ISO timestamps — sometimes with
+/// nanosecond fractions — or as seconds-until under a handful of spellings.
 public struct KimiCodingUsageReader: OAuthUsageReader {
-    public let providerId = "kimi-coding"
+    public let site: KimiSite
+    public var providerId: String { site.id }
     public let url: URL
 
-    public init(url: URL = URL(string: "https://api.kimi.com/coding/v1/usages")!) {
-        self.url = url
+    public init(site: KimiSite = .china, url: URL? = nil) {
+        self.site = site
+        self.url = url ?? site.usageURL
     }
 
     public func usage(_ credentials: OAuthCredentials, using client: HTTPClient) async throws -> [OAuthUsageWindow] {
@@ -374,7 +378,111 @@ public struct KimiCodingUsageReader: OAuthUsageReader {
                 windowSeconds: 7 * 24 * 60 * 60
             ))
         }
+        return mergingCurrentPools(windows, payload: payload, now: now)
+    }
+
+    /// The current `usages` shape adds ratios and monthly pools. Keep it
+    /// beside the legacy counters, whose live values can lead a stale ratio.
+    private static func mergingCurrentPools(
+        _ legacy: [OAuthUsageWindow],
+        payload: [String: Any],
+        now: Date
+    ) -> [OAuthUsageWindow] {
+        guard let usages = payload["usages"] as? [String: Any] else { return legacy }
+        var windows = legacy
+        for (key, kind, seconds) in [
+            ("limit_5h", OAuthUsageWindowKind.fiveHour, 5 * 60 * 60),
+            ("limit_7d", .sevenDay, 7 * 24 * 60 * 60),
+        ] {
+            guard let quota = currentQuota(usages[key], now: now) else { continue }
+            let current = OAuthUsageWindow(
+                window: kind,
+                usedPercent: quota.usedPercent,
+                resetsAt: quota.resetsAt,
+                windowSeconds: seconds
+            )
+            guard let index = windows.firstIndex(where: { $0.window == kind }) else {
+                windows.append(current)
+                continue
+            }
+            let existing = windows[index]
+            if samePeriod(existing.resetsAt, current.resetsAt) {
+                windows[index].usedPercent = max(existing.usedPercent, current.usedPercent)
+                if let existingReset = existing.resetsAt, let currentReset = current.resetsAt {
+                    windows[index].resetsAt = max(existingReset, currentReset)
+                }
+            } else if let existingReset = existing.resetsAt, let currentReset = current.resetsAt {
+                let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+                if min(existingReset, currentReset) <= nowMs {
+                    // Only an expired window lets the later period lower
+                    // consumption. Before then the active constraint wins.
+                    windows[index] = existingReset > currentReset ? existing : current
+                } else {
+                    // Both periods are active or still ahead: keep the next
+                    // reset, and never clear the stronger constraint.
+                    windows[index] = existingReset < currentReset ? existing : current
+                    windows[index].usedPercent = max(existing.usedPercent, current.usedPercent)
+                    windows[index].resetsAt = min(existingReset, currentReset)
+                }
+            } else if let datedReset = existing.resetsAt ?? current.resetsAt {
+                let nowMs = Int64(now.timeIntervalSince1970 * 1000)
+                if datedReset <= nowMs {
+                    // The dated period is over; the undated reading is the
+                    // only one that can describe the current period.
+                    windows[index] = existing.resetsAt == nil ? existing : current
+                } else {
+                    // Keep the active recovery time and the strongest
+                    // constraint, including when both readings are equal.
+                    if existing.resetsAt == nil {
+                        windows[index] = current
+                        windows[index].usedPercent = max(existing.usedPercent, current.usedPercent)
+                        windows[index].resetsAt = datedReset
+                    } else {
+                        windows[index].usedPercent = max(existing.usedPercent, current.usedPercent)
+                        windows[index].resetsAt = datedReset
+                    }
+                }
+            } else {
+                windows[index].usedPercent = max(existing.usedPercent, current.usedPercent)
+            }
+        }
+        if let monthly = currentQuota(usages["limit_month_total"], now: now) {
+            windows.append(OAuthUsageWindow(
+                window: .primary,
+                usedPercent: monthly.usedPercent,
+                resetsAt: monthly.resetsAt,
+                windowSeconds: nil
+            ))
+        }
+        if let coding = currentQuota(usages["limit_month_code"], now: now) {
+            windows.append(OAuthUsageWindow(
+                window: .primary,
+                usedPercent: coding.usedPercent,
+                resetsAt: coding.resetsAt,
+                windowSeconds: nil,
+                limitID: "month_code",
+                limitName: "Kimi Code"
+            ))
+        }
         return windows
+    }
+
+    private static func currentQuota(_ value: Any?, now: Date) -> (usedPercent: Double, resetsAt: Int64?)? {
+        guard let entry = value as? [String: Any],
+              let ratio = doubleValue(entry["used_ratio"]), ratio.isFinite
+        else { return nil }
+        return (ratio * 100, resetsAtMillis(entry, now: now))
+    }
+
+    private static func samePeriod(_ lhs: Int64?, _ rhs: Int64?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        return abs(lhs - rhs) <= 2_000
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let number = value as? NSNumber { return number.doubleValue }
+        if let text = value as? String { return Double(text) }
+        return nil
     }
 
     private static func windowSeconds(_ window: [String: Any], fallback: [String: Any]) -> Int? {

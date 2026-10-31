@@ -8,9 +8,52 @@ import NIOConcurrencyHelpers
 // `grant_type=refresh_token` form POST to the same token endpoint. Every
 // request carries the `X-Msh-*` device-identity headers the Kimi CLI sends.
 
+/// One Kimi For Coding region. Accounts and tokens stay scoped to the site
+/// that issued them; the model and usage paths are otherwise identical.
+public struct KimiSite: Sendable, Hashable {
+    public let id: String
+    public let name: String
+    public let authHost: URL
+    public let apiBaseURL: String
+
+    public init(id: String, name: String, authHost: URL, apiBaseURL: String) {
+        self.id = id
+        self.name = name
+        self.authHost = authHost
+        self.apiBaseURL = apiBaseURL
+    }
+
+    public var tokenURL: URL {
+        authHost.appendingPathComponent("api/oauth/token")
+    }
+
+    public var usageURL: URL {
+        URL(string: apiBaseURL + "/v1/usages")!
+    }
+
+    public static let china = KimiSite(
+        id: "kimi-coding",
+        name: "Kimi For Coding",
+        authHost: URL(string: "https://auth.kimi.com")!,
+        apiBaseURL: "https://api.kimi.com/coding"
+    )
+    public static let global = KimiSite(
+        id: "kimi-coding-ai",
+        name: "Kimi For Coding Global",
+        authHost: URL(string: "https://auth.kimi.ai")!,
+        apiBaseURL: "https://api.kimi.ai/coding"
+    )
+    public static let all: [KimiSite] = [.china, .global]
+
+    public static func site(id: String) -> KimiSite? {
+        all.first { $0.id == id }
+    }
+}
+
 public struct KimiCodingOAuthProvider: OAuthProvider {
-    public let id = "kimi-coding"
-    public let name = "Kimi For Coding"
+    public let site: KimiSite
+    public var id: String { site.id }
+    public var name: String { site.name }
     public let tokenURL: URL
     public let clientID: String
     /// The fingerprint sent when the credentials don't name their own device
@@ -19,11 +62,13 @@ public struct KimiCodingOAuthProvider: OAuthProvider {
     public let identity: KimiDeviceIdentity?
 
     public init(
-        tokenURL: URL = URL(string: "https://auth.kimi.com/api/oauth/token")!,
+        site: KimiSite = .china,
+        tokenURL: URL? = nil,
         clientID: String = KimiOAuth.clientID,
         identity: KimiDeviceIdentity? = nil
     ) {
-        self.tokenURL = tokenURL
+        self.site = site
+        self.tokenURL = tokenURL ?? site.tokenURL
         self.clientID = clientID
         self.identity = identity
     }
@@ -100,7 +145,7 @@ public struct KimiDeviceIdentity: Sendable, Equatable {
 /// agent string the bundled kimi-coding catalog models pin for chat requests).
 public enum KimiOAuth {
     public static let clientID = "17e5f671-d194-4dfb-9706-5516cb48c098"
-    public static let host = URL(string: "https://auth.kimi.com")!
+    public static let host = KimiSite.china.authHost
     /// Keep in sync with the `User-Agent` header on the bundled `kimi-coding`
     /// catalog models.
     static let cliVersion = "1.5"

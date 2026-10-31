@@ -163,6 +163,13 @@ public let providerDirectory: [ProviderDescriptor] = [
         formTitle: nil
     ),
     ProviderDescriptor(
+        storeId: "kimi-coding-ai",
+        scope: "kimi-coding-ai",
+        catalogKey: "kimi-coding-ai",
+        displayName: "Kimi For Coding Global",
+        formTitle: nil
+    ),
+    ProviderDescriptor(
         storeId: "xai",
         scope: "xai",
         catalogKey: "xai",

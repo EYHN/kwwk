@@ -246,9 +246,10 @@ struct KimiCodingOAuthTests {
         #expect(updated.refresh == "keep-me")
     }
 
-    @Test("kimi-coding is a default OAuthManager provider")
+    @Test("both Kimi sites are default OAuthManager providers")
     func kimiInDefaultProviders() {
         #expect(OAuthManager.defaultProviders().contains { $0.id == "kimi-coding" })
+        #expect(OAuthManager.defaultProviders().contains { $0.id == "kimi-coding-ai" })
     }
 
     @Test("device id stays process-stable when the id file can't be written")

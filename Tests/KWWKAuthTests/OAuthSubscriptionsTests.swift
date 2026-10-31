@@ -25,6 +25,9 @@ struct OAuthSubscriptionsTests {
         #expect((OAuthSubscriptions.refresher(providerId: "qoder") as? QoderOAuthProvider)?.site == .global)
         #expect((OAuthSubscriptions.refresher(providerId: "workbuddy-ai") as? WorkBuddyOAuthProvider)?.site == .international)
         #expect((OAuthSubscriptions.refresher(providerId: "workbuddy") as? WorkBuddyOAuthProvider)?.site == .china)
+        #expect((OAuthSubscriptions.refresher(providerId: "kimi-coding") as? KimiCodingOAuthProvider)?.site == .china)
+        #expect((OAuthSubscriptions.refresher(providerId: "kimi-coding-ai") as? KimiCodingOAuthProvider)?.site == .global)
+        #expect(OAuthSubscriptions.provider(id: "kimi-coding-ai")?.name == "Kimi For Coding Global")
     }
 
     @Test("Usage is read only for subscriptions that can be signed in to")
@@ -32,6 +35,8 @@ struct OAuthSubscriptionsTests {
         let known = Set(OAuthSubscriptions.providers.map(\.id))
         #expect(OAuthSubscriptions.usageIds.isSubset(of: known))
         #expect(OAuthSubscriptions.usageIds.contains("kiro"))
+        #expect(OAuthSubscriptions.usageIds.contains("kimi-coding"))
+        #expect(OAuthSubscriptions.usageIds.contains("kimi-coding-ai"))
         // A key or a session has no windows kwwk reads.
         #expect(!OAuthSubscriptions.usageIds.contains("zai"))
         #expect(!OAuthSubscriptions.usageIds.contains("github-copilot"))

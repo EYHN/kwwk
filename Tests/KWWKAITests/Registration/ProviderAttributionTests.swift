@@ -11,6 +11,7 @@ struct ProviderAttributionTests {
         #expect(ProviderAttribution.getProviderDisplayName("google") == "Google Gemini")
         #expect(ProviderAttribution.getProviderDisplayName("vercel-ai-gateway") == "Vercel AI Gateway")
         #expect(ProviderAttribution.getProviderDisplayName("kimi-coding") == "Kimi For Coding")
+        #expect(ProviderAttribution.getProviderDisplayName("kimi-coding-ai") == "Kimi For Coding Global")
     }
 
     @Test("unknown provider falls back to its id")
