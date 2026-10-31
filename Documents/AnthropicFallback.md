@@ -1,11 +1,14 @@
 # Anthropic server-side fallback
 
-Official Anthropic Messages requests for `claude-fable-5`, `claude-fable-5-1`,
+Fallback is opt-in. With `StreamOptions.anthropicServerSideFallback = true`,
+official Anthropic Messages requests for `claude-fable-5`, `claude-fable-5-1`,
 `claude-mythos-5`, `claude-mythos-5-1`, and `claude-opus-5`
-automatically include `fallbacks: [{"model":"claude-opus-4-8"}]`
+include `fallbacks: [{"model":"claude-opus-4-8"}]`
 and `server-side-fallback-2026-06-01` (omp's protocol). Both API-key and Claude subscription
-routes use this provider. Set `StreamOptions.anthropicServerSideFallback = false`
-to disable it. Other models and third-party endpoints do not opt in.
+routes use this provider. Left unset, no request opts in: a safeguard refusal
+(for example `stop_details.category: "cyber"`) ends the turn as `refusal`
+rather than being answered by another model (2026-10-31; it was on by default
+before). Other models and third-party endpoints never opt in.
 This is an exact allowlist: preview IDs, unknown suffixes, and future versions
 are not implicitly enabled. Mythos support applies to custom model definitions;
 this change does not add Mythos entries or guessed prices to the bundled catalog.
