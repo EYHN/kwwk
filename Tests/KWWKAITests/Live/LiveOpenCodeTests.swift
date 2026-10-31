@@ -46,10 +46,12 @@ struct LiveOpenCodeTests {
                 let registered = await registerOpenCode(plan: plan, apiKey: key, modelOverride: id)
                 let session = UUID().uuidString
                 do {
+                    // the key travels with the resolution, as in a session
+                    let auth = try await registered.authResolver?(registered.model, session)
                     let events = try await stream(model: registered.model, context: Context(
                         systemPrompt: "You are a helpful assistant. Give a brief answer.",
                         messages: [.user(UserMessage(text: "Reply with the word OK."))]
-                    ), options: StreamOptions(sessionId: session))
+                    ), options: StreamOptions(apiKey: auth?.token, sessionId: session, resolvedAuth: auth))
                     var deltas = 0
                     for await event in events {
                         if case .textDelta = event { deltas += 1 }
