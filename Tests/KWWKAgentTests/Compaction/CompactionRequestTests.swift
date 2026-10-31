@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 @testable import KWWKAI
 @testable import KWWKAgent
@@ -233,6 +236,42 @@ struct CompactionRequestTests {
         #expect(recap.nativeCompaction != nil)
     }
 
+    // ChatGPT's Codex backend answers 400 {"detail":"Unsupported parameter:
+    // metadata"} to `"metadata": {}`, which an auth with no metadata put on
+    // the V2 compaction request. The loop and the local summary already sent
+    // none; the native request must not either, and must keep real metadata.
+    @Test("native compaction sends the auth's metadata only when it has some", arguments: [false, true])
+    func nativeCompactionMetadata(hasMetadata: Bool) async throws {
+        let client = CompactionRequestCapture(body: Self.codexSSE)
+        let model = Model(id: "gpt-5.6", api: "chatgpt-codex", provider: UUID().uuidString)
+        await APIRegistry.shared.register(
+            ProviderVariants.chatgptCodex(client: client, webSocketClient: nil),
+            scope: model.provider
+        )
+        let metadata: [String: JSONValue] = hasMetadata ? ["deployment": "prod"] : [:]
+        let result = await AgentContextCompactor.compactMessages(
+            messages: history(),
+            model: model,
+            sessionId: "session",
+            config: .init(keepRecentTokens: 40, summaryRetryPolicy: .init(baseDelayMs: 0)),
+            authResolver: { _, _ in ResolvedProviderAuth(token: "token", scheme: .bearer, metadata: metadata) }
+        )
+        await APIRegistry.shared.unregisterScope(model.provider)
+        _ = try result.get()
+        let body = try JSONDecoder().decode([String: JSONValue].self, from: #require(client.lastBody))
+        guard case .array(let input)? = body["input"] else { Issue.record("missing input"); return }
+        #expect(input.last == ["type": "compaction_trigger"])
+        #expect(body["metadata"] == (hasMetadata ? .object(metadata) : nil))
+    }
+
+    static let codexSSE = """
+    data: {"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"opaque"}}
+
+    data: {"type":"response.completed","response":{}}
+
+
+    """
+
     @Test("native retry exhaustion leaves the Agent transcript unchanged")
     func nativeFailurePreservesContext() async throws {
         let attempts = CompactionAttempts()
@@ -450,6 +489,38 @@ struct CompactionRequestTests {
 private actor CompactionAttempts {
     var count = 0
     func next() -> Int { count += 1; return count }
+}
+
+/// Answers every request with `body` and keeps the last request body.
+private final class CompactionRequestCapture: HTTPClient, @unchecked Sendable {
+    private let lock = NSLock()
+    private let body: String
+    private var captured: Data?
+
+    init(body: String) { self.body = body }
+
+    var lastBody: Data? { lock.withLock { captured } }
+
+    func stream(
+        url: URL,
+        method: String,
+        headers: [String: String],
+        body requestBody: Data?,
+        cancellation: CancellationHandle?
+    ) async throws -> (HTTPURLResponse, AsyncThrowingStream<Data, Error>) {
+        lock.withLock { captured = requestBody }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["content-type": "text/event-stream"]
+        )!
+        let data = Data(body.utf8)
+        return (response, AsyncThrowingStream { continuation in
+            continuation.yield(data)
+            continuation.finish()
+        })
+    }
 }
 
 private final class NativeTestProvider: NativeCompactionProvider, Sendable {

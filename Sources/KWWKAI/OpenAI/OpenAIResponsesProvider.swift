@@ -1297,7 +1297,9 @@ public final class OpenAIResponsesProvider:
                 }
             }
         }
-        if let meta = options?.metadata {
+        // An empty dictionary says nothing, and ChatGPT's Codex backend
+        // refuses `"metadata": {}` as an unsupported parameter.
+        if let meta = options?.metadata, !meta.isEmpty {
             root["metadata"] = .object(meta)
         }
         // Prompt caching: pin same-session requests to the same cache via

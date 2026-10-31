@@ -54,7 +54,7 @@ extension OpenAICompletionsProvider {
         }
         applyReasoning(&root, model: model, options: options, compat: compat)
         applyRouting(&root, compat: compat)
-        if let meta = options?.metadata, let any = anyFromJSONValue(.object(meta)) {
+        if let meta = options?.metadata, !meta.isEmpty, let any = anyFromJSONValue(.object(meta)) {
             root["metadata"] = any
         }
         let retention = options?.cacheRetention ?? .short

@@ -298,7 +298,11 @@ enum ContextCompactionPipeline {
             maxTokens: maxTokens,
             apiKey: auth?.token,
             sessionId: request.sessionId,
-            metadata: auth?.metadata,
+            // As the loop and the local summary send it: an auth with no
+            // metadata sends none. Codex V2 compaction reuses the turn's
+            // request encoder, and ChatGPT answers `"metadata": {}` with
+            // 400 "Unsupported parameter: metadata".
+            metadata: auth?.metadata.isEmpty == false ? auth?.metadata : nil,
             resolvedAuth: auth,
             reasoning: request.summaryReasoning,
             cancellation: request.cancellation
