@@ -12,6 +12,22 @@ struct AnthropicFallbackTests {
         "claude-opus-5"
     ]
 
+    /// Fallback is opt-in: every test of the opted-in protocol asks for it.
+    static let optedIn = StreamOptions(anthropicServerSideFallback: true)
+
+    @Test(arguments: supportedModels)
+    func requestWithoutOptInHasNoFallback(_ id: String) async throws {
+        for options in [nil, StreamOptions()] as [StreamOptions?] {
+            let client = StubSSEClient(body: sse([start, stop]))
+            _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: options).result()
+            let request = try #require(client.lastRequest)
+            let data = try #require(request.body)
+            let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            #expect(body["fallbacks"] == nil)
+            #expect(request.headers["anthropic-beta"]?.contains("server-side-fallback") != true)
+        }
+    }
+
     @Test(arguments: supportedModels)
     func nativeCompactionPreservesFallbackHistoryAndBeta(_ id: String) async throws {
         let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}]}"#)
@@ -24,7 +40,7 @@ struct AnthropicFallbackTests {
             model: model(id),
             context: Context(messages: [.assistant(history)]),
             instructions: "summarize",
-            options: nil
+            options: Self.optedIn
         )
         let request = try #require(client.lastRequest)
         let data = try #require(request.body)
@@ -56,7 +72,7 @@ struct AnthropicFallbackTests {
     @Test(arguments: supportedModels)
     func requestOptsIntoFallback(_ id: String) async throws {
         let client = StubSSEClient(body: sse([start, stop]))
-        _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: nil).result()
+        _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: Self.optedIn).result()
         let request = try #require(client.lastRequest)
         let data = try #require(request.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -68,7 +84,7 @@ struct AnthropicFallbackTests {
     func doesNotEnableOnOtherRoutesOrOptOut(_ id: String) async throws {
         for variant in 0..<5 {
             var selected = model(id)
-            var options = StreamOptions()
+            var options = Self.optedIn
             if variant == 0 { selected.baseURL = "https://proxy.example.com" }
             if variant == 1 { selected.provider = "github-copilot" }
             if variant == 2 { selected.id = "claude-opus-4-8" }
@@ -96,7 +112,7 @@ struct AnthropicFallbackTests {
     ])
     func unrelatedAndUnknownModelsDoNotOptIn(_ id: String) async throws {
         let client = StubSSEClient(body: sse([start.replacingOccurrences(of: "claude-fable-5", with: id), stop]))
-        _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: nil).result()
+        _ = await AnthropicProvider(client: client).stream(model: model(id), context: Context(), options: Self.optedIn).result()
         let request = try #require(client.lastRequest)
         let data = try #require(request.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -110,7 +126,7 @@ struct AnthropicFallbackTests {
             #"{"type":"content_block_stop","index":1}"#,
             #"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}"#, stop,
         ]))
-        let stream = AnthropicProvider(client: client).stream(model: model(), context: Context(), options: nil)
+        let stream = AnthropicProvider(client: client).stream(model: model(), context: Context(), options: Self.optedIn)
         var indices: [Int] = []
         for await event in stream {
             switch event {
@@ -137,7 +153,7 @@ struct AnthropicFallbackTests {
             text.replacingOccurrences(of: "\"index\":1", with: "\"index\":3"),
             delta.replacingOccurrences(of: "\"index\":1", with: "\"index\":3"), stop]))
         let result = await AnthropicProvider(client: client)
-            .stream(model: model(), context: Context(), options: nil)
+            .stream(model: model(), context: Context(), options: Self.optedIn)
             .result()
         #expect(result.stopReason == .stop)
         #expect(result.content == [.text(TextContent(text: "hello")),
@@ -152,7 +168,7 @@ struct AnthropicFallbackTests {
             stop,
         ]))
         let result = await AnthropicProvider(client: client)
-            .stream(model: model(), context: Context(), options: nil)
+            .stream(model: model(), context: Context(), options: Self.optedIn)
             .result()
         #expect(result.responseModel == "claude-opus-4-8")
     }
@@ -179,7 +195,7 @@ struct AnthropicFallbackTests {
         let result = await provider.stream(
             model: model(id),
             context: Context(),
-            options: StreamOptions(headers: ["Anthropic-Beta": "custom-beta"])
+            options: StreamOptions(headers: ["Anthropic-Beta": "custom-beta"], anthropicServerSideFallback: true)
         ).result()
         #expect(result.responseModel == "claude-opus-4-8")
         let headers = try #require(client.lastRequest?.headers)
@@ -203,13 +219,13 @@ struct AnthropicFallbackTests {
             stop,
         ]))
         let first = await AnthropicProvider(client: client)
-            .stream(model: model(id), context: Context(), options: nil)
+            .stream(model: model(id), context: Context(), options: Self.optedIn)
             .result()
         let restored = try JSONDecoder().decode(AssistantMessage.self, from: JSONEncoder().encode(first))
         #expect(restored == first)
         for variant in 0..<4 {
             var selected = model(id)
-            var options = StreamOptions()
+            var options = Self.optedIn
             if variant == 1 { options.anthropicServerSideFallback = false }
             if variant == 2 { selected.baseURL = "https://proxy.example.com" }
             if variant == 3 { selected.provider = "other" }
@@ -272,7 +288,7 @@ struct AnthropicFallbackTests {
         }
         let client = StubSSEClient(body: sse([start, stop]))
         _ = await AnthropicProvider(client: client)
-            .stream(model: model(), context: Context(messages: history), options: nil)
+            .stream(model: model(), context: Context(messages: history), options: Self.optedIn)
             .result()
         let data = try #require(client.lastRequest?.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])

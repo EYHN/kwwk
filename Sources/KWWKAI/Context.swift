@@ -217,8 +217,9 @@ public struct StreamOptions: Sendable {
     /// analog ignore this.
     public var interleavedThinking: Bool?
 
-    /// Official Anthropic Fable/Mythos 5/5.1 and Opus 5 default to server-side Opus 4.8
-    /// fallback. Set false to opt out; other endpoints/models are unaffected.
+    /// Set true to opt official Anthropic Fable/Mythos 5/5.1 and Opus 5 requests
+    /// into server-side Opus 4.8 fallback. Off by default, so a refusal stays a
+    /// refusal; other endpoints/models never opt in.
     public var anthropicServerSideFallback: Bool?
 
     /// Bedrock reasoning display mode (`thinking.display`). `nil` ⇒ provider
