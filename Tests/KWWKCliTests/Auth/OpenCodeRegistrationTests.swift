@@ -32,8 +32,13 @@ struct OpenCodeRegistrationTests {
             #expect(resolved.model.baseURL == OpenCodePlan.plan(id: id)?.rootURL)
             #expect(resolved.model.compat == catalog.compat)
             #expect(resolved.modelLabel == "\(defaultModel) · \(name)")
-            // A static key: the providers sign with it, no resolver needed.
-            #expect(resolved.authResolver == nil)
+            // The key travels with the resolution, not the shared providers:
+            // registering the plan again for another key leaves it alone.
+            let auth = try #require(try await resolved.authResolver?(resolved.model, nil))
+            #expect(auth.token == Self.key.access)
+            #expect(auth.scheme == .bearer)
+            _ = await registerOpenCode(plan: try #require(OpenCodePlan.plan(id: id)), apiKey: "oc_sk_other")
+            #expect(try await resolved.authResolver?(resolved.model, nil)?.token == Self.key.access)
             for api in OpenCodePlan.wires {
                 #expect(await APIRegistry.shared.provider(scope: id, api: api) is OpenCodeRequestProvider)
             }

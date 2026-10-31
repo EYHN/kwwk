@@ -50,29 +50,42 @@ struct OpenCodeGatewayTests {
         #expect(Self.header(request.headers, "x-opencode-session") == "ses_1")
     }
 
-    @Test("a request with no session gets the process's id; a caller's own header is kept")
+    @Test("a request with no session gets a fresh id; a caller's own non-empty header is kept, once")
     func sessionHeader() async throws {
-        let cases: [(StreamOptions?, String)] = [
-            (nil, OpenCodeRequestProvider.processSession),
-            (StreamOptions(sessionId: ""), OpenCodeRequestProvider.processSession),
-            (StreamOptions(sessionId: "ses_1", headers: ["X-OpenCode-Session": "mine"]), "mine"),
+        let resolved = ResolvedProviderAuth(token: "k", scheme: .bearer, headers: ["X-Opencode-Session": "auth"])
+        let cases: [(StreamOptions?, [String: String]?, String?)] = [
+            (nil, nil, nil),
+            (StreamOptions(sessionId: ""), nil, nil),
+            // Go answers an empty header 400, as it does none
+            (StreamOptions(sessionId: "ses_1", headers: ["x-opencode-session": ""]), nil, "ses_1"),
+            (StreamOptions(sessionId: "ses_1", headers: ["X-OpenCode-Session": "mine"]), nil, "mine"),
+            (StreamOptions(sessionId: "ses_1", resolvedAuth: resolved), nil, "auth"),
+            (StreamOptions(sessionId: "ses_1"), ["X-OPENCODE-SESSION": "model"], "model"),
         ]
-        for (options, expected) in cases {
+        var fresh: Set<String> = []
+        for (options, modelHeaders, expected) in cases {
             let client = StubSSEClient(body: "")
             let provider = try #require(
                 ProviderVariants.openCodeProviders(plan: .go, apiKey: "k", client: client).first
             )
             let stream = provider.stream(
-                model: Model(id: "glm-5.2", api: provider.api, provider: OpenCodePlan.go.id),
+                model: Model(id: "glm-5.2", api: provider.api, provider: OpenCodePlan.go.id, headers: modelHeaders),
                 context: Context(messages: [.user(UserMessage(text: "hi"))]),
                 options: options
             )
             for await _ in stream {}
             let headers = try #require(client.lastRequest?.headers)
-            #expect(Self.header(headers, "x-opencode-session") == expected)
+            let sent = try #require(Self.header(headers, "x-opencode-session"))
+            if let expected {
+                #expect(sent == expected)
+            } else {
+                #expect(UUID(uuidString: sent) != nil)
+                fresh.insert(sent)
+            }
             #expect(headers.keys.filter { $0.lowercased() == "x-opencode-session" }.count == 1)
         }
-        #expect(!OpenCodeRequestProvider.processSession.isEmpty)
+        // two requests with no session are two conversations
+        #expect(fresh.count == 2)
     }
 
     @Test("native compaction and session cleanup pass through, routed and stamped")

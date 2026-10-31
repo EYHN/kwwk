@@ -107,15 +107,15 @@ extension ProviderVariants {
 /// The plan decides the address: whatever `baseURL` a model carries (the
 /// catalog's, a session template's) is replaced by the plan's base for this
 /// wire. The header is the request's session id; a request with no session
-/// (a title, a key check) gets one id for the whole process, since the
-/// gateway wants one on every request. A header the caller set itself is
-/// kept. Session cleanup and native compaction pass straight through, routed
-/// and stamped the same way (no catalog model opts in to native compaction,
-/// and the gateway has no `/responses/compact`, so compaction is kwwk's own
-/// summary today).
+/// (a title, a key check) is a conversation of its own and gets a fresh id,
+/// since the gateway wants one on every request. A non-empty header the
+/// caller set itself — in the options, the resolved auth or the model, in
+/// any spelling — is kept, and sent once. Session cleanup and native
+/// compaction pass straight through, routed and stamped the same way (no
+/// catalog model opts in to native compaction, and the gateway has no
+/// `/responses/compact`, so compaction is kwwk's own summary today).
 struct OpenCodeRequestProvider: APIProvider, APIProviderSessionLifecycle, NativeCompactionProvider {
     static let sessionHeader = "x-opencode-session"
-    static let processSession = UUID().uuidString.lowercased()
 
     let base: any APIProvider
     let plan: OpenCodePlan
@@ -123,7 +123,7 @@ struct OpenCodeRequestProvider: APIProvider, APIProviderSessionLifecycle, Native
     var api: String { base.api }
 
     func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
-        base.stream(model: routed(model), context: context, options: stamped(options))
+        base.stream(model: routed(model), context: context, options: stamped(options, model: model))
     }
 
     func closeSession(sessionId: String) async {
@@ -141,25 +141,46 @@ struct OpenCodeRequestProvider: APIProvider, APIProviderSessionLifecycle, Native
             model: routed(model),
             context: context,
             instructions: instructions,
-            options: stamped(options)
+            options: stamped(options, model: model)
         )
     }
 
+    /// The model at the plan's base for this wire, without a session
+    /// header of its own: `stamped` sends the one the request goes with.
     private func routed(_ model: Model) -> Model {
         var routed = model
         routed.baseURL = plan.baseURL(for: api)
+        routed.headers = routed.headers.map(Self.withoutSessionHeader)
         return routed
     }
 
-    private func stamped(_ options: StreamOptions?) -> StreamOptions {
+    /// `options` with exactly one `x-opencode-session`: the first non-empty
+    /// one the caller set (options, resolved auth, model), else the
+    /// request's session id, else a fresh id.
+    private func stamped(_ options: StreamOptions?, model: Model) -> StreamOptions {
         var stamped = options ?? StreamOptions()
-        var headers = stamped.headers ?? [:]
-        if !headers.keys.contains(where: { $0.lowercased() == Self.sessionHeader }) {
-            let session = stamped.sessionId.flatMap { $0.isEmpty ? nil : $0 }
-            headers[Self.sessionHeader] = session ?? Self.processSession
-        }
+        let set = [stamped.headers, stamped.resolvedAuth?.headers, model.headers]
+            .lazy
+            .compactMap { $0.flatMap(Self.sessionHeader(in:)) }
+            .first
+        let session = stamped.sessionId.flatMap { $0.isEmpty ? nil : $0 }
+        var headers = Self.withoutSessionHeader(stamped.headers ?? [:])
+        headers[Self.sessionHeader] = set ?? session ?? UUID().uuidString.lowercased()
         stamped.headers = headers
+        if var auth = stamped.resolvedAuth {
+            auth.headers = Self.withoutSessionHeader(auth.headers)
+            stamped.resolvedAuth = auth
+        }
         return stamped
+    }
+
+    /// A non-empty session header among `headers`, in any spelling.
+    static func sessionHeader(in headers: [String: String]) -> String? {
+        headers.first { $0.key.lowercased() == sessionHeader && !$0.value.isEmpty }?.value
+    }
+
+    static func withoutSessionHeader(_ headers: [String: String]) -> [String: String] {
+        headers.filter { $0.key.lowercased() != sessionHeader }
     }
 }
 
@@ -170,13 +191,18 @@ struct OpenCodeRequestProvider: APIProvider, APIProviderSessionLifecycle, Native
 /// rides Chat Completions as a plain text model. The model's `baseURL` is the
 /// plan's root, the same for every model, so a `/model` pick that keeps the
 /// session template's address still routes (`OpenCodeRequestProvider`).
+///
+/// The registered wires hold no key: the key travels with this resolution,
+/// through its `authResolver`, so registering the plan again for another key
+/// (a second login, a key check) never changes the key a running session
+/// sends.
 public func registerOpenCode(
     plan: OpenCodePlan,
     apiKey: String,
     modelOverride: String? = nil,
     defaultModel: String? = nil
 ) async -> ResolvedAuth {
-    for provider in ProviderVariants.openCodeProviders(plan: plan, apiKey: apiKey) {
+    for provider in ProviderVariants.openCodeProviders(plan: plan, apiKey: nil) {
         await APIRegistry.shared.register(provider, scope: plan.id)
     }
     let modelId = modelOverride ?? defaultModel.flatMap { $0.isEmpty ? nil : $0 } ?? plan.defaultModel
@@ -211,6 +237,6 @@ public func registerOpenCode(
     return ResolvedAuth(
         model: model,
         modelLabel: "\(modelId) · \(plan.name)",
-        authResolver: nil
+        authResolver: { _, _ in ResolvedProviderAuth(token: apiKey, scheme: .bearer) }
     )
 }

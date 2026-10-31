@@ -206,7 +206,11 @@ func resolveEnvAuth(
         if let plan = OpenCodePlan.plan(id: provider) {
             guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
             let resolved = await registerOpenCode(plan: plan, apiKey: key, modelOverride: forcedId)
-            return ResolvedAuth(model: resolved.model, modelLabel: resolved.modelLabel + " (env)", authResolver: nil)
+            return ResolvedAuth(
+                model: resolved.model,
+                modelLabel: resolved.modelLabel + " (env)",
+                authResolver: resolved.authResolver
+            )
         }
         guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }

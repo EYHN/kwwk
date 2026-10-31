@@ -240,28 +240,59 @@ struct CompactionRequestTests {
     // metadata"} to `"metadata": {}`, which an auth with no metadata put on
     // the V2 compaction request. The loop and the local summary already sent
     // none; the native request must not either, and must keep real metadata.
-    @Test("native compaction sends the auth's metadata only when it has some", arguments: [false, true])
-    func nativeCompactionMetadata(hasMetadata: Bool) async throws {
+    @Test("a Codex native compaction for an auth with no metadata sends none")
+    func nativeCompactionMetadata() async throws {
         let client = CompactionRequestCapture(body: Self.codexSSE)
         let model = Model(id: "gpt-5.6", api: "chatgpt-codex", provider: UUID().uuidString)
         await APIRegistry.shared.register(
             ProviderVariants.chatgptCodex(client: client, webSocketClient: nil),
             scope: model.provider
         )
-        let metadata: [String: JSONValue] = hasMetadata ? ["deployment": "prod"] : [:]
         let result = await AgentContextCompactor.compactMessages(
             messages: history(),
             model: model,
             sessionId: "session",
             config: .init(keepRecentTokens: 40, summaryRetryPolicy: .init(baseDelayMs: 0)),
-            authResolver: { _, _ in ResolvedProviderAuth(token: "token", scheme: .bearer, metadata: metadata) }
+            authResolver: { _, _ in ResolvedProviderAuth(token: "token", scheme: .bearer) }
         )
         await APIRegistry.shared.unregisterScope(model.provider)
         _ = try result.get()
         let body = try JSONDecoder().decode([String: JSONValue].self, from: #require(client.lastBody))
         guard case .array(let input)? = body["input"] else { Issue.record("missing input"); return }
         #expect(input.last == ["type": "compaction_trigger"])
-        #expect(body["metadata"] == (hasMetadata ? .object(metadata) : nil))
+        #expect(body["metadata"] == nil)
+    }
+
+    // The pipeline itself, apart from what an encoder leaves out: the
+    // options it hands a native compaction carry the auth's metadata only
+    // when it has some.
+    @Test("the pipeline hands native compaction the auth's metadata only when it has some", arguments: [false, true])
+    func nativeCompactionOptions(hasMetadata: Bool) async throws {
+        let seen = CompactionOptionsCapture()
+        let metadata: [String: JSONValue] = hasMetadata ? ["deployment": "prod"] : [:]
+        var model = Self.model
+        model.id = "gpt-5.6"
+        let config = AgentContextCompactionConfig(
+            keepRecentTokens: 40,
+            summaryRetryPolicy: .init(baseDelayMs: 0),
+            nativeCompaction: { model, _, _, options in
+                await seen.keep(options)
+                return NativeCompactionResult(
+                    summary: "native summary",
+                    payload: NativeCompactionPayload(model: model, items: [.string("opaque")])
+                )
+            }
+        )
+        let result = await AgentContextCompactor.compactMessages(
+            messages: history(),
+            model: model,
+            sessionId: "session",
+            config: config,
+            authResolver: { _, _ in ResolvedProviderAuth(token: "token", scheme: .bearer, metadata: metadata) }
+        )
+        _ = try result.get()
+        let options = try #require(await seen.options)
+        #expect(options.metadata == (hasMetadata ? metadata : nil))
     }
 
     static let codexSSE = """
@@ -489,6 +520,12 @@ struct CompactionRequestTests {
 private actor CompactionAttempts {
     var count = 0
     func next() -> Int { count += 1; return count }
+}
+
+/// Keeps the options a native compaction was handed.
+private actor CompactionOptionsCapture {
+    var options: StreamOptions?
+    func keep(_ options: StreamOptions?) { self.options = options }
 }
 
 /// Answers every request with `body` and keeps the last request body.
