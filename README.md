@@ -5,8 +5,8 @@ A Swift-native coding agent with two faces:
 - **`kwwk`** — an interactive coding CLI (TUI) that drives your existing
   Anthropic, ChatGPT (Codex), GitHub Copilot, Cursor, Devin, Kimi For
   Coding, xAI Grok, Z.AI GLM Coding Plan, or OpenRouter account — or an API key
-  for Anthropic, OpenAI, Google (Gemini), OpenRouter, or any
-  OpenAI-compatible endpoint.
+  for Anthropic, OpenAI, Google (Gemini), OpenRouter, OpenCode (Go or Zen), or
+  any OpenAI-compatible endpoint.
 - **`KWWKAgent` / `KWWKAI`** — the agent runtime underneath, exposed as
   SwiftPM libraries so you can embed it in your own app, build custom
   tools, or swap the LLM provider.
@@ -61,7 +61,7 @@ neither configured, kwwk starts logged out — launch it and run `/login`
 to sign in to a provider (browser sign-in for ChatGPT Codex, Copilot,
 Claude Code, Cursor, Devin, Kimi For Coding, xAI Grok, the Z.AI GLM Coding Plan,
 or OpenRouter; or an API key for Anthropic, OpenAI, Google (Gemini),
-OpenRouter, or any OpenAI-compatible endpoint).
+OpenRouter, OpenCode Go or Zen, or any OpenAI-compatible endpoint).
 
 Inside the TUI, `/help` lists slash commands (`/model`, `/thinking`,
 `/clear`, …). The agent ships with Bash, Read, Write, Edit, Grep, Find,
@@ -710,6 +710,14 @@ OpenRouter) there are `Models.xaiGrok(id:)`, `Models.groq(id:)`,
 To use a subscription (OAuth) token instead of a raw API key, drive the
 flow via `KWWKAI.OAuth` / `OAuthLogin` — the same code path the CLI's
 in-session `/login` command uses.
+
+OpenCode's gateway (`OpenCodePlan.go`, the Go subscription, and
+`OpenCodePlan.zen`, pay-as-you-go) takes one Console API key for every
+model it serves. `registerOpenCode(plan:apiKey:)` (or a stored
+`opencode-go` / `opencode` login through `registerStored`) registers all
+four wires it speaks — Chat Completions, Responses, Anthropic Messages and
+Gemini — each at its own path under the plan, and every request names its
+conversation in `x-opencode-session`, which Go requires.
 
 ### Updating the model catalog
 

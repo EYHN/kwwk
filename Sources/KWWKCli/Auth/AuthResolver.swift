@@ -200,6 +200,14 @@ func resolveEnvAuth(
             let model = devinModel(id: forcedId ?? DevinModels.defaultModelId)
             return ResolvedAuth(model: model, modelLabel: "\(model.id) · Devin (env)", authResolver: nil)
         }
+        // OpenCode's plans route each wire under the plan's root and name the
+        // conversation in a header Go refuses requests without; the flat env
+        // providers below do neither.
+        if let plan = OpenCodePlan.plan(id: provider) {
+            guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
+            let resolved = await registerOpenCode(plan: plan, apiKey: key, modelOverride: forcedId)
+            return ResolvedAuth(model: resolved.model, modelLabel: resolved.modelLabel + " (env)", authResolver: nil)
+        }
         guard let key = EnvAPIKeys.apiKey(for: provider, env: environment), !key.isEmpty else { continue }
         guard let model = pickEnvModel(provider: provider, id: forcedId) else { continue }
         guard await registerEnvProviders(for: provider, apiKey: key) else { continue }

@@ -193,6 +193,52 @@ let loginProviders: [LoginEntry] = [
         )
     ),
     LoginEntry(
+        id: "opencode-go",
+        display: "OpenCode Go API key (opencode.ai Go subscription)",
+        flow: .apiKey(
+            fields: [
+                APIKeyFormField(
+                    key: "apiKey",
+                    label: "API key",
+                    hint: "from the OpenCode Console",
+                    placeholder: "oc_sk_…",
+                    required: true
+                ),
+                APIKeyFormField(
+                    key: "defaultModel",
+                    label: "Default model id",
+                    hint: "(optional)",
+                    placeholder: "glm-5.2",
+                    required: false
+                ),
+            ],
+            extrasKeys: ["defaultModel"]
+        )
+    ),
+    LoginEntry(
+        id: "opencode",
+        display: "OpenCode Zen API key (opencode.ai pay-as-you-go)",
+        flow: .apiKey(
+            fields: [
+                APIKeyFormField(
+                    key: "apiKey",
+                    label: "API key",
+                    hint: "from the OpenCode Console",
+                    placeholder: "oc_sk_…",
+                    required: true
+                ),
+                APIKeyFormField(
+                    key: "defaultModel",
+                    label: "Default model id",
+                    hint: "(optional)",
+                    placeholder: "claude-sonnet-5",
+                    required: false
+                ),
+            ],
+            extrasKeys: ["defaultModel"]
+        )
+    ),
+    LoginEntry(
         id: "zai-coding-cn",
         display: "BigModel (智谱) GLM Coding Plan (bigmodel.cn sign-in)",
         flow: .oauth
