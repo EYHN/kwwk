@@ -5,19 +5,25 @@ import FoundationNetworking
 
 /// Antigravity's model list, and how a family's effort picks the id sent.
 ///
-/// The bundled `Resources/antigravity-models.json` is a seed written from
-/// the list magpie's `fetchAvailableModels` fixture recorded on 2026-10-20
-/// (`internal/provider/testdata/antigravity-models-2026-10-20.json`), one
-/// row per family with the effort variants folded into it; it is replaced
-/// by a live `fetchAvailableModels` (`AntigravityOAuth.fetchAvailableModels`)
-/// before release, and a re-sync is a file edit. Left out of it, as magpie
-/// leaves them out: the `chat_*` and `tab_*` ids (Antigravity's editor),
-/// `gemini-3.1-flash-image` (image-only), `gemini-2.5-pro` and
-/// `gemini-2.5-flash-thinking` (magpie's hidden list), `gemini-2.5-flash` and
-/// `gemini-2.5-flash-lite` (retired, listed under the name of the model
-/// their users were moved to), `gemini-3-flash-agent` (named like Gemini 3.5
-/// Flash (High)), `gemini-3.5-flash-lite` and the unnamed
-/// `gemini-3.8-flash-tiered`.
+/// The bundled `Resources/antigravity-models.json` is the list a free-tier
+/// account's `fetchAvailableModels` answered on 2026-11-02 (Hub 2.28.2;
+/// asked with no tier named, since Google answers `free-tier` with 400),
+/// one row per family with the effort variants folded into it, in the
+/// order of Antigravity's picker (`agentModelSorts`) and then the models it
+/// serves outside it. A re-sync is a file edit from a live
+/// `AntigravityOAuth.fetchAvailableModels`. Left out of it, as magpie leaves
+/// them out: the `chat_*` and `tab_*` ids (Antigravity's editor),
+/// `gemini-3.1-flash-image` (image-only), `gemini-4-argon-disabled`
+/// (disabled: asking for it is a 404), `gemini-2.5-flash`,
+/// `gemini-2.5-flash-lite` and `gemini-2.5-flash-thinking` (retired, every
+/// one listed under the name "Gemini 3.5 Flash Lite"), `gemini-2.5-pro`,
+/// `gemini-3.5-flash-lite` and the unnamed `gemini-3.8-flash-tiered`. A paid
+/// tier may list more, and such a family goes in as another row. The
+/// `gemini-3.5-flash` family (`-extra-low`, `-low`) of the 2026-10-20 list
+/// magpie recorded is retired, not tier-gated: asked for it on 2026-11-02,
+/// Google streamed "Gemini 3.5 Flash is no longer available. Please switch
+/// to Gemini 3.7 Flash in the latest version of Antigravity." and ended the
+/// reply with no finish reason.
 ///
 /// Antigravity lists some models once for each thinking level it serves
 /// them at (`gemini-3.8-flash-low`, `-medium`, `-high`, named "Gemini 3.8
@@ -26,8 +32,10 @@ import FoundationNetworking
 /// level the family has to the variant id Antigravity serves it as, and the
 /// request goes out under the id the effort picks (`variantId`). Which level
 /// a variant is at is what Antigravity's name for it says, where the names
-/// say one each: `gemini-3.5-flash-extra-low` is "(Low)" and
-/// `gemini-3.5-flash-low` "(Medium)" (magpie `antigravity_models.go`).
+/// say one each (magpie's 2026-10-20 list had `gemini-3.5-flash-extra-low`
+/// as "(Low)" and `gemini-3.5-flash-low` as "(Medium)"; magpie
+/// `antigravity_models.go`). A row's `name` is Antigravity's display name,
+/// a family's without the level.
 public enum AntigravityModels {
     public static let api = "antigravity-codeassist"
     public static let provider = "antigravity"

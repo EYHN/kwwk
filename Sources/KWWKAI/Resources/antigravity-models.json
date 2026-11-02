@@ -44,7 +44,7 @@
       "image"
     ],
     "maxTokens": 64000,
-    "name": "Claude Sonnet 4.6",
+    "name": "Claude Sonnet 4.6 (Thinking)",
     "provider": "antigravity",
     "reasoning": false
   },
@@ -86,35 +86,6 @@
     "name": "GPT-OSS 120B (Medium)",
     "provider": "antigravity",
     "reasoning": false
-  },
-  {
-    "api": "antigravity-codeassist",
-    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-    "contextWindow": 1048576,
-    "cost": {
-      "cacheRead": 0,
-      "cacheWrite": 0,
-      "input": 0,
-      "output": 0
-    },
-    "id": "gemini-3.5-flash",
-    "input": [
-      "text",
-      "image"
-    ],
-    "maxTokens": 65536,
-    "name": "Gemini 3.5 Flash",
-    "provider": "antigravity",
-    "reasoning": true,
-    "thinkingLevelMap": {
-      "high": null,
-      "low": "gemini-3.5-flash-extra-low",
-      "max": null,
-      "medium": "gemini-3.5-flash-low",
-      "minimal": null,
-      "off": null,
-      "xhigh": null
-    }
   },
   {
     "api": "antigravity-codeassist",

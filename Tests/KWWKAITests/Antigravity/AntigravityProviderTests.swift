@@ -278,7 +278,16 @@ struct AntigravityEnvelopeTests {
 struct AntigravityShapingTests {
     @Test("The effort picks the variant id a family is asked for (magpie TestCollapseAntigravityModels)")
     func variants() {
-        let flash35 = catalog("gemini-3.5-flash")
+        // Where the names say the levels, the map carries them so: magpie's
+        // 2026-10-20 list had gemini-3.5-flash-extra-low as "(Low)" and -low
+        // as "(Medium)", a family a free-tier account isn't served today.
+        let flash35 = Model(
+            id: "gemini-3.5-flash", api: AntigravityModels.api, provider: "antigravity", reasoning: true,
+            thinkingLevelMap: [
+                "off": nil, "minimal": nil, "low": "gemini-3.5-flash-extra-low", "medium": "gemini-3.5-flash-low",
+                "high": nil, "xhigh": nil, "max": nil,
+            ]
+        )
         #expect(AntigravityModels.variantId(model: flash, reasoning: nil) == "gemini-3.8-flash-high")
         #expect(AntigravityModels.variantId(model: flash, reasoning: .low) == "gemini-3.8-flash-low")
         #expect(AntigravityModels.variantId(model: flash, reasoning: .medium) == "gemini-3.8-flash-medium")
@@ -286,8 +295,7 @@ struct AntigravityShapingTests {
         // A level the family lacks goes to the nearest it has.
         #expect(AntigravityModels.variantId(model: flash, reasoning: .max) == "gemini-3.8-flash-high")
         #expect(AntigravityModels.variantId(model: flash, reasoning: .minimal) == "gemini-3.8-flash-low")
-        // The names say the levels: extra-low is Low, low is Medium; without
-        // high, the highest there is.
+        // Without high, the highest there is.
         #expect(AntigravityModels.variantId(model: flash35, reasoning: nil) == "gemini-3.5-flash-low")
         #expect(AntigravityModels.variantId(model: flash35, reasoning: .low) == "gemini-3.5-flash-extra-low")
         #expect(AntigravityModels.variantId(model: flash35, reasoning: .medium) == "gemini-3.5-flash-low")
@@ -772,10 +780,18 @@ struct AntigravityReplyTests {
 
     @Test("A reply that ends without a finish reason, or with nothing said, is a failed reply, not an answer")
     func brokenOff() async throws {
-        var (message, _) = await turn(AntigravityStubClient(candidate(#"{"text":"hi"}"#)))
-        #expect(said(message) == "|text:hi|error:Antigravity stream ended without a finish reason|stop:error")
+        // What a retired model answers (gemini-3.5-flash-low, 2026-11-02): a
+        // notice and no finish reason. Google's words lead the failure.
+        let notice = "Gemini 3.5 Flash is no longer available. Please switch to Gemini 3.7 Flash in the latest version of Antigravity."
+        var (message, _) = await turn(AntigravityStubClient(candidate(#"{"text":"\#(notice)"}"#)))
+        #expect(said(message) == "|text:\(notice)|error:\(notice) (Antigravity stream ended without a finish reason)|stop:error")
         #expect(message.failure?.category == .transport)
         #expect(message.failure?.isRetryable == true)
+        // A long reply cut off mid-answer is not quoted.
+        let long = String(repeating: "x", count: 301)
+        (message, _) = await turn(AntigravityStubClient(candidate(#"{"text":"\#(long)"}"#)))
+        #expect(message.errorMessage == "Antigravity stream ended without a finish reason")
+        #expect(message.failure?.category == .transport)
 
         (message, _) = await turn(AntigravityStubClient(candidate(#"{"text":"hmm","thought":true}"#, finish: "STOP")))
         #expect(message.errorMessage == "Antigravity stream ended without content")
@@ -899,12 +915,12 @@ struct AntigravityFailureTests {
 
 @Suite("Antigravity models")
 struct AntigravityModelTests {
-    @Test("The bundled seed is the 2026-10-20 list, one row a family, on Antigravity's wire")
+    @Test("The bundled seed is a free-tier account's live list of 2026-11-02, one row a family, on Antigravity's wire")
     func bundled() {
         let models = ModelsCatalog.models(for: "antigravity")
         #expect(models.map(\.id) == [
             "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3-flash", "gemini-3.1-flash-lite",
-            "gemini-3.5-flash", "gemini-3.8-flash", "gpt-oss-120b-medium",
+            "gemini-3.8-flash", "gpt-oss-120b-medium",
         ])
         for model in models {
             #expect(model.api == "antigravity-codeassist")
@@ -914,7 +930,6 @@ struct AntigravityModelTests {
         }
         func limits(_ id: String) -> (Int, Int) { (catalog(id).contextWindow, catalog(id).maxTokens) }
         #expect(limits("gemini-3.8-flash") == (1_048_576, 65_536))
-        #expect(limits("gemini-3.5-flash") == (1_048_576, 65_536))
         #expect(limits("gemini-3-flash") == (1_048_576, 65_536))
         #expect(limits("gemini-3.1-flash-lite") == (1_048_576, 65_535))
         #expect(limits("claude-opus-4-6-thinking") == (250_000, 64_000))
@@ -923,9 +938,12 @@ struct AntigravityModelTests {
         #expect(flash.thinkingLevelMap?.compactMapValues { $0 } == [
             "low": "gemini-3.8-flash-low", "medium": "gemini-3.8-flash-medium", "high": "gemini-3.8-flash-high",
         ])
-        #expect(catalog("gemini-3.5-flash").thinkingLevelMap?.compactMapValues { $0 } == [
-            "low": "gemini-3.5-flash-extra-low", "medium": "gemini-3.5-flash-low",
-        ])
+        // The rows are named as Antigravity's picker names them, a family
+        // without its level.
+        #expect(flash.name == "Gemini 3.8 Flash")
+        #expect(sonnet.name == "Claude Sonnet 4.6 (Thinking)")
+        #expect(opus.name == "Claude Opus 4.6 (Thinking)")
+        #expect(gptOSS.name == "GPT-OSS 120B (Medium)")
         #expect(flash.input == [.text, .image])
         #expect(gptOSS.input == [.text])
         #expect(!sonnet.reasoning && !gptOSS.reasoning && opus.reasoning)

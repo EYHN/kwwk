@@ -224,8 +224,20 @@ public final class AntigravityProvider: APIProvider, @unchecked Sendable {
         var final = state.finalize()
         if rawFinishReason == nil {
             // No closing chunk: the reply broke off, a transport failure the
-            // retry policy replays, not a finished answer.
-            return failed(final, ProviderFailure(message: "Antigravity stream ended without a finish reason"))
+            // retry policy replays, not a finished answer. A short text it
+            // ended on is Google's own word on why — a retired model is
+            // answered "Gemini 3.5 Flash is no longer available. Please switch
+            // to Gemini 3.7 Flash in the latest version of Antigravity." and
+            // nothing more — so it leads the failure's message.
+            var message = "Antigravity stream ended without a finish reason"
+            let text = final.content.compactMap { block -> String? in
+                if case .text(let text) = block { return text.text }
+                return nil
+            }.joined().trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.isEmpty, text.count <= noticeLength {
+                message = "\(text) (\(message))"
+            }
+            return failed(final, ProviderFailure(message: message))
         }
         if final.stopReason == .stop, !final.hasReplayUnsafeContent, !sentImage {
             // STOP with no parts, or thoughts alone, is a failed reply, not
@@ -242,6 +254,10 @@ public final class AntigravityProvider: APIProvider, @unchecked Sendable {
         }
         return final
     }
+
+    /// The most text a reply that broke off is quoted in its failure: Google's
+    /// notices are a sentence or two, a reply cut mid-answer is not.
+    static let noticeLength = 300
 
     /// Gemini's own tools live in a namespace, `default_api`, and a model now
     /// and then names one of the client's with it (magpie #636): the
