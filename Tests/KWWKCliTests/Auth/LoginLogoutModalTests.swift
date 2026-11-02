@@ -25,7 +25,9 @@ struct LoginLogoutModalTests {
         let rendered = (harness.modalLines ?? []).joined(separator: "\n")
         #expect(rendered.contains("Log in to a provider"))
         #expect(rendered.contains("Anthropic OAuth"))
-        #expect(rendered.contains("OpenRouter API key"))
+        // The picker scrolls past the harness's screen, so the API-key half
+        // is checked by its first entry, not its last.
+        #expect(rendered.contains("Anthropic API key"))
 
         // Esc cancels back to the transcript with a gentle notice.
         ctx.modal.routeCancel()
