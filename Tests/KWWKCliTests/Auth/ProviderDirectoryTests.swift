@@ -24,6 +24,7 @@ struct ProviderDirectoryTests {
         ("cursor", "cursor", "cursor", "Cursor", nil),
         ("devin", "devin", "devin", "Devin", nil),
         ("kiro", "kiro", "kiro", "Kiro", nil),
+        ("antigravity", "antigravity", "antigravity", "Antigravity", nil),
         ("qoder", "qoder", "qoder", "Qoder", nil),
         ("qoder-cn", "qoder-cn", "qoder-cn", "Qoder CN", nil),
         ("workbuddy", "workbuddy", "workbuddy", "WorkBuddy", nil),

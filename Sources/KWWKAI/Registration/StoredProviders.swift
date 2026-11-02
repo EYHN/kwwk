@@ -177,6 +177,8 @@ public func registerStored(
         return await registerDevin(manager: manager, modelOverride: modelOverride, primeToken: primeToken)
     case "kiro":
         return await registerKiro(manager: manager, modelOverride: modelOverride, primeToken: primeToken)
+    case "antigravity":
+        return await registerAntigravity(manager: manager, modelOverride: modelOverride, primeToken: primeToken)
     case "qoder", "qoder-cn":
         return await registerQoder(
             site: .of(storeId),

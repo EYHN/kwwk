@@ -17,6 +17,7 @@ public enum ProviderAttribution {
     /// `openai-compatible` custom endpoints).
     public static let displayNames: [String: String] = [
         "anthropic": "Anthropic",
+        "antigravity": "Antigravity",
         "amazon-bedrock": "Amazon Bedrock",
         "ant-ling": "Ant Ling",
         "azure": "Azure",
