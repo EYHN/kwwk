@@ -123,6 +123,14 @@ private func object(_ data: Data?) throws -> [String: Any] {
 }
 
 /// A built envelope, read the way magpie's tests read it.
+/// Whether a decoded `thinkingConfig` says `includeThoughts: true`. Linux's
+/// JSONSerialization reads a JSON `true` back as the number 1, macOS as a
+/// Bool, so the check takes either spelling.
+private func includesThoughts(_ thinking: [String: Any]?) -> Bool {
+    guard let value = thinking?["includeThoughts"] else { return false }
+    return (value as? Bool) == true || (value as? Int) == 1
+}
+
 private struct Envelope {
     var root: [String: Any]
     var request: [String: Any] { root["request"] as? [String: Any] ?? [:] }
@@ -329,7 +337,9 @@ struct AntigravityShapingTests {
     func thinking() throws {
         // A variant is told the level its id says, whatever was asked.
         var envelope = try build(sent: "gemini-3.8-flash-low", reasoning: .high)
-        #expect(envelope.thinking as? [String: AnyHashable] == ["includeThoughts": true, "thinkingLevel": "low"])
+        #expect(envelope.thinking?.count == 2)
+        #expect(includesThoughts(envelope.thinking))
+        #expect(envelope.thinking?["thinkingLevel"] as? String == "low")
         envelope = try build(reasoning: nil)
         #expect(envelope.thinking?["thinkingLevel"] as? String == "high")
         envelope = try build(reasoning: .medium)
@@ -362,7 +372,9 @@ struct AntigravityShapingTests {
 
         // Claude thinking: a budget, and room for its answer past it.
         envelope = try build(model: opus, reasoning: .high)
-        #expect(envelope.thinking as? [String: AnyHashable] == ["includeThoughts": true, "thinkingBudget": 24000])
+        #expect(envelope.thinking?.count == 2)
+        #expect(includesThoughts(envelope.thinking))
+        #expect(envelope.thinking?["thinkingBudget"] as? Int == 24000)
         #expect(envelope.generation["maxOutputTokens"] as? Int == 56000)
         envelope = try build(model: opus)
         #expect(envelope.thinking?["thinkingBudget"] as? Int == 10000)
