@@ -77,8 +77,11 @@ enum AntigravityRequest {
     }
 
     /// How hard the model should think (magpie `thinkingConfig`): a level for
-    /// Gemini 3 and later, a budget for Claude. A model that doesn't think
-    /// (GPT-OSS, a Claude whose id doesn't say thinking) gets none, and one
+    /// Gemini 3 and later and for a Claude whose id says its level
+    /// (`claude-opus-5-5-high`, which Antigravity lists with a
+    /// `thinkingLevel` and no budget; oh-my-pi sends it the level), a budget
+    /// for any other Claude. A model that doesn't think (GPT-OSS, a Claude
+    /// whose id says neither thinking nor a level) gets none, and one
     /// whose id already says its level (`said`: Antigravity's
     /// `gemini-3.8-flash-low`) is told that level and no other — the effort
     /// asked for picked that id. Told no level, Antigravity's variants all
@@ -98,18 +101,19 @@ enum AntigravityRequest {
     ) -> (config: [String: Any]?, claudeBudget: Int?) {
         let lower = sent.lowercased()
         let claude = isClaude(sent)
-        if isGPTOSS(sent) || (claude && !lower.contains("thinking")) { return (nil, nil) }
+        let claudeLevel = claude && said != nil
+        if isGPTOSS(sent) || (claude && !lower.contains("thinking") && !claudeLevel) { return (nil, nil) }
         if reasoning == nil, said == nil, !claude { return (nil, nil) }
         var config: [String: Any] = ["includeThoughts": true]
         let generation = geminiGeneration(sent)
-        if generation >= 3 || lower.hasPrefix("gemini-pro-agent") {
+        if generation >= 3 || lower.hasPrefix("gemini-pro-agent") || claudeLevel {
             if let effort = said ?? reasoning.map(ModelThinkingLevel.init(reasoning:)) {
                 let flash = lower.contains("flash")
                 let level: String
                 switch effort {
                 case .low: level = "low"
                 case .minimal: level = said != nil && flash ? "minimal" : "low"
-                case .medium: level = flash || generation > 3 ? "medium" : "high"
+                case .medium: level = flash || generation > 3 || claudeLevel ? "medium" : "high"
                 case .off, .high, .xhigh, .max: level = "high"
                 }
                 config["thinkingLevel"] = level

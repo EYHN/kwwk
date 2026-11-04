@@ -9,6 +9,35 @@
       "input": 0,
       "output": 0
     },
+    "id": "gemini-4-argon",
+    "input": [
+      "text",
+      "image"
+    ],
+    "maxTokens": 65536,
+    "name": "Gemini 4 Argon",
+    "provider": "antigravity",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "high": "gemini-4-argon-high",
+      "low": "gemini-4-argon-low",
+      "max": null,
+      "medium": "gemini-4-argon-medium",
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    }
+  },
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 1048576,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
     "id": "gemini-3.8-flash",
     "input": [
       "text",
@@ -31,61 +60,60 @@
   {
     "api": "antigravity-codeassist",
     "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-    "contextWindow": 250000,
+    "contextWindow": 1000000,
     "cost": {
       "cacheRead": 0,
       "cacheWrite": 0,
       "input": 0,
       "output": 0
     },
-    "id": "claude-sonnet-4-6",
+    "id": "claude-opus-5-5",
     "input": [
       "text",
       "image"
     ],
-    "maxTokens": 64000,
-    "name": "Claude Sonnet 4.6",
+    "maxTokens": 128000,
+    "name": "Claude Opus 5.5",
     "provider": "antigravity",
-    "reasoning": false
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "high": "claude-opus-5-5-high",
+      "low": "claude-opus-5-5-low",
+      "max": null,
+      "medium": "claude-opus-5-5-medium",
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    }
   },
   {
     "api": "antigravity-codeassist",
     "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-    "contextWindow": 250000,
+    "contextWindow": 1000000,
     "cost": {
       "cacheRead": 0,
       "cacheWrite": 0,
       "input": 0,
       "output": 0
     },
-    "id": "claude-opus-4-6-thinking",
+    "id": "claude-sonnet-5-5",
     "input": [
       "text",
       "image"
     ],
-    "maxTokens": 64000,
-    "name": "Claude Opus 4.6 (Thinking)",
+    "maxTokens": 128000,
+    "name": "Claude Sonnet 5.5",
     "provider": "antigravity",
-    "reasoning": true
-  },
-  {
-    "api": "antigravity-codeassist",
-    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
-    "contextWindow": 131072,
-    "cost": {
-      "cacheRead": 0,
-      "cacheWrite": 0,
-      "input": 0,
-      "output": 0
-    },
-    "id": "gpt-oss-120b-medium",
-    "input": [
-      "text"
-    ],
-    "maxTokens": 32768,
-    "name": "GPT-OSS 120B (Medium)",
-    "provider": "antigravity",
-    "reasoning": false
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "high": "claude-sonnet-5-5-high",
+      "low": "claude-sonnet-5-5-low",
+      "max": null,
+      "medium": "claude-sonnet-5-5-medium",
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    }
   },
   {
     "api": "antigravity-codeassist",
