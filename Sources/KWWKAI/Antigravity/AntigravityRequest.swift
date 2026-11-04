@@ -31,15 +31,24 @@ enum AntigravityRequest {
 
     // MARK: - Ids and names
 
-    /// A tool call's id as Antigravity takes one: only `[A-Za-z0-9_-]`, every
-    /// other character an underscore.
+    /// A tool call's id as Antigravity takes one, `^[A-Za-z0-9_-]{1,64}$`
+    /// (Claude behind Code Assist refuses any other): every other character
+    /// an underscore, and an id longer than 64 (OpenAI Responses'
+    /// `call_…|fc_…`) cut to its first 47 and a hash of the whole, so two
+    /// long ids that begin alike stay apart and a call and its result still
+    /// meet (pi and oh-my-pi cap at 64 too).
     static func toolID(_ id: String) -> String {
-        String(String.UnicodeScalarView(id.unicodeScalars.map { scalar in
+        let sanitized = String(String.UnicodeScalarView(id.unicodeScalars.map { scalar in
             let allowed = ("a"..."z").contains(scalar) || ("A"..."Z").contains(scalar)
                 || ("0"..."9").contains(scalar) || scalar == "_" || scalar == "-"
             return allowed ? scalar : "_"
         }))
+        guard sanitized.count > maxToolIDLength else { return sanitized }
+        let digest = Array(SHA256.hash(data: Data(id.utf8))).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return String(sanitized.prefix(maxToolIDLength - 1 - digest.count)) + "_" + digest
     }
+
+    static let maxToolIDLength = 64
 
     static func isClaude(_ id: String) -> Bool { id.lowercased().contains("claude") }
     static func isGPTOSS(_ id: String) -> Bool { id.lowercased().hasPrefix("gpt-oss") }

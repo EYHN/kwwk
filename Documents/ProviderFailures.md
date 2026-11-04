@@ -89,6 +89,12 @@ whatever quota is left (magpie #666). `AntigravityCloak` breaks those lines
 with a zero-width space before they go; should Google still answer that 429
 to such a prompt, `AntigravityProvider` reads it as `refusal`
 (`providerCode: prompt_refusal`, never retried, never a quota), with a hint
-after Google's words. Every other Antigravity 429 is `quota`, with the reset
-its message names ("Your quota will reset after 3h19m30s") in `resetsAt`; a
-404 "Requested entity was not found" is a model the account isn't served.
+after Google's words. Any other Antigravity 429 that says it is back within
+60 seconds ("reset after 26s", or Google's `RetryInfo`) is `rateLimit`,
+retried after that wait, as is Google's capacity or rate limit
+(`MODEL_CAPACITY_EXHAUSTED`, `RATE_LIMIT_EXCEEDED`) and a bare "Resource has
+been exhausted". It is `quota` ("usage limit reached", never retried) only
+when Google says the quota is spent: `QUOTA_EXHAUSTED`, a per-day
+`QuotaFailure`, a longer reset ("Your quota will reset after 3h19m30s", kept
+in `resetsAt`) or "You have exhausted your capacity on this model". A 404
+"Requested entity was not found" is a model the account isn't served.

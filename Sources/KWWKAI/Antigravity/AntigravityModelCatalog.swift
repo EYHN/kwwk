@@ -35,7 +35,10 @@ import FoundationNetworking
 /// say one each (magpie's 2026-10-20 list had `gemini-3.5-flash-extra-low`
 /// as "(Low)" and `gemini-3.5-flash-low` as "(Medium)"; magpie
 /// `antigravity_models.go`). A row's `name` is Antigravity's display name,
-/// a family's without the level.
+/// a family's without the level — except `claude-sonnet-4-6`, which
+/// Antigravity lists as "Claude Sonnet 4.6 (Thinking)" but which kwwk
+/// sends without thinking (its id doesn't say thinking, so it is no
+/// `reasoning` model): it is named "Claude Sonnet 4.6", as magpie names it.
 public enum AntigravityModels {
     public static let api = "antigravity-codeassist"
     public static let provider = "antigravity"

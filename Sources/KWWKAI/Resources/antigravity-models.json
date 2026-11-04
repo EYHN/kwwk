@@ -44,7 +44,7 @@
       "image"
     ],
     "maxTokens": 64000,
-    "name": "Claude Sonnet 4.6 (Thinking)",
+    "name": "Claude Sonnet 4.6",
     "provider": "antigravity",
     "reasoning": false
   },

@@ -272,6 +272,17 @@ struct AntigravityEnvelopeTests {
         #expect(client.requests.isEmpty)
     }
 
+    @Test("A Claude model that thinks is asked for interleaved thinking; other models are not (pi, oh-my-pi)")
+    func interleavedThinking() async throws {
+        for (model, beta) in [(opus, "interleaved-thinking-2025-05-14"), (sonnet, nil), (flash, nil), (gptOSS, nil)] as [(Model, String?)] {
+            let client = AntigravityStubClient(candidate(#"{"text":"Hello"}"#, finish: "STOP"))
+            _ = await turn(client, model: model)
+            #expect(client.requests.first?.headers["anthropic-beta"] == beta, "\(model.id)")
+        }
+        #expect(AntigravityProvider.requestHeaders(token: "t", hubVersion: "1", model: opus)["anthropic-beta"] == "interleaved-thinking-2025-05-14")
+        #expect(AntigravityProvider.requestHeaders(token: "t", hubVersion: "1")["anthropic-beta"] == nil)
+    }
+
     @Test("A host's base URL stands in for the daily host")
     func resolvedBaseURL() async throws {
         let client = AntigravityStubClient(candidate(#"{"text":"Hello"}"#, finish: "STOP"))
@@ -433,6 +444,37 @@ struct AntigravityShapingTests {
         #expect(envelope.parts(3) as? [[String: String]] == [["text": "and?"]])
         #expect(AntigravityRequest.toolID("toolu_01ABC-x") == "toolu_01ABC-x")
         #expect(AntigravityRequest.toolID("call:1|é") == "call_1__")
+    }
+
+    @Test("A tool-call id longer than 64 is cut to 64, two that begin alike stay apart, and a call meets its result (pi, oh-my-pi)")
+    func longToolIds() throws {
+        // OpenAI Responses' ids: call_… joined to fc_… with a bar.
+        let one = "call_" + String(repeating: "a", count: 40) + "|fc_" + String(repeating: "b", count: 40)
+        let two = "call_" + String(repeating: "a", count: 40) + "|fc_" + String(repeating: "c", count: 40)
+        let first = AntigravityRequest.toolID(one)
+        let second = AntigravityRequest.toolID(two)
+        #expect(first.count == 64)
+        #expect(second.count == 64)
+        #expect(first != second)
+        #expect(first == AntigravityRequest.toolID(one))
+        #expect(first.range(of: #"^[A-Za-z0-9_-]{1,64}$"#, options: .regularExpression) != nil)
+        #expect(first.hasPrefix("call_aaaa"))
+        let exactly64 = String(repeating: "x", count: 64)
+        #expect(AntigravityRequest.toolID(exactly64) == exactly64)
+
+        let envelope = try build(
+            model: opus,
+            messages: [
+                .user(UserMessage(text: "read")),
+                assistant([call(one, "read")], model: opus),
+                result(one, [.text(TextContent(text: "file"))]),
+            ],
+            tools: [Tool(name: "read", description: "Read", parameters: objectSchema)]
+        )
+        let sentCall = envelope.parts(1).compactMap { $0["functionCall"] as? [String: Any] }.first
+        let sentResult = envelope.parts(2).compactMap { $0["functionResponse"] as? [String: Any] }.first
+        #expect(sentCall?["id"] as? String == first)
+        #expect(sentResult?["id"] as? String == first)
     }
 
     @Test("Claude's calls carry the stand-in signature, are checked against the schema, and its images follow every response")
@@ -776,6 +818,33 @@ struct AntigravityReplyTests {
         #expect(kinds.filter { $0 == "toolcall_end" }.count == 2)
     }
 
+    @Test("A part with no text that carries a signature signs the text before it, and goes back on replay (magpie #1445)")
+    func emptySignedText() async throws {
+        let client = AntigravityStubClient(
+            candidate(#"{"text":"Hello"}"#),
+            candidate(#"{"text":"","thoughtSignature":"c2ln"}"#, finish: "STOP")
+        )
+        let (message, _) = await turn(client)
+        #expect(said(message) == "|text:Hello|stop:stop")
+        guard case .text(let text)? = message.content.first else {
+            Issue.record("no text: \(message.content)")
+            return
+        }
+        #expect(text.textSignature == "c2ln")
+
+        // Alone, it still keeps its signature, on a text of its own.
+        let (alone, _) = await turn(AntigravityStubClient(
+            candidate(#"{"functionCall":{"name":"ls"}}"#),
+            candidate(#"{"text":"","thoughtSignature":"c2ln"}"#, finish: "STOP")
+        ))
+        #expect(alone.content.contains {
+            if case .text(let text) = $0 { return text.text.isEmpty && text.textSignature == "c2ln" }
+            return false
+        })
+        let envelope = try build(messages: [.user(UserMessage(text: "go")), .assistant(alone)])
+        #expect(envelope.parts(1).contains { $0["text"] as? String == "" && $0["thoughtSignature"] as? String == "c2ln" })
+    }
+
     @Test("A bare chunk decodes too, and the end is the finish reason", arguments: [
         ("MAX_TOKENS", StopReason.length, nil),
         ("STOP", .stop, nil),
@@ -840,10 +909,20 @@ struct AntigravityReplyTests {
         #expect(message.failure?.providerCode == "prompt_refusal")
         #expect(message.failure?.httpStatus == 429)
         #expect(message.failure?.isRetryable == false)
-        // The same words on a prompt Antigravity answers: the quota it says.
+        // The same words on a prompt Antigravity answers: Google busy, a
+        // limit retried, not spent quota (pi and oh-my-pi retry it).
         (message, _) = await turn(AntigravityStubClient(refusal))
+        #expect(message.failure?.category == .rateLimit)
+        #expect(message.failure?.isRetryable == true)
+        #expect(message.errorMessage == "Antigravity: rate limited: Resource has been exhausted (e.g. check quota).")
+
+        // Spent quota said inside the reply is the quota it says.
+        (message, _) = await turn(AntigravityStubClient(event(
+            #"{"error":{"code":429,"message":"You have exhausted your capacity on this model. Your quota will reset after 2h.","status":"RESOURCE_EXHAUSTED"}}"#
+        )))
         #expect(message.failure?.category == .quota)
-        #expect(message.errorMessage == "Antigravity: usage limit reached: Resource has been exhausted (e.g. check quota).")
+        #expect(message.failure?.isRetryable == false)
+        #expect(message.failure?.resetsAt != nil)
     }
 }
 
@@ -887,20 +966,60 @@ struct AntigravityFailureTests {
         let expected = Date().timeIntervalSince1970 + 3 * 3600 + 19 * 60 + 30
         #expect(abs(resetsAt - expected) < 60)
 
-        // The refusal's words without the prompt it refuses: a quota too,
-        // with a Retry-After kept.
+        // The refusal's words without the prompt it refuses: Google busy,
+        // retried after the Retry-After it gave.
         client = AntigravityStubClient([.init(status: 429, headers: ["Content-Type": "application/json", "Retry-After": "7"], chunks: [Data(turnedAwayBody.utf8)])])
         (message, _) = await turn(client)
         failure = try #require(message.failure)
-        #expect(failure.category == .quota)
+        #expect(failure.category == .rateLimit)
+        #expect(failure.outcome == .rateLimited)
+        #expect(failure.isRetryable == true)
         #expect(failure.resetsAt == nil)
         #expect(failure.retryAfterMs == 7000)
+        #expect(ProviderRetryPolicy().delay(for: failure, attempt: 0) == 7000)
 
         #expect(AntigravityProvider.resetsAfterSeconds("Your quota will reset after 45m2s.") == 2702)
         #expect(AntigravityProvider.resetsAfterSeconds("Your quota will reset after 26s.") == 26)
         #expect(AntigravityProvider.resetsAfterSeconds("Your quota will reset after 155h2m1s.") == 558_121)
         #expect(AntigravityProvider.resetsAfterSeconds("Your quota will reset after ") == nil)
         #expect(AntigravityProvider.resetsAfterSeconds("Resource has been exhausted (e.g. check quota).") == nil)
+    }
+
+    @Test("A 429 that is back soon, or Google's capacity, is waited out; spent quota is not (oh-my-pi, magpie backSoon)", arguments: [
+        // A short reset, even of the plan's own quota: retried after it.
+        (#"{"error":{"code":429,"message":"You have exhausted your capacity on this model. Your quota will reset after 26s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED"}]}}"#,
+         ProviderFailure.Category.rateLimit, 26_000.0 as Double?, false),
+        // Google's RetryInfo names the wait.
+        (#"{"error":{"code":429,"message":"Resource has been exhausted (e.g. check quota).","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3.5s"}]}}"#,
+         .rateLimit, 3_500, false),
+        // No capacity for the model right now.
+        (#"{"error":{"code":429,"message":"No capacity available for model claude-opus-4-6-thinking on the server","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"MODEL_CAPACITY_EXHAUSTED"}]}}"#,
+         .rateLimit, nil, false),
+        (#"{"error":{"code":429,"message":"Too many requests.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"RATE_LIMIT_EXCEEDED"}]}}"#,
+         .rateLimit, nil, false),
+        // Spent: the plan's words with no reset, a daily quota, a long RetryInfo.
+        (#"{"error":{"code":429,"message":"You have exhausted your capacity on this model.","status":"RESOURCE_EXHAUSTED"}}"#,
+         .quota, nil, false),
+        (#"{"error":{"code":429,"message":"Resource has been exhausted.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel"}]}]}}"#,
+         .quota, nil, false),
+        (#"{"error":{"code":429,"message":"Resource has been exhausted.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"3600s"}]}}"#,
+         .quota, nil, true),
+        (quotaSpentBody, .quota, nil, true),
+    ])
+    func exhausted(body: String, category: ProviderFailure.Category, retryAfterMs: Double?, resets: Bool) {
+        let failure = AntigravityProvider.httpFailure(status: 429, body: Data(body.utf8), model: "m", system: nil)
+        #expect(failure.httpStatus == 429)
+        #expect(failure.category == category)
+        #expect(failure.isRetryable == (category == .rateLimit))
+        #expect(failure.retryAfterMs == retryAfterMs)
+        #expect((failure.resetsAt != nil) == resets)
+        if category == .quota {
+            #expect(failure.message.hasPrefix("Antigravity: usage limit reached: "))
+            #expect(failure.outcome == .quotaExhausted)
+        } else {
+            #expect(failure.message.hasPrefix("Antigravity: rate limited: "))
+            #expect(failure.outcome == .rateLimited)
+        }
     }
 
     @Test("Other answers are read by their status and Google's words", arguments: [
@@ -953,7 +1072,8 @@ struct AntigravityModelTests {
         // The rows are named as Antigravity's picker names them, a family
         // without its level.
         #expect(flash.name == "Gemini 3.8 Flash")
-        #expect(sonnet.name == "Claude Sonnet 4.6 (Thinking)")
+        // Sonnet goes without thinking, so its name doesn't say it does.
+        #expect(sonnet.name == "Claude Sonnet 4.6")
         #expect(opus.name == "Claude Opus 4.6 (Thinking)")
         #expect(gptOSS.name == "GPT-OSS 120B (Medium)")
         #expect(flash.input == [.text, .image])
