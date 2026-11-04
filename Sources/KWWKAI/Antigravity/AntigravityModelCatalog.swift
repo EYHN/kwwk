@@ -5,20 +5,32 @@ import FoundationNetworking
 
 /// Antigravity's model list, and how a family's effort picks the id sent.
 ///
-/// The bundled `Resources/antigravity-models.json` is the list a free-tier
-/// account's `fetchAvailableModels` answered on 2026-11-02 (Hub 2.28.2;
-/// asked with no tier named, since Google answers `free-tier` with 400),
-/// one row per family with the effort variants folded into it, in the
-/// order of Antigravity's picker (`agentModelSorts`) and then the models it
-/// serves outside it. A re-sync is a file edit from a live
+/// The bundled `Resources/antigravity-models.json` is the union of what
+/// Antigravity's `fetchAvailableModels` answered a free-tier account on
+/// 2026-11-02 (Hub 2.28.2) and a Google AI Pro account (paid tier
+/// `g1-pro-tier`) on 2026-11-04 (Hub 2.29.0), each asked with no tier named,
+/// since Google answers a named tier with 400. It is one row per family with
+/// the effort variants folded into it, in the order of Antigravity's picker
+/// (`agentModelSorts`) and then the models it serves outside it. A family
+/// one plan isn't served is still listed: asked for it, Google answers 404
+/// and the Agent fails with "this account is not served …". Gemini 4 Argon
+/// (`gemini-4-argon-low`, `-medium`, `-high`) and Claude Opus and Sonnet 5.5
+/// (`claude-opus-5-5-…`, `claude-sonnet-5-5-…`) are the Pro account's; the
+/// free account had Argon only as `gemini-4-argon-disabled` and neither
+/// Claude 5.5. A re-sync is a file edit from a live
 /// `AntigravityOAuth.fetchAvailableModels`. Left out of it, as magpie leaves
 /// them out: the `chat_*` and `tab_*` ids (Antigravity's editor),
 /// `gemini-3.1-flash-image` (image-only), `gemini-4-argon-disabled`
 /// (disabled: asking for it is a 404), `gemini-2.5-flash`,
 /// `gemini-2.5-flash-lite` and `gemini-2.5-flash-thinking` (retired, every
 /// one listed under the name "Gemini 3.5 Flash Lite"), `gemini-2.5-pro`,
-/// `gemini-3.5-flash-lite` and the unnamed `gemini-3.8-flash-tiered`. A paid
-/// tier may list more, and such a family goes in as another row. The
+/// `gemini-3.5-flash-lite` (Antigravity's helper for search and commit
+/// messages) and the unnamed `gemini-3.8-flash-tiered`. Also left out:
+/// `gpt-oss-120b-medium`, which both accounts still list but which
+/// Antigravity says "will be removed from Antigravity on November 18, 2026",
+/// and `claude-opus-4-6-thinking` and `claude-sonnet-4-6`, which the free
+/// account listed on 2026-11-02 and the Pro account no longer did; an id the
+/// list leaves out still resolves (`antigravityModel(id:)`). The
 /// `gemini-3.5-flash` family (`-extra-low`, `-low`) of the 2026-10-20 list
 /// magpie recorded is retired, not tier-gated: asked for it on 2026-11-02,
 /// Google streamed "Gemini 3.5 Flash is no longer available. Please switch
@@ -35,10 +47,7 @@ import FoundationNetworking
 /// say one each (magpie's 2026-10-20 list had `gemini-3.5-flash-extra-low`
 /// as "(Low)" and `gemini-3.5-flash-low` as "(Medium)"; magpie
 /// `antigravity_models.go`). A row's `name` is Antigravity's display name,
-/// a family's without the level — except `claude-sonnet-4-6`, which
-/// Antigravity lists as "Claude Sonnet 4.6 (Thinking)" but which kwwk
-/// sends without thinking (its id doesn't say thinking, so it is no
-/// `reasoning` model): it is named "Claude Sonnet 4.6", as magpie names it.
+/// a family's without the level ("Gemini 4 Argon", "Claude Opus 5.5").
 public enum AntigravityModels {
     public static let api = "antigravity-codeassist"
     public static let provider = "antigravity"
@@ -94,9 +103,19 @@ public enum AntigravityModels {
 }
 
 /// The catalog row for an Antigravity model id, or a usable fallback for ids
-/// the bundled seed doesn't carry (each plan lists its own).
+/// the bundled seed doesn't carry (each plan lists its own). A variant id of
+/// a family the seed has (`gemini-4-argon-low`) is that family's row under
+/// the variant's id, a model of one id that says its own level.
 public func antigravityModel(id: String) -> Model {
     if let catalog = ModelsCatalog.model(provider: AntigravityModels.provider, id: id) { return catalog }
+    if let family = ModelsCatalog.models(for: AntigravityModels.provider).first(where: { family in
+        family.thinkingLevelMap?.values.contains { $0 == id } == true
+    }) {
+        var variant = family
+        variant.id = id
+        variant.thinkingLevelMap = nil
+        return variant
+    }
     let lower = id.lowercased()
     return Model(
         id: id,

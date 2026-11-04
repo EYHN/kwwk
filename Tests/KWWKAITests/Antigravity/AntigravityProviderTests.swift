@@ -66,9 +66,14 @@ private func catalog(_ id: String) -> Model {
 }
 
 private let flash = catalog("gemini-3.8-flash")
-private let opus = catalog("claude-opus-4-6-thinking")
-private let sonnet = catalog("claude-sonnet-4-6")
-private let gptOSS = catalog("gpt-oss-120b-medium")
+private let argon = catalog("gemini-4-argon")
+private let opus55 = catalog("claude-opus-5-5")
+private let sonnet55 = catalog("claude-sonnet-5-5")
+// Ids the bundled list leaves out, still served to some plans: they resolve
+// to the fallback row.
+private let opus = antigravityModel(id: "claude-opus-4-6-thinking")
+private let sonnet = antigravityModel(id: "claude-sonnet-4-6")
+private let gptOSS = antigravityModel(id: "gpt-oss-120b-medium")
 
 private func auth(
     token: String = "tok",
@@ -272,9 +277,13 @@ struct AntigravityEnvelopeTests {
         #expect(client.requests.isEmpty)
     }
 
-    @Test("A Claude model that thinks is asked for interleaved thinking; other models are not (pi, oh-my-pi)")
+    @Test("A claude-*-thinking model is asked for interleaved thinking; Claude 5.5 and other models are not (pi, oh-my-pi)")
     func interleavedThinking() async throws {
-        for (model, beta) in [(opus, "interleaved-thinking-2025-05-14"), (sonnet, nil), (flash, nil), (gptOSS, nil)] as [(Model, String?)] {
+        let pairs: [(Model, String?)] = [
+            (opus, "interleaved-thinking-2025-05-14"), (sonnet, nil), (flash, nil), (gptOSS, nil),
+            (opus55, nil), (sonnet55, nil), (antigravityModel(id: "claude-opus-5-5-high"), nil), (argon, nil),
+        ]
+        for (model, beta) in pairs {
             let client = AntigravityStubClient(candidate(#"{"text":"Hello"}"#, finish: "STOP"))
             _ = await turn(client, model: model)
             #expect(client.requests.first?.headers["anthropic-beta"] == beta, "\(model.id)")
@@ -323,6 +332,16 @@ struct AntigravityShapingTests {
         #expect(AntigravityModels.variantId(model: opus, reasoning: .high) == "claude-opus-4-6-thinking")
         #expect(AntigravityModels.variantId(model: gptOSS, reasoning: .low) == "gpt-oss-120b-medium")
         #expect(AntigravityModels.variantId(model: catalog("gemini-3-flash"), reasoning: .low) == "gemini-3-flash")
+
+        for family in [argon, opus55, sonnet55] {
+            #expect(AntigravityModels.variantId(model: family, reasoning: nil) == "\(family.id)-high")
+            #expect(AntigravityModels.variantId(model: family, reasoning: .low) == "\(family.id)-low")
+            #expect(AntigravityModels.variantId(model: family, reasoning: .medium) == "\(family.id)-medium")
+            #expect(AntigravityModels.variantId(model: family, reasoning: .high) == "\(family.id)-high")
+            #expect(AntigravityModels.variantId(model: family, reasoning: .minimal) == "\(family.id)-low")
+            #expect(AntigravityModels.variantId(model: family, reasoning: .max) == "\(family.id)-high")
+            #expect(supportedThinkingLevels(family) == [.low, .medium, .high])
+        }
 
         #expect(supportedThinkingLevels(flash) == [.low, .medium, .high])
         #expect(supportedThinkingLevels(flash35) == [.low, .medium])
@@ -376,8 +395,16 @@ struct AntigravityShapingTests {
         let pro = Model(id: "gemini-3.1-pro", api: AntigravityModels.api, provider: "antigravity", reasoning: true)
         #expect(try build(model: pro, reasoning: .medium).thinking?["thinkingLevel"] as? String == "high")
         #expect(try build(model: pro, reasoning: .low).thinking?["thinkingLevel"] as? String == "low")
-        let argon = Model(id: "gemini-4-argon", api: AntigravityModels.api, provider: "antigravity", reasoning: true)
-        #expect(try build(model: argon, reasoning: .medium).thinking?["thinkingLevel"] as? String == "medium")
+        let bareArgon = Model(id: "gemini-4-argon", api: AntigravityModels.api, provider: "antigravity", reasoning: true)
+        #expect(try build(model: bareArgon, reasoning: .medium).thinking?["thinkingLevel"] as? String == "medium")
+        // Argon's variants are told the level their id says.
+        for (effort, level) in [(.low, "low"), (.medium, "medium"), (.high, "high")] as [(ReasoningLevel, String)] {
+            envelope = try build(model: argon, reasoning: effort)
+            #expect(envelope.root["model"] as? String == "gemini-4-argon-\(level)")
+            #expect(envelope.thinking?["thinkingLevel"] as? String == level)
+            #expect(includesThoughts(envelope.thinking))
+            #expect(envelope.generation["maxOutputTokens"] == nil)
+        }
         // Antigravity's Gemini is never told how long its answer may be.
         #expect(try build(model: flash3, maxTokens: 100).generation["maxOutputTokens"] == nil)
 
@@ -400,7 +427,29 @@ struct AntigravityShapingTests {
         #expect(envelope.thinking == nil)
         #expect(envelope.generation["maxOutputTokens"] as? Int == 1000)
 
-        // A Claude whose id doesn't say thinking, and GPT-OSS, are told none.
+        // Claude 5.5's variants are told the level their id says, as
+        // Antigravity lists them (a thinkingLevel, no budget), and no budget.
+        for family in [opus55, sonnet55] {
+            for (effort, level) in [(.low, "low"), (.medium, "medium"), (.high, "high")] as [(ReasoningLevel, String)] {
+                envelope = try build(model: family, reasoning: effort)
+                #expect(envelope.root["model"] as? String == "\(family.id)-\(level)")
+                #expect(envelope.thinking?.count == 2)
+                #expect(includesThoughts(envelope.thinking))
+                #expect(envelope.thinking?["thinkingLevel"] as? String == level)
+                #expect(envelope.thinking?["thinkingBudget"] == nil)
+            }
+            envelope = try build(model: family)
+            #expect(envelope.root["model"] as? String == "\(family.id)-high")
+            #expect(envelope.thinking?["thinkingLevel"] as? String == "high")
+            #expect(envelope.generation["maxOutputTokens"] as? Int == 128_000)
+            #expect(try build(model: family, maxTokens: 8000).generation["maxOutputTokens"] as? Int == 8000)
+        }
+        // A caller naming the variant itself gets the level it says.
+        let opusHigh = antigravityModel(id: "claude-opus-5-5-high")
+        #expect(try build(model: opusHigh, reasoning: .low).thinking?["thinkingLevel"] as? String == "high")
+
+        // A Claude whose id says neither thinking nor a level, and GPT-OSS,
+        // are told none.
         envelope = try build(model: sonnet, reasoning: .high)
         #expect(envelope.thinking == nil)
         #expect(envelope.generation["maxOutputTokens"] as? Int == 64000)
@@ -1046,12 +1095,12 @@ struct AntigravityFailureTests {
 
 @Suite("Antigravity models")
 struct AntigravityModelTests {
-    @Test("The bundled seed is a free-tier account's live list of 2026-11-02, one row a family, on Antigravity's wire")
+    @Test("The bundled seed is the free-tier and Pro accounts' live lists of 2026-11-02 and -04, one row a family, on Antigravity's wire")
     func bundled() {
         let models = ModelsCatalog.models(for: "antigravity")
         #expect(models.map(\.id) == [
-            "claude-opus-4-6-thinking", "claude-sonnet-4-6", "gemini-3-flash", "gemini-3.1-flash-lite",
-            "gemini-3.8-flash", "gpt-oss-120b-medium",
+            "claude-opus-5-5", "claude-sonnet-5-5", "gemini-3-flash", "gemini-3.1-flash-lite",
+            "gemini-3.8-flash", "gemini-4-argon",
         ])
         for model in models {
             #expect(model.api == "antigravity-codeassist")
@@ -1063,30 +1112,45 @@ struct AntigravityModelTests {
         #expect(limits("gemini-3.8-flash") == (1_048_576, 65_536))
         #expect(limits("gemini-3-flash") == (1_048_576, 65_536))
         #expect(limits("gemini-3.1-flash-lite") == (1_048_576, 65_535))
-        #expect(limits("claude-opus-4-6-thinking") == (250_000, 64_000))
-        #expect(limits("claude-sonnet-4-6") == (250_000, 64_000))
-        #expect(limits("gpt-oss-120b-medium") == (131_072, 32_768))
-        #expect(flash.thinkingLevelMap?.compactMapValues { $0 } == [
-            "low": "gemini-3.8-flash-low", "medium": "gemini-3.8-flash-medium", "high": "gemini-3.8-flash-high",
-        ])
+        #expect(limits("gemini-4-argon") == (1_048_576, 65_536))
+        #expect(limits("claude-opus-5-5") == (1_000_000, 128_000))
+        #expect(limits("claude-sonnet-5-5") == (1_000_000, 128_000))
+        for family in [flash, argon, opus55, sonnet55] {
+            #expect(family.thinkingLevelMap?.compactMapValues { $0 } == [
+                "low": "\(family.id)-low", "medium": "\(family.id)-medium", "high": "\(family.id)-high",
+            ])
+            #expect(family.input == [.text, .image])
+            #expect(family.reasoning)
+        }
         // The rows are named as Antigravity's picker names them, a family
         // without its level.
         #expect(flash.name == "Gemini 3.8 Flash")
-        // Sonnet goes without thinking, so its name doesn't say it does.
-        #expect(sonnet.name == "Claude Sonnet 4.6")
-        #expect(opus.name == "Claude Opus 4.6 (Thinking)")
-        #expect(gptOSS.name == "GPT-OSS 120B (Medium)")
-        #expect(flash.input == [.text, .image])
+        #expect(argon.name == "Gemini 4 Argon")
+        #expect(opus55.name == "Claude Opus 5.5")
+        #expect(sonnet55.name == "Claude Sonnet 5.5")
+
+        // Ids the seed lacks still resolve: GPT-OSS and Claude 4.6, left out
+        // of the list, as the fallback row.
+        #expect(opus.api == "antigravity-codeassist")
+        #expect(opus.name == "claude-opus-4-6-thinking")
+        #expect((opus.contextWindow, opus.maxTokens) == (250_000, 64_000))
+        #expect((sonnet.contextWindow, sonnet.maxTokens) == (250_000, 64_000))
         #expect(gptOSS.input == [.text])
         #expect(!sonnet.reasoning && !gptOSS.reasoning && opus.reasoning)
-
-        // An id the seed lacks still resolves.
-        let argon = antigravityModel(id: "gemini-4-argon")
-        #expect(argon.api == "antigravity-codeassist")
-        #expect(argon.reasoning)
-        #expect(argon.contextWindow == 1_048_576)
-        #expect(antigravityModel(id: "claude-opus-5-5").contextWindow == 250_000)
         #expect(!antigravityModel(id: "gpt-oss-20b").reasoning)
+        // A variant id is its family's row under that id.
+        let argonLow = antigravityModel(id: "gemini-4-argon-low")
+        #expect(argonLow.id == "gemini-4-argon-low")
+        #expect(argonLow.name == "Gemini 4 Argon")
+        #expect(argonLow.thinkingLevelMap == nil)
+        #expect((argonLow.contextWindow, argonLow.maxTokens) == (1_048_576, 65_536))
+        #expect(AntigravityModels.variantId(model: argonLow, reasoning: .high) == "gemini-4-argon-low")
+        #expect(AntigravityModels.levelSaid(by: "gemini-4-argon-low", model: argonLow) == .low)
+        let sonnetMedium = antigravityModel(id: "claude-sonnet-5-5-medium")
+        #expect((sonnetMedium.contextWindow, sonnetMedium.maxTokens) == (1_000_000, 128_000))
+        #expect(sonnetMedium.reasoning)
+        // An id no family has is the fallback row.
+        #expect(antigravityModel(id: "claude-opus-4-5-thinking").contextWindow == 250_000)
     }
 }
 
@@ -1125,11 +1189,11 @@ struct AntigravityRegistrationTests {
     func overrideAndSignedOut() async throws {
         let manager = try await manager(OAuthCredentials(access: "at", refresh: "rt", expires: .max))
         let resolved = try #require(try await registerStored(
-            storeId: "antigravity", manager: manager, modelOverride: "claude-sonnet-4-6", primeToken: false
+            storeId: "antigravity", manager: manager, modelOverride: "claude-sonnet-5-5", primeToken: false
         ))
-        #expect(resolved.model.id == "claude-sonnet-4-6")
-        #expect(resolved.model.contextWindow == 250_000)
-        #expect(resolved.modelLabel == "claude-sonnet-4-6 · Antigravity")
+        #expect(resolved.model.id == "claude-sonnet-5-5")
+        #expect(resolved.model.contextWindow == 1_000_000)
+        #expect(resolved.modelLabel == "claude-sonnet-5-5 · Antigravity")
 
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let empty = OAuthManager(store: try OAuthStore(url: dir.appendingPathComponent("oauth.json")))

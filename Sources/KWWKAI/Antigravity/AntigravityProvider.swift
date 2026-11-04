@@ -306,17 +306,20 @@ public final class AntigravityProvider: APIProvider, @unchecked Sendable {
     // MARK: - Request
 
     /// The headers the Hub sends: its token, and its own name and version.
-    /// No `Accept`: the Hub sends none. A Claude model that thinks is also
+    /// No `Accept`: the Hub sends none. A `claude-*-thinking` model is also
     /// asked for interleaved thinking, so it keeps thinking between tool
     /// calls (pi and oh-my-pi send the same beta for `claude-*-thinking`
-    /// through Code Assist; magpie sends none).
+    /// through Code Assist; magpie sends none). Claude 5.5's level variants
+    /// (`claude-opus-5-5-high`) think adaptively and go without it, as
+    /// oh-my-pi sends them.
     static func requestHeaders(token: String, hubVersion: String, model: Model? = nil) -> [String: String] {
         var headers = [
             "Authorization": "Bearer \(token)",
             "Content-Type": "application/json",
             "User-Agent": AntigravityOAuth.userAgent(version: hubVersion),
         ]
-        if let model, AntigravityRequest.isClaude(model.id), model.reasoning {
+        if let model, AntigravityRequest.isClaude(model.id), model.reasoning,
+           model.id.lowercased().contains("thinking") {
             headers["anthropic-beta"] = interleavedThinkingBeta
         }
         return headers
