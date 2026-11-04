@@ -1,0 +1,130 @@
+[
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 1048576,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
+    "id": "gemini-3.8-flash",
+    "input": [
+      "text",
+      "image"
+    ],
+    "maxTokens": 65536,
+    "name": "Gemini 3.8 Flash",
+    "provider": "antigravity",
+    "reasoning": true,
+    "thinkingLevelMap": {
+      "high": "gemini-3.8-flash-high",
+      "low": "gemini-3.8-flash-low",
+      "max": null,
+      "medium": "gemini-3.8-flash-medium",
+      "minimal": null,
+      "off": null,
+      "xhigh": null
+    }
+  },
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 250000,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
+    "id": "claude-sonnet-4-6",
+    "input": [
+      "text",
+      "image"
+    ],
+    "maxTokens": 64000,
+    "name": "Claude Sonnet 4.6",
+    "provider": "antigravity",
+    "reasoning": false
+  },
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 250000,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
+    "id": "claude-opus-4-6-thinking",
+    "input": [
+      "text",
+      "image"
+    ],
+    "maxTokens": 64000,
+    "name": "Claude Opus 4.6 (Thinking)",
+    "provider": "antigravity",
+    "reasoning": true
+  },
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 131072,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
+    "id": "gpt-oss-120b-medium",
+    "input": [
+      "text"
+    ],
+    "maxTokens": 32768,
+    "name": "GPT-OSS 120B (Medium)",
+    "provider": "antigravity",
+    "reasoning": false
+  },
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 1048576,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
+    "id": "gemini-3-flash",
+    "input": [
+      "text",
+      "image"
+    ],
+    "maxTokens": 65536,
+    "name": "Gemini 3 Flash",
+    "provider": "antigravity",
+    "reasoning": true
+  },
+  {
+    "api": "antigravity-codeassist",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "contextWindow": 1048576,
+    "cost": {
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "input": 0,
+      "output": 0
+    },
+    "id": "gemini-3.1-flash-lite",
+    "input": [
+      "text",
+      "image"
+    ],
+    "maxTokens": 65535,
+    "name": "Gemini 3.1 Flash Lite",
+    "provider": "antigravity",
+    "reasoning": true
+  }
+]

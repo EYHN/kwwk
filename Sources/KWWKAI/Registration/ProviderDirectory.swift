@@ -128,6 +128,13 @@ public let providerDirectory: [ProviderDescriptor] = [
         formTitle: nil
     ),
     ProviderDescriptor(
+        storeId: "antigravity",
+        scope: "antigravity",
+        catalogKey: "antigravity",
+        displayName: "Antigravity",
+        formTitle: nil
+    ),
+    ProviderDescriptor(
         storeId: "qoder",
         scope: "qoder",
         catalogKey: "qoder",

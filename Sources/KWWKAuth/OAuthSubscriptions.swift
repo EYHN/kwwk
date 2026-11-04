@@ -34,6 +34,7 @@ public enum OAuthSubscriptions {
         Provider(id: "cursor", name: "Cursor", upkeep: .refreshed),
         Provider(id: "devin", name: "Devin", upkeep: .session),
         Provider(id: "kiro", name: "Kiro", upkeep: .refreshed),
+        Provider(id: "antigravity", name: "Antigravity", upkeep: .refreshed),
         Provider(id: QoderSite.global.id, name: QoderSite.global.name, upkeep: .refreshed),
         Provider(id: QoderSite.cn.id, name: QoderSite.cn.name, upkeep: .refreshed),
         Provider(id: WorkBuddySite.china.id, name: WorkBuddySite.china.name, upkeep: .refreshed),
@@ -83,6 +84,8 @@ public enum OAuthSubscriptions {
             return try await OAuthLogin.loginDevin(callbacks: callbacks, client: client)
         case "kiro":
             return try await OAuthLogin.loginKiro(callbacks: callbacks, client: client)
+        case "antigravity":
+            return try await OAuthLogin.loginAntigravity(callbacks: callbacks, client: client)
         case QoderSite.global.id:
             return try await OAuthLogin.loginQoder(site: .global, callbacks: callbacks, client: client)
         case QoderSite.cn.id:
@@ -124,6 +127,7 @@ public enum OAuthSubscriptions {
         case "github-copilot": GitHubCopilotOAuthProvider()
         case "cursor": CursorOAuthProvider()
         case "kiro": KiroOAuthProvider()
+        case "antigravity": AntigravityOAuthProvider()
         case QoderSite.global.id: QoderOAuthProvider(site: .global)
         case QoderSite.cn.id: QoderOAuthProvider(site: .cn)
         case WorkBuddySite.china.id: WorkBuddyOAuthProvider(site: .china)

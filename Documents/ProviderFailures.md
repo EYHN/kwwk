@@ -80,3 +80,21 @@ the same path as an input overflow: the failed chunk is halved and retried,
 down to the same minimum budget, keeping every chunk already summarized. Kimi
 For Coding's k3 answers some long summaries this way; the halved chunk changes
 the request instead of replaying it.
+
+Antigravity (Google's Code Assist backend) answers 429 "Resource has been
+exhausted (e.g. check quota)" to a system prompt that carries one of the
+lines it turns away — Claude Code's billing line, the Claude Agent SDK's
+identity line, Codex's GPT-5 identity line, Hermes Agent's earlier persona —
+whatever quota is left (magpie #666). `AntigravityCloak` breaks those lines
+with a zero-width space before they go; should Google still answer that 429
+to such a prompt, `AntigravityProvider` reads it as `refusal`
+(`providerCode: prompt_refusal`, never retried, never a quota), with a hint
+after Google's words. Any other Antigravity 429 that says it is back within
+60 seconds ("reset after 26s", or Google's `RetryInfo`) is `rateLimit`,
+retried after that wait, as is Google's capacity or rate limit
+(`MODEL_CAPACITY_EXHAUSTED`, `RATE_LIMIT_EXCEEDED`) and a bare "Resource has
+been exhausted". It is `quota` ("usage limit reached", never retried) only
+when Google says the quota is spent: `QUOTA_EXHAUSTED`, a per-day
+`QuotaFailure`, a longer reset ("Your quota will reset after 3h19m30s", kept
+in `resetsAt`) or "You have exhausted your capacity on this model". A 404
+"Requested entity was not found" is a model the account isn't served.

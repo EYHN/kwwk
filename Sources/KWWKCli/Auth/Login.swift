@@ -53,6 +53,11 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "antigravity",
+        display: "Antigravity (Google AI Pro / Ultra plan, Google sign-in)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "qoder",
         display: "Qoder (qoder.com subscription)",
         flow: .oauth

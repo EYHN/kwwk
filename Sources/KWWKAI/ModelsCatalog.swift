@@ -82,6 +82,13 @@ public enum ModelsCatalog {
             let kiro = loadBundledArray("kiro-models")
             if !kiro.isEmpty { out["kiro"] = kiro }
         }
+        // Antigravity's list is each plan's own too; the bundled one is a
+        // seed written from magpie's 2026-10-20 fixture, one row per family
+        // with its effort variants folded in (`AntigravityModels`).
+        if out["antigravity"] == nil {
+            let antigravity = loadBundledArray("antigravity-models")
+            if !antigravity.isEmpty { out["antigravity"] = antigravity }
+        }
         // Qoder's roster is the account's own and every request is built
         // from the live listing; the bundled rows seed the model picker, the
         // same ones for both sites.
