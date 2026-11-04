@@ -19,9 +19,6 @@ import FoundationNetworking
 // Assist gave the account, which every request names), `tier` (the tier the
 // account is on: `free-tier`, `standard-tier`) and `paidTier` (the Google
 // One plan it pays for: `g1-pro-tier`, `g1-ultra-tier`).
-//
-// Google may suspend an Antigravity account it sees used outside
-// Antigravity. The host warns before the sign-in; nothing here does.
 
 /// Constants, credential readers and Code Assist calls for Antigravity's
 /// sign-in and management API.
