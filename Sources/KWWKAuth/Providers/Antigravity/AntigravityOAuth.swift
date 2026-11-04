@@ -208,10 +208,45 @@ public enum AntigravityOAuth {
         ))
     }
 
-    /// Sets the account up for Code Assist as Antigravity does (magpie
-    /// `onboard`): `POST <daily>/v1internal:onboardUser`, a long-running
-    /// operation asked again until it is done, at most `onboardAttempts`
-    /// times. Returns the project it was given, nil when Google gave none.
+    /// `GET <daily>/v1internal/<operation>`: a long-running operation as it
+    /// stands now (oh-my-pi polls onboarding this way).
+    static func operation(
+        name: String,
+        access: String,
+        hubVersion: String,
+        headers: [String: String] = [:],
+        client: HTTPClient
+    ) async throws -> [String: Any] {
+        var requestHeaders = [
+            "Authorization": "Bearer \(access)",
+            "User-Agent": userAgent(version: hubVersion),
+        ]
+        for (key, value) in headers { requestHeaders[key] = value }
+        let path = name.split(separator: "/").map {
+            String($0).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String($0)
+        }.joined(separator: "/")
+        let (response, data) = try await client.request(
+            url: URL(string: "\(dailyHost)/v1internal/\(path)")!,
+            method: "GET",
+            headers: requestHeaders,
+            body: nil
+        )
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        guard (200..<300).contains(response.statusCode) else {
+            throw CodeAssistError(method: "operations", status: response.statusCode, message: apiErrorText(object, data: data))
+        }
+        return object ?? [:]
+    }
+
+    /// Sets the account up for Code Assist as Antigravity does:
+    /// `POST <daily>/v1internal:onboardUser` once, then the long-running
+    /// operation it answers polled by its name (`GET <daily>/v1internal/
+    /// <name>`, as oh-my-pi does) until it is done, at most
+    /// `onboardAttempts` asks in all. An operation that comes back with no
+    /// name, or whose name Code Assist won't answer, is asked for again by
+    /// posting onboardUser anew (magpie `onboard`). An operation done with
+    /// an error fails the sign-in with Google's words. Returns the project
+    /// it was given, nil when Google gave none.
     static func onboardUser(
         tierId: String,
         access: String,
@@ -227,20 +262,41 @@ public enum AntigravityOAuth {
             "User-Agent": userAgent(version: hubVersion) + " google-api-nodejs-client/10.3.0",
             "X-Goog-Api-Client": "gl-node/22.21.1",
         ]
+        var name: String?
+        var pollable = true
         for attempt in 0..<onboardAttempts {
             if attempt > 0 { try await pollSleep(onboardPollSeconds) }
-            let operation = try await call(
-                host: dailyHost,
-                method: "onboardUser",
-                body: body,
-                access: access,
-                hubVersion: hubVersion,
-                headers: headers,
-                client: client
-            )
+            let operation: [String: Any]
+            if let name, pollable {
+                do {
+                    operation = try await self.operation(
+                        name: name, access: access, hubVersion: hubVersion, headers: headers, client: client
+                    )
+                } catch let error as CodeAssistError where [400, 404, 405].contains(error.status) {
+                    // The operation can't be asked for by name here: ask
+                    // as magpie does, posting onboardUser again.
+                    pollable = false
+                    continue
+                }
+            } else {
+                operation = try await call(
+                    host: dailyHost,
+                    method: "onboardUser",
+                    body: body,
+                    access: access,
+                    hubVersion: hubVersion,
+                    headers: headers,
+                    client: client
+                )
+            }
             if operation["done"] as? Bool == true {
+                if let error = operation["error"] as? [String: Any] {
+                    let message = (error["message"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "\(error)"
+                    throw OAuthError.invalidResponse("Antigravity couldn't set this Google account up: \(message)")
+                }
                 return companionProject((operation["response"] as? [String: Any])?["cloudaicompanionProject"])
             }
+            if let next = operation["name"] as? String, !next.isEmpty { name = next }
         }
         throw OAuthError.invalidResponse(
             "Antigravity: setting the account up for Code Assist is taking long; try again in a minute"
@@ -545,7 +601,17 @@ extension OAuthLogin {
         }
 
         callbacks.onProgress("asking whose account this is…")
-        let email = try await antigravityWho(access: tokens.accessToken, client: client)
+        // Whose account it is only labels the login: a userinfo that fails
+        // leaves the login without an email, not without a login (pi keeps
+        // the email optional too).
+        let email: String?
+        do {
+            email = try await antigravityWho(access: tokens.accessToken, client: client)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            email = nil
+        }
 
         callbacks.onProgress("finding the account's Code Assist project…")
         let version = await hubVersion.current(client: client)
@@ -555,7 +621,8 @@ extension OAuthLogin {
             client: client,
             pollSleep: pollSleep
         )
-        var extras: [String: JSONValue] = ["email": .string(email), "projectId": .string(account.projectId)]
+        var extras: [String: JSONValue] = ["projectId": .string(account.projectId)]
+        if let email { extras["email"] = .string(email) }
         if let tier = account.tier, !tier.isEmpty { extras["tier"] = .string(tier) }
         if let paid = account.paidTier, !paid.isEmpty { extras["paidTier"] = .string(paid) }
         return OAuthCredentials(
@@ -567,7 +634,7 @@ extension OAuthLogin {
     }
 
     /// Whose Google account an access token is (magpie `googleWho`).
-    private static func antigravityWho(access: String, client: HTTPClient) async throws -> String {
+    static func antigravityWho(access: String, client: HTTPClient) async throws -> String {
         let (response, body) = try await client.request(
             url: AntigravityOAuth.userInfoURL,
             method: "GET",
@@ -590,13 +657,32 @@ extension OAuthLogin {
 /// rotate: the answer carries an access token alone, and the stored refresh
 /// token stays. A refused grant (`invalid_grant`: revoked, or the app's
 /// access withdrawn) is `.rejected`; anything else may pass later.
+///
+/// Each refresh also asks `loadCodeAssist` again, as magpie asks it for
+/// each process (`antigravityProject`), so a plan bought or dropped since
+/// the sign-in reaches `tier` and `paidTier` (which pick the models
+/// `fetchAvailableModels` lists) within the hour, not at the next sign-in.
+/// That ask is an aside: when it fails, or takes longer than
+/// `accountCheckSeconds`, the refreshed token goes with the extras it had.
 public struct AntigravityOAuthProvider: OAuthProvider {
     public let id = "antigravity"
     public let name = "Antigravity"
     public let tokenURL: URL
+    public let hubVersion: AntigravityHubVersion
+    /// Whether a refresh asks loadCodeAssist for the account's tiers again.
+    public let refreshesAccount: Bool
 
-    public init(tokenURL: URL = AntigravityOAuth.tokenURL) {
+    /// The longest a refresh waits for loadCodeAssist.
+    static let accountCheckSeconds: Double = 10
+
+    public init(
+        tokenURL: URL = AntigravityOAuth.tokenURL,
+        hubVersion: AntigravityHubVersion = .shared,
+        refreshesAccount: Bool = true
+    ) {
         self.tokenURL = tokenURL
+        self.hubVersion = hubVersion
+        self.refreshesAccount = refreshesAccount
     }
 
     public func refresh(
@@ -623,12 +709,46 @@ public struct AntigravityOAuthProvider: OAuthProvider {
                 detail: "antigravity refresh missing access_token"
             )
         }
+        var extras = credentials.extras
+        if refreshesAccount, let load = await currentAccount(access: json.accessToken, client: client) {
+            Self.update(&extras, from: load)
+        }
         return OAuthCredentials(
             access: json.accessToken,
             refresh: json.refreshToken ?? credentials.refresh,
             expires: AntigravityOAuth.expiry(json.expiresIn),
-            extras: credentials.extras
+            extras: extras
         )
+    }
+
+    /// What loadCodeAssist says of the account now, nil when it can't be
+    /// had within `accountCheckSeconds`.
+    private func currentAccount(access: String, client: HTTPClient) async -> AntigravityOAuth.LoadReply? {
+        let hubVersion = self.hubVersion
+        return await withTaskGroup(of: AntigravityOAuth.LoadReply?.self) { group in
+            group.addTask {
+                let version = await hubVersion.current(client: client)
+                return try? await AntigravityOAuth.loadCodeAssist(access: access, hubVersion: version, client: client)
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(Self.accountCheckSeconds * 1_000_000_000))
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// The login's extras with what loadCodeAssist said now: each of its
+    /// project, tier and paid plan that it names replaces the one stored;
+    /// one it leaves out is kept (an account set up by onboarding may have
+    /// no `currentTier`, and oh-my-pi finds `paidTier` missing from a first
+    /// answer that has the project).
+    static func update(_ extras: inout [String: JSONValue], from load: AntigravityOAuth.LoadReply) {
+        if let project = load.projectId, !project.isEmpty { extras["projectId"] = .string(project) }
+        if let tier = load.currentTier, !tier.isEmpty { extras["tier"] = .string(tier) }
+        if let paid = load.paidTier, !paid.isEmpty { extras["paidTier"] = .string(paid) }
     }
 }
 
@@ -641,7 +761,11 @@ public struct AntigravityOAuthProvider: OAuthProvider {
 /// 5-hour and a weekly window for the Gemini models and another pair for
 /// the Claude and GPT models. The per-model windows come first, each named
 /// for its model; the pools after, named "Gemini" and "Claude & GPT". A
-/// summary that cannot be read leaves the per-model windows standing alone.
+/// model's 5 hours are its pool's 5 hours, so a model whose pool has a
+/// 5-hour window is left out and the pool's window stands for it (magpie
+/// `PooledWindows`); a model whose pool has only its week keeps its own 5
+/// hours. A summary that cannot be read leaves the per-model windows
+/// standing alone.
 public struct AntigravityUsageReader: OAuthUsageReader {
     public let providerId = "antigravity"
     public let hubVersion: AntigravityHubVersion
@@ -689,9 +813,59 @@ public struct AntigravityUsageReader: OAuthUsageReader {
         return Self.windows(models: models, summary: summary)
     }
 
-    /// The per-model 5-hour windows, by model id, then the pools' windows.
+    /// The per-model 5-hour windows no pool's 5 hours stand for, by model
+    /// id, then the pools' windows.
     public static func windows(models: [String: Any], summary: [String: Any]?) -> [OAuthUsageWindow] {
-        modelWindows(models) + (summary.map(poolWindows) ?? [])
+        let groups = summary.map { Self.pools($0) } ?? []
+        let own = modelWindows(models).filter { window in
+            guard let found = Self.pool(of: window, among: groups) else { return true }
+            return !found.windows.contains { $0.windowSeconds == window.windowSeconds }
+        }
+        return own + groups.flatMap(\.windows)
+    }
+
+    /// A quota group of retrieveUserQuotaSummary: its name, what it says it
+    /// holds (its name and description, lower-cased) and its windows.
+    struct Pool {
+        var name: String
+        var about: String
+        var windows: [OAuthUsageWindow]
+        var hasFiveHours: Bool { windows.contains { $0.window == .fiveHour } }
+        /// A group named for one model ("Gemini 4 Argon") says a version; a
+        /// family's ("Gemini", "Claude & GPT") doesn't (magpie `versioned`).
+        var isModels: Bool { name.contains { $0.isNumber } }
+    }
+
+    /// The pool a model's window draws on (magpie `pools`): a group named
+    /// for the model itself (its name or id begins with the group's), else
+    /// a family's group with 5 hours whose name or description names the
+    /// model's family ("Models within this group: Claude Opus, Claude
+    /// Sonnet, GPT-OSS"); nil when none does.
+    static func pool(of window: OAuthUsageWindow, among pools: [Pool]) -> Pool? {
+        let id = (window.limitID ?? "").lowercased()
+        let name = (window.limitName ?? "").lowercased()
+        let spelled = id.replacingOccurrences(of: "-", with: " ")
+        if let own = pools.first(where: { pool in
+            guard pool.isModels else { return false }
+            let named = pool.name.lowercased()
+            return [name, spelled].contains { $0 == named || $0.hasPrefix(named + " ") || $0.hasPrefix(named + "(") }
+        }) {
+            return own
+        }
+        let family = vendor(id: id, name: window.limitName ?? "").lowercased()
+        guard !family.isEmpty else { return nil }
+        return pools.first { $0.hasFiveHours && !$0.isModels && $0.about.contains(family) }
+    }
+
+    /// The family a model is in, as its id begins — Gemini, Claude,
+    /// GPT-OSS — else its name's first word (magpie `antigravityVendor`).
+    static func vendor(id: String, name: String) -> String {
+        let lower = id.lowercased()
+        if lower.hasPrefix("gemini") { return "Gemini" }
+        if lower.hasPrefix("claude") { return "Claude" }
+        if lower.hasPrefix("gpt-oss") { return "GPT-OSS" }
+        if let first = name.split(separator: " ").first { return String(first) }
+        return String(lower.split(separator: "-").first ?? "")
     }
 
     /// One window a chat model, from `fetchAvailableModels`: how much of its
@@ -724,9 +898,16 @@ public struct AntigravityUsageReader: OAuthUsageReader {
     /// GPT — and a slug of it as its id. A bucket of another length keeps
     /// Google's name for it. Disabled buckets are not windows.
     static func poolWindows(_ payload: [String: Any]) -> [OAuthUsageWindow] {
-        var out: [OAuthUsageWindow] = []
+        pools(payload).flatMap(\.windows)
+    }
+
+    /// The quota groups of a summary, each with its windows (`poolWindows`).
+    static func pools(_ payload: [String: Any]) -> [Pool] {
+        var pools: [Pool] = []
         for group in payload["groups"] as? [[String: Any]] ?? [] {
-            let pool = poolName(group["displayName"] as? String ?? "")
+            var out: [OAuthUsageWindow] = []
+            let displayName = group["displayName"] as? String ?? ""
+            let pool = poolName(displayName)
             guard !pool.isEmpty else { continue }
             for bucket in group["buckets"] as? [[String: Any]] ?? [] {
                 guard bucket["disabled"] as? Bool != true else { continue }
@@ -758,8 +939,11 @@ public struct AntigravityUsageReader: OAuthUsageReader {
                     limitName: name
                 ))
             }
+            guard !out.isEmpty else { continue }
+            let about = (displayName + " " + (group["description"] as? String ?? "")).lowercased()
+            pools.append(Pool(name: pool, about: about, windows: out))
         }
-        return out
+        return pools
     }
 
     /// A quota group's name without "models" at its end, its "and" an

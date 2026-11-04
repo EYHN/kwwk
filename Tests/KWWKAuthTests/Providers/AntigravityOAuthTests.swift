@@ -144,7 +144,7 @@ struct AntigravitySignInTests {
         #expect(AntigravityOAuth.paidTier(credentials) == "g1-pro-tier")
     }
 
-    @Test("An account with no project is set up on the daily host, asked again until done (magpie TestAntigravityProjectAndEnvelope)")
+    @Test("An account with no project is set up on the daily host, its operation polled until done (oh-my-pi)")
     func onboard() async throws {
         let client = QueuedHTTPClient([
             .response(status: 200, body: tokenAnswer),
@@ -162,19 +162,91 @@ struct AntigravitySignInTests {
             pollSleep: { seconds in slept.append("\(seconds)") }
         )
         #expect(client.requestCount == 5)
+        #expect(client.requests[3].url.absoluteString == "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser")
+        #expect(client.requests[3].method == "POST")
         for index in [3, 4] {
-            #expect(client.requests[index].url.absoluteString == "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser")
             #expect(client.header("User-Agent", request: index) == hubAgent + " google-api-nodejs-client/10.3.0")
             #expect(client.header("X-Goog-Api-Client", request: index) == "gl-node/22.21.1")
-            let body = try jsonBody(client, request: index)
-            #expect(body["tier_id"] as? String == "free-tier")
-            #expect((body["metadata"] as? [String: String]) == [
-                "ide_type": "ANTIGRAVITY", "ide_version": "3.1.4", "ide_name": "antigravity",
-            ])
+            #expect(client.header("Authorization", request: index) == "Bearer ag-at")
         }
-        // Asked again after a pause, once the operation says it isn't done.
+        let body = try jsonBody(client, request: 3)
+        #expect(body["tier_id"] as? String == "free-tier")
+        #expect((body["metadata"] as? [String: String]) == [
+            "ide_type": "ANTIGRAVITY", "ide_version": "3.1.4", "ide_name": "antigravity",
+        ])
+        // The operation is asked for by its name, not onboarded again.
+        #expect(client.requests[4].url.absoluteString == "https://daily-cloudcode-pa.googleapis.com/v1internal/operations/1")
+        #expect(client.requests[4].method == "GET")
+        #expect(client.requests[4].body == nil)
+        // Asked after a pause, once the operation says it isn't done.
         #expect(slept.entries == ["2.0"])
         #expect(credentials.extras == ["email": "ag@example.com", "projectId": "ag-proj", "tier": "free-tier"])
+    }
+
+    @Test("An operation Code Assist won't answer by name is onboarded again (magpie); one done with an error fails saying why")
+    func onboardFallbacks() async throws {
+        var client = QueuedHTTPClient([
+            .response(status: 200, body: tokenAnswer),
+            .response(status: 200, body: whoAnswer),
+            .response(status: 200, body: #"{"allowedTiers":[{"id":"free-tier","isDefault":true}]}"#),
+            .response(status: 200, body: #"{"done":false,"name":"operations/1"}"#),
+            .response(status: 404, body: #"{"error":{"code":404,"message":"Not found","status":"NOT_FOUND"}}"#),
+            .response(status: 200, body: #"{"done":false,"name":"operations/1"}"#),
+            .response(status: 200, body: #"{"done":true,"response":{"cloudaicompanionProject":"ag-proj"}}"#),
+        ])
+        let credentials = try await OAuthLogin.loginAntigravity(
+            callbacks: scripted(["code": "c"], presenter: RecordingPresenter(), made: LoopbackBox()),
+            client: client,
+            hubVersion: hubVersion,
+            pollSleep: { _ in }
+        )
+        #expect(client.requestCount == 7)
+        #expect(client.requests[4].method == "GET")
+        for index in [5, 6] {
+            #expect(client.requests[index].url.absoluteString == "https://daily-cloudcode-pa.googleapis.com/v1internal:onboardUser")
+            #expect(client.requests[index].method == "POST")
+        }
+        #expect(AntigravityOAuth.projectId(credentials) == "ag-proj")
+
+        client = QueuedHTTPClient([
+            .response(status: 200, body: tokenAnswer),
+            .response(status: 200, body: whoAnswer),
+            .response(status: 200, body: #"{"allowedTiers":[{"id":"free-tier","isDefault":true}]}"#),
+            .response(status: 200, body: #"{"done":false,"name":"operations/2"}"#),
+            .response(status: 200, body: #"{"name":"operations/2","done":true,"error":{"code":9,"message":"Precondition failed"}}"#),
+        ])
+        do {
+            _ = try await OAuthLogin.loginAntigravity(
+                callbacks: scripted(["code": "c"], presenter: RecordingPresenter(), made: LoopbackBox()),
+                client: client,
+                hubVersion: hubVersion,
+                pollSleep: { _ in }
+            )
+            Issue.record("signed in through a failed onboarding")
+        } catch {
+            #expect(error.localizedDescription.contains("Precondition failed"))
+        }
+        #expect(client.requestCount == 5)
+    }
+
+    @Test("A userinfo that fails leaves the login without an email, not without a login (pi)")
+    func noEmail() async throws {
+        for who in [QueuedHTTPClient.Answer.response(status: 500, body: "busy"), .response(status: 200, body: #"{"id":"1"}"#),
+                    .failure(URLError(.timedOut))] {
+            let client = QueuedHTTPClient([
+                .response(status: 200, body: tokenAnswer),
+                who,
+                .response(status: 200, body: proLoad),
+            ])
+            let credentials = try await OAuthLogin.loginAntigravity(
+                callbacks: scripted(["code": "c"], presenter: RecordingPresenter(), made: LoopbackBox()),
+                client: client,
+                hubVersion: hubVersion
+            )
+            #expect(client.requestCount == 3)
+            #expect(AntigravityOAuth.email(credentials) == nil)
+            #expect(credentials.extras == ["projectId": "aicode-consumers", "tier": "standard-tier", "paidTier": "g1-pro-tier"])
+        }
     }
 
     @Test("Onboarding that never finishes, and an account Google won't serve, fail the sign-in saying why")
@@ -269,9 +341,10 @@ struct AntigravityRefreshTests {
     func refresh() async throws {
         let client = QueuedHTTPClient([
             .response(status: 200, body: #"{"access_token":"new","expires_in":3599,"scope":"x","token_type":"Bearer"}"#),
+            .response(status: 200, body: #"{"currentTier":{"id":"free-tier"},"cloudaicompanionProject":"ag-proj"}"#),
         ])
         let before = Int64(Date().timeIntervalSince1970 * 1000)
-        let refreshed = try await AntigravityOAuthProvider().refresh(credentials, using: client)
+        let refreshed = try await AntigravityOAuthProvider(hubVersion: hubVersion).refresh(credentials, using: client)
         #expect(client.requests[0].url.absoluteString == "https://oauth2.googleapis.com/token")
         #expect(client.requests[0].method == "POST")
         #expect(client.header("Content-Type", request: 0) == "application/x-www-form-urlencoded")
@@ -282,8 +355,39 @@ struct AntigravityRefreshTests {
         #expect(refreshed.access == "new")
         #expect(refreshed.refresh == "rt")
         #expect(refreshed.extras == credentials.extras)
+        // The account is asked of again with the new token.
+        #expect(client.requestCount == 2)
+        #expect(client.requests[1].url.absoluteString == "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist")
+        #expect(client.header("Authorization", request: 1) == "Bearer new")
         #expect(refreshed.expires >= before + (3599 - 300) * 1000)
         #expect(refreshed.expires <= Int64(Date().timeIntervalSince1970 * 1000) + (3599 - 300) * 1000)
+    }
+
+    @Test("A refresh takes the plan the account is on now; a loadCodeAssist that fails keeps what the login had")
+    func tierRefreshed() async throws {
+        let token = QueuedHTTPClient.Answer.response(status: 200, body: #"{"access_token":"new","expires_in":3599}"#)
+        // Bought Google AI Pro since the sign-in.
+        var client = QueuedHTTPClient([token, .response(status: 200, body: proLoad)])
+        var refreshed = try await AntigravityOAuthProvider(hubVersion: hubVersion).refresh(credentials, using: client)
+        #expect(refreshed.extras == [
+            "email": "ag@example.com", "projectId": "aicode-consumers", "tier": "standard-tier", "paidTier": "g1-pro-tier",
+        ])
+        // A tier it doesn't name is kept.
+        client = QueuedHTTPClient([token, .response(status: 200, body: #"{"cloudaicompanionProject":"ag-proj"}"#)])
+        refreshed = try await AntigravityOAuthProvider(hubVersion: hubVersion).refresh(credentials, using: client)
+        #expect(refreshed.extras == credentials.extras)
+        // A failed ask is no failed refresh.
+        for answer in [QueuedHTTPClient.Answer.response(status: 503, body: "busy"), .failure(URLError(.timedOut))] {
+            client = QueuedHTTPClient([token, answer])
+            refreshed = try await AntigravityOAuthProvider(hubVersion: hubVersion).refresh(credentials, using: client)
+            #expect(refreshed.access == "new")
+            #expect(refreshed.extras == credentials.extras)
+        }
+        // A host may leave the account alone.
+        client = QueuedHTTPClient([token])
+        refreshed = try await AntigravityOAuthProvider(hubVersion: hubVersion, refreshesAccount: false).refresh(credentials, using: client)
+        #expect(client.requestCount == 1)
+        #expect(refreshed.extras == credentials.extras)
     }
 
     @Test("A refused grant parks the login; other failures do not")
@@ -395,7 +499,7 @@ struct AntigravityUsageTests {
     private static let jan6 = Int64(Date(timeIntervalSince1970: 4_071_340_800).timeIntervalSince1970 * 1000)
     private static let jan7 = jan6 + 24 * 60 * 60 * 1000
 
-    @Test("Each chat model's 5 hours, then the pools' 5 hours and week, as Antigravity's own panel reads them")
+    @Test("The pools' 5 hours and week stand for their models' 5 hours, as Antigravity's own panel reads them (magpie PooledWindows)")
     func windows() async throws {
         let client = QueuedHTTPClient([
             .response(status: 200, body: Self.models),
@@ -405,18 +509,9 @@ struct AntigravityUsageTests {
         let windows = try await reader.usage(credentials, using: client)
         let five = 5 * 60 * 60
         #expect(windows == [
-            // The models, by id: a model saying nothing of what is left has
-            // none left; one without a name is named by its id.
-            OAuthUsageWindow(window: .primary, usedPercent: (1 - 0.7) * 100, resetsAt: nil, windowSeconds: five,
-                             limitID: "claude-opus-4-6-thinking", limitName: "Claude Opus 4.6 (Thinking)"),
-            OAuthUsageWindow(window: .primary, usedPercent: 100, resetsAt: Self.jan1at3, windowSeconds: five,
-                             limitID: "claude-sonnet-4-6", limitName: "claude-sonnet-4-6"),
-            OAuthUsageWindow(window: .primary, usedPercent: (1 - 0.9545545) * 100, resetsAt: Self.jan1at5, windowSeconds: five,
-                             limitID: "gemini-3.8-flash-high", limitName: "Gemini 3.8 Flash (High)"),
-            OAuthUsageWindow(window: .primary, usedPercent: 0, resetsAt: Self.jan1at5, windowSeconds: five,
-                             limitID: "gemini-3.8-flash-low", limitName: "Gemini 3.8 Flash (Low)"),
-            // The pools, each window under its pool's name; a bucket with
-            // no fraction has none left, a disabled one is no window.
+            // Every model's 5 hours are its pool's 5 hours: none is listed
+            // twice. The pools, each window under its pool's name; a bucket
+            // with no fraction has none left, a disabled one is no window.
             OAuthUsageWindow(window: .sevenDay, usedPercent: 25, resetsAt: Self.jan7, windowSeconds: 7 * 24 * 60 * 60,
                              limitID: "gemini", limitName: "Gemini"),
             OAuthUsageWindow(window: .fiveHour, usedPercent: (1 - 0.9545545) * 100, resetsAt: Self.jan1at5, windowSeconds: five,
@@ -438,6 +533,41 @@ struct AntigravityUsageTests {
         #expect((asked["entitlement"] as? [String: String]) == ["userTier": "g1-pro-tier"])
         #expect(client.requests[1].url.absoluteString == "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary")
         #expect(try jsonBody(client, request: 1) as? [String: String] == ["project": "aicode-consumers"])
+    }
+
+    @Test("Without a pool's 5 hours a model keeps its own: one whose pool has only its week, one named for a pool of its own, one no pool names")
+    func pooled() throws {
+        let five = 5 * 60 * 60
+        func object(_ json: String) throws -> [String: Any] {
+            try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        }
+        let models = try object("""
+            {"models":{
+            "gemini-4-argon-high":{"displayName":"Gemini 4 Argon (High)","quotaInfo":{"remainingFraction":0.5}},
+            "gemini-3.8-flash-high":{"displayName":"Gemini 3.8 Flash (High)","quotaInfo":{"remainingFraction":0.9}},
+            "claude-opus-4-6-thinking":{"displayName":"Claude Opus 4.6 (Thinking)","quotaInfo":{"remainingFraction":0.7}},
+            "mystery-1":{"displayName":"Mystery 1","quotaInfo":{"remainingFraction":0.2}}}}
+            """)
+        // Argon's own quota, a week only: its 5 hours stay, and the family's
+        // pool doesn't take it. Claude's pool has only its week: Claude keeps
+        // its 5 hours. Gemini's has its 5 hours, which stand for Flash's.
+        let summary = try object("""
+            {"groups":[
+            {"displayName":"Gemini 4 Argon","buckets":[{"window":"weekly","remainingFraction":0.6}]},
+            {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
+              {"window":"5h","remainingFraction":0.9},{"window":"weekly","remainingFraction":0.8}]},
+            {"displayName":"Claude and GPT models","description":"Claude Opus, Claude Sonnet, GPT-OSS","buckets":[
+              {"window":"weekly","remainingFraction":0.4}]}]}
+            """)
+        let windows = AntigravityUsageReader.windows(models: models, summary: summary)
+        #expect(windows.map { "\($0.limitID ?? "")/\($0.windowSeconds ?? 0)" } == [
+            "claude-opus-4-6-thinking/\(five)", "gemini-4-argon-high/\(five)", "mystery-1/\(five)",
+            "gemini-4-argon/604800", "gemini/\(five)", "gemini/604800", "claude-gpt/604800",
+        ])
+        // No summary: every model stands alone.
+        #expect(AntigravityUsageReader.windows(models: models, summary: nil).count == 4)
+        #expect(AntigravityUsageReader.vendor(id: "gpt-oss-120b-medium", name: "") == "GPT-OSS")
+        #expect(AntigravityUsageReader.vendor(id: "x-1", name: "Mystery 1") == "Mystery")
     }
 
     @Test("A tier Google refuses with a 400 is left out, down to none, and not named again for a day (magpie #1553)")
