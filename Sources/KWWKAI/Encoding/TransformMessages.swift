@@ -26,6 +26,7 @@ public enum TransformMessages {
         var result = downgradeUnsupportedImages(expandNativeCompaction(messages, model: model), model: model)
         result = stripCrossModelThinking(result, model: model, preserveAnthropicFallback: preserveAnthropicFallback)
         result = fillEmptyToolCallIds(result)
+        result = dropUnnamedToolCalls(result)
         result = normalizeToolCallIds(result, model: model)
         result = uniquifyToolCallIds(result, model: model)
         result = sanitizeSurrogates(result)
@@ -355,6 +356,36 @@ public enum TransformMessages {
                 let match = pending.firstIndex { $0.name == t.toolName } ?? 0
                 t.toolCallId = pending.remove(at: match).id
                 return .toolResult(t)
+            case .user, .system:
+                return message
+            }
+        }
+    }
+
+    /// Leaves out each tool call stored with an empty name, and its result.
+    /// A Chat relay can send a `tool_calls` fragment that never names its
+    /// function (OpenRouter's GLM, 2026-09-07); the call ran as "Tool  not
+    /// found" and stayed in the transcript, and every provider that checks
+    /// the name refuses it on every later turn (Responses: "Invalid
+    /// 'input[33].name': empty string"). A turn left with no content goes
+    /// too. Runs after ``fillEmptyToolCallIds(_:)`` so the result is found
+    /// by the id its call was given.
+    public static func dropUnnamedToolCalls(_ messages: [Message]) -> [Message] {
+        var dropped = Set<String>()
+        return messages.compactMap { message in
+            switch message {
+            case .assistant(var a):
+                let kept = a.content.filter { block in
+                    guard case .toolCall(let tc) = block, tc.name.isEmpty else { return true }
+                    dropped.insert(tc.id)
+                    return false
+                }
+                guard kept.count != a.content.count else { return message }
+                guard !kept.isEmpty else { return nil }
+                a.content = kept
+                return .assistant(a)
+            case .toolResult(let t):
+                return dropped.contains(t.toolCallId) ? nil : message
             case .user, .system:
                 return message
             }
