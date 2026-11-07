@@ -26,6 +26,13 @@ jobs:
       - name: Select Swift 6.1 toolchain
         if: startsWith(matrix.os, 'macos-15')
         run: sudo xcode-select --switch /Applications/Xcode_16.4.app/Contents/Developer
+      # The dependencies are over half of every build and change only with the
+      # lockfile. A checkout's new timestamps still rebuild this package.
+      - uses: actions/cache@v5
+        with:
+          path: .build
+          key: swiftpm-${{ matrix.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-${{ matrix.os }}-
       - name: swift build
         run: swift build --product kwwk
       - name: bundled resource self-test
@@ -44,6 +51,11 @@ jobs:
     container: swift:${{ matrix.swift }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: .build
+          key: swiftpm-linux-${{ matrix.swift }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-linux-${{ matrix.swift }}-
       - name: install python3 (fake MCP servers in tests)
         run: apt-get update && apt-get install -y --no-install-recommends python3
       - name: swift build
@@ -60,6 +72,11 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: .build-ios
+          key: swiftpm-ios-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-ios-
       - name: swift build (iOS 15, kwwk CLI)
         # There is no Swift SDK bundle for iOS, so each stage gets the
         # iPhoneOS sysroot by hand: frontend, C, link driver and ld. The native
