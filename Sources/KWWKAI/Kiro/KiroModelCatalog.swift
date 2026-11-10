@@ -31,8 +31,11 @@ public enum KiroModels {
         let query = OAuth.urlEncodedForm([
             "origin": "KIRO_CLI", "profileArn": KiroOAuth.profileArn(credentials) ?? "",
         ])
+        guard let url = URL(string: "\(KiroOAuth.managementURL(region: region))List-Available-Models?\(query)") else {
+            throw ProviderFailure(message: "The Kiro login's profile names a region that is not one")
+        }
         let (response, body) = try await client.request(
-            url: URL(string: "\(KiroOAuth.managementURL(region: region))List-Available-Models?\(query)")!,
+            url: url,
             method: "GET",
             headers: ["Authorization": "Bearer \(credentials.access)", "Accept": "application/json"],
             body: nil

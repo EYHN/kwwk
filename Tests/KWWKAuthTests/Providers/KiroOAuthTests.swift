@@ -543,6 +543,22 @@ struct KiroRefreshTests {
         #expect(await kindOf(.response(status: 200, body: "{}")) == .unavailable)
     }
 
+    @Test("A stored region that gives no URL is a sign-in to make again, and nothing is sent", arguments: ["social", "idc"])
+    func unusableRegion(kind: String) async throws {
+        var credentials = kind == "social" ? social : idc
+        credentials.extras["region"] = "a:b"
+        let client = QueuedHTTPClient([])
+        do {
+            _ = try await KiroOAuthProvider().refresh(credentials, using: client)
+            Issue.record("the refresh went through")
+        } catch let error as OAuthRefreshError {
+            #expect(error.providerId == "kiro")
+            #expect(error.kind == .rejected)
+            #expect(error.status == nil)
+        }
+        #expect(client.requests.isEmpty)
+    }
+
     @Test("The API is in the profile's region, else the nearest of Kiro's two to the sign-in", arguments: [
         ("arn:aws:codewhisperer:eu-central-1:1:profile/P", "us-east-1", "eu-central-1"),
         ("arn:aws:codewhisperer:us-east-1:1:profile/P", "", "us-east-1"),
@@ -635,6 +651,17 @@ struct KiroUsageTests {
                 credentials,
                 using: QueuedHTTPClient([.response(status: 403, body: "no")])
             )
+        }
+    }
+
+    // Whether such a host still parses differs between Foundation builds;
+    // either way the read ends in an error, never in a trap.
+    @Test("A profile whose region is not one reads as no usage")
+    func unusableRegion() async throws {
+        var stored = credentials
+        stored.extras["profileArn"] = "arn:aws:codewhisperer:a b:1:profile/P"
+        await #expect(throws: OAuthUsageError.self) {
+            _ = try await KiroUsageReader().usage(stored, using: QueuedHTTPClient([.response(status: 403, body: "no")]))
         }
     }
 
