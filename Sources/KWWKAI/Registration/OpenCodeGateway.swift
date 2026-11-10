@@ -14,8 +14,9 @@ import FoundationNetworking
 ///   - Gemini at `<root>/google`
 ///
 /// kwwk's transports append their own version and path to these. The
-/// catalog's `baseUrl`s are not used: its Gemini entries name `<root>/v1`,
-/// which becomes `<root>/v1/v1beta/models/…`, a path the gateway answers 404.
+/// catalog's `baseUrl`s are not used: the plan decides the address, so a
+/// session template saved against an older catalog (whose Gemini entries
+/// named `<root>/v1`, a 404 once `/v1beta/models/…` is appended) still routes.
 ///
 /// The gateway routes and caches a conversation by `x-opencode-session`
 /// (`OpenCodeRequestProvider`). Go refuses a request without it, 400

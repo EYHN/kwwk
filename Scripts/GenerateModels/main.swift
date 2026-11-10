@@ -10,9 +10,9 @@ import KWWKGenerateModelsCore
 ///   swift run kwwk-generate-models \
 ///       /path/to/pi-mono/packages/ai/src/models.generated.ts
 ///
-/// Current pi-mono checkouts must first run their own
-/// `node packages/ai/scripts/generate-models.ts` command to materialize the
-/// Git-ignored provider JSON files referenced by the generated TypeScript.
+/// Current pi-mono checkouts must first run `npm run hydrate-model-data` in
+/// `packages/ai` to materialize the Git-ignored provider JSON files
+/// referenced by the generated TypeScript.
 ///
 /// By default the output is written to:
 ///
@@ -34,8 +34,8 @@ struct GenerateModels: ParsableCommand {
         Also run `swift run kwwk-generate-cursor-models` when syncing: the Cursor catalog \
         (cursor-models.json) is regenerated separately.
 
-        Current pi-mono checkouts must first run `node packages/ai/scripts/generate-models.ts` in the \
-        pi-mono repository to materialize the Git-ignored provider JSON files.
+        Current pi-mono checkouts must first run `npm run hydrate-model-data` in pi-mono's packages/ai \
+        to materialize the Git-ignored provider JSON files.
         """
     )
 

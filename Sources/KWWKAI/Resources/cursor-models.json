@@ -391,6 +391,106 @@
       "input" : 0,
       "output" : 0
     },
+    "id" : "claude-fable-5-2-high",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.2 1M (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 300000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-2-low",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.2 1M Low (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 300000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-2-max",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.2 1M Max (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 300000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-2-medium",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.2 1M Medium (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 300000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
+    "id" : "claude-fable-5-2-xhigh",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 64000,
+    "name" : "Claude Fable 5.2 1M Extra High (NO ZDR)",
+    "provider" : "cursor",
+    "reasoning" : false
+  },
+  {
+    "api" : "cursor-agent",
+    "baseUrl" : "https:\/\/api2.cursor.sh",
+    "contextWindow" : 300000,
+    "cost" : {
+      "cacheRead" : 0,
+      "cacheWrite" : 0,
+      "input" : 0,
+      "output" : 0
+    },
     "id" : "claude-fable-5-high",
     "input" : [
       "text",
@@ -2871,146 +2971,6 @@
     ],
     "maxTokens" : 64000,
     "name" : "Gemini 3.5 Flash",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.6-flash-high",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.6 Flash",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.6-flash-low",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.6 Flash Low",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.6-flash-medium",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.6 Flash Medium",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.6-flash-minimal",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.6 Flash Minimal",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.7-flash-high",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.7 Flash",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.7-flash-low",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.7 Flash Low",
-    "provider" : "cursor",
-    "reasoning" : false
-  },
-  {
-    "api" : "cursor-agent",
-    "baseUrl" : "https:\/\/api2.cursor.sh",
-    "contextWindow" : 1000000,
-    "cost" : {
-      "cacheRead" : 0,
-      "cacheWrite" : 0,
-      "input" : 0,
-      "output" : 0
-    },
-    "id" : "gemini-3.7-flash-medium",
-    "input" : [
-      "text",
-      "image"
-    ],
-    "maxTokens" : 64000,
-    "name" : "Gemini 3.7 Flash Medium",
     "provider" : "cursor",
     "reasoning" : false
   },

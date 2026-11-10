@@ -237,7 +237,7 @@ public enum GenerateModelsCore {
         } catch {
             throw GenerateModelsCoreError.conversion(
                 "could not read provider JSON for \(constant) at \(jsonURL.path); "
-                    + "run pi-mono's `node packages/ai/scripts/generate-models.ts` first: \(error)"
+                    + "run `npm run hydrate-model-data` in pi-mono's packages/ai first: \(error)"
             )
         }
 
