@@ -170,9 +170,10 @@ public enum ProviderVariants {
     /// Claude Code CLI version advertised on the OAuth identity headers. The
     /// subscription endpoint stamps requests as Claude Code via `user-agent`
     /// and `x-app`, plus a `claude-code-20250219` beta prefix.
-    /// Matches pi's Anthropic provider at 6671c604766b (2026-09-16).
-    /// Fable 5.1 rejects older versions with claude_code_version_too_old.
-    public static let claudeCodeVersion = "2.1.280"
+    /// Matches pi's Anthropic provider and the npm latest (2026-11-10).
+    /// Older versions are rejected with claude_code_version_too_old (5.2 needs
+    /// 2.1.290 or newer).
+    public static let claudeCodeVersion = "2.1.322"
 
     public static func anthropicOAuth(
         accessToken: String? = nil,
