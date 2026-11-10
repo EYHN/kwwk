@@ -895,6 +895,20 @@ struct KiroModelTests {
         #expect(request.headers["Accept"] == "application/json")
     }
 
+    @Test("A region that parses but is not one lists nothing, and nothing is sent", arguments: [
+        ("region", "evil.com/x"), ("region", "us-east-1.evil.com"),
+        ("profileArn", "arn:aws:codewhisperer:us-east-1.evil.com:1:profile/P"),
+    ])
+    func fetchHostileRegion(key: String, value: String) async throws {
+        var credentials = OAuthCredentials(access: "at", refresh: "rt", expires: .max, extras: ["region": "us-east-1"])
+        credentials.extras[key] = .string(value)
+        let client = KiroStubClient([.init(chunks: [Data(Self.list.utf8)])])
+        await #expect(throws: ProviderFailure(message: "The Kiro login's profile names a region that is not one")) {
+            _ = try await KiroModels.fetch(credentials: credentials, client: client)
+        }
+        #expect(client.requests.isEmpty)
+    }
+
     @Test("An empty list and a refusal are failures, not an empty catalog")
     func fetchFailures() async throws {
         let credentials = OAuthCredentials(access: "at", refresh: "rt", expires: .max)
@@ -961,6 +975,23 @@ struct KiroRegistrationTests {
         #expect(auth.scheme == .bearer)
         #expect(auth.baseURL == "https://runtime.eu-central-1.kiro.dev")
         #expect(auth.metadata == ["profileArn": "arn:aws:codewhisperer:eu-central-1:9:profile/E"])
+    }
+
+    @Test("A login whose region parses but is not one gives no base URL, so no turn is sent", arguments: [
+        ("region", "evil.com/x"), ("region", "us-east-1.evil.com"),
+        ("profileArn", "arn:aws:codewhisperer:evil.com/x:9:profile/E"),
+    ])
+    func hostileRegion(key: String, value: String) async throws {
+        var credentials = OAuthCredentials(
+            access: "at", refresh: "rt", expires: .max,
+            extras: ["region": "eu-west-1", "profileArn": "arn:aws:codewhisperer:eu-central-1:9:profile/E"]
+        )
+        credentials.extras[key] = .string(value)
+        let manager = try await manager(credentials)
+        let model = kiroModel(id: "auto")
+        await #expect(throws: ProviderFailure(message: "The Kiro login names a region that is not one; sign in again")) {
+            _ = try await kiroAuthResolver(manager: manager)(model, nil)
+        }
     }
 
     @Test("A model override is honoured, and a signed-out store resolves to nothing")
