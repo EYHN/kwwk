@@ -418,8 +418,11 @@ extension OAuthLogin {
         body: [String: Any],
         client: HTTPClient
     ) async throws -> [String: Any] {
+        guard let endpoint = URL(string: url) else {
+            throw OAuthError.invalidResponse("the Kiro sign-in named an address that is not a URL")
+        }
         let (response, data) = try await client.request(
-            url: URL(string: url)!,
+            url: endpoint,
             method: "POST",
             headers: [
                 "Content-Type": "application/json",
@@ -479,9 +482,20 @@ public struct KiroOAuthProvider: OAuthProvider {
             headers["User-Agent"] = KiroOAuth.desktopUserAgent
             body = ["refreshToken": credentials.refresh]
         }
+        // The region is read from the stored login. One that gives no URL
+        // is a login no refresh can use: a sign-in to make again, like a
+        // refused grant.
+        guard let endpoint = URL(string: url) else {
+            throw OAuthRefreshError(
+                providerId: id,
+                kind: .rejected,
+                status: nil,
+                detail: "the stored Kiro login names a region that is not one; sign in again"
+            )
+        }
         let (response, data) = try await OAuthRefreshError.post(
             provider: id,
-            url: URL(string: url)!,
+            url: endpoint,
             headers: headers,
             body: try JSONSerialization.data(withJSONObject: body),
             client: client
@@ -532,8 +546,15 @@ public struct KiroUsageReader: OAuthUsageReader {
             "origin": "KIRO_CLI", "profileArn": profile, "resourceType": "CREDIT", "isEmailRequired": "true",
         ])
         let base = KiroOAuth.managementURL(region: KiroOAuth.apiRegion(credentials))
+        guard let url = URL(string: "\(base)Get-Usage-Limits?\(query)") else {
+            throw OAuthUsageError.unavailable(
+                providerId: providerId,
+                status: nil,
+                detail: "the Kiro login's profile names a region that is not one"
+            )
+        }
         let (response, body) = try await OAuthUsage.get(
-            URL(string: "\(base)Get-Usage-Limits?\(query)")!,
+            url,
             headers: [
                 "Authorization": "Bearer \(credentials.access)",
                 "Accept": "application/json",
