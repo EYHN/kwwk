@@ -124,7 +124,7 @@
     }
   },
   "github-copilot": {
-    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists.",
+    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists.",
     "claude-fable-5": {
       "contextWindow": 264000,
       "maxTokens": 64000
@@ -141,7 +141,6 @@
       "contextWindow": 200000,
       "maxTokens": 100000
     },
-    "claude-opus-4.7": null,
     "claude-opus-4.8": {
       "contextWindow": 264000
     },
@@ -159,28 +158,17 @@
     "claude-sonnet-5.5": {
       "contextWindow": 328000
     },
-    "gemini-3.5-flash": null,
-    "gemini-3.6-flash": null,
-    "gemini-3.7-flash": {
-      "contextWindow": 264000
-    },
     "gemini-3.8-flash": {
       "contextWindow": 265536,
       "maxTokens": 65536
     },
-    "gpt-5-mini": {
-      "contextWindow": 192000
+    "gemini-4-argon": {
+      "contextWindow": 265536
     },
     "gpt-5.3-codex": {
       "contextWindow": 400000
     },
-    "gpt-5.4": {
-      "contextWindow": 400000
-    },
     "gpt-5.4-nano": null,
-    "gpt-5.5": {
-      "contextWindow": 400000
-    },
     "gpt-5.6-luna": {
       "contextWindow": 328000
     },
@@ -202,17 +190,16 @@
     "gpt-6.1-sol": {
       "contextWindow": 400000
     },
-    "grok-4.5": {
-      "contextWindow": 328000
+    "gpt-6.1-terra": {
+      "contextWindow": 400000
     },
+    "grok-4.5": null,
     "grok-4.6": {
       "contextWindow": 328000
     },
     "grok-4.7": {
       "contextWindow": 328000
-    },
-    "kimi-k2.7-code": null,
-    "mai-code-1-flash-picker": null
+    }
   },
   "zai": {
     "$note": "Models Z.ai's coding endpoint lists (GET /api/coding/paas/v4/models, 2026-10-13) and pi-mono leaves out. Each answered through a Coding Plan login the same day, except glm-5.3-flashx, which that plan does not include. Windows are the ones OpenRouter publishes for the same models.",

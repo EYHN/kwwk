@@ -744,7 +744,7 @@ them — don't update one without the others:
 
 ```sh
 # In the pi-mono checkout, materialize the generated provider JSON first.
-node packages/ai/scripts/generate-models.ts
+(cd packages/ai && npm run hydrate-model-data)
 
 # In the kwwk checkout, use that exact pi-mono checkout as the input.
 swift run kwwk-generate-models /path/to/pi-mono/packages/ai/src/models.generated.ts

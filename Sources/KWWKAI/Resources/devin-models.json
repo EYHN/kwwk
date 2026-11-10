@@ -94,6 +94,70 @@
     },
     "contextWindow" : 1000000,
     "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
+      "input" : 8,
+      "output" : 40
+    },
+    "id" : "claude-fable-5-2",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Fable 5.2",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-fable-5-2-high",
+      "low" : "claude-fable-5-2-low",
+      "max" : "claude-fable-5-2-max",
+      "medium" : "claude-fable-5-2-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-fable-5-2-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.4,
+      "cacheWrite" : 0,
+      "input" : 16,
+      "output" : 80
+    },
+    "id" : "claude-fable-5-2-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "Claude Fable 5.2 Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "claude-fable-5-2-high-fast",
+      "low" : "claude-fable-5-2-low-fast",
+      "max" : "claude-fable-5-2-max-fast",
+      "medium" : "claude-fable-5-2-medium-fast",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "claude-fable-5-2-xhigh-fast"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
       "cacheRead" : 0.01,
       "cacheWrite" : 0,
       "input" : 0.1,
@@ -755,10 +819,10 @@
     },
     "contextWindow" : 1048576,
     "cost" : {
-      "cacheRead" : 0.05,
+      "cacheRead" : 0.1,
       "cacheWrite" : 0,
-      "input" : 1,
-      "output" : 5
+      "input" : 2,
+      "output" : 10
     },
     "id" : "gemini-4-argon",
     "input" : [
@@ -878,7 +942,7 @@
       "text",
       "image"
     ],
-    "maxTokens" : 128000,
+    "maxTokens" : 131072,
     "name" : "GLM-5.3 Flash 1M",
     "provider" : "devin",
     "reasoning" : true,
@@ -1316,6 +1380,70 @@
     },
     "contextWindow" : 1000000,
     "cost" : {
+      "cacheRead" : 0.05,
+      "cacheWrite" : 0,
+      "input" : 1,
+      "output" : 5
+    },
+    "id" : "gpt-6-1-terra",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6.1 Terra",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-1-terra-high",
+      "low" : "gpt-6-1-terra-low",
+      "max" : "gpt-6-1-terra-max",
+      "medium" : "gpt-6-1-terra-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-6-1-terra-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
+      "cacheRead" : 0.1,
+      "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 10
+    },
+    "id" : "gpt-6-1-terra-fast",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 128000,
+    "name" : "GPT-6.1 Terra Fast",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "gpt-6-1-terra-high-priority",
+      "low" : "gpt-6-1-terra-low-priority",
+      "max" : "gpt-6-1-terra-max-priority",
+      "medium" : "gpt-6-1-terra-medium-priority",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : "gpt-6-1-terra-xhigh-priority"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "compat" : {
+      "supportsParallelToolCalls" : true
+    },
+    "contextWindow" : 1000000,
+    "cost" : {
       "cacheRead" : 1,
       "cacheWrite" : 0,
       "input" : 10,
@@ -1634,6 +1762,35 @@
     "cost" : {
       "cacheRead" : 0.2,
       "cacheWrite" : 0,
+      "input" : 2,
+      "output" : 10
+    },
+    "id" : "kimi-k3-1-pro",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 131072,
+    "name" : "Kimi K3.1 Pro",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "kimi-k3-1-pro-high",
+      "low" : "kimi-k3-1-pro-low",
+      "max" : "kimi-k3-1-pro-max",
+      "medium" : "kimi-k3-1-pro-medium",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.2,
+      "cacheWrite" : 0,
       "input" : 4,
       "output" : 20
     },
@@ -1654,6 +1811,35 @@
       "minimal" : "muse-wonder-1-0-minimal",
       "off" : null,
       "xhigh" : "muse-wonder-1-0-xhigh"
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 1048576,
+    "cost" : {
+      "cacheRead" : 0.04,
+      "cacheWrite" : 0,
+      "input" : 0.2,
+      "output" : 0.5
+    },
+    "id" : "nemotron-3-5-super",
+    "input" : [
+      "text",
+      "image"
+    ],
+    "maxTokens" : 65536,
+    "name" : "Nemotron 3.5 Super",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "nemotron-3-5-super-high",
+      "low" : null,
+      "max" : null,
+      "medium" : "nemotron-3-5-super-medium",
+      "minimal" : null,
+      "off" : "nemotron-3-5-super-none",
+      "xhigh" : null
     }
   },
   {
@@ -1819,6 +2005,34 @@
       "low" : null,
       "max" : "swe-2-max-lightning",
       "medium" : "swe-2-medium-lightning",
+      "minimal" : null,
+      "off" : null,
+      "xhigh" : null
+    }
+  },
+  {
+    "api" : "devin-agent",
+    "baseUrl" : "https:\/\/server.codeium.com",
+    "contextWindow" : 262144,
+    "cost" : {
+      "cacheRead" : 0.075,
+      "cacheWrite" : 0.75,
+      "input" : 0.75,
+      "output" : 3.75
+    },
+    "id" : "swe-2-flash",
+    "input" : [
+      "text"
+    ],
+    "maxTokens" : 131072,
+    "name" : "SWE-2 Flash",
+    "provider" : "devin",
+    "reasoning" : true,
+    "thinkingLevelMap" : {
+      "high" : "swe-2-flash-high",
+      "low" : null,
+      "max" : "swe-2-flash-max",
+      "medium" : "swe-2-flash-medium",
       "minimal" : null,
       "off" : null,
       "xhigh" : null
