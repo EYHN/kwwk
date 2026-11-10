@@ -788,6 +788,15 @@ struct KiroRequestTests {
         #expect(message.errorMessage == "Kiro sign-in is required (run /login kiro)")
         #expect(client.requests.isEmpty)
     }
+
+    @Test("A login whose region gives no URL fails the turn, and nothing is sent")
+    func unusableRegion() async throws {
+        let client = KiroStubClient()
+        let (message, _) = await turn(client, auth: kiroAuth(baseURL: "https://runtime.a:b.kiro.dev"))
+        #expect(message.stopReason == .error)
+        #expect(message.errorMessage == "The Kiro login names a region that is not one; sign in again")
+        #expect(client.requests.isEmpty)
+    }
 }
 
 // MARK: - Errors

@@ -62,8 +62,13 @@ public final class KiroProvider: APIProvider, @unchecked Sendable {
             var headers = Self.requestHeaders(token: token)
             for (key, value) in options?.headers ?? [:] { headers[key] = value }
             let baseURL = Self.baseURL(model: model, resolved: options?.resolvedAuth?.baseURL)
+            // The base follows the region the stored login names. One that
+            // gives no URL fails the turn rather than ending the process.
+            guard let url = URL(string: baseURL + "/generateAssistantResponse") else {
+                throw ProviderFailure(message: "The Kiro login names a region that is not one; sign in again")
+            }
             let (response, stream) = try await client.stream(
-                url: URL(string: baseURL + "/generateAssistantResponse")!,
+                url: url,
                 method: "POST",
                 headers: headers,
                 body: body,
