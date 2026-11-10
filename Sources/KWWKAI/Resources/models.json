@@ -16327,6 +16327,47 @@
         "xhigh" : null
       }
     },
+    "gemini-4-carbon" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "gemini-4-carbon",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerRequest" : 3600,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        },
+        "maxRequestBytes" : 20971520
+      },
+      "maxTokens" : 32768,
+      "name" : "Gemini 4 Carbon",
+      "provider" : "google",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
     "gemini-flash-latest" : {
       "api" : "google-generative-ai",
       "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
@@ -17048,6 +17089,45 @@
       },
       "maxTokens" : 65536,
       "name" : "Gemini 4 Argon",
+      "provider" : "google-vertex",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
+    "gemini-4-carbon" : {
+      "api" : "google-vertex",
+      "baseUrl" : "https:\/\/{location}-aiplatform.googleapis.com",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "gemini-4-carbon",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 65536,
+      "name" : "Gemini 4 Carbon",
       "provider" : "google-vertex",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -26286,6 +26366,45 @@
         "xhigh" : null
       }
     },
+    "gemini-4-carbon" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/opencode.ai\/inference\/google\/v1beta",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "gemini-4-carbon",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 65536,
+      "name" : "Gemini 4 Carbon",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
     "glm-5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/opencode.ai\/inference\/openai\/v1",
@@ -28264,7 +28383,16 @@
         "cacheRead" : 0.0040000000000000001,
         "cacheWrite" : 0,
         "input" : 0.1,
-        "output" : 0.5
+        "output" : 0.5,
+        "tiers" : [
+          {
+            "cacheRead" : 0.012,
+            "cacheWrite" : 0,
+            "input" : 0.3,
+            "inputTokensAbove" : 200000,
+            "output" : 1.5
+          }
+        ]
       },
       "id" : "muse-ember-1.0",
       "input" : [
@@ -30274,10 +30402,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.17,
+        "cacheRead" : 0.18,
         "cacheWrite" : 0,
-        "input" : 0.1719,
-        "output" : 9.7471
+        "input" : 0.1824,
+        "output" : 9.338800000000001
       },
       "id" : "~moonshotai\/kimi-latest",
       "input" : [
@@ -30672,8 +30800,8 @@
       "cost" : {
         "cacheRead" : 0.029999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.033500000000000002,
-        "output" : 0.083000000000000004
+        "input" : 0.039899999999999998,
+        "output" : 0.078399999999999997
       },
       "id" : "~z-ai\/glm-flash-latest",
       "input" : [
@@ -33311,10 +33439,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.017999999999999999,
+        "cacheRead" : 0.0060000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.050999999999999997,
-        "output" : 0.5669999999999999
+        "input" : 0.3,
+        "output" : 1.2
       },
       "id" : "deepseek\/deepseek-v4.1-flash",
       "input" : [
@@ -34734,6 +34862,96 @@
         "xhigh" : null
       }
     },
+    "google\/gemini-4-carbon" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0.1875,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "google\/gemini-4-carbon",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 943718,
+      "name" : "Google: Gemini 4 Carbon",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
+    "google\/gemini-4-carbon:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.050000000000000003,
+        "cacheWrite" : 0.1875,
+        "input" : 1,
+        "output" : 5
+      },
+      "id" : "google\/gemini-4-carbon:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 943718,
+      "name" : "Google: Gemini 4 Carbon (batch)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
     "google\/gemini-nano-banana-2.1" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -35796,7 +36014,7 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 1000000,
       "cost" : {
         "cacheRead" : 0.15,
         "cacheWrite" : 0,
@@ -35818,7 +36036,7 @@
           }
         }
       },
-      "maxTokens" : 131072,
+      "maxTokens" : 262144,
       "name" : "Meta: Muse Spark Open",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -36016,10 +36234,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.014999999999999999,
+        "cacheRead" : 0.0074999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 0.6
+        "input" : 0.074999999999999997,
+        "output" : 0.3
       },
       "id" : "minimax\/minimax-m3.1-flash",
       "input" : [
@@ -43940,10 +44158,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.033000000000000002,
+        "cacheRead" : 0.020625000000000001,
         "cacheWrite" : 0,
-        "input" : 0.132,
-        "output" : 0.528
+        "input" : 0.082500000000000004,
+        "output" : 0.33
       },
       "id" : "tencent\/hy3",
       "input" : [
@@ -44053,10 +44271,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.042000000000000003,
+        "cacheRead" : 0.0378,
         "cacheWrite" : 0,
-        "input" : 0.834,
-        "output" : 2.501
+        "input" : 0.7506,
+        "output" : 2.2509
       },
       "id" : "tencent\/hy4-preview",
       "input" : [
@@ -45380,9 +45598,9 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0050000000000000001,
+        "cacheRead" : 0.0051000000000000004,
         "cacheWrite" : 0,
-        "input" : 0.0060000000000000001,
+        "input" : 0.0061000000000000004,
         "output" : 6.8
       },
       "id" : "z-ai\/glm-5.2",
@@ -45414,10 +45632,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.194,
+        "cacheRead" : 0.178,
         "cacheWrite" : 0,
-        "input" : 0.573,
-        "output" : 1.169
+        "input" : 0.527,
+        "output" : 1.075
       },
       "id" : "z-ai\/glm-5.2:batch",
       "input" : [
@@ -45480,12 +45698,12 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048575,
+      "contextWindow" : 1048576,
       "cost" : {
         "cacheRead" : 0.029999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 0.5
+        "input" : 0.039899999999999998,
+        "output" : 0.078399999999999997
       },
       "id" : "z-ai\/glm-5.3-flash",
       "input" : [
@@ -45502,7 +45720,7 @@
           }
         }
       },
-      "maxTokens" : 943717,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5.3 Flash",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -45527,9 +45745,9 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.012999999999999999,
+        "cacheRead" : 0.016,
         "cacheWrite" : 0,
-        "input" : 0.029999999999999999,
+        "input" : 0.036999999999999998,
         "output" : 0.060999999999999999
       },
       "id" : "z-ai\/glm-5.3-flash:batch",
@@ -48219,6 +48437,55 @@
         "xhigh" : "xhigh"
       }
     },
+    "claude-fable-5-2" : {
+      "api" : "pi-messages",
+      "baseUrl" : "https:\/\/radius.pi.dev\/v1",
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40
+      },
+      "enabled" : true,
+      "id" : "claude-fable-5-2",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "lab" : "Anthropic",
+      "maxTokens" : 128000,
+      "name" : "Claude Fable 5.2",
+      "promptCache" : {
+        "long" : 3600,
+        "short" : 300
+      },
+      "provider" : "radius",
+      "providers" : [
+        {
+          "credential" : "radius",
+          "id" : "anthropic",
+          "name" : "Anthropic",
+          "source" : "radius"
+        }
+      ],
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "claude-haiku-4-5" : {
       "api" : "pi-messages",
       "baseUrl" : "https:\/\/radius.pi.dev\/v1",
@@ -48602,7 +48869,7 @@
       "baseUrl" : "https:\/\/radius.pi.dev\/v1",
       "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0.2,
+        "cacheRead" : 0.1,
         "cacheWrite" : 2.5,
         "input" : 2,
         "output" : 10
@@ -53871,6 +54138,39 @@
       },
       "maxTokens" : 1000000,
       "name" : "Gemini 4 Argon",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
+    "google\/gemini-4-carbon" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 10
+      },
+      "id" : "google\/gemini-4-carbon",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 1000000,
+      "name" : "Gemini 4 Carbon",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
