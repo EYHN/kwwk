@@ -84,20 +84,28 @@ public enum KiroOAuth {
         extra(credentials, "profileArn")
     }
 
-    /// The region the login signed in at, where its token is refreshed.
-    public static func signInRegion(_ credentials: OAuthCredentials) -> String {
-        extra(credentials, "region") ?? "us-east-1"
+    /// A region read from a stored login, which goes into host names: nil
+    /// when it is not a region, so no request goes to a host it chose.
+    static func validated(_ region: String) -> String? {
+        isRegion(region) ? region : nil
+    }
+
+    /// The region the login signed in at, where its token is refreshed;
+    /// nil when the stored one is not a region.
+    public static func signInRegion(_ credentials: OAuthCredentials) -> String? {
+        validated(extra(credentials, "region") ?? "us-east-1")
     }
 
     /// Where the account's API is: the region its profile is in, else the
-    /// nearest of Kiro's two to where it signed in (magpie `kiroRegion`).
-    public static func apiRegion(_ credentials: OAuthCredentials) -> String {
-        apiRegion(profile: profileArn(credentials) ?? "", signedIn: signInRegion(credentials))
+    /// nearest of Kiro's two to where it signed in (magpie `kiroRegion`);
+    /// nil when the login names a region that is not one.
+    public static func apiRegion(_ credentials: OAuthCredentials) -> String? {
+        signInRegion(credentials).flatMap { apiRegion(profile: profileArn(credentials) ?? "", signedIn: $0) }
     }
 
-    static func apiRegion(profile: String, signedIn: String) -> String {
+    static func apiRegion(profile: String, signedIn: String) -> String? {
         let parts = profile.split(separator: ":", omittingEmptySubsequences: false)
-        if parts.count > 4, !parts[3].isEmpty { return String(parts[3]) }
+        if parts.count > 4, !parts[3].isEmpty { return validated(String(parts[3])) }
         return signedIn.hasPrefix("eu-") ? "eu-central-1" : "us-east-1"
     }
 
@@ -465,12 +473,12 @@ public struct KiroOAuthProvider: OAuthProvider {
     ) async throws -> OAuthCredentials {
         let region = KiroOAuth.signInRegion(credentials)
         var extras = credentials.extras
-        let url: String
+        let url: String?
         var headers = ["Content-Type": "application/json", "Accept": "application/json"]
         let body: [String: String]
         if KiroOAuth.extra(credentials, "authMethod") == "IdC",
            let clientId = KiroOAuth.extra(credentials, "clientId") {
-            url = KiroOAuth.oidcURL(region: region) + "/token"
+            url = region.map { KiroOAuth.oidcURL(region: $0) + "/token" }
             body = [
                 "clientId": clientId,
                 "clientSecret": KiroOAuth.extra(credentials, "clientSecret") ?? "",
@@ -478,14 +486,14 @@ public struct KiroOAuthProvider: OAuthProvider {
                 "grantType": "refresh_token",
             ]
         } else {
-            url = KiroOAuth.refreshURL(region: region)
+            url = region.map(KiroOAuth.refreshURL)
             headers["User-Agent"] = KiroOAuth.desktopUserAgent
             body = ["refreshToken": credentials.refresh]
         }
-        // The region is read from the stored login. One that gives no URL
-        // is a login no refresh can use: a sign-in to make again, like a
-        // refused grant.
-        guard let endpoint = URL(string: url) else {
+        // The region is read from the stored login. One that is not a
+        // region is a login no refresh can use: a sign-in to make again,
+        // like a refused grant.
+        guard let endpoint = url.flatMap(URL.init(string:)) else {
             throw OAuthRefreshError(
                 providerId: id,
                 kind: .rejected,
@@ -545,8 +553,8 @@ public struct KiroUsageReader: OAuthUsageReader {
         let query = OAuth.urlEncodedForm([
             "origin": "KIRO_CLI", "profileArn": profile, "resourceType": "CREDIT", "isEmailRequired": "true",
         ])
-        let base = KiroOAuth.managementURL(region: KiroOAuth.apiRegion(credentials))
-        guard let url = URL(string: "\(base)Get-Usage-Limits?\(query)") else {
+        guard let region = KiroOAuth.apiRegion(credentials),
+              let url = URL(string: "\(KiroOAuth.managementURL(region: region))Get-Usage-Limits?\(query)") else {
             throw OAuthUsageError.unavailable(
                 providerId: providerId,
                 status: nil,

@@ -559,6 +559,35 @@ struct KiroRefreshTests {
         #expect(client.requests.isEmpty)
     }
 
+    @Test("A stored region that parses but is not a region sends nothing", arguments: [
+        ("social", "evil.com/x"), ("idc", "evil.com/x"),
+        ("social", "us-east-1.evil.com"), ("idc", "us-east-1.evil.com"), ("idc", "attacker.example#"),
+    ])
+    func hostileRegion(kind: String, region: String) async throws {
+        var credentials = kind == "social" ? social : idc
+        credentials.extras["region"] = .string(region)
+        let client = QueuedHTTPClient([.response(status: 200, body: #"{"accessToken":"stolen"}"#)])
+        await #expect(throws: OAuthRefreshError.self) {
+            _ = try await KiroOAuthProvider().refresh(credentials, using: client)
+        }
+        #expect(client.requests.isEmpty)
+    }
+
+    @Test("A region is used only when it is one; a missing one falls back", arguments: [
+        ("arn:aws:codewhisperer:us-east-1.evil.com:1:profile/P", "us-east-1", nil),
+        ("arn:aws:codewhisperer:evil.com/x:1:profile/P", "us-east-1", nil),
+        ("arn:aws:codewhisperer:eu-central-1:1:profile/P", "evil.com/x", nil),
+        ("", "us-east-1.evil.com", nil),
+        ("", "", "us-east-1"),
+    ] as [(String, String, String?)])
+    func validatedRegion(profile: String, signedIn: String, expected: String?) {
+        var extras: [String: JSONValue] = [:]
+        if !profile.isEmpty { extras["profileArn"] = .string(profile) }
+        if !signedIn.isEmpty { extras["region"] = .string(signedIn) }
+        let credentials = OAuthCredentials(access: "a", refresh: "r", expires: .max, extras: extras)
+        #expect(KiroOAuth.apiRegion(credentials) == expected)
+    }
+
     @Test("The API is in the profile's region, else the nearest of Kiro's two to the sign-in", arguments: [
         ("arn:aws:codewhisperer:eu-central-1:1:profile/P", "us-east-1", "eu-central-1"),
         ("arn:aws:codewhisperer:us-east-1:1:profile/P", "", "us-east-1"),
@@ -663,6 +692,23 @@ struct KiroUsageTests {
         await #expect(throws: OAuthUsageError.self) {
             _ = try await KiroUsageReader().usage(stored, using: QueuedHTTPClient([.response(status: 403, body: "no")]))
         }
+    }
+
+    @Test("A profile or sign-in region that parses but is not one sends nothing", arguments: [
+        ("profileArn", "arn:aws:codewhisperer:us-east-1.evil.com:1:profile/P"),
+        ("profileArn", "arn:aws:codewhisperer:evil.com/x:1:profile/P"),
+        ("region", "evil.com/x"),
+    ])
+    func hostileRegion(key: String, value: String) async throws {
+        var stored = credentials
+        stored.extras[key] = .string(value)
+        let client = QueuedHTTPClient([.response(status: 200, body: Self.limits)])
+        await #expect(throws: OAuthUsageError.unavailable(
+            providerId: "kiro", status: nil, detail: "the Kiro login's profile names a region that is not one"
+        )) {
+            _ = try await KiroUsageReader().usage(stored, using: client)
+        }
+        #expect(client.requests.isEmpty)
     }
 
     @Test("Kiro is among the providers whose usage is read")

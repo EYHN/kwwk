@@ -27,11 +27,11 @@ public enum KiroModels {
         credentials: OAuthCredentials,
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> [Model] {
-        let region = KiroOAuth.apiRegion(credentials)
         let query = OAuth.urlEncodedForm([
             "origin": "KIRO_CLI", "profileArn": KiroOAuth.profileArn(credentials) ?? "",
         ])
-        guard let url = URL(string: "\(KiroOAuth.managementURL(region: region))List-Available-Models?\(query)") else {
+        guard let region = KiroOAuth.apiRegion(credentials),
+              let url = URL(string: "\(KiroOAuth.managementURL(region: region))List-Available-Models?\(query)") else {
             throw ProviderFailure(message: "The Kiro login's profile names a region that is not one")
         }
         let (response, body) = try await client.request(
@@ -154,12 +154,15 @@ func kiroAuthResolver(
         do {
             let authorization = try await manager.authorization(for: "kiro")
             guard let credentials = try await manager.credentials(for: "kiro") else { return nil }
+            guard let region = KiroOAuth.apiRegion(credentials) else {
+                throw ProviderFailure(message: "The Kiro login names a region that is not one; sign in again")
+            }
             var metadata: [String: JSONValue] = [:]
             if let profile = KiroOAuth.profileArn(credentials) { metadata["profileArn"] = .string(profile) }
             return ResolvedProviderAuth(
                 token: authorization.apiKey,
                 scheme: .bearer,
-                baseURL: KiroModels.runtimeURL(region: KiroOAuth.apiRegion(credentials)),
+                baseURL: KiroModels.runtimeURL(region: region),
                 metadata: metadata,
                 onRejected: authorization.onRejected
             )
