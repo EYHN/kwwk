@@ -41,7 +41,7 @@ func runHeadlessInternal(
 
     // Resolve session persistence: a fresh id by default, or a stored
     // transcript when `--resume` / `--session` was passed.
-    let store = SessionStore(directory: SessionStore.defaultDirectory())
+    let store = SessionStore(directory: cliSessionDirectory(cwd: cwd))
     let resolvedResume = try await store.resolveResume(resume, cwd: cwd)
     let sessionId = resolvedResume.sessionId
 

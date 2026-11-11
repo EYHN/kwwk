@@ -30,8 +30,29 @@ jobs:
       - name: Verify bundled resources
         run: .build/release/kwwk --self-test
 
+  linux-static:
+    # The prebuilt static Linux CLI attached to the release; see
+    # Scripts/build-linux-static.sh.
+    runs-on: ubuntu-latest
+    container: swift:latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: install curl and file (SDK download, static-link check)
+        run: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates file
+      - name: build static binary
+        run: Scripts/build-linux-static.sh x86_64
+      - name: bundled resource self-test
+        run: dist/kwwk-linux-x86_64/kwwk --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kwwk-linux-x86_64
+          path: |
+            dist/kwwk-linux-x86_64.tar.gz
+            dist/kwwk-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
   release:
-    needs: verify
+    needs: [verify, linux-static]
     runs-on: macos-15
     permissions:
       contents: write
@@ -56,6 +77,19 @@ jobs:
         run: |
           gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1 \
             || gh release create "${GITHUB_REF_NAME}" --generate-notes
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: kwwk-linux-x86_64
+          path: linux-static
+
+      - name: Attach the static Linux binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" --clobber \
+            linux-static/kwwk-linux-x86_64.tar.gz \
+            linux-static/kwwk-linux-x86_64.tar.gz.sha256
 
       - name: Open or update homebrew-tap bump PR
         env:

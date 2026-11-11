@@ -223,6 +223,7 @@ public actor SessionStore {
         tokensBefore: Int? = nil,
         contextWindow: Int? = nil,
         reason: CompactionReason,
+        usage: Usage? = nil,
         model: String? = nil,
         provider: String? = nil
     ) throws {
@@ -245,7 +246,8 @@ public actor SessionStore {
                     tokensBefore: tokensBefore,
                     contextWindow: contextWindow,
                     trustedRecap: trustedRecap,
-                    reason: reason
+                    reason: reason,
+                    usage: usage
                 )
             ))
     }

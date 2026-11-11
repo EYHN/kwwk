@@ -354,6 +354,45 @@ struct AgentContextCompactorTests {
         #expect(!snapshot.prompt.contains("feature X"))
     }
 
+    @Test("compaction hands every billed summary request's usage to the agent")
+    func compactionReportsSummaryUsage() async {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+
+        let model = faux.getModel()
+        let agent = Agent(options: AgentOptions(
+            initialState: AgentInitialState(
+                model: model,
+                messages: conversation(model: model)
+            ),
+            streamFn: { model, _, _ in
+                let (stream, continuation) = AssistantMessageStream.makeStream()
+                continuation.end(AssistantMessage(
+                    content: [.text(TextContent(text: "usage summary"))],
+                    api: model.api,
+                    provider: model.provider,
+                    model: model.id,
+                    usage: Usage(input: 900, output: 60, totalTokens: 960, cost: Cost(total: 0.25))
+                ))
+                return stream
+            }
+        ))
+
+        #expect(agent.takeCompactionUsage() == nil)
+        let first = await AgentContextCompactor.compactAgent(agent: agent, sessionId: "usage-1")
+        #expect(first == .compacted(messagesCompacted: 2, hasRunningTasksLedger: false))
+        agent.state.messages = conversation(model: model)
+        let second = await AgentContextCompactor.compactAgent(agent: agent, sessionId: "usage-2")
+        #expect(second == first)
+
+        let usage = agent.takeCompactionUsage()
+        #expect(usage?.input == 1_800)
+        #expect(usage?.output == 120)
+        #expect(usage?.totalTokens == 1_920)
+        #expect(usage?.cost.total == 0.5)
+        #expect(agent.takeCompactionUsage() == nil)
+    }
+
     @Test("summary requests mirror the agent's effective reasoning level")
     func summaryRequestInheritsAgentReasoning() async {
         let faux = await registerFauxProvider(RegisterFauxProviderOptions(models: [

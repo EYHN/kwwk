@@ -65,6 +65,59 @@ jobs:
       - name: swift test
         run: swift test
 
+  build-linux-static:
+    # The prebuilt Linux CLI: a fully static musl binary plus its resource
+    # bundle, for machines without a Swift toolchain (CI sandboxes, eval
+    # harnesses). Uploaded as the `kwwk-linux-x86_64` artifact.
+    runs-on: ubuntu-latest
+    container: swift:latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/cache@v5
+        with:
+          path: .build
+          key: swiftpm-linux-static-${{ hashFiles('Package.resolved') }}
+          restore-keys: swiftpm-linux-static-
+      - name: install curl and file (SDK download, static-link check)
+        run: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates file
+      - name: build static binary
+        run: Scripts/build-linux-static.sh x86_64
+      - name: bundled resource self-test
+        run: dist/kwwk-linux-x86_64/kwwk --self-test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kwwk-linux-x86_64
+          path: |
+            dist/kwwk-linux-x86_64.tar.gz
+            dist/kwwk-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  linux-static-smoke:
+    # The static binary must run on distributions with no Swift runtime: a
+    # glibc one and a musl one.
+    needs: build-linux-static
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:stable-slim", "alpine:latest"]
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: kwwk-linux-x86_64
+      - name: unpack and self-test
+        run: |
+          tar -xzf kwwk-linux-x86_64.tar.gz
+          ./kwwk-linux-x86_64/kwwk --self-test
+          ./kwwk-linux-x86_64/kwwk --help >/dev/null
+          # A bad invocation exits 2 rather than crashing.
+          set +e
+          ./kwwk-linux-x86_64/kwwk -p </dev/null
+          status=$?
+          set -e
+          test "$status" -eq 2
+
   build-ios:
     # The `kwwk` CLI cross-compiled for iOS at the Package.swift floor, on the
     # newest toolchain. The Swift 6.1 floor itself is covered by macos-15 and

@@ -181,29 +181,33 @@ public enum AgentContextCompactor {
             }
             context.tools = context.tools.filter { !unload.contains($0.name) }
         }
-        let result = await compactContext(
-            context: context,
-            model: model,
-            compactionModel: summaryModel,
-            backgroundManager: backgroundManager,
-            sessionId: sessionId,
-            config: agent.resolvedCompactionConfig(config),
-            targetTokens: targetTokens,
-            additionalMessages: additionalMessages,
-            respectMinimumMessages: respectMinimumMessages,
-            summaryReasoning: agent.summaryReasoning(for: summaryModel),
-            authResolver: agent.authResolver,
-            transformContext: agent.transformContext,
-            convertToLlm: agent.convertToLlm,
-            streamFn: { model, context, options in
-                try await agent.streamForCompaction(
-                    model: model,
-                    context: context,
-                    options: options
-                )
-            },
-            cancellation: cancellation
-        )
+        let usageCollector = CompactionUsageCollector()
+        defer { agent.noteCompactionUsage(usageCollector.usage) }
+        let result = await CompactionUsageCollector.$current.withValue(usageCollector) {
+            await compactContext(
+                context: context,
+                model: model,
+                compactionModel: summaryModel,
+                backgroundManager: backgroundManager,
+                sessionId: sessionId,
+                config: agent.resolvedCompactionConfig(config),
+                targetTokens: targetTokens,
+                additionalMessages: additionalMessages,
+                respectMinimumMessages: respectMinimumMessages,
+                summaryReasoning: agent.summaryReasoning(for: summaryModel),
+                authResolver: agent.authResolver,
+                transformContext: agent.transformContext,
+                convertToLlm: agent.convertToLlm,
+                streamFn: { model, context, options in
+                    try await agent.streamForCompaction(
+                        model: model,
+                        context: context,
+                        options: options
+                    )
+                },
+                cancellation: cancellation
+            )
+        }
 
         switch result {
         case .success(let replacement):

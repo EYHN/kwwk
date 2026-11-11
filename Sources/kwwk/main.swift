@@ -18,7 +18,8 @@ struct KwwkCommand: ParsableCommand {
         commandName: "kwwk",
         abstract: "Coding-agent CLI: an interactive TUI, or a one-shot prompt with -p.",
         discussion: """
-        Sessions are persisted to ~/.kwwk/sessions/<id>.jsonl as an append-only log and replayed on resume.
+        Sessions are persisted to ~/.kwwk/sessions/<id>.jsonl (or --session-dir / KWWK_SESSION_DIR) as an append-only \
+        log and replayed on resume.
 
         MCP servers are read from ~/.kwwk/mcp.json (project servers in .kwwk/mcp.json need \
         KWWK_ALLOW_PROJECT_MCP=1); manage them with `kwwk mcp` and see their status with /mcp.
@@ -81,6 +82,15 @@ struct KwwkCommand: ParsableCommand {
 
     @Option(name: .customLong("session"), help: ArgumentHelp("Resume (or create) a specific session id.", valueName: "id"))
     var sessionID: String?
+
+    @Option(
+        name: .customLong("session-dir"),
+        help: ArgumentHelp(
+            "Keep session transcripts in this directory instead of ~/.kwwk/sessions (also KWWK_SESSION_DIR).",
+            valueName: "path"
+        )
+    )
+    var sessionDirectory: String?
 
     /// The prompt words of `-p`. Unknown options land here too, so a prompt
     /// may contain words that look like flags, as it always could.
@@ -166,6 +176,11 @@ struct KwwkCLI {
             Foundation.exit(0)
         }
 
+        // Exported rather than threaded through: the TUI, `-p` and any nested
+        // `kwwk` the agent starts all read the same directory.
+        if let sessionDirectory = command.sessionDirectory, !sessionDirectory.isEmpty {
+            setenv("KWWK_SESSION_DIR", sessionDirectory, 1)
+        }
         let thinkingLevel = command.thinking
         let builtinSubagents = command.builtinSubagents(args)
         let resume = command.resume(args)

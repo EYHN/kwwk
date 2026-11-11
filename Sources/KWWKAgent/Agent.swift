@@ -75,6 +75,9 @@ public final class Agent: Sendable {
     private let terminalToolName: String?
     private let terminalToolReminderLimit: Int
     let idleCompactionTimer = IdleCompactionTimer()
+    /// Summary-request usage of compactions run since the last
+    /// `takeCompactionUsage()`; see `CompactionUsageCollector`.
+    private let compactionUsage = NIOLockedValueBox<Usage?>(nil)
 
     public var thinkingBudgets: ThinkingBudgets? {
         get { lockedState.withLockedValue { $0.thinkingBudgets } }
@@ -254,6 +257,21 @@ public final class Agent: Sendable {
         options: StreamOptions?
     ) async throws -> AssistantMessageStream {
         try await streamFn(model, context, options)
+    }
+
+    internal func noteCompactionUsage(_ usage: Usage?) {
+        guard let usage else { return }
+        compactionUsage.withLockedValue { $0 = ($0 ?? Usage()).adding(usage) }
+    }
+
+    /// Drain the provider-reported usage of compaction summary requests made
+    /// since the previous call. Those replies never enter the transcript, so
+    /// a session recorder persists this on its next compaction marker.
+    public func takeCompactionUsage() -> Usage? {
+        compactionUsage.withLockedValue { usage in
+            defer { usage = nil }
+            return usage
+        }
     }
 
     internal func resolvedCompactionConfig(_ config: AgentContextCompactionConfig) -> AgentContextCompactionConfig {
