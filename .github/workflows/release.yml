@@ -37,6 +37,8 @@ jobs:
     container: swift:latest
     steps:
       - uses: actions/checkout@v5
+      - name: install curl and file (SDK download, static-link check)
+        run: apt-get update && apt-get install -y --no-install-recommends curl ca-certificates file
       - name: build static binary
         run: Scripts/build-linux-static.sh x86_64
       - name: bundled resource self-test
