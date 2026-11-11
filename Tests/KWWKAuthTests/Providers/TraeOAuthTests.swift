@@ -196,7 +196,7 @@ struct TraeSignInTests {
 
     // MARK: - The exchange
 
-    @Test("The exchange posts the five fields and reads the token, its end and the bound device")
+    @Test("The exchange posts the five fields and reads the token and its end")
     func exchangeBody() async throws {
         let client = QueuedHTTPClient([ok(exchangeGiven)])
         let exchanged = try await exchange(.china, client)
@@ -204,8 +204,7 @@ struct TraeSignInTests {
         #expect(exchanged.token == TraeOAuth.Token(
             access: "jwt-1",
             refresh: "refresh-1",
-            expires: 1_790_801_493_459 - 5 * 60 * 1000,
-            boundDeviceID: "wl2k1e2endpp32"
+            expires: 1_790_801_493_459 - 5 * 60 * 1000
         ))
 
         let request = client.requests[0]
@@ -352,7 +351,6 @@ struct TraeSignInTests {
         #expect(credentials.expires == 1_790_801_493_459 - 5 * 60 * 1000)
         #expect(credentials.extras == [
             "userId": .string("user-1"),
-            "deviceId": .string("wl2k1e2endpp32"),
             "checkinDeviceId": .string(deviceID),
             "machineId": .string(machineID),
             "oauthHost": .string("https://api.trae.cn"),

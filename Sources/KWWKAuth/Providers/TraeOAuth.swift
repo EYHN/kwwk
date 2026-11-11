@@ -82,8 +82,6 @@ public enum TraeOAuth {
 
     /// The account's id: `UserID` of a renewal, `x-uid` of a request.
     public static let userIDExtra = "userId"
-    /// `Result.BoundDeviceID`: the device the service bound the sign-in to.
-    public static let boundDeviceIDExtra = "deviceId"
     /// The device id the sign-in registered, sent as `x-device-id`.
     public static let deviceIDExtra = "checkinDeviceId"
     /// The machine id the sign-in sent, sent again as `x-machine-id`.
@@ -91,11 +89,6 @@ public enum TraeOAuth {
     /// The account gate that accepted the sign-in, which its renewals go to:
     /// the international build has several and only one serves an account.
     public static let accountGatewayExtra = "oauthHost"
-
-    public static func string(_ value: JSONValue?) -> String? {
-        guard case .string(let text)? = value, !text.isEmpty else { return nil }
-        return text
-    }
 
     // MARK: One build's values
 
@@ -200,10 +193,10 @@ public enum TraeOAuth {
                 let (response, data) = try await client.request(
                     url: url,
                     method: "POST",
-                    headers: jsonHeaders,
+                    headers: GateEnvelope.jsonHeaders,
                     body: body
                 )
-                guard response.statusCode == 200, let root = object(data),
+                guard response.statusCode == 200, let root = GateEnvelope.object(data),
                       let host = guidanceHost(root) else {
                     failures.append("\(address): no sign-in host")
                     continue
@@ -224,11 +217,11 @@ public enum TraeOAuth {
     static func guidanceHost(_ root: [String: Any]) -> String? {
         let keys = ["LoginHost", "loginHost", "LoginURL", "loginUrl"]
         for layer in ["Result", "result", "data"] {
-            if let inner = root[layer] as? [String: Any], let host = firstString(inner, keys) {
+            if let inner = root[layer] as? [String: Any], let host = GateEnvelope.firstString(inner, keys) {
                 return host
             }
         }
-        return firstString(root, keys)
+        return GateEnvelope.firstString(root, keys)
     }
 
     /// `<host>/authorization?<query>`, its parameters in the order the client
@@ -304,23 +297,23 @@ public enum TraeOAuth {
     /// always asks with PKCE, so a callback without an auth code is a
     /// failure, not a second flow.
     static func callback(_ params: [String: String], site: TraeSite) throws -> Callback {
-        guard let info = params["authCodeInfo"].flatMap({ object(Data($0.utf8)) }),
-              let authCode = firstString(info, ["AuthCode", "authCode"]) else {
+        guard let info = params["authCodeInfo"].flatMap({ GateEnvelope.object(Data($0.utf8)) }),
+              let authCode = GateEnvelope.firstString(info, ["AuthCode", "authCode"]) else {
             throw OAuthError.invalidResponse("\(site.name)'s page returned no sign-in code")
         }
-        let user = params["userInfo"].flatMap { object(Data($0.utf8)) } ?? [:]
+        let user = params["userInfo"].flatMap { GateEnvelope.object(Data($0.utf8)) } ?? [:]
         return Callback(
             authCode: authCode,
-            userID: firstString(user, ["UserID", "UserId", "userId"]) ?? ""
+            userID: GateEnvelope.firstString(user, ["UserID", "UserId", "userId"]) ?? ""
         )
     }
 
     /// `access_denied` is the user leaving the page; any other error is the
     /// page's own refusal.
     static func checkCallbackError(_ params: [String: String], site: TraeSite) throws {
-        guard let error = firstString(params, ["error", "error_code", "errorCode"]) else { return }
+        guard let error = GateEnvelope.firstString(params, ["error", "error_code", "errorCode"]) else { return }
         if error == "access_denied" { throw OAuthLoginError.cancelled }
-        let description = firstString(params, ["error_description", "error_desc", "message"])
+        let description = GateEnvelope.firstString(params, ["error_description", "error_desc", "message"])
         throw OAuthLoginError.denied("\(site.name) \(error)" + (description.map { ": \($0)" } ?? ""))
     }
 
@@ -333,22 +326,22 @@ public enum TraeOAuth {
         /// Unix ms of the access token's end, less the renewal margin;
         /// `.max` when neither the gate nor the token says one.
         var expires: Int64
-        var boundDeviceID: String
     }
 
     /// The token in a gate's answer; nil when it carries none.
     static func token(_ root: [String: Any]) -> Token? {
         let result = (root["Result"] ?? root["result"]) as? [String: Any] ?? root
-        guard let access = firstString(result, ["Token", "token", "AccessToken", "accessToken", "access_token"])
-        else { return nil }
+        guard let access = GateEnvelope.firstString(
+            result,
+            ["Token", "token", "AccessToken", "accessToken", "access_token"]
+        ) else { return nil }
         return Token(
             access: access,
-            refresh: firstString(result, ["RefreshToken", "refreshToken", "refresh_token"]) ?? "",
+            refresh: GateEnvelope.firstString(result, ["RefreshToken", "refreshToken", "refresh_token"]) ?? "",
             expires: expiry(
                 result["TokenExpireAt"] ?? result["tokenExpireAt"] ?? result["ExpiresAt"] ?? result["expiresAt"],
                 access: access
-            ),
-            boundDeviceID: firstString(result, ["BoundDeviceID", "BoundDeviceId", "boundDeviceId"]) ?? ""
+            )
         )
     }
 
@@ -379,7 +372,7 @@ public enum TraeOAuth {
             ] as [String: Any],
             options: [.sortedKeys]
         )
-        var headers = jsonHeaders
+        var headers = GateEnvelope.jsonHeaders
         headers["x-cloudide-token"] = ""
 
         var failures: [String] = []
@@ -393,7 +386,7 @@ public enum TraeOAuth {
                     headers: headers,
                     body: body
                 )
-                guard let root = object(answer) else {
+                guard let root = GateEnvelope.object(answer) else {
                     failures.append("\(origin): unreadable answer (HTTP \(response.statusCode))")
                     continue
                 }
@@ -449,38 +442,16 @@ public enum TraeOAuth {
 
     // MARK: Small helpers
 
-    static let jsonHeaders = ["Content-Type": "application/json", "Accept": "application/json"]
-
-    /// A gate's refusal: its `{Code, Message}` envelope, either spelling.
-    struct Refusal: Equatable {
-        var code: Int
-        var message: String
-
-        /// The refresh token (or auth code) is not this gate's to take: the
-        /// other build's, or one that is spent.
-        var isInvalidRefreshToken: Bool {
-            code == TraeOAuth.invalidRefreshTokenCode
-                || message.lowercased().contains("refresh token is invalid")
-        }
-    }
-
-    /// The refusal a gate's answer carries; nil for a success, which some
-    /// of its services answer with no code at all.
-    static func refusal(_ root: [String: Any]) -> Refusal? {
-        for key in ["Code", "code", "ErrCode", "errCode"] {
-            let code: Int? = switch root[key] {
-            case let number as NSNumber: number.intValue
-            case let text as String: Int(text)
-            default: nil
-            }
-            guard let code, code != 0 else { continue }
-            let message = firstString(root, ["Message", "message", "Msg", "msg", "ErrMsg", "errMsg"])
-            return Refusal(code: code, message: message ?? "code \(code)")
-        }
-        if let error = (root["Error"] ?? root["error"]) as? String, !error.isEmpty {
-            return Refusal(code: 0, message: error)
-        }
-        return nil
+    /// A gate's refusal in its words, and whether it says the refresh token
+    /// (or auth code) is not this gate's to take: the other build's, or one
+    /// that is spent.
+    static func refusal(_ root: [String: Any]) -> (message: String, isInvalidRefreshToken: Bool)? {
+        guard let refusal = GateEnvelope.refusal(root) else { return nil }
+        let message = refusal.said ?? "code \(refusal.code)"
+        return (
+            message,
+            refusal.code == invalidRefreshTokenCode || message.lowercased().contains("refresh token is invalid")
+        )
     }
 
     /// Sixteen decimal digits, the shape the China page checks its
@@ -512,8 +483,8 @@ public enum TraeOAuth {
             .replacingOccurrences(of: "-", with: "+")
             .replacingOccurrences(of: "_", with: "/")
         while payload.count % 4 != 0 { payload.append("=") }
-        guard let data = Data(base64Encoded: payload), let claims = object(data) else { return "" }
-        return firstString(claims, ["user_id", "userId", "uid", "sub", "UserID"]) ?? ""
+        guard let data = Data(base64Encoded: payload), let claims = GateEnvelope.object(data) else { return "" }
+        return GateEnvelope.firstString(claims, ["user_id", "userId", "uid", "sub", "UserID"]) ?? ""
     }
 
     /// When a token ends, as Unix ms less the renewal margin. `TokenExpireAt`
@@ -537,23 +508,6 @@ public enum TraeOAuth {
         }
         return OAuth.jwtExpiryMillis(access) ?? .max
     }
-
-    static func object(_ data: Data) -> [String: Any]? {
-        guard data.count <= 1024 * 1024 else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    /// The first non-empty string among `keys`, a number as its text.
-    static func firstString(_ object: [String: Any], _ keys: [String]) -> String? {
-        for key in keys {
-            if let text = object[key] as? String {
-                if !text.isEmpty { return text }
-            } else if let number = object[key] as? NSNumber {
-                return number.stringValue
-            }
-        }
-        return nil
-    }
 }
 
 // MARK: - Sign-in
@@ -567,8 +521,8 @@ extension OAuthLogin {
     ///    `<host>/authorization`;
     /// 4. the page calls back with `authCodeInfo`, a JSON string holding
     ///    `AuthCode`, and `userInfo`;
-    /// 5. `POST <gate>/trae/api/v3/oauth/ExchangeToken` answers the JWT, its
-    ///    refresh token and, on the China build, `BoundDeviceID`.
+    /// 5. `POST <gate>/trae/api/v3/oauth/ExchangeToken` answers the JWT and
+    ///    its refresh token.
     public static func loginTrae(
         site: TraeSite,
         callbacks: Callbacks,
@@ -626,7 +580,6 @@ extension OAuthLogin {
         ]
         let userID = callback.userID.isEmpty ? TraeOAuth.jwtUserID(token.access) : callback.userID
         if !userID.isEmpty { extras[TraeOAuth.userIDExtra] = .string(userID) }
-        if !token.boundDeviceID.isEmpty { extras[TraeOAuth.boundDeviceIDExtra] = .string(token.boundDeviceID) }
         return OAuthCredentials(
             access: token.access,
             refresh: token.refresh,
@@ -654,27 +607,27 @@ public struct TraeOAuthProvider: OAuthProvider {
         _ credentials: OAuthCredentials,
         using client: HTTPClient
     ) async throws -> OAuthCredentials {
-        let gateway = TraeOAuth.string(credentials.extras[TraeOAuth.accountGatewayExtra]) ?? site.accountGateway
+        let gateway = GateEnvelope.string(credentials.extras[TraeOAuth.accountGatewayExtra]) ?? site.accountGateway
         let body = try JSONSerialization.data(
             withJSONObject: [
                 "ClientID": TraeOAuth.clientID,
                 "RefreshToken": credentials.refresh,
                 "ClientSecret": "-",
-                "UserID": TraeOAuth.string(credentials.extras[TraeOAuth.userIDExtra]) ?? "",
+                "UserID": GateEnvelope.string(credentials.extras[TraeOAuth.userIDExtra]) ?? "",
             ],
             options: [.sortedKeys]
         )
         let (response, answer) = try await OAuthRefreshError.post(
             provider: id,
             url: URL(string: gateway + TraeOAuth.renewalExchangePath)!,
-            headers: TraeOAuth.jsonHeaders,
+            headers: GateEnvelope.jsonHeaders,
             body: body,
             client: client
         )
         func failed(_ kind: OAuthRefreshError.Kind, _ detail: String) -> OAuthRefreshError {
             OAuthRefreshError(providerId: id, kind: kind, status: response.statusCode, detail: detail)
         }
-        guard let root = TraeOAuth.object(answer) else {
+        guard let root = GateEnvelope.object(answer) else {
             throw failed(.unavailable, "\(site.name) gave an unreadable answer")
         }
         if let refusal = TraeOAuth.refusal(root) {
@@ -682,7 +635,7 @@ public struct TraeOAuthProvider: OAuthProvider {
             // of its other codes do isn't known, so none of them parks it.
             throw failed(
                 refusal.isInvalidRefreshToken ? .rejected : .unavailable,
-                "\(refusal.message) (code \(refusal.code))"
+                refusal.message
             )
         }
         guard let token = TraeOAuth.token(root) else {

@@ -31,13 +31,6 @@ public enum RaccoonOAuth {
     /// `office_identity`, which every request carries as `X-Org-Code`. It
     /// comes back from the sign-in and cannot be derived.
     public static let officeIdentityExtra = "officeIdentity"
-    public static let officeOrgNameExtra = "officeOrgName"
-    public static let officeOrgRoleExtra = "officeOrgRole"
-
-    public static func string(_ value: JSONValue?) -> String? {
-        guard case .string(let text)? = value, !text.isEmpty else { return nil }
-        return text
-    }
 
     /// `<origin>/code/authorize`, which answers 307 to the page that signs
     /// the account in.
@@ -84,49 +77,28 @@ public enum RaccoonOAuth {
         /// `.max` when neither the gate nor the token says one.
         var expires: Int64
         var officeIdentity: String
-        var officeOrgName: String
-        var officeOrgRole: String
     }
 
     /// The token in the gate's answer; nil when it carries none.
     static func token(_ root: [String: Any]) -> Token? {
         let data = (root["data"] ?? root["Data"]) as? [String: Any] ?? root
-        guard let access = firstString(data, ["access_token", "accessToken"]) else { return nil }
+        guard let access = GateEnvelope.firstString(data, ["access_token", "accessToken"]) else { return nil }
         return Token(
             access: access,
-            refresh: firstString(data, ["refresh_token", "refreshToken"]) ?? "",
+            refresh: GateEnvelope.firstString(data, ["refresh_token", "refreshToken"]) ?? "",
             expires: expiry(data["expires_at"] ?? data["expiresAt"] ?? data["exp"], access: access),
-            officeIdentity: firstString(data, ["office_identity", "officeIdentity"]) ?? "",
-            officeOrgName: firstString(data, ["office_org_name", "officeOrgName"]) ?? "",
-            officeOrgRole: firstString(data, ["office_org_role", "officeOrgRole"]) ?? ""
+            officeIdentity: GateEnvelope.firstString(data, ["office_identity", "officeIdentity"]) ?? ""
         )
     }
 
-    /// The gate's refusal: its envelope's business code, where 0 is success
-    /// and an answer with no code is one too.
-    struct Refusal: Equatable {
-        var code: Int
-        var message: String
-
-        /// The token is refused or has ended: only a new sign-in helps.
-        var endsLogin: Bool { [200001, 200003, 200012].contains(code) }
-    }
-
-    static func refusal(_ root: [String: Any]) -> Refusal? {
-        for key in ["code", "Code", "errCode", "ErrCode"] {
-            let code: Int? = switch root[key] {
-            case let number as NSNumber: number.intValue
-            case let text as String: Int(text)
-            default: nil
-            }
-            guard let code, code != 0 else { continue }
-            let said = firstString(root, ["message", "Message", "msg", "Msg"])
-            return Refusal(code: code, message: meaning(of: code) ?? said ?? "code \(code)")
-        }
-        if let error = (root["error"] ?? root["Error"]) as? String, !error.isEmpty {
-            return Refusal(code: 0, message: error)
-        }
-        return nil
+    /// The gate's refusal in words, and whether it says the token is
+    /// refused or has ended, which only a new sign-in mends.
+    static func refusal(_ root: [String: Any]) -> (message: String, endsLogin: Bool)? {
+        guard let refusal = GateEnvelope.refusal(root) else { return nil }
+        return (
+            meaning(of: refusal.code) ?? refusal.said ?? "code \(refusal.code)",
+            [200001, 200003, 200012].contains(refusal.code)
+        )
     }
 
     /// The gate's business codes, in words. A code not known here keeps the
@@ -153,34 +125,10 @@ public enum RaccoonOAuth {
         return (whole > 1_000_000_000_000 ? whole : whole * 1000) - OAuth.expiryMarginMs
     }
 
-    static let jsonHeaders = ["Content-Type": "application/json", "Accept": "application/json"]
-
-    static func object(_ data: Data) -> [String: Any]? {
-        guard data.count <= 1024 * 1024 else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    /// The first non-empty string among `keys`, a number as its text.
-    package static func firstString(_ object: [String: Any], _ keys: [String]) -> String? {
-        for key in keys {
-            if let text = object[key] as? String {
-                if !text.isEmpty { return text }
-            } else if let number = object[key] as? NSNumber {
-                return number.stringValue
-            }
-        }
-        return nil
-    }
-
     static func credentials(_ token: Token, keeping base: OAuthCredentials? = nil) -> OAuthCredentials {
         var extras = base?.extras ?? [:]
-        for (key, value) in [
-            (officeIdentityExtra, token.officeIdentity),
-            (officeOrgNameExtra, token.officeOrgName),
-            (officeOrgRoleExtra, token.officeOrgRole),
-        ] where !value.isEmpty {
-            extras[key] = .string(value)
-        }
+        // A renewal that does not name the office keeps the sign-in's.
+        if !token.officeIdentity.isEmpty { extras[officeIdentityExtra] = .string(token.officeIdentity) }
         return OAuthCredentials(
             access: token.access,
             // The gate rotates the refresh token; one it does not answer
@@ -233,10 +181,10 @@ extension OAuthLogin {
         let (response, answer) = try await client.request(
             url: URL(string: RaccoonOAuth.authBase + "/login_with_authorization_code")!,
             method: "POST",
-            headers: RaccoonOAuth.jsonHeaders,
+            headers: GateEnvelope.jsonHeaders,
             body: try JSONSerialization.data(withJSONObject: ["authorization_code": code])
         )
-        guard let root = RaccoonOAuth.object(answer) else {
+        guard let root = GateEnvelope.object(answer) else {
             throw OAuthError.invalidResponse("\(name) gave an unreadable answer (HTTP \(response.statusCode))")
         }
         if let refusal = RaccoonOAuth.refusal(root) {
@@ -267,18 +215,18 @@ public struct RaccoonOAuthProvider: OAuthProvider {
         let (response, answer) = try await OAuthRefreshError.post(
             provider: id,
             url: URL(string: RaccoonOAuth.authBase + "/refresh")!,
-            headers: RaccoonOAuth.jsonHeaders,
+            headers: GateEnvelope.jsonHeaders,
             body: try JSONSerialization.data(withJSONObject: ["refresh_token": credentials.refresh]),
             client: client
         )
         func failed(_ kind: OAuthRefreshError.Kind, _ detail: String) -> OAuthRefreshError {
             OAuthRefreshError(providerId: id, kind: kind, status: response.statusCode, detail: detail)
         }
-        guard let root = RaccoonOAuth.object(answer) else {
+        guard let root = GateEnvelope.object(answer) else {
             throw failed(.unavailable, "\(name) gave an unreadable answer")
         }
         if let refusal = RaccoonOAuth.refusal(root) {
-            throw failed(refusal.endsLogin ? .rejected : .unavailable, "\(refusal.message) (code \(refusal.code))")
+            throw failed(refusal.endsLogin ? .rejected : .unavailable, refusal.message)
         }
         guard let token = RaccoonOAuth.token(root) else {
             throw failed(.unavailable, "\(name) gave no refreshed token")

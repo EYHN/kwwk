@@ -83,11 +83,7 @@ struct RaccoonSignInTests {
         #expect(credentials.access == "access-1")
         #expect(credentials.refresh == "refresh-1")
         #expect(credentials.expires == 1_790_801_493_000 - 5 * 60 * 1000)
-        #expect(credentials.extras == [
-            "officeIdentity": .string("org-1"),
-            "officeOrgName": .string("Office"),
-            "officeOrgRole": .string("member"),
-        ])
+        #expect(credentials.extras == ["officeIdentity": .string("org-1")])
     }
 
     @Test("A redirect that names another sign-in's state is refused; one that names none is taken")
@@ -141,7 +137,7 @@ struct RaccoonRenewalTests {
         access: "access-old",
         refresh: "refresh-old",
         expires: 0,
-        extras: ["officeIdentity": .string("org-1"), "officeOrgName": .string("Office")]
+        extras: ["officeIdentity": .string("org-1"), "accountName": .string("kept")]
     )
 
     @Test("A renewal posts the refresh token to /refresh and takes the rotated one")
@@ -173,7 +169,7 @@ struct RaccoonRenewalTests {
         #expect(renewed.refresh == "refresh-old")
         #expect(renewed.expires == .max)
         #expect(renewed.extras["officeIdentity"] == .string("org-2"))
-        #expect(renewed.extras["officeOrgName"] == .string("Office"))
+        #expect(renewed.extras["accountName"] == .string("kept"))
     }
 
     @Test("A refused or ended token ends the login; any other refusal may pass")

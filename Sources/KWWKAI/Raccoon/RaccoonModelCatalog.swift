@@ -88,18 +88,19 @@ public enum RaccoonModels {
         return listed
     }
 
+    private static let catalogues = AccountListingCache<[Model]>()
+
     /// How long the catalogue is waited for.
     static let catalogTimeout: TimeInterval = 15
 
     /// `GET /api/web/llm/v2/model_catalog`: the account's models in the
     /// gate's own order; empty for an answer that cannot be read.
     ///
-    /// Kept for ten minutes per account: a host resolves its provider on
-    /// every session and every model switch, and the picker asks again.
+    /// Kept per office (`AccountListingCache`).
     static func catalog(token: String, credentials: OAuthCredentials, client: HTTPClient) async -> [Model] {
         let account = RaccoonWire.accountHeaders(credentials)
         let key = account["X-Org-Code"] ?? ""
-        if let kept = CatalogCache.shared.models(for: key) { return kept }
+        if let kept = catalogues.listing(for: key) { return kept }
         var headers = RaccoonWire.clientHeaders.merging(account) { _, own in own }
         headers["Authorization"] = bearerHeaderValue(token)
         headers["Content-Type"] = "application/json"
@@ -121,7 +122,7 @@ public enum RaccoonModels {
             }
             guard let root = (try? JSONSerialization.jsonObject(with: answer)) as? [String: Any] else { return [] }
             let models = rows(in: (root["data"] ?? root["Data"]) as? [String: Any] ?? root)
-            if !models.isEmpty { CatalogCache.shared.keep(models, for: key) }
+            if !models.isEmpty { catalogues.keep(models, for: key) }
             return models
         } catch {
             return []
@@ -149,7 +150,7 @@ public enum RaccoonModels {
     /// gone: read by them alone, the catalogue is empty with no error. They
     /// stay as fallbacks for a gate that goes back to them.
     static func row(_ listed: [String: Any]) -> Model? {
-        let string = RaccoonOAuth.firstString
+        let string = GateEnvelope.firstString
         guard let id = string(listed, ["model_name", "id", "modelName"]) else { return nil }
         let params = listed["params"] as? [String: Any] ?? [:]
         func int(_ value: Any?) -> Int? {
@@ -184,25 +185,5 @@ public enum RaccoonModels {
         let tags = Set((listed["tags"] as? [String] ?? []).map { $0.lowercased() })
         return !tags.isDisjoint(with: ["vision", "image", "image-understanding"])
             || id == "sn-deepseek-v4-1-flash"
-    }
-}
-
-/// The catalogues this process has read, per office, for ten minutes.
-private final class CatalogCache: @unchecked Sendable {
-    static let shared = CatalogCache()
-
-    private let lock = NSLock()
-    private var kept: [String: (models: [Model], at: Date)] = [:]
-    private let lifetime: TimeInterval = 10 * 60
-
-    func models(for account: String) -> [Model]? {
-        lock.withLock {
-            guard let entry = kept[account], Date().timeIntervalSince(entry.at) < lifetime else { return nil }
-            return entry.models
-        }
-    }
-
-    func keep(_ models: [Model], for account: String) {
-        lock.withLock { kept[account] = (models, Date()) }
     }
 }

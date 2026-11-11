@@ -48,7 +48,7 @@ enum RaccoonWire {
     /// sign-in: without it the gate answers as to an unauthorized caller,
     /// even with a valid token.
     static func accountHeaders(_ credentials: OAuthCredentials) -> [String: String] {
-        ["X-Org-Code": RaccoonOAuth.string(credentials.extras[RaccoonOAuth.officeIdentityExtra]) ?? ""]
+        ["X-Org-Code": GateEnvelope.string(credentials.extras[RaccoonOAuth.officeIdentityExtra]) ?? ""]
     }
 
     /// The most output the gate takes. The catalogue names 100,000 for

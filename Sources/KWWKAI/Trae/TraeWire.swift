@@ -72,8 +72,8 @@ enum TraeWire {
     /// A login that recorded neither gets a machine id made from the
     /// account, the same one on every request.
     static func accountHeaders(token: String, credentials: OAuthCredentials) -> [String: String] {
-        let userID = TraeOAuth.string(credentials.extras[TraeOAuth.userIDExtra]) ?? ""
-        let machineID = TraeOAuth.string(credentials.extras[TraeOAuth.machineIDExtra])
+        let userID = GateEnvelope.string(credentials.extras[TraeOAuth.userIDExtra]) ?? ""
+        let machineID = GateEnvelope.string(credentials.extras[TraeOAuth.machineIDExtra])
             ?? derivedMachineID(account: userID.isEmpty ? token : userID)
         let trace = PKCE.randomHex(bytes: 16)
         return [
@@ -82,7 +82,7 @@ enum TraeWire {
             "X-Cloudide-Token": token,
             "x-uid": userID,
             "x-machine-id": machineID,
-            "x-device-id": TraeOAuth.string(credentials.extras[TraeOAuth.deviceIDExtra]) ?? machineID,
+            "x-device-id": GateEnvelope.string(credentials.extras[TraeOAuth.deviceIDExtra]) ?? machineID,
             "x-custom-trace-id": trace,
             "x-flow-traceparent": "04-\(trace)-\(trace.prefix(16))-01",
         ]

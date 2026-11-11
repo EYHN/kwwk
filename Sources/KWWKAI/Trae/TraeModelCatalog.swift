@@ -21,13 +21,13 @@ public enum TraeModels {
 
     /// One model as the directory publishes it, with the function that lists
     /// it.
-    public struct Entry: Sendable, Hashable {
-        public var id: String
-        public var function: String
+    struct Entry: Sendable, Hashable {
+        var id: String
+        var function: String
         /// The directory calls it a reasoning model.
-        public var reasoning: Bool
-        public var contextWindow: Int
-        public var maxTokens: Int
+        var reasoning: Bool
+        var contextWindow: Int
+        var maxTokens: Int
     }
 
     // MARK: - Rows
@@ -130,17 +130,15 @@ public enum TraeModels {
     /// of an id kept, in the order the functions are declared. A function
     /// that does not answer costs only its own models; empty when none does.
     ///
-    /// Kept for ten minutes per account: a host resolves its provider on
-    /// every session and every model switch, and the gate's answer does not
-    /// change that often.
+    /// Kept per account (`AccountListingCache`).
     static func roster(
         site: TraeSite,
         token: String,
         credentials: OAuthCredentials,
         client: HTTPClient
     ) async -> [Entry] {
-        let account = "\(site.id)|\(TraeOAuth.string(credentials.extras[TraeOAuth.userIDExtra]) ?? "")"
-        if let kept = RosterCache.shared.roster(for: account) { return kept }
+        let account = "\(site.id)|\(GateEnvelope.string(credentials.extras[TraeOAuth.userIDExtra]) ?? "")"
+        if let kept = rosters.listing(for: account) { return kept }
         let headers = TraeWire.clientHeaders()
             .merging(TraeWire.accountHeaders(token: token, credentials: credentials)) { _, account in account }
             .merging(["Accept": "application/json", "Content-Type": "application/json"]) { _, json in json }
@@ -157,9 +155,11 @@ public enum TraeModels {
         }
         var seen: Set<String> = []
         let roster = listed.filter { seen.insert($0.id).inserted }
-        if !roster.isEmpty { RosterCache.shared.keep(roster, for: account) }
+        if !roster.isEmpty { rosters.keep(roster, for: account) }
         return roster
     }
+
+    private static let rosters = AccountListingCache<[Entry]>()
 
     /// How long one function's listing is waited for: a sign-in that reads
     /// the roster to verify the account has well under a minute for all of
@@ -238,25 +238,5 @@ public enum TraeModels {
             return true
         }
         return id == "sagitta" || id == "aquila"
-    }
-}
-
-/// The rosters this process has read, per account, for ten minutes.
-private final class RosterCache: @unchecked Sendable {
-    static let shared = RosterCache()
-
-    private let lock = NSLock()
-    private var kept: [String: (roster: [TraeModels.Entry], at: Date)] = [:]
-    private let lifetime: TimeInterval = 10 * 60
-
-    func roster(for account: String) -> [TraeModels.Entry]? {
-        lock.withLock {
-            guard let entry = kept[account], Date().timeIntervalSince(entry.at) < lifetime else { return nil }
-            return entry.roster
-        }
-    }
-
-    func keep(_ roster: [TraeModels.Entry], for account: String) {
-        lock.withLock { kept[account] = (roster, Date()) }
     }
 }
