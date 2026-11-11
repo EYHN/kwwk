@@ -39,6 +39,9 @@ public enum OAuthSubscriptions {
         Provider(id: QoderSite.cn.id, name: QoderSite.cn.name, upkeep: .refreshed),
         Provider(id: WorkBuddySite.china.id, name: WorkBuddySite.china.name, upkeep: .refreshed),
         Provider(id: WorkBuddySite.international.id, name: WorkBuddySite.international.name, upkeep: .refreshed),
+        Provider(id: TraeSite.china.id, name: TraeSite.china.name, upkeep: .refreshed),
+        Provider(id: TraeSite.international.id, name: TraeSite.international.name, upkeep: .refreshed),
+        Provider(id: RaccoonOAuth.providerId, name: RaccoonOAuth.name, upkeep: .refreshed),
         Provider(id: KimiSite.china.id, name: KimiSite.china.name, upkeep: .refreshed),
         Provider(id: KimiSite.global.id, name: KimiSite.global.name, upkeep: .refreshed),
         Provider(id: "xai", name: "Grok", upkeep: .refreshed),
@@ -94,6 +97,14 @@ public enum OAuthSubscriptions {
             return try await OAuthLogin.loginWorkBuddy(site: .china, callbacks: callbacks, client: client)
         case WorkBuddySite.international.id:
             return try await OAuthLogin.loginWorkBuddy(site: .international, callbacks: callbacks, client: client)
+        case TraeSite.china.id, TraeSite.international.id:
+            return try await OAuthLogin.loginTrae(
+                site: TraeSite.site(id: providerId)!,
+                callbacks: callbacks,
+                client: client
+            )
+        case RaccoonOAuth.providerId:
+            return try await OAuthLogin.loginRaccoon(callbacks: callbacks, client: client)
         case KimiSite.china.id, KimiSite.global.id:
             return try await OAuthLogin.loginKimiCoding(
                 site: KimiSite.site(id: providerId)!,
@@ -132,6 +143,8 @@ public enum OAuthSubscriptions {
         case QoderSite.cn.id: QoderOAuthProvider(site: .cn)
         case WorkBuddySite.china.id: WorkBuddyOAuthProvider(site: .china)
         case WorkBuddySite.international.id: WorkBuddyOAuthProvider(site: .international)
+        case TraeSite.china.id, TraeSite.international.id: TraeOAuthProvider(site: TraeSite.site(id: providerId)!)
+        case RaccoonOAuth.providerId: RaccoonOAuthProvider()
         case KimiSite.china.id, KimiSite.global.id:
             KimiCodingOAuthProvider(site: KimiSite.site(id: providerId)!, identity: kimiIdentity)
         case "xai": XaiOAuthProvider()

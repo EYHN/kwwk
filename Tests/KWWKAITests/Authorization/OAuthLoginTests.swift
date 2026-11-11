@@ -70,6 +70,52 @@ struct OAuthCallbackServerTests {
         #expect(params["code"] == "early")
     }
 
+    @Test("port 0 binds any free port, and the redirect URI names the one it got")
+    func ephemeralPort() async throws {
+        let server = try OAuthCallbackServer(port: 0, path: "/authorize", redirectHost: "127.0.0.1")
+        try await server.listen()
+        defer { server.stop() }
+        let redirect = try #require(URLComponents(string: server.redirectURI))
+        #expect(redirect.host == "127.0.0.1")
+        #expect(redirect.path == "/authorize")
+        let port = try #require(redirect.port)
+        #expect(port > 1023)
+
+        async let wait: [String: String] = server.waitForCallback()
+        // A request with no payload is answered and the flow keeps waiting:
+        // a probe must not end a sign-in the user is still completing.
+        let (_, probe) = try await URLSession.shared.data(from: URL(string: server.redirectURI)!)
+        #expect((probe as? HTTPURLResponse)?.statusCode == 404)
+
+        // Trae's page comes back with `authCodeInfo` where an OAuth redirect
+        // has `code`.
+        var page = redirect
+        page.queryItems = [
+            URLQueryItem(name: "authCodeInfo", value: #"{"AuthCode":"code-1"}"#),
+            URLQueryItem(name: "loginTraceID", value: "trace-1"),
+        ]
+        let (_, answer) = try await URLSession.shared.data(from: try #require(page.url))
+        #expect((answer as? HTTPURLResponse)?.statusCode == 200)
+        let params = try await wait
+        #expect(params["authCodeInfo"] == #"{"AuthCode":"code-1"}"#)
+        #expect(params["loginTraceID"] == "trace-1")
+        // The address stays the one the page was given after the port is released.
+        #expect(server.redirectURI == redirect.string)
+    }
+
+    @Test("a page that asks before it reports back is told it may")
+    func preflight() async throws {
+        let server = try OAuthCallbackServer(port: 0)
+        try await server.listen()
+        defer { server.stop() }
+        var request = URLRequest(url: URL(string: server.redirectURI)!)
+        request.httpMethod = "OPTIONS"
+        let (_, response) = try await URLSession.shared.data(for: request)
+        let answer = try #require(response as? HTTPURLResponse)
+        #expect(answer.statusCode == 204)
+        #expect(answer.value(forHTTPHeaderField: "access-control-allow-origin") == "*")
+    }
+
     @Test("cancel() unblocks waitForCallback with a CancellationError")
     func cancelUnblocks() async throws {
         let server = try OAuthCallbackServer(port: 53981)
