@@ -794,7 +794,7 @@ struct DevinModelNormalizationTests {
             DevinWire.getCliModelConfigsPath: [.init(status: 200, chunks: [try Gzip.compress(response.data)])],
         ])
         let models = try await DevinModels.fetch(apiKey: "tok", baseURL: "https://devin.test", client: client)
-        #expect(models.map(\.id) == ["swe-1-6", "swe-1-6-fast", "swe-1-7-solo"])
+        #expect(models.map(\.id) == ["swe-1-6", "swe-1-7-solo"])
         #expect(models.last?.contextWindow == 300_000)
         let discoveryBody = try #require(client.requests.first?.body)
         let meta = fields(try #require(fields(discoveryBody)[1]?.first?.asData))
