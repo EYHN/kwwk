@@ -193,6 +193,15 @@ public func registerStored(
             modelOverride: modelOverride,
             primeToken: primeToken
         )
+    case TraeSite.china.id, TraeSite.international.id:
+        return await registerTrae(
+            site: TraeSite.site(id: storeId)!,
+            manager: manager,
+            modelOverride: modelOverride,
+            primeToken: primeToken
+        )
+    case RaccoonOAuth.providerId:
+        return await registerRaccoon(manager: manager, modelOverride: modelOverride, primeToken: primeToken)
     case KimiSite.china.id, KimiSite.global.id:
         return await registerKimiCoding(
             site: KimiSite.site(id: storeId)!,

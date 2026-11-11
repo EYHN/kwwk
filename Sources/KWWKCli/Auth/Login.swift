@@ -78,6 +78,21 @@ let loginProviders: [LoginEntry] = [
         flow: .oauth
     ),
     LoginEntry(
+        id: "trae",
+        display: "Trae CN (ByteDance's IDE, China build)",
+        flow: .oauth
+    ),
+    LoginEntry(
+        id: "trae-intl",
+        display: "Trae (ByteDance's IDE, international build)",
+        flow: .oauth
+    ),
+    LoginEntry(
+        id: "raccoon",
+        display: "Raccoon (SenseTime's office assistant, xiaohuanxiong.com)",
+        flow: .oauth
+    ),
+    LoginEntry(
         id: "kimi-coding",
         display: "Kimi For Coding (Moonshot coding plan)",
         flow: .oauth

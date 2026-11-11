@@ -100,6 +100,15 @@ public enum ModelsCatalog {
         for provider in ["workbuddy", "workbuddy-ai"] where out[provider] == nil {
             out[provider] = loadBundledArray("\(provider)-models")
         }
+        // Trae's roster and Raccoon's catalogue are the account's own, read
+        // live; a written-in seed stands in until they have answered, the
+        // same one for both Trae builds.
+        for site in TraeSite.all where out[site.id] == nil {
+            out[site.id] = TraeModels.seed(on: site)
+        }
+        if out[RaccoonOAuth.providerId] == nil {
+            out[RaccoonOAuth.providerId] = RaccoonModels.seed
+        }
         // Kimi's two regions share model capabilities. Only the credential
         // scope and coding endpoint differ; keeping the China rows as the
         // source also lets subagents resolve overrides under the global site.

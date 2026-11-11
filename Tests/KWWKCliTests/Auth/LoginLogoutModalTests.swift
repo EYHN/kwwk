@@ -26,8 +26,13 @@ struct LoginLogoutModalTests {
         #expect(rendered.contains("Log in to a provider"))
         #expect(rendered.contains("Anthropic OAuth"))
         // The picker scrolls past the harness's screen, so the API-key half
-        // is checked by its first entry, not its last.
-        #expect(rendered.contains("Anthropic API key"))
+        // is checked by its first entry, once the selection has reached it.
+        let firstKeyEntry = loginProviders.firstIndex { entry in
+            if case .apiKey = entry.flow { return true }
+            return false
+        } ?? 0
+        for _ in 0..<firstKeyEntry { ctx.modal.routeDown() }
+        #expect((harness.modalLines ?? []).joined(separator: "\n").contains("Anthropic API key"))
 
         // Esc cancels back to the transcript with a gentle notice.
         ctx.modal.routeCancel()
