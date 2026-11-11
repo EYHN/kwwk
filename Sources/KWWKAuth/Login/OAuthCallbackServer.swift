@@ -8,9 +8,14 @@ import NIOHTTP1
 /// the registered path, captures the query parameters, and replies with a
 /// "You can close this tab" page.
 ///
+/// Port 0 binds whichever port is free, for a provider that takes any
+/// loopback redirect (Trae, Raccoon); `redirectURI` names the bound one once
+/// `listen()` has returned.
+///
 /// Backed by SwiftNIO so the same implementation runs on macOS and Linux —
 /// the previous `Network.framework` version only linked on Apple.
 public final class OAuthCallbackServer: Sendable {
+    /// The port asked for; 0 asks for any free one (see `redirectURI`).
     public let port: UInt16
     public let path: String
     public let successHTML: String
@@ -29,6 +34,9 @@ public final class OAuthCallbackServer: Sendable {
 
     private struct State {
         var channel: Channel?
+        /// The port the listener holds, which is the one asked for unless
+        /// that was 0.
+        var boundPort: UInt16?
         var continuation: CheckedContinuation<[String: String], Error>?
         var resolved = false
         var cancelled = false
@@ -65,8 +73,14 @@ public final class OAuthCallbackServer: Sendable {
         group.shutdownGracefully { _ in }
     }
 
+    /// The query parameters that mark a request as the provider's redirect:
+    /// the authorization code every OAuth flow here answers with, and
+    /// `authCodeInfo`, which Trae's page answers with in its place.
+    static let redirectParameters: Set<String> = ["code", "authCodeInfo"]
+
     public var redirectURI: String {
-        "http://\(redirectHost):\(port)\(path)"
+        let bound = state.withLockedValue { $0.boundPort } ?? port
+        return "http://\(redirectHost):\(bound)\(path)"
     }
 
     /// Start listening. Idempotent.
@@ -79,7 +93,7 @@ public final class OAuthCallbackServer: Sendable {
         if state.withLockedValue({ $0.channel != nil }) { return }
 
         let ch = try makeBootstrap().bind(host: "127.0.0.1", port: Int(port)).wait()
-        state.withLockedValue { $0.channel = ch }
+        hold(ch)
     }
 
     private func startAsync() async throws {
@@ -88,7 +102,14 @@ public final class OAuthCallbackServer: Sendable {
         if state.withLockedValue({ $0.channel != nil || $0.resolved }) { return }
 
         let ch = try await makeBootstrap().bind(host: "127.0.0.1", port: Int(port)).get()
-        state.withLockedValue { $0.channel = ch }
+        hold(ch)
+    }
+
+    private func hold(_ channel: Channel) {
+        state.withLockedValue { state in
+            state.channel = channel
+            state.boundPort = channel.localAddress?.port.flatMap { UInt16(exactly: $0) }
+        }
     }
 
     private func makeBootstrap() -> ServerBootstrap {
@@ -242,6 +263,13 @@ private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable 
             write(context: context, status: .badRequest, html: server.errorHTMLFilled("bad URL"))
             return
         }
+        // A page that reports back with a request of its own asks first
+        // whether it may; the answer is the headers `write` puts on every
+        // response.
+        if head.method == .OPTIONS {
+            write(context: context, status: .noContent, html: "")
+            return
+        }
         guard url.path == server.path else {
             write(context: context, status: .notFound, html: server.errorHTMLFilled("unknown path"))
             return
@@ -260,12 +288,12 @@ private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable 
             }
             return
         }
-        // Only a request that actually carries the authorization `code`
-        // resolves the flow. Anything else hitting the path (browser favicon
-        // probe, health check, a preflight with no query) gets a 404 and the
-        // server keeps waiting — otherwise a stray request would kill the
-        // pending login with an empty parameter set.
-        guard params["code"] != nil else {
+        // Only a request that actually carries the authorization `code` (or
+        // Trae's `authCodeInfo`) resolves the flow. Anything else hitting the
+        // path (browser favicon probe, health check, a request with no
+        // query) gets a 404 and the server keeps waiting — otherwise a stray
+        // request would kill the pending login with an empty parameter set.
+        guard OAuthCallbackServer.redirectParameters.contains(where: { params[$0] != nil }) else {
             write(context: context, status: .notFound, html: server.errorHTMLFilled("missing authorization code"))
             return
         }
@@ -279,6 +307,12 @@ private final class CallbackHandler: ChannelInboundHandler, @unchecked Sendable 
         headers.add(name: "content-type", value: "text/html; charset=utf-8")
         headers.add(name: "content-length", value: String(bodyBytes.count))
         headers.add(name: "connection", value: "close")
+        // What Trae's desktop client answers its sign-in page with, for a
+        // page that reports back with a fetch rather than a navigation. The
+        // body is the static page above either way.
+        headers.add(name: "access-control-allow-origin", value: "*")
+        headers.add(name: "access-control-allow-methods", value: "GET,POST,OPTIONS")
+        headers.add(name: "access-control-allow-headers", value: "content-type")
 
         let responseHead = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
         context.write(wrapOutboundOut(.head(responseHead)), promise: nil)
