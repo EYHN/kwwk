@@ -90,7 +90,11 @@ struct MCPHTTPSessionLifetimeTests {
     // the transport, the transport released the `URLSession` it had made for
     // itself, and swift-corelibs-foundation aborted the process ("_MultiHandle
     // deallocated with non-zero retain count") while a model request was
-    // still streaming on another session.
+    // still streaming on another session. The abort is a race inside curl's
+    // callbacks and did not fire on the Linux CI image before the fix, so
+    // this guards the behaviour (connections come and go, other requests
+    // keep streaming) rather than proving the crash is gone; transports now
+    // share `URLSessionHTTPClient.shared` and release no session at all.
     @Test("a refused MCP connection leaves a request streaming elsewhere alone")
     func refusedConnectionKeepsOtherRequestsAlive() async throws {
         guard let server = try UnauthorizedMCPServer.start() else { return }

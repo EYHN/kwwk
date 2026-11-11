@@ -120,6 +120,11 @@ public final class URLSessionMCPAuthHTTPClient: MCPAuthHTTPClient, @unchecked Se
     private let delegate: Delegate
     private let timeoutSeconds: TimeInterval
 
+    /// One client that lives as long as the process: the default wherever a
+    /// caller passes none, so no `URLSession` is made and released per
+    /// transport or per authorization run (see `URLSessionHTTPClient.shared`).
+    public static let shared = URLSessionMCPAuthHTTPClient()
+
     public init(timeoutSeconds: TimeInterval = MCPAuthHTTP.defaultTimeoutSeconds) {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil

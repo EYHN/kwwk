@@ -55,6 +55,14 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
     public let session: URLSession
     private let delegate: StreamingSessionDelegate
 
+    /// One client that lives as long as the process, for callers that come
+    /// and go (an MCP transport per connection attempt). Releasing a
+    /// `URLSession` while other sessions have requests in flight aborts the
+    /// process on swift-corelibs-foundation ("_MultiHandle deallocated with
+    /// non-zero retain count"), so such callers share this one instead of
+    /// making and dropping their own.
+    public static let shared = URLSessionHTTPClient()
+
     public init(session: URLSession? = nil) {
         let delegate = StreamingSessionDelegate()
         self.delegate = delegate
