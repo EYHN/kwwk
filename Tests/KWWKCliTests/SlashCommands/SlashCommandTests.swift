@@ -370,7 +370,7 @@ struct SlashInputParseTests {
         #expect(compacting.hasPrefix("* compacting 3 messages"))
         #expect(compacting.hasSuffix("/goal <objective> to start one"))
         let retrying = line(.retrying(attempt: 0, until: Date(), reason: ""), streaming: true)
-        #expect(retrying.hasPrefix("* retry 2/5 in now  ·  Esc to cancel"))
+        #expect(retrying.hasPrefix("* retry 2/8 in now  ·  Esc to cancel"))
     }
 
     @MainActor

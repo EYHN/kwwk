@@ -133,6 +133,16 @@ public final class URLSessionHTTPClient: HTTPClient, @unchecked Sendable {
     }
 }
 
+extension URLSessionHTTPClient {
+    /// How long a request may go without a byte (before the headers or
+    /// between body chunks) before it fails with NSURLErrorTimedOut (-1001),
+    /// on Darwin and in FoundationNetworking alike. URLSession's 60 s default
+    /// is shorter than a model provider (or a gateway queueing in front of
+    /// one) may take to answer a long-context request, so every attempt
+    /// timed out. Codex's stream idle timeout is the same 300 s.
+    public static let defaultIdleTimeoutSeconds: TimeInterval = 300
+}
+
 private extension URLSessionHTTPClient {
     static func isolatedConfiguration() -> URLSessionConfiguration {
         let configuration = URLSessionConfiguration.ephemeral
@@ -141,6 +151,7 @@ private extension URLSessionHTTPClient {
         configuration.urlCache = nil
         configuration.httpShouldSetCookies = false
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = defaultIdleTimeoutSeconds
         return configuration
     }
 }

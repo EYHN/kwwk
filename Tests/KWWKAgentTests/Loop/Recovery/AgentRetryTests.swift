@@ -120,13 +120,13 @@ struct AgentRetryTests {
         let registration = await registerFauxProvider()
         defer { registration.unregister() }
 
-        // 5 attempts allowed — queue 5 retryable failures.
+        // 8 attempts allowed — queue 8 retryable failures.
         let failure: FauxResponseStep = .message(fauxAssistantMessage(
             "",
             stopReason: .error,
             errorMessage: "HTTP 504: gateway timeout"
         ))
-        registration.setResponses([failure, failure, failure, failure, failure])
+        registration.setResponses(Array(repeating: failure, count: 8))
 
         let agent = Agent(initialState: AgentInitialState(model: registration.getModel()))
         agent.retryBaseDelayMs = 5
@@ -140,12 +140,12 @@ struct AgentRetryTests {
 
         try await agent.prompt("hi")
 
-        // 4 retries scheduled (attempts 0..3); the 5th attempt runs but
+        // 7 retries scheduled (attempts 0..6); the 8th attempt runs but
         // does not schedule another retry — it falls through to replay.
         let entries = await recorder.snapshot()
-        #expect(entries.count == 4)
-        #expect(entries.map(\.attempt) == [0, 1, 2, 3])
-        for (entry, upperBound) in zip(entries, [UInt64(5), 10, 20, 40]) {
+        #expect(entries.count == 7)
+        #expect(entries.map(\.attempt) == [0, 1, 2, 3, 4, 5, 6])
+        for (entry, upperBound) in zip(entries, [UInt64(5), 10, 20, 40, 80, 160, 320]) {
             #expect(entry.delayMs >= UInt64(Double(upperBound) * 0.75))
             #expect(entry.delayMs <= upperBound)
         }
