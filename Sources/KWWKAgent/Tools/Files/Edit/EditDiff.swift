@@ -25,10 +25,14 @@ public enum EditDiff {
         return ("", content)
     }
 
+    /// The ending of the first line, read on bytes. `range(of: "\n")`
+    /// searches by Character and never finds the "\n" inside a "\r\n"
+    /// grapheme, so every CRLF file read as LF and an edit rewrote all of
+    /// its line endings to LF.
     public static func detectLineEnding(_ content: String) -> LineEnding {
-        guard let lfRange = content.range(of: "\n") else { return .lf }
-        guard let crlfRange = content.range(of: "\r\n") else { return .lf }
-        return crlfRange.lowerBound < lfRange.lowerBound ? .crlf : .lf
+        let utf8 = content.utf8
+        guard let newline = utf8.firstIndex(of: 0x0A), newline > utf8.startIndex else { return .lf }
+        return utf8[utf8.index(before: newline)] == 0x0D ? .crlf : .lf
     }
 
     public static func normalizeToLF(_ text: String) -> String {

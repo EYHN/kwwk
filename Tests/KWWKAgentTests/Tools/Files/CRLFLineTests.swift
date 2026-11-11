@@ -37,7 +37,7 @@ struct CRLFLineTests {
         #expect(output.hasPrefix("# line 100\r\n"))
         #expect(output.contains("uni:U105 uni:hasName \"Universidad Politécnica 105\" ;\r\n"))
         #expect(output.contains("# line 305\r\n"))
-        #expect(!output.contains("# line 99\r"))
+        #expect(!output.contains("# line 99\r\n"))
         // 306 lines by "\n" count: the empty piece after the final CRLF.
         #expect(!output.contains("more lines in file"))
     }
@@ -52,11 +52,11 @@ struct CRLFLineTests {
         let tool = createReadTool(cwd: dir.path)
         let result = try await tool.execute(
             "call-crlf-2",
-            ["path": .string(file.path), "offset": .int(10), "limit": .int(5)],
+            ["path": .string(file.path), "offset": .int(8), "limit": .int(5)],
             nil,
             nil
         )
-        #expect(textOutput(result) == "# line 10\r\n# line 11\r\n# line 12\r\n# line 13\r\n# line 14\r\n\n[292 more lines in file. Use offset=15 to continue.]")
+        #expect(textOutput(result) == "# line 8\r\n# line 9\r\n# line 10\r\n# line 11\r\n# line 12\r\n\n[294 more lines in file. Use offset=13 to continue.]")
     }
 
     @Test("read with only an offset on a CRLF file reads to EOF")
@@ -87,9 +87,10 @@ struct CRLFLineTests {
 
         let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000))
         let output = textOutput(try await tool.execute("call-crlf-5", ["path": .string(file.path)], nil, nil))
-        #expect(output.contains("Line 2000\r"))
+        // Compared as whole graphemes: the kept "\r" and the notice's "\n" make one "\r\n".
+        #expect(output.hasPrefix("Line 1\r\nLine 2\r\n"))
+        #expect(output.contains("Line 1999\r\nLine 2000\r\n\n[Showing lines 1-2000 of 2501. Use offset=2001 to continue.]"))
         #expect(!output.contains("Line 2001"))
-        #expect(output.contains("Showing lines 1-2000 of 2501"))
     }
 
     @Test("readLineWindow cuts on the newline byte")
