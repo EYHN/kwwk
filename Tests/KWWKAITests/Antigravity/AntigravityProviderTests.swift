@@ -67,6 +67,7 @@ private func catalog(_ id: String) -> Model {
 
 private let flash = catalog("gemini-3.8-flash")
 private let argon = catalog("gemini-4-argon")
+private let carbon = catalog("gemini-4-carbon")
 private let opus55 = catalog("claude-opus-5-5")
 private let sonnet55 = catalog("claude-sonnet-5-5")
 // Ids the bundled list leaves out, still served to some plans: they resolve
@@ -1095,12 +1096,12 @@ struct AntigravityFailureTests {
 
 @Suite("Antigravity models")
 struct AntigravityModelTests {
-    @Test("The bundled seed is the free-tier and Pro accounts' live lists of 2026-11-02 and -04, one row a family, on Antigravity's wire")
+    @Test("The bundled seed is the free-tier, Pro and Ultra accounts' live lists of 2026-11-02, -04 and -11, one row a family, on Antigravity's wire")
     func bundled() {
         let models = ModelsCatalog.models(for: "antigravity")
         #expect(models.map(\.id) == [
             "claude-opus-5-5", "claude-sonnet-5-5", "gemini-3-flash", "gemini-3.1-flash-lite",
-            "gemini-3.8-flash", "gemini-4-argon",
+            "gemini-3.8-flash", "gemini-4-argon", "gemini-4-carbon",
         ])
         for model in models {
             #expect(model.api == "antigravity-codeassist")
@@ -1113,9 +1114,10 @@ struct AntigravityModelTests {
         #expect(limits("gemini-3-flash") == (1_048_576, 65_536))
         #expect(limits("gemini-3.1-flash-lite") == (1_048_576, 65_535))
         #expect(limits("gemini-4-argon") == (1_048_576, 65_536))
+        #expect(limits("gemini-4-carbon") == (1_048_576, 262_144))
         #expect(limits("claude-opus-5-5") == (1_000_000, 128_000))
         #expect(limits("claude-sonnet-5-5") == (1_000_000, 128_000))
-        for family in [flash, argon, opus55, sonnet55] {
+        for family in [flash, argon, carbon, opus55, sonnet55] {
             #expect(family.thinkingLevelMap?.compactMapValues { $0 } == [
                 "low": "\(family.id)-low", "medium": "\(family.id)-medium", "high": "\(family.id)-high",
             ])
@@ -1126,6 +1128,7 @@ struct AntigravityModelTests {
         // without its level.
         #expect(flash.name == "Gemini 3.8 Flash")
         #expect(argon.name == "Gemini 4 Argon")
+        #expect(carbon.name == "Gemini 4 Carbon")
         #expect(opus55.name == "Claude Opus 5.5")
         #expect(sonnet55.name == "Claude Sonnet 5.5")
 

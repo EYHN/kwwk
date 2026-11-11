@@ -7,9 +7,10 @@ import FoundationNetworking
 ///
 /// The bundled `Resources/antigravity-models.json` is the union of what
 /// Antigravity's `fetchAvailableModels` answered a free-tier account on
-/// 2026-11-02 (Hub 2.28.2) and a Google AI Pro account (paid tier
-/// `g1-pro-tier`) on 2026-11-04 (Hub 2.29.0), each asked with no tier named,
-/// since Google answers a named tier with 400. It is one row per family with
+/// 2026-11-02 (Hub 2.28.2), a Google AI Pro account (paid tier
+/// `g1-pro-tier`) on 2026-11-04 (Hub 2.29.0) and a Google AI Ultra account
+/// (paid tier `g1-ultra-lite-tier`) on 2026-11-11 (Hub 2.31.0), each asked
+/// with no tier named, since Google answers a named tier with 400. It is one row per family with
 /// the effort variants folded into it, in the order of Antigravity's picker
 /// (`agentModelSorts`) and then the models it serves outside it. A family
 /// one plan isn't served is still listed: asked for it, Google answers 404
@@ -17,7 +18,11 @@ import FoundationNetworking
 /// (`gemini-4-argon-low`, `-medium`, `-high`) and Claude Opus and Sonnet 5.5
 /// (`claude-opus-5-5-…`, `claude-sonnet-5-5-…`) are the Pro account's; the
 /// free account had Argon only as `gemini-4-argon-disabled` and neither
-/// Claude 5.5. A re-sync is a file edit from a live
+/// Claude 5.5. Gemini 4 Carbon (`gemini-4-carbon-low`, `-medium`, `-high`,
+/// writing up to 262,144 tokens where Argon writes 65,536) is the Ultra
+/// account's, which Antigravity serves on Ultra and Enterprise plans only;
+/// that account's list puts it first and makes `gemini-4-carbon-medium` its
+/// default, but kwwk keeps Gemini 3.8 Flash, which every plan is served. A re-sync is a file edit from a live
 /// `AntigravityOAuth.fetchAvailableModels`. Left out of it, as magpie leaves
 /// them out: the `chat_*` and `tab_*` ids (Antigravity's editor),
 /// `gemini-3.1-flash-image` (image-only), `gemini-4-argon-disabled`
