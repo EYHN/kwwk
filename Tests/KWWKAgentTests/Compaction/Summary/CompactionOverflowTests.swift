@@ -85,7 +85,8 @@ struct CompactionOverflowTests {
         )
         guard case .failure = result else { Issue.record("Expected failure"); return }
         let calls = await log.calls
-        #expect(calls.count == (reason.contains("refusal") ? 1 : 5))
+        // A timeout keeps five attempts; a rate limit gets the full eight.
+        #expect(calls.count == (reason.contains("refusal") ? 1 : reason.contains("429") ? 8 : 5))
         #expect(calls.allSatisfy { $0.text == calls.first?.text })
     }
 

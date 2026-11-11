@@ -142,7 +142,7 @@ struct ProviderFailureParityTests {
         #expect(policy.delay(for: .init(message: "busy", httpStatus: 429, shouldRetry: false), attempt: 0) == nil)
         #expect(ProviderRetryPolicy(maxRetryDelayMs: 0).delay(for: .init(message: "busy", httpStatus: 429, retryAfterMs: 277403000), attempt: 0) == 277403000)
         #expect(ProviderRetryPolicy(maxAttempts: 20).delay(for: .init(message: "busy", httpStatus: 503), attempt: 10) == 30000)
-        #expect(policy.delay(for: .init(message: "busy", httpStatus: 503), attempt: 4) == nil)
+        #expect(policy.delay(for: .init(message: "busy", httpStatus: 503), attempt: 7) == nil)
         #expect(policy.delay(for: .init(message: "busy", httpStatus: 503), attempt: 0, jitter: 0.75) == 750)
         #expect(policy.delay(for: .init(message: "busy", httpStatus: 429, retryAfterMs: 1000), attempt: 0, jitter: 0.75) == 1000)
     }

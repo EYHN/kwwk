@@ -29,6 +29,10 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
     /// The provider's name for the spent window (Anthropic's representative
     /// claim, e.g. `five_hour`, `seven_day`).
     public var limitWindow: String?
+    /// When the provider's rate-limit window reopens (ms from the failure),
+    /// read from `x-ratelimit-reset*` on a 429 without Retry-After. A floor
+    /// on the backoff, not a server-requested delay.
+    public var rateLimitResetMs: Double?
     public var errorDescription: String? { message }
 
     public init(
@@ -44,7 +48,8 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         stopDetails: JSONValue? = nil,
         upstreamMessage: String? = nil,
         resetsAt: Double? = nil,
-        limitWindow: String? = nil
+        limitWindow: String? = nil,
+        rateLimitResetMs: Double? = nil
     ) {
         self.message = message
         self.httpStatus = httpStatus
@@ -59,6 +64,7 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         self.upstreamMessage = upstreamMessage.map(Self.boundedDiagnostic)
         self.resetsAt = resetsAt
         self.limitWindow = limitWindow
+        self.rateLimitResetMs = rateLimitResetMs
     }
 
     public static func capture(_ error: any Error) -> Self {
@@ -186,6 +192,9 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
         failure.requestId = response.value(forHTTPHeaderField: "x-request-id")
             ?? response.value(forHTTPHeaderField: "request-id") ?? failure.requestId
         failure.retryAfterMs = retryDelay(response: response)
+        if response.statusCode == 429, failure.retryAfterMs == nil {
+            failure.rateLimitResetMs = rateLimitReset(headers: headerFields(response), now: now)
+        }
         switch response.value(forHTTPHeaderField: "x-should-retry")?.lowercased() {
         case "true": failure.shouldRetry = true
         case "false": failure.shouldRetry = false
@@ -236,9 +245,54 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
     }
 
     static func retryDelay(response: HTTPURLResponse) -> Double? {
-        retryDelay(headers: response.allHeaderFields.reduce(into: [:]) { result, entry in
+        retryDelay(headers: headerFields(response))
+    }
+
+    private static func headerFields(_ response: HTTPURLResponse) -> [String: String] {
+        response.allHeaderFields.reduce(into: [:]) { result, entry in
             if let key = entry.key as? String { result[key] = String(describing: entry.value) }
-        })
+        }
+    }
+
+    /// Milliseconds until the rate-limit window reopens, from the headers
+    /// OpenAI-compatible APIs send: `x-ratelimit-reset-requests` /
+    /// `x-ratelimit-reset-tokens` as a duration ("1s", "6m0s", "20ms";
+    /// OpenAI, Groq, DeepSeek) and `x-ratelimit-reset` as a unix time in
+    /// milliseconds (OpenRouter) or seconds, or as delta seconds. The
+    /// latest of them, since a 429 does not say which window is spent.
+    public static func rateLimitReset(headers: [String: String], now: Date = Date()) -> Double? {
+        let headers = headers.reduce(into: [String: String]()) { $0[$1.key.lowercased()] = $1.value }
+        let nowMs = now.timeIntervalSince1970 * 1000
+        var latest: Double?
+        for name in ["x-ratelimit-reset-requests", "x-ratelimit-reset-tokens", "x-ratelimit-reset"] {
+            guard let raw = headers[name]?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { continue }
+            let ms: Double?
+            if let number = Double(raw) {
+                guard number.isFinite, number >= 0 else { continue }
+                if number >= 1e12 { ms = number - nowMs }
+                else if number >= 1e9 { ms = number * 1000 - nowMs }
+                else { ms = number * 1000 }
+            } else {
+                ms = durationMs(raw)
+            }
+            if let ms, ms.isFinite { latest = max(latest ?? 0, max(0, ms)) }
+        }
+        return latest
+    }
+
+    /// A Go-style duration ("1h2m3.5s", "6m0s", "250ms") in milliseconds.
+    private static func durationMs(_ text: String) -> Double? {
+        let units: [(String, Double)] = [("ms", 1), ("h", 3_600_000), ("m", 60_000), ("s", 1000)]
+        var rest = Substring(text)
+        var total = 0.0
+        while !rest.isEmpty {
+            let digits = rest.prefix { $0.isASCII && ($0.isNumber || $0 == ".") }
+            guard let value = Double(digits), let unit = units.first(where: { rest.dropFirst(digits.count).hasPrefix($0.0) })
+            else { return nil }
+            total += value * unit.1
+            rest = rest.dropFirst(digits.count + unit.0.count)
+        }
+        return total
     }
 
     public var category: Category {
@@ -320,7 +374,11 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
             if code == -999 { return .cancelled }
             if code == -1001 { return .timeout }
             if code == NSURLErrorUnknown, Self.isCurlTransferInterrupted(text) { return .transport }
-            return [-1003, -1004, -1005, -1006, -1009].contains(code) ? .transport : .invalidRequest
+            // Connectivity that can come back: host lookup/connect failures,
+            // a dropped connection (-1005), no network (-1009, -1018, -1020),
+            // and -1011, which FoundationNetworking reports for curl's
+            // "Empty reply from server" (a gateway closing an idle request).
+            return [-1003, -1004, -1005, -1006, -1009, -1011, -1018, -1020].contains(code) ? .transport : .invalidRequest
         }
         if domain?.lowercased() == NSPOSIXErrorDomain.lowercased() {
             if transportDomain?.lowercased() == NSPOSIXErrorDomain.lowercased(), let code = transportCode {
@@ -383,7 +441,10 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
     /// (CURLE_PARTIAL_FILE, an HTTP/2 stream reset). FoundationNetworking has
     /// no URLError for these and surfaces them as NSURLErrorUnknown.
     private static func isCurlTransferInterrupted(_ text: String) -> Bool {
-        ["transfer closed with", "was not closed cleanly", "stream error in the http/2 framing layer"]
+        ["transfer closed with", "was not closed cleanly", "stream error in the http/2 framing layer",
+         // CURLE_GOT_NOTHING, and CURLE_RECV_ERROR / CURLE_SEND_ERROR
+         // without ECONNRESET (which maps to -1005).
+         "empty reply from server", "recv failure", "send failure"]
             .contains(where: text.contains)
     }
 

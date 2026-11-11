@@ -1810,7 +1810,7 @@ func codingFrameStateLine(
     case .retrying(let attempt, let until, let reason):
         let remaining = max(0, until.timeIntervalSinceNow)
         let countdown = remaining >= 1.0 ? "\(Int(remaining.rounded(.up)))s" : "now"
-        parts.append(Theme.paint("\(spinner) retry \(attempt + 2)/5 in \(countdown)", Theme.warn, bold: true))
+        parts.append(Theme.paint("\(spinner) retry \(attempt + 2)/\(ProviderRetryPolicy().maxAttempts) in \(countdown)", Theme.warn, bold: true))
         if !reason.isEmpty {
             parts.append(Theme.faintText(String(reason.prefix(40))))
         }
