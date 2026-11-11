@@ -124,12 +124,16 @@
     }
   },
   "github-copilot": {
-    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists.",
+    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists. claude-fable-5.2 and gemini-4-carbon (2026-11-11, no signed-in Copilot account at hand) take their siblings' limits (claude-fable-5.1, gemini-4-argon) until read off Copilot's /models: a window kept too small only compacts early, one too large overflows.",
     "claude-fable-5": {
       "contextWindow": 264000,
       "maxTokens": 64000
     },
     "claude-fable-5.1": {
+      "contextWindow": 264000,
+      "maxTokens": 64000
+    },
+    "claude-fable-5.2": {
       "contextWindow": 264000,
       "maxTokens": 64000
     },
@@ -163,6 +167,9 @@
       "maxTokens": 65536
     },
     "gemini-4-argon": {
+      "contextWindow": 265536
+    },
+    "gemini-4-carbon": {
       "contextWindow": 265536
     },
     "gpt-5.3-codex": {

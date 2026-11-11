@@ -10250,6 +10250,45 @@
         "xhigh" : "xhigh"
       }
     },
+    "claude-fable-5-2" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/anthropic",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "sendSessionAffinityHeaders" : true
+      },
+      "contextWindow" : 1000000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40
+      },
+      "id" : "claude-fable-5-2",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "Claude Fable 5.2",
+      "provider" : "cloudflare-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "claude-haiku-4-5" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/gateway.ai.cloudflare.com\/v1\/{CLOUDFLARE_ACCOUNT_ID}\/{CLOUDFLARE_GATEWAY_ID}\/anthropic",
@@ -10779,7 +10818,7 @@
       },
       "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0.025000000000000001,
+        "cacheRead" : 0.029999999999999999,
         "cacheWrite" : 0,
         "input" : 0.1,
         "output" : 0.4
@@ -14504,6 +14543,51 @@
         "xhigh" : "xhigh"
       }
     },
+    "claude-fable-5.2" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
+      "compat" : {
+        "forceAdaptiveThinking" : true,
+        "supportsMidConvoSystemMessages" : true
+      },
+      "contextWindow" : 264000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40
+      },
+      "headers" : {
+        "Copilot-Integration-Id" : "vscode-chat",
+        "Editor-Plugin-Version" : "copilot-chat\/0.35.0",
+        "Editor-Version" : "vscode\/1.107.0",
+        "User-Agent" : "GitHubCopilotChat\/0.35.0"
+      },
+      "id" : "claude-fable-5.2",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 64000,
+      "name" : "Claude Fable 5.2",
+      "provider" : "github-copilot",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "max" : "max",
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "claude-haiku-4.5" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
@@ -14909,6 +14993,48 @@
       },
       "maxTokens" : 65536,
       "name" : "Gemini 4 Argon",
+      "provider" : "github-copilot",
+      "reasoning" : true
+    },
+    "gemini-4-carbon" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/api.individual.githubcopilot.com",
+      "compat" : {
+        "supportsDeveloperRole" : false,
+        "supportsReasoningEffort" : false,
+        "supportsStore" : false,
+        "supportsStrictMode" : true
+      },
+      "contextWindow" : 265536,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0,
+        "input" : 2,
+        "output" : 10
+      },
+      "headers" : {
+        "Copilot-Integration-Id" : "vscode-chat",
+        "Editor-Plugin-Version" : "copilot-chat\/0.35.0",
+        "Editor-Version" : "vscode\/1.107.0",
+        "User-Agent" : "GitHubCopilotChat\/0.35.0"
+      },
+      "id" : "gemini-4-carbon",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 65536,
+      "name" : "Gemini 4 Carbon",
       "provider" : "github-copilot",
       "reasoning" : true
     },
@@ -17136,6 +17262,45 @@
         "max" : null,
         "medium" : "medium",
         "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
+    "gemini-robotics-er-2-preview" : {
+      "api" : "google-vertex",
+      "baseUrl" : "https:\/\/{location}-aiplatform.googleapis.com",
+      "contextWindow" : 131072,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 0,
+        "input" : 1,
+        "output" : 5
+      },
+      "id" : "gemini-robotics-er-2-preview",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 65536,
+      "name" : "Gemini Robotics-ER 2 Preview",
+      "provider" : "google-vertex",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : "minimal",
         "off" : null,
         "xhigh" : null
       }
@@ -25952,7 +26117,7 @@
         }
       },
       "maxTokens" : 384000,
-      "name" : "DeepSeek V4.1 Flash",
+      "name" : "DeepSeek V4.1 Flash 1017",
       "provider" : "opencode",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -28909,7 +29074,7 @@
         }
       },
       "maxTokens" : 384000,
-      "name" : "DeepSeek V4.1 Flash",
+      "name" : "DeepSeek V4.1 Flash 1017",
       "provider" : "opencode-go",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -30405,7 +30570,7 @@
         "cacheRead" : 0.18,
         "cacheWrite" : 0,
         "input" : 0.1824,
-        "output" : 9.338800000000001
+        "output" : 11.0055
       },
       "id" : "~moonshotai\/kimi-latest",
       "input" : [
@@ -32579,6 +32744,74 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
+    "baidu\/ernie-5.5-flash-preview:free" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1024000,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0,
+        "output" : 0
+      },
+      "id" : "baidu\/ernie-5.5-flash-preview:free",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 921600,
+      "name" : "Baidu: ERNIE-5.5-Flash-Preview (free)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : null,
+        "max" : null,
+        "medium" : null,
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : null
+      }
+    },
+    "baidu\/ernie-light-dt-1.0-intl" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1024000,
+      "cost" : {
+        "cacheRead" : 0.113,
+        "cacheWrite" : 0,
+        "input" : 1.13,
+        "output" : 3.94
+      },
+      "id" : "baidu\/ernie-light-dt-1.0-intl",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 131072,
+      "name" : "Baidu: ERNIE-Light-DT-1.0",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : null,
+        "minimal" : null,
+        "off" : "none",
+        "xhigh" : null
+      }
+    },
     "bytedance-seed\/seed-1.6" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -33216,18 +33449,18 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048575,
+      "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.018200000000000001,
+        "cacheRead" : 0.017999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.090999999999999998,
-        "output" : 0.182
+        "input" : 0.089999999999999997,
+        "output" : 0.18
       },
       "id" : "deepseek\/deepseek-v4-flash",
       "input" : [
         "text"
       ],
-      "maxTokens" : 943717,
+      "maxTokens" : 393216,
       "name" : "DeepSeek: DeepSeek V4 Flash 0423",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -33439,10 +33672,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0060000000000000001,
+        "cacheRead" : 0.017999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.3,
-        "output" : 1.2
+        "input" : 0.050999999999999997,
+        "output" : 0.5669999999999999
       },
       "id" : "deepseek\/deepseek-v4.1-flash",
       "input" : [
@@ -36234,10 +36467,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0074999999999999997,
+        "cacheRead" : 0.014999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.074999999999999997,
-        "output" : 0.3
+        "input" : 0.15,
+        "output" : 0.6
       },
       "id" : "minimax\/minimax-m3.1-flash",
       "input" : [
@@ -42201,31 +42434,6 @@
         "xhigh" : "xhigh"
       }
     },
-    "qwen\/qwen-2.5-7b-instruct" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 32768,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.1,
-        "output" : 0.2
-      },
-      "id" : "qwen\/qwen-2.5-7b-instruct",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 29491,
-      "name" : "Qwen: Qwen2.5 7B Instruct",
-      "provider" : "openrouter",
-      "reasoning" : false
-    },
     "qwen\/qwen-2.5-72b-instruct" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -44158,10 +44366,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.020625000000000001,
+        "cacheRead" : 0.033000000000000002,
         "cacheWrite" : 0,
-        "input" : 0.082500000000000004,
-        "output" : 0.33
+        "input" : 0.132,
+        "output" : 0.528
       },
       "id" : "tencent\/hy3",
       "input" : [
@@ -44271,10 +44479,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0378,
+        "cacheRead" : 0.042000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.7506,
-        "output" : 2.2509
+        "input" : 0.834,
+        "output" : 2.501
       },
       "id" : "tencent\/hy4-preview",
       "input" : [
@@ -45290,31 +45498,6 @@
       "provider" : "openrouter",
       "reasoning" : true
     },
-    "xingchen-agi\/xing4.0-29b-a4b:free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "xingchen-agi\/xing4.0-29b-a4b:free",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 235929,
-      "name" : "XingChen: Xing4.0 29B A4B (free)",
-      "provider" : "openrouter",
-      "reasoning" : true
-    },
     "z-ai\/glm-4.5" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -45571,12 +45754,12 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 202752,
+      "contextWindow" : 202745,
       "cost" : {
-        "cacheRead" : 0.26,
+        "cacheRead" : 0.247,
         "cacheWrite" : 0,
-        "input" : 1.4,
-        "output" : 4.4
+        "input" : 1.33,
+        "output" : 4.18
       },
       "id" : "z-ai\/glm-5.1",
       "input" : [
@@ -45598,9 +45781,9 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0051000000000000004,
+        "cacheRead" : 0.0060000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.0061000000000000004,
+        "input" : 0.0070000000000000001,
         "output" : 6.8
       },
       "id" : "z-ai\/glm-5.2",
@@ -45745,9 +45928,9 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.016,
+        "cacheRead" : 0.02,
         "cacheWrite" : 0,
-        "input" : 0.036999999999999998,
+        "input" : 0.047,
         "output" : 0.060999999999999999
       },
       "id" : "z-ai\/glm-5.3-flash:batch",
@@ -51023,6 +51206,39 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
+    "alibaba\/qwen3.6-35b-a3b" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
+        "input" : 0.375,
+        "output" : 2.25
+      },
+      "id" : "alibaba\/qwen3.6-35b-a3b",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 65536,
+      "name" : "Qwen 3.6 35B A3B",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true
+    },
     "alibaba\/qwen3.6-plus" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -51222,7 +51438,7 @@
         "cacheRead" : 0.058999999999999997,
         "cacheWrite" : 0,
         "input" : 0.059999999999999998,
-        "output" : 2.3
+        "output" : 2.2
       },
       "id" : "alibaba\/qwen3.8-27b",
       "input" : [
@@ -52847,90 +53063,6 @@
         "max" : "max",
         "xhigh" : "xhigh"
       }
-    },
-    "bytedance\/seed-1.6" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 256000,
-      "cost" : {
-        "cacheRead" : 0.050000000000000003,
-        "cacheWrite" : 0,
-        "input" : 0.25,
-        "output" : 2,
-        "tiers" : [
-          {
-            "cacheRead" : 0.050000000000000003,
-            "cacheWrite" : 0,
-            "input" : 0.5,
-            "inputTokensAbove" : 128000,
-            "output" : 4
-          }
-        ]
-      },
-      "id" : "bytedance\/seed-1.6",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 32000,
-      "name" : "Seed 1.6",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
-    },
-    "bytedance\/seed-1.8" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 256000,
-      "cost" : {
-        "cacheRead" : 0.050000000000000003,
-        "cacheWrite" : 0,
-        "input" : 0.25,
-        "output" : 2,
-        "tiers" : [
-          {
-            "cacheRead" : 0.050000000000000003,
-            "cacheWrite" : 0,
-            "input" : 0.5,
-            "inputTokensAbove" : 128000,
-            "output" : 4
-          }
-        ]
-      },
-      "id" : "bytedance\/seed-1.8",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 64000,
-      "name" : "Bytedance Seed 1.8",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
     },
     "bytedance\/seed-2.1-turbo" : {
       "api" : "anthropic-messages",
