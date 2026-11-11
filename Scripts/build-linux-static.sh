@@ -24,9 +24,20 @@ if ! swift sdk list 2>/dev/null | grep -q "static-linux"; then
     version="${toolchain#swift-}"
     version="${version%-RELEASE}"
     base="https://download.swift.org/swift-${version}-release/static-sdk/${toolchain}"
-    bundle="${toolchain}_static-linux-0.0.1.artifactbundle.tar.gz"
     tmp="$(mktemp -d)"
-    curl -fsSL --retry 3 -o "${tmp}/${bundle}" "${base}/${bundle}"
+    # The bundle's own version moved from 0.0.1 (Swift 6.0/6.1) to 0.1.0.
+    bundle=""
+    for sdk_version in 0.1.0 0.0.1; do
+        candidate="${toolchain}_static-linux-${sdk_version}.artifactbundle.tar.gz"
+        if curl -fsSL --retry 3 -o "${tmp}/${candidate}" "${base}/${candidate}"; then
+            bundle="$candidate"
+            break
+        fi
+    done
+    if [[ -z "$bundle" ]]; then
+        echo "no static Linux SDK found under ${base}" >&2
+        exit 1
+    fi
     swift sdk install "${tmp}/${bundle}"
     rm -rf "$tmp"
 fi
