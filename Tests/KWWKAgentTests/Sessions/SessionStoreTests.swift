@@ -1144,4 +1144,93 @@ struct SessionStoreTests {
         #expect(raw.contains(#""tokensBefore":"#))
         #expect(raw.contains(#""firstKeptMessageIndex":4"#))
     }
+
+    @Test("SessionRecorder persists the summary request's usage on the compaction marker")
+    func recorderPersistsCompactionSummaryUsage() async throws {
+        let (store, dir) = tempStore()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let faux = await registerFauxProvider(
+            RegisterFauxProviderOptions(models: [
+                FauxModelDefinition(id: "compact-usage-window", contextWindow: 2_000)
+            ]))
+        defer { faux.unregister() }
+
+        let model = faux.getModel()
+        let highUsage = AssistantMessage(
+            content: [.text(TextContent(text: "large answer"))],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(input: 1_600, output: 1)
+        )
+        let summary = AssistantMessage(
+            content: [.text(TextContent(text: "billed summary"))],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: Usage(
+                input: 321,
+                output: 17,
+                cacheRead: 40,
+                totalTokens: 378,
+                cost: Cost(input: 0.25, output: 0.5, cacheRead: 0.25, total: 1)
+            )
+        )
+        let agent = Agent(
+            options: AgentOptions(
+                initialState: AgentInitialState(
+                    model: model,
+                    messages: [userMsg("seed"), assistantMsg("reply")]
+                ),
+                streamFn: { _, context, _ in
+                    let message = context.systemPrompt?.contains("durable working-state summary") == true
+                        ? summary
+                        : highUsage
+                    let pair = AssistantMessageStream.makeStream()
+                    pair.continuation.end(message)
+                    return pair.stream
+                },
+                autoCompact: AgentAutoCompactOptions(
+                    threshold: 0.5,
+                    config: AgentContextCompactionConfig(minMessages: 1)
+                )
+            ))
+
+        let id = "sess-compact-usage"
+        let recorder = SessionRecorder(
+            store: store,
+            sessionId: id,
+            cwd: "/w",
+            model: model.id,
+            provider: model.provider
+        )
+        await recorder.ensureCreated()
+        let unsubscribe = recorder.attach(to: agent)
+        defer { unsubscribe() }
+
+        try await agent.prompt("establish high provider usage")
+        try await agent.prompt("trigger compaction")
+
+        let raw = try String(contentsOf: dir.appendingPathComponent("\(id).jsonl"), encoding: .utf8)
+        let compactionLines = raw.split(separator: "\n").filter { $0.contains(#""type":"compaction""#) }
+        #expect(compactionLines.count == 1)
+        let entry = try JSONDecoder().decode(
+            SessionStore.Entry.self,
+            from: Data(try #require(compactionLines.first).utf8)
+        )
+        guard case .compaction(_, let compaction) = entry else {
+            Issue.record("expected a compaction entry")
+            return
+        }
+        #expect(compaction.usage?.input == 321)
+        #expect(compaction.usage?.output == 17)
+        #expect(compaction.usage?.cacheRead == 40)
+        #expect(compaction.usage?.cost.total == 1)
+        // The recorder drained the agent's compaction usage.
+        #expect(agent.takeCompactionUsage() == nil)
+        // A marker without usage still decodes (older files, non-LLM compaction).
+        let loaded = try await store.load(id: id)
+        #expect(text(from: loaded.messages.first).contains("billed summary"))
+    }
 }

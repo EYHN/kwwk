@@ -26,7 +26,7 @@ func runCodingTUIInternal(
 
     // Resolve session persistence up front: a fresh id by default, or a
     // stored transcript when `--resume` / `--session` was passed.
-    let sessionStore = SessionStore(directory: SessionStore.defaultDirectory())
+    let sessionStore = SessionStore(directory: cliSessionDirectory())
     // `--resume` opens the same polished arrow-key picker that `/resume` uses,
     // rather than a bare numbered stdin prompt. The picker needs the TUI +
     // ModalHost to exist, so we start in a fresh session and open the resume
@@ -945,7 +945,8 @@ func runCodingTUIInternal(
             await recorderBox.recorder.recordCompaction(
                 messages: agent.state.messages,
                 messagesCompacted: messagesCompacted,
-                reason: .compact
+                reason: .compact,
+                summaryUsage: agent.takeCompactionUsage()
             )
         },
         persistShake: { mode in

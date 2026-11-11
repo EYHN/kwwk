@@ -24,6 +24,7 @@ public final class SessionRecorder: Sendable {
         let tokensBefore: Int?
         let contextWindow: Int?
         let reason: SessionStore.CompactionReason
+        let usage: Usage?
     }
 
     private enum TranscriptRewrite: Sendable {
@@ -100,6 +101,10 @@ public final class SessionRecorder: Sendable {
         var persistedCount: Int
         /// Usage snapshot from the latest compactStart, consumed by compactEnd.
         var pendingCompactionUsage: AgentContextUsage?
+        /// Summary-request usage of compactions not yet written to disk. A
+        /// failed compaction still bills its requests, so its usage rides on
+        /// the next compaction marker instead of being dropped.
+        var unrecordedSummaryUsage: Usage?
         /// Failed append/compaction/meta operations remain queued so a later
         /// recorder event can retry them before any newer write reaches disk.
         /// Explicit rewrites queued behind a failure are cancelled as one-shot
@@ -181,6 +186,7 @@ public final class SessionRecorder: Sendable {
                 // successful or not. Always consume it so a later manual
                 // compact cannot inherit telemetry from a failed automatic one.
                 let usage = self.takePendingCompactionUsage()
+                self.noteSummaryUsage(agent.takeCompactionUsage())
                 if case .compacted(let messagesCompacted, _) = outcome {
                     await self.recordCompaction(
                         messages: agent.state.messages,
@@ -209,14 +215,17 @@ public final class SessionRecorder: Sendable {
     /// Record that the live context has been replaced by a compacted
     /// projection. This appends a compaction marker after any queued message
     /// writes and resets the baseline so the next post-compaction message is
-    /// persisted immediately.
+    /// persisted immediately. `summaryUsage` is what the summary requests
+    /// cost (usually `agent.takeCompactionUsage()`); usage carried from
+    /// earlier failed compactions is added to it.
     public func recordCompaction(
         messages replacementMessages: [Message],
         messagesCompacted: Int,
         firstKeptMessageIndex: Int? = nil,
         tokensBefore: Int? = nil,
         contextWindow: Int? = nil,
-        reason: SessionStore.CompactionReason
+        reason: SessionStore.CompactionReason,
+        summaryUsage: Usage? = nil
     ) async {
         await enqueue(.compaction(PendingCompaction(
             replacementMessages: replacementMessages.map(redactedForPersistence),
@@ -226,8 +235,29 @@ public final class SessionRecorder: Sendable {
                 : firstKeptMessageIndex,
             tokensBefore: tokensBefore,
             contextWindow: contextWindow,
-            reason: reason
+            reason: reason,
+            usage: combinedSummaryUsage(summaryUsage)
         )))
+    }
+
+    private func noteSummaryUsage(_ usage: Usage?) {
+        guard let usage else { return }
+        state.withLockedValue {
+            $0.unrecordedSummaryUsage = ($0.unrecordedSummaryUsage ?? Usage()).adding(usage)
+        }
+    }
+
+    /// `usage` plus any summary usage still waiting for a marker.
+    private func combinedSummaryUsage(_ usage: Usage?) -> Usage? {
+        let carried: Usage? = state.withLockedValue { state in
+            defer { state.unrecordedSummaryUsage = nil }
+            return state.unrecordedSummaryUsage
+        }
+        switch (carried, usage) {
+        case (nil, let usage): return usage
+        case (let carried, nil): return carried
+        case (let carried?, let usage?): return carried.adding(usage)
+        }
     }
 
     private func noteCompactionStart(_ usage: AgentContextUsage) {
@@ -340,6 +370,7 @@ public final class SessionRecorder: Sendable {
                 tokensBefore: compaction.tokensBefore,
                 contextWindow: compaction.contextWindow,
                 reason: compaction.reason,
+                usage: compaction.usage,
                 model: model,
                 provider: provider
             )

@@ -1,6 +1,25 @@
 import Foundation
 import KWWKAgent
 
+/// Environment variable that moves the CLI's session transcripts (and their
+/// `subagents/` directory) out of `~/.kwwk/sessions`. `--session-dir` sets it.
+let kwwkSessionDirEnvironmentKey = "KWWK_SESSION_DIR"
+
+/// Where the CLI keeps session transcripts: `KWWK_SESSION_DIR` when set to a
+/// non-empty path (relative paths resolve against the working directory),
+/// else `~/.kwwk/sessions`.
+func cliSessionDirectory(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    cwd: String = FileManager.default.currentDirectoryPath
+) -> URL {
+    guard let raw = environment[kwwkSessionDirEnvironmentKey], !raw.isEmpty else {
+        return SessionStore.defaultDirectory()
+    }
+    let expanded = (raw as NSString).expandingTildeInPath
+    let path = expanded.hasPrefix("/") ? expanded : (cwd as NSString).appendingPathComponent(expanded)
+    return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+}
+
 func cliShellPath(environment: [String: String]) -> String {
     guard let shell = environment["SHELL"],
           shell.hasPrefix("/"),

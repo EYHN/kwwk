@@ -56,6 +56,12 @@ extension SessionStore {
         public var trustedRecap: Bool?
         /// Nil when decoding pre-`CompactionReason` session files.
         public var reason: CompactionReason?
+        /// Provider-reported usage of the summary requests this compaction
+        /// (and any failed attempts since the previous marker) made. Their
+        /// replies never enter the transcript, so this is the only record of
+        /// those tokens. Nil when nothing was billed (native or non-LLM
+        /// compaction) and in older session files; older readers ignore it.
+        public var usage: Usage?
 
         public init(
             replacementMessages: [Message],
@@ -64,7 +70,8 @@ extension SessionStore {
             tokensBefore: Int? = nil,
             contextWindow: Int? = nil,
             trustedRecap: Bool? = nil,
-            reason: CompactionReason?
+            reason: CompactionReason?,
+            usage: Usage? = nil
         ) {
             self.replacementMessages = replacementMessages
             self.messagesCompacted = messagesCompacted
@@ -73,6 +80,7 @@ extension SessionStore {
             self.contextWindow = contextWindow
             self.trustedRecap = trustedRecap
             self.reason = reason
+            self.usage = usage
         }
     }
 
@@ -86,7 +94,7 @@ extension SessionStore {
         private enum CodingKeys: String, CodingKey {
             case type, timestamp, message, model, provider, thinkingLevel, title
             case replacementMessages, messagesCompacted, firstKeptMessageIndex
-            case tokensBefore, contextWindow, trustedRecap, reason
+            case tokensBefore, contextWindow, trustedRecap, reason, usage
         }
         private enum Kind: String, Codable { case message, meta, compaction }
 
@@ -114,7 +122,8 @@ extension SessionStore {
                         tokensBefore: try c.decodeIfPresent(Int.self, forKey: .tokensBefore),
                         contextWindow: try c.decodeIfPresent(Int.self, forKey: .contextWindow),
                         trustedRecap: try c.decodeIfPresent(Bool.self, forKey: .trustedRecap),
-                        reason: try c.decodeIfPresent(CompactionReason.self, forKey: .reason)
+                        reason: try c.decodeIfPresent(CompactionReason.self, forKey: .reason),
+                        usage: try c.decodeIfPresent(Usage.self, forKey: .usage)
                     )
                 )
             }
@@ -144,6 +153,7 @@ extension SessionStore {
                 try c.encodeIfPresent(compaction.contextWindow, forKey: .contextWindow)
                 try c.encodeIfPresent(compaction.trustedRecap, forKey: .trustedRecap)
                 try c.encodeIfPresent(compaction.reason, forKey: .reason)
+                try c.encodeIfPresent(compaction.usage, forKey: .usage)
             }
         }
     }

@@ -119,6 +119,8 @@ enum CompactionSummaryGenerator {
                 do {
                     let response = try await streamRequest(requestModel, context, options)
                     let message = await response.result()
+                    // Every attempt is billed, retried ones included.
+                    CompactionUsageCollector.current?.add(message.usage)
                     await closeProviderSession(sessionId: providerSessionId)
                     return message
                 } catch {
