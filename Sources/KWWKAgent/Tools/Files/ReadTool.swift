@@ -126,26 +126,10 @@ public func createReadTool(
                 throw CodingToolError.offsetOutOfRange(offset: offset ?? 0, totalLines: totalLines)
             }
 
-            var userLimitedLines: Int?
-            let selectedContent: String
-            if let limit {
-                // Only split up to the requested window instead of every line
-                // in the file: `maxSplits` stops scanning past the window and
-                // keeps the remainder as one unsplit chunk, which we drop.
-                // A negative limit selects nothing; a huge one saturates
-                // (split stops at EOF anyway) instead of overflowing.
-                let limit = max(0, limit)
-                let sum = startLine.addingReportingOverflow(limit)
-                let needed = sum.overflow ? Int.max : sum.partialValue
-                let head = text.split(separator: "\n", maxSplits: needed, omittingEmptySubsequences: false)
-                let windowEnd = min(needed, head.count)
-                selectedContent = head[startLine..<windowEnd].joined(separator: "\n")
-                userLimitedLines = windowEnd - startLine
-            } else {
-                // No limit: everything from the offset to EOF is needed anyway.
-                let allLines = text.components(separatedBy: "\n")
-                selectedContent = allLines[startLine...].joined(separator: "\n")
-            }
+            // A negative limit selects nothing; a huge one stops at EOF.
+            let window = readLineWindow(text, startLine: startLine, limit: limit.map { max(0, $0) })
+            let selectedContent = window.content
+            let userLimitedLines: Int? = limit == nil ? nil : window.lines
 
             let trunc = Truncate.truncateHead(
                 selectedContent,
@@ -188,6 +172,40 @@ public func createReadTool(
     tool.fileAccessCwd = cwd
     tool.codingToolCapabilities = .read
     return tool
+}
+
+/// Lines `startLine ..< startLine + limit` (to EOF when `limit` is nil),
+/// joined by their own "\n" and the number of lines taken. `startLine`
+/// must be below the file's line count.
+///
+/// Lines are cut on the "\n" byte, exactly as `totalLines` counts them, and
+/// a "\r" before it stays with its line. Swift's Character view reads "\r\n"
+/// as one grapheme, so `String.split(separator: "\n")` finds no break at all
+/// in a CRLF file: the window came back as one piece while `totalLines`
+/// counted every line, and slicing it at the offset trapped (SIGILL).
+func readLineWindow(_ text: String, startLine: Int, limit: Int?) -> (content: String, lines: Int) {
+    let utf8 = text.utf8
+    var begin = utf8.startIndex
+    for _ in 0..<startLine {
+        guard let newline = utf8[begin...].firstIndex(of: 0x0A) else { break }
+        begin = utf8.index(after: newline)
+    }
+    var end = utf8.endIndex
+    var lines = 0
+    if let limit {
+        end = begin
+        var cursor = begin
+        while lines < limit {
+            lines += 1
+            guard let newline = utf8[cursor...].firstIndex(of: 0x0A) else {
+                end = utf8.endIndex
+                break
+            }
+            end = newline
+            cursor = utf8.index(after: newline)
+        }
+    }
+    return (String(decoding: utf8[begin..<end], as: UTF8.self), lines)
 }
 
 private func encodeTruncation(_ t: Truncate.Result) -> JSONValue {
