@@ -48,7 +48,12 @@ jobs:
       matrix:
         swift: ["6.1", "latest"]
     runs-on: ubuntu-latest
-    container: swift:${{ matrix.swift }}
+    container:
+      image: swift:${{ matrix.swift }}
+      # The runner's own resolver stopped answering inside a job's
+      # container network on 2026-11-11 (apt could not resolve
+      # archive.ubuntu.com), so the container names its resolvers.
+      options: --dns 1.1.1.1 --dns 8.8.8.8
     steps:
       - uses: actions/checkout@v5
       - uses: actions/cache@v5
@@ -70,7 +75,9 @@ jobs:
     # bundle, for machines without a Swift toolchain (CI sandboxes, eval
     # harnesses). Uploaded as the `kwwk-linux-x86_64` artifact.
     runs-on: ubuntu-latest
-    container: swift:latest
+    container:
+      image: swift:latest
+      options: --dns 1.1.1.1 --dns 8.8.8.8
     steps:
       - uses: actions/checkout@v5
       - uses: actions/cache@v5
