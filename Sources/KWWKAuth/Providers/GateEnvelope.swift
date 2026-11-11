@@ -38,9 +38,17 @@ package enum GateEnvelope {
 
     /// The refusal an answer carries; nil for a success, which is code 0 or
     /// no code at all. An `error` string alone is a refusal of code 0.
+    ///
+    /// Where the gates put it, as each answered a made-up token on
+    /// 2026-11-11: Trae's account gates under `ResponseMetadata.Error`, the
+    /// code a string (`{"Code":"20101","Message":"Token invalid: …"}`);
+    /// Trae's chat gate and Raccoon at the top (`{"code":1001,"message":…}`),
+    /// Raccoon with a slug for `message` and its words in `details`.
     static func refusal(_ root: [String: Any]) -> Refusal? {
+        let metadata = root["ResponseMetadata"] as? [String: Any]
+        let envelope = metadata?["Error"] as? [String: Any] ?? root
         for key in ["code", "Code", "errCode", "ErrCode"] {
-            let code: Int? = switch root[key] {
+            let code: Int? = switch envelope[key] {
             case let number as NSNumber: number.intValue
             case let text as String: Int(text)
             default: nil
@@ -48,7 +56,7 @@ package enum GateEnvelope {
             guard let code, code != 0 else { continue }
             return Refusal(
                 code: code,
-                said: firstString(root, ["message", "Message", "msg", "Msg", "errMsg", "ErrMsg"])
+                said: firstString(envelope, ["details", "message", "Message", "msg", "Msg", "errMsg", "ErrMsg"])
             )
         }
         if let error = (root["error"] ?? root["Error"]) as? String, !error.isEmpty {

@@ -49,12 +49,13 @@ public struct TraeSite: Sendable, Hashable {
         gateway: "https://trae-api-cn.mchost.guru",
         accountGateway: "https://api.trae.cn"
     )
-    /// The international build.
+    /// The international build. Its chat gate serves no renewal (404), so a
+    /// login that recorded no account gate is renewed at the first of them.
     public static let international = TraeSite(
         id: "trae-intl",
         name: "Trae",
         gateway: "https://core-normal.trae.ai",
-        accountGateway: "https://core-normal.trae.ai"
+        accountGateway: "https://grow-normal.trae.ai"
     )
     public static let all: [TraeSite] = [.china, .international]
 
@@ -75,7 +76,8 @@ public enum TraeOAuth {
     static let renewalExchangePath = "/cloudide/api/v3/trae/oauth/ExchangeToken"
 
     /// The code a gate answers a token of the other build with, and a
-    /// refresh token it no longer takes.
+    /// refresh token it no longer takes ("Token invalid: refresh token is
+    /// invalid.", under a 401).
     static let invalidRefreshTokenCode = 20101
 
     // MARK: Extras
@@ -447,11 +449,12 @@ public enum TraeOAuth {
     /// that is spent.
     static func refusal(_ root: [String: Any]) -> (message: String, isInvalidRefreshToken: Bool)? {
         guard let refusal = GateEnvelope.refusal(root) else { return nil }
-        let message = refusal.said ?? "code \(refusal.code)"
-        return (
-            message,
-            refusal.code == invalidRefreshTokenCode || message.lowercased().contains("refresh token is invalid")
-        )
+        let message = switch refusal.said {
+        case let said? where refusal.code != 0: "\(said) (\(refusal.code))"
+        case let said?: said
+        case nil: "code \(refusal.code)"
+        }
+        return (message, refusal.code == invalidRefreshTokenCode)
     }
 
     /// Sixteen decimal digits, the shape the China page checks its

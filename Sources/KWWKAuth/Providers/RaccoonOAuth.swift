@@ -108,7 +108,7 @@ public enum RaccoonOAuth {
         case 200001: "Raccoon refused this token; sign in again"
         case 200003, 200012: "the Raccoon sign-in has expired; sign in again"
         case 200009: "this Raccoon account is disabled"
-        case 200035: "that sign-in code has already been used; sign in again"
+        case 200035: "that sign-in code was not found or has already been used; sign in again"
         case 200402: "this Raccoon account has no credits left"
         case 200429: "Raccoon is rate limiting this account"
         default: nil

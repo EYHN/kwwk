@@ -110,10 +110,20 @@ struct RaccoonSignInTests {
 
     @Test("The gate's refusal is said in words: a spent code by what it is, an unknown one in the gate's own")
     func refused() async {
+        // The gate's own answers to made-up values, 2026-11-11, each a 400.
         await #expect(throws: OAuthLoginError.denied(
-            "Raccoon: that sign-in code has already been used; sign in again"
+            "Raccoon: that sign-in code was not found or has already been used; sign in again"
         )) {
-            _ = try await signIn(QueuedHTTPClient([ok(#"{"code":200035,"message":"used"}"#)]))
+            _ = try await signIn(QueuedHTTPClient([.response(
+                status: 400,
+                body: #"{"code":200035,"message":"authorization_code_not_found_error","details":"authorization code not found"}"#
+            )]))
+        }
+        await #expect(throws: OAuthLoginError.denied("Raccoon: param token invalid format invalid")) {
+            _ = try await signIn(QueuedHTTPClient([.response(
+                status: 400,
+                body: #"{"code":100002,"message":"params_invalid_error","details":"param token invalid format invalid"}"#
+            )]))
         }
         await #expect(throws: OAuthLoginError.denied("Raccoon: 稍后再试")) {
             _ = try await signIn(QueuedHTTPClient([ok(#"{"code":"500123","msg":"稍后再试"}"#)]))
@@ -185,7 +195,15 @@ struct RaccoonRenewalTests {
         for code in [200001, 200003, 200012] {
             #expect(await kind(ok(#"{"code":\#(code),"message":"no"}"#)) == .rejected)
         }
-        #expect(await kind(.response(status: 401, body: "{}")) == .rejected)
+        // The gate's own answers to a made-up token, 2026-11-11.
+        #expect(await kind(.response(
+            status: 400,
+            body: #"{"code":100002,"message":"params_invalid_error","details":"param token invalid format invalid"}"#
+        )) == .rejected)
+        #expect(await kind(.response(
+            status: 401,
+            body: #"{"code":200003,"message":"authorization_verify_error","details":"authorization verify failed"}"#
+        )) == .rejected)
         #expect(await kind(ok(#"{"code":200429,"message":"slow down"}"#)) == .unavailable)
         #expect(await kind(ok(#"{"code":0,"data":{}}"#)) == .unavailable)
         #expect(await kind(.response(status: 404, body: "")) == .unavailable)

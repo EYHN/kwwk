@@ -17,7 +17,14 @@ private let exchangeGiven = #"""
 {"ResponseMetadata":{},"Result":{"BoundDeviceID":"wl2k1e2endpp32","ClientID":"ono9krqynydwx5","DeviceBindStatus":"BOUND","RefreshExpireAt":1805143893459,"RefreshToken":"refresh-1","Token":"jwt-1","TokenExpireAt":1790801493459,"UserJwt":"user-jwt"}}
 """#
 
-private let invalidRefreshToken = #"{"Code":20101,"Message":"refresh token is invalid"}"#
+// A gate's refusals, as api.trae.cn and grow-normal.trae.ai answered made-up
+// values on 2026-11-11: the first under a 401, the second under a 400.
+private let invalidRefreshToken = #"""
+{"ResponseMetadata":{"Action":"","Error":{"Code":"20101","Data":{"__Message.error":"refresh token is invalid"},"Message":"Token invalid: refresh token is invalid.","StandardCode":"040012"},"OID":null,"Region":""}}
+"""#
+private let invalidParameter = #"""
+{"ResponseMetadata":{"Action":"","Error":{"Code":"10101","Data":{},"Message":"无效参数：{__Message.field}.","StandardCode":"040004"},"OID":null,"Region":""}}
+"""#
 
 private func ok(_ body: String) -> QueuedHTTPClient.Answer {
     .response(status: 200, body: body)
@@ -136,10 +143,11 @@ struct TraeSignInTests {
 
         let client = QueuedHTTPClient([
             .response(status: 503, body: "busy"),
-            ok(#"{"Result":{"LoginHost":"https://www.trae.ai"}}"#),
+            // api.marscode.com's own answer, 2026-11-11: a bare host.
+            ok(#"{"ResponseMetadata":{"Action":"","OID":null},"Result":{"LoginHost":"www.trae.ai"}}"#),
         ])
         #expect(try await TraeOAuth.signInHost(profile: .international, loginTraceID: "trace-1", client: client)
-            == "https://www.trae.ai")
+            == "www.trae.ai")
         #expect(client.requests.map(\.url.absoluteString) == [
             "https://api.marscode.com/cloudide/api/v3/trae/GetLoginGuidance",
             "https://api.trae.ai/cloudide/api/v3/trae/GetLoginGuidance",
@@ -241,7 +249,7 @@ struct TraeSignInTests {
     func exchangeFallsThrough() async throws {
         let client = QueuedHTTPClient([
             .response(status: 502, body: "<html>"),
-            ok(#"{"Code":10101,"Message":"invalid parameter"}"#),
+            .response(status: 400, body: invalidParameter),
             ok(#"{"Result":{"AccessToken":"jwt-intl","RefreshToken":"refresh-intl","ExpiresAt":1790801493}}"#),
         ])
         let exchanged = try await exchange(.international, client)
@@ -260,7 +268,7 @@ struct TraeSignInTests {
         (TraeSite.china, "Trae"), (TraeSite.international, "Trae CN"),
     ])
     func otherBuild(site: TraeSite, other: String) async {
-        let client = QueuedHTTPClient([ok(invalidRefreshToken)])
+        let client = QueuedHTTPClient([.response(status: 401, body: invalidRefreshToken)])
         await #expect(throws: OAuthLoginError.denied(
             "this account belongs to the other Trae build; sign in to \(other) instead"
         )) {
@@ -270,8 +278,10 @@ struct TraeSignInTests {
 
     @Test("A refusal is read from the envelope and said in the gate's words")
     func refused() async {
-        let client = QueuedHTTPClient([ok(#"{"Code":10101,"Message":"invalid parameter"}"#)])
-        await #expect(throws: OAuthLoginError.denied("Trae CN: https://api.trae.cn: invalid parameter")) {
+        let client = QueuedHTTPClient([.response(status: 400, body: invalidParameter)])
+        await #expect(throws: OAuthLoginError.denied(
+            "Trae CN: https://api.trae.cn: 无效参数：{__Message.field}. (10101)"
+        )) {
             _ = try await exchange(.china, client)
         }
     }
@@ -419,6 +429,13 @@ struct TraeRenewalTests {
         #expect(client.requests[0].url.host == "api.trae.cn")
         #expect(renewed.refresh == "refresh-old")
         #expect(renewed.expires == .max)
+
+        // The international chat gate answers a renewal 404; its account
+        // gates take it.
+        let abroad = QueuedHTTPClient([ok(#"{"Result":{"Token":"jwt-new"}}"#)])
+        _ = try await TraeOAuthProvider(site: .international).refresh(credentials, using: abroad)
+        #expect(abroad.requests[0].url.absoluteString
+            == "https://grow-normal.trae.ai/cloudide/api/v3/trae/oauth/ExchangeToken")
     }
 
     @Test("A refresh token the gate no longer takes ends the login; any other refusal may pass")
@@ -431,9 +448,12 @@ struct TraeRenewalTests {
                 return (error as? OAuthRefreshError)?.kind
             }
         }
+        #expect(await kind(.response(status: 401, body: invalidRefreshToken)) == .rejected)
+        // The same code under a 200 ends the login too; another does not.
         #expect(await kind(ok(invalidRefreshToken)) == .rejected)
-        #expect(await kind(.response(status: 401, body: "{}")) == .rejected)
         #expect(await kind(ok(#"{"Code":10000,"Message":"busy"}"#)) == .unavailable)
+        // A gate that serves no renewal, as the international chat gate.
+        #expect(await kind(.response(status: 404, body: "<html>")) == .unavailable)
         #expect(await kind(ok("{}")) == .unavailable)
         #expect(await kind(ok("<html>")) == .unavailable)
         #expect(await kind(.response(status: 503, body: "")) == .unavailable)
