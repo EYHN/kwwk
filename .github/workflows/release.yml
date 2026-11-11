@@ -34,7 +34,12 @@ jobs:
     # The prebuilt static Linux CLI attached to the release; see
     # Scripts/build-linux-static.sh.
     runs-on: ubuntu-latest
-    container: swift:latest
+    container:
+      image: swift:latest
+      # The runner's own resolver stopped answering inside a job's
+      # container network on 2026-11-11 (apt could not resolve
+      # archive.ubuntu.com), so the container names its resolvers.
+      options: --dns 1.1.1.1 --dns 8.8.8.8
     steps:
       - uses: actions/checkout@v5
       - name: install curl and file (SDK download, static-link check)
