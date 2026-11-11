@@ -33,6 +33,35 @@ struct FallbackRunCostTests {
         )
         #expect(await recorder.cost == usage.cost)
     }
+
+    @Test func sumsProviderBilledTurnCosts() async throws {
+        let model = Model(id: "deepseek/deepseek-v4.1-flash", api: "openai-completions", provider: "openrouter",
+                          cost: ModelCost(input: 0.006, output: 0.5, cacheRead: 0.005, cacheWrite: 0))
+        var usage = Usage(input: 100_000, output: 2_000, totalTokens: 102_000)
+        usage.cost = Cost(input: 0.03, output: 0.01, total: 0.04, billed: true)
+        let message = AssistantMessage(
+            content: [.text(TextContent(text: "done"))],
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: usage
+        )
+        let recorder = FallbackCostRecorder()
+        try await AgentLoop.run(
+            prompts: [.user(UserMessage(text: "hello"))],
+            context: AgentContext(systemPrompt: "", messages: [], tools: []),
+            config: AgentLoopConfig(model: model),
+            emit: { await recorder.record($0) },
+            cancellation: nil,
+            streamFn: { _, _, _ in
+                let stream = AssistantMessageStream()
+                stream.push(.done(reason: .stop, message: message))
+                stream.end(message)
+                return stream
+            }
+        )
+        #expect(await recorder.cost?.total == 0.04)
+    }
 }
 
 private actor FallbackCostRecorder {
