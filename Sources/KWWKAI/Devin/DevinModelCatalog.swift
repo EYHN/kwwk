@@ -22,25 +22,15 @@ public enum DevinModels {
 
     /// Wire uids whose configs advertise `supports_images` while the backend
     /// silently drops `ChatMessagePrompt.images` (verified by oh-my-pi).
+    /// SWE-1.6 Fast is retired from Devin's catalog but stays here for a
+    /// Cascade host that still lists it.
     static let imageBlindUids: Set<String> = ["swe-1-6", "swe-1-6-fast"]
 
-    /// Curated seed — both SWE-1.6 lanes, verified live by oh-my-pi. Always
+    /// Curated seed — SWE-1.6, verified live by oh-my-pi (SWE-1.6 Fast is
+    /// retired: absent from `GetCliModelConfigs` since October). Always
     /// present in the generated catalog so the default model resolves even
     /// when discovery returns a reduced roster.
     public static let seedModels: [Model] = [
-        Model(
-            id: "swe-1-6-fast",
-            name: "SWE-1.6 Fast",
-            api: "devin-agent",
-            provider: "devin",
-            baseURL: DevinWire.defaultBaseURL,
-            reasoning: true,
-            input: [.text],
-            cost: ModelCost(input: 0.3, output: 1.5, cacheRead: 0.03, cacheWrite: 0),
-            contextWindow: 200_000,
-            maxTokens: 128_000,
-            compat: parallelToolsCompat()
-        ),
         Model(
             id: "swe-1-6",
             name: "SWE-1.6",
