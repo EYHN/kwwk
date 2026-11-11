@@ -2589,12 +2589,16 @@ private func salvagedSubagentSummary(
     let assistants = messages.compactMap { message -> AssistantMessage? in
         if case .assistant(let assistant) = message { return assistant }; return nil
     }
-    if assistants.contains(where: { $0.responseModel != nil && $0.responseModel != $0.model }) {
+    // Fallback-model prices and provider-billed costs (OpenRouter) live on the turn.
+    func turnPriced(_ a: AssistantMessage) -> Bool {
+        (a.responseModel != nil && a.responseModel != a.model) || a.usage.cost.billed == true
+    }
+    if assistants.contains(where: turnPriced) {
         // A completed run summary already contains per-attempt provider prices.
         // If the run failed before emitting it, recover those costs from history.
         if summary == nil {
             salvaged.cost = assistants.reduce(into: Cost()) { total, assistant in
-                let cost = assistant.responseModel != nil && assistant.responseModel != assistant.model
+                let cost = turnPriced(assistant)
                     ? assistant.usage.cost : calculateCost(model: model, usage: assistant.usage)
                 total.input += cost.input
                 total.output += cost.output

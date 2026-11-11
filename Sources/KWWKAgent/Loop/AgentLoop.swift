@@ -194,7 +194,9 @@ public enum AgentLoop {
             return s
         }
         func accumulate(_ assistant: AssistantMessage) {
-            let servedChanged = assistant.responseModel != nil && assistant.responseModel != assistant.model
+            // A fallback model's price or a provider-billed cost only lives on the turn.
+            let servedChanged = (assistant.responseModel != nil && assistant.responseModel != assistant.model)
+                || assistant.usage.cost.billed == true
             hasServedModelChange = hasServedModelChange || servedChanged
             let cost = servedChanged ? assistant.usage.cost : calculateCost(model: config.model, usage: assistant.usage)
             perTurnCost.input += cost.input

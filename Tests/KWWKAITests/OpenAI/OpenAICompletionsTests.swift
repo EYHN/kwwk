@@ -684,6 +684,45 @@ struct OpenAICompletionsTests {
         #expect(r.usage.totalTokens == 120)
     }
 
+    static let billedSSE = """
+    data: {"id":"c","choices":[{"index":0,"delta":{"content":"hi"}}]}
+
+    data: {"id":"c","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":200,"prompt_tokens_details":{"cached_tokens":400},"cost":0.0123,"cost_details":{"upstream_inference_cost":null}}}
+
+    data: [DONE]
+
+    """
+
+    @Test("OpenRouter turns cost what usage.cost billed, split in catalog proportions")
+    func openRouterBilledCost() async throws {
+        var model = Self.model
+        model.provider = "openrouter"
+        model.baseURL = "https://openrouter.ai/api/v1"
+        model.cost = ModelCost(input: 1, output: 4, cacheRead: 0.5, cacheWrite: 0)
+        let client = StubSSEClient(body: Self.billedSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let r = await provider.stream(model: model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil).result()
+        let estimate = calculateCost(model: model, usage: r.usage)
+        #expect(r.usage.cost.total == 0.0123)
+        #expect(r.usage.cost.billed == true)
+        let parts = r.usage.cost.input + r.usage.cost.output + r.usage.cost.cacheRead + r.usage.cost.cacheWrite
+        #expect(abs(parts - 0.0123) < 1e-12)
+        #expect(abs(r.usage.cost.output / r.usage.cost.input - estimate.output / estimate.input) < 1e-9)
+    }
+
+    @Test("other providers ignore usage.cost and keep catalog pricing")
+    func nonOpenRouterIgnoresBilledCost() async throws {
+        var model = Self.model
+        model.cost = ModelCost(input: 1, output: 4, cacheRead: 0.5, cacheWrite: 0)
+        let client = StubSSEClient(body: Self.billedSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "sk-test")
+        let r = await provider.stream(model: model,
+            context: Context(messages: [.user(UserMessage(text: "x"))]), options: nil).result()
+        #expect(r.usage.cost == calculateCost(model: model, usage: r.usage))
+        #expect(r.usage.cost.billed == nil)
+    }
+
     @Test("falls back to choice.usage when chunk.usage absent (Moonshot)")
     func choiceUsageFallback() async throws {
         let sse = """

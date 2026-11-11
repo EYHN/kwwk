@@ -209,6 +209,28 @@ final class OpenAICompletionsState: @unchecked Sendable {
         usage.reasoning = reasoning
         usage.totalTokens = input + output + cacheRead + cacheWrite
         usage.cost = calculateCost(model: model, usage: usage)
+        // OpenRouter bills whichever upstream it routed to, often above the
+        // catalog's cheapest-provider price, and reports the charge in USD as
+        // `usage.cost` on every response. Use it, split across the parts in
+        // the catalog's proportions.
+        let isOpenRouter = provider == "openrouter" || model.baseURL.lowercased().contains("openrouter.ai")
+        let billed: Double? = switch obj["cost"] {
+        case .double(let d)?: d
+        case .int(let n)?: Double(n)
+        default: nil
+        }
+        if isOpenRouter, let billed {
+            let estimate = usage.cost
+            let scale = estimate.total > 0 ? billed / estimate.total : 0
+            usage.cost = Cost(
+                input: estimate.input * scale,
+                output: estimate.output * scale,
+                cacheRead: estimate.cacheRead * scale,
+                cacheWrite: estimate.cacheWrite * scale,
+                total: billed,
+                billed: true
+            )
+        }
     }
 
     /// Streaming snapshot. In-progress tool calls use an empty-object

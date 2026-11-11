@@ -201,18 +201,24 @@ public struct Cost: Codable, Sendable, Hashable {
     public var cacheRead: Double
     public var cacheWrite: Double
     public var total: Double
+    /// True when `total` is what the provider billed (OpenRouter's
+    /// `usage.cost`) rather than a catalog estimate, so run totals add it up
+    /// per turn instead of re-pricing the summed usage from the catalog.
+    public var billed: Bool?
     public init(
         input: Double = 0,
         output: Double = 0,
         cacheRead: Double = 0,
         cacheWrite: Double = 0,
-        total: Double = 0
+        total: Double = 0,
+        billed: Bool? = nil
     ) {
         self.input = input
         self.output = output
         self.cacheRead = cacheRead
         self.cacheWrite = cacheWrite
         self.total = total
+        self.billed = billed
     }
 }
 
