@@ -26,10 +26,12 @@ public enum DevinWire {
 
     /// Released Devin CLI identity. The backend gates behavior on this tuple:
     /// `ideType: "chisel"` unlocks router assignment and the CLI model
-    /// surface. Bump alongside oh-my-pi if the backend starts rejecting it.
+    /// surface. Bump alongside oh-my-pi if the backend starts rejecting it;
+    /// the current release is `version` in
+    /// https://static.devin.ai/cli/current/manifest.json.
     static let cliIdeName = "devin-cli"
     static let cliIdeType = "chisel"
-    static let cliVersion = "3000.11.3"
+    static let cliVersion = "3000.12.43"
     static let cliExtensionName = "chisel"
 
     /// Connect client identity the native CLI sends on the chat stream.
