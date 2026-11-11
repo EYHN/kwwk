@@ -24,6 +24,16 @@ public enum Truncate {
         public var maxBytes: Int
     }
 
+    /// Splits on the "\n" byte, keeping a "\r" with its line. A Character
+    /// split would not: Swift reads "\r\n" as one grapheme, so a CRLF text
+    /// came back as a single line (a CRLF file over the byte budget read as
+    /// "line 1 exceeds limit"). 0x0A never occurs inside a multi-byte
+    /// sequence, so every piece decodes as it does in the whole text.
+    static func splitLines(_ content: String) -> [String] {
+        content.utf8.split(separator: 0x0A, omittingEmptySubsequences: false)
+            .map { String(decoding: $0, as: UTF8.self) }
+    }
+
     public static func formatSize(_ bytes: Int) -> String {
         if bytes < 1024 { return "\(bytes)B" }
         if bytes < 1024 * 1024 {
@@ -40,7 +50,7 @@ public enum Truncate {
         maxBytes: Int = defaultMaxBytes
     ) -> Result {
         let totalBytes = content.utf8.count
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let lines = splitLines(content)
         let totalLines = lines.count
 
         if totalLines <= maxLines && totalBytes <= maxBytes {
@@ -120,9 +130,12 @@ public enum Truncate {
         let totalBytes = content.utf8.count
         // A trailing newline terminates the last line — it does not start an
         // empty one. Without this, `seq 1 3` counts 4 lines and the kept tail
-        // ends in "" instead of "3".
-        let body = content.hasSuffix("\n") ? String(content.dropLast()) : content
-        let lines = body.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // ends in "" instead of "3". Checked on the byte: a text ending in
+        // "\r\n" ends in that one Character, which is not "\n".
+        let body = content.utf8.last == 0x0A
+            ? String(decoding: content.utf8.dropLast(), as: UTF8.self)
+            : content
+        let lines = splitLines(body)
         let totalLines = lines.count
 
         if totalLines <= maxLines && totalBytes <= maxBytes {
