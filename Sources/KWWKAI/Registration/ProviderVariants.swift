@@ -170,10 +170,10 @@ public enum ProviderVariants {
     /// Claude Code CLI version advertised on the OAuth identity headers. The
     /// subscription endpoint stamps requests as Claude Code via `user-agent`
     /// and `x-app`, plus a `claude-code-20250219` beta prefix.
-    /// Matches pi's Anthropic provider and the npm latest (2026-11-10).
+    /// Matches the npm latest (2026-11-12).
     /// Older versions are rejected with claude_code_version_too_old (5.2 needs
     /// 2.1.290 or newer).
-    public static let claudeCodeVersion = "2.1.322"
+    public static let claudeCodeVersion = "2.1.323"
 
     public static func anthropicOAuth(
         accessToken: String? = nil,
