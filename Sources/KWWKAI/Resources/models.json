@@ -22267,47 +22267,6 @@
         "minimal" : null
       }
     },
-    "google\/diffusiongemma-26b-a4b-it" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false
-      },
-      "contextWindow" : 250000,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "headers" : {
-        "NVCF-POLL-SECONDS" : "3600"
-      },
-      "id" : "google\/diffusiongemma-26b-a4b-it",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 32768,
-      "name" : "DiffusionGemma 26B A4B IT",
-      "provider" : "nvidia",
-      "reasoning" : true
-    },
     "google\/gemma-3-4b-it" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
@@ -30363,10 +30322,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0050000000000000001,
+        "cacheRead" : 0.0040000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.0060000000000000001,
-        "output" : 0.5
+        "input" : 0.021999999999999999,
+        "output" : 0.4
       },
       "id" : "~deepseek\/deepseek-flash-latest",
       "input" : [
@@ -32812,96 +32771,6 @@
         "xhigh" : null
       }
     },
-    "bytedance-seed\/seed-1.6" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.25,
-        "output" : 2,
-        "tiers" : [
-          {
-            "cacheRead" : 0,
-            "cacheWrite" : 0,
-            "input" : 0.5,
-            "inputTokensAbove" : 128000,
-            "output" : 4
-          }
-        ]
-      },
-      "id" : "bytedance-seed\/seed-1.6",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 32768,
-      "name" : "ByteDance Seed: Seed 1.6",
-      "provider" : "openrouter",
-      "reasoning" : true
-    },
-    "bytedance-seed\/seed-1.6-flash" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.074999999999999997,
-        "output" : 0.3,
-        "tiers" : [
-          {
-            "cacheRead" : 0,
-            "cacheWrite" : 0,
-            "input" : 0.1,
-            "inputTokensAbove" : 128000,
-            "output" : 0.8
-          }
-        ]
-      },
-      "id" : "bytedance-seed\/seed-1.6-flash",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 32768,
-      "name" : "ByteDance Seed: Seed 1.6 Flash",
-      "provider" : "openrouter",
-      "reasoning" : true
-    },
     "bytedance-seed\/seed-2-1-turbo" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -32937,60 +32806,6 @@
       "name" : "ByteDance Seed: Seed 2.1 Turbo",
       "provider" : "openrouter",
       "reasoning" : true
-    },
-    "bytedance-seed\/seed-2.0-code" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
-      "compat" : {
-        "sendSessionAffinityHeaders" : true,
-        "supportsDeveloperRole" : false,
-        "supportsStrictMode" : true,
-        "thinkingFormat" : "openrouter"
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.5,
-        "output" : 3,
-        "tiers" : [
-          {
-            "cacheRead" : 0,
-            "cacheWrite" : 0,
-            "input" : 1,
-            "inputTokensAbove" : 128000,
-            "output" : 6
-          }
-        ]
-      },
-      "id" : "bytedance-seed\/seed-2.0-code",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 131072,
-      "name" : "ByteDance Seed: Seed-2.0-Code",
-      "provider" : "openrouter",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : null,
-        "medium" : "medium",
-        "minimal" : null,
-        "off" : "none",
-        "xhigh" : null
-      }
     },
     "bytedance-seed\/seed-2.0-lite" : {
       "api" : "openai-completions",
@@ -33672,10 +33487,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.017999999999999999,
+        "cacheRead" : 0.0040000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.050999999999999997,
-        "output" : 0.5669999999999999
+        "input" : 0.021999999999999999,
+        "output" : 0.4
       },
       "id" : "deepseek\/deepseek-v4.1-flash",
       "input" : [
@@ -33718,10 +33533,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0050000000000000001,
+        "cacheRead" : 0.0060000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.0060000000000000001,
-        "output" : 0.5
+        "input" : 0.3,
+        "output" : 1.2
       },
       "id" : "deepseek\/deepseek-v4.1-flash-1017",
       "input" : [
@@ -33738,7 +33553,7 @@
           }
         }
       },
-      "maxTokens" : 943718,
+      "maxTokens" : 393216,
       "name" : "DeepSeek: DeepSeek V4.1 Flash 1017",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -35280,7 +35095,7 @@
         "cacheRead" : 0.040000000000000001,
         "cacheWrite" : 0,
         "input" : 0.080000000000000002,
-        "output" : 0.45
+        "output" : 0.35
       },
       "id" : "google\/gemma-3-27b-it",
       "input" : [
@@ -35460,7 +35275,7 @@
         "cacheRead" : 0.014999999999999999,
         "cacheWrite" : 0,
         "input" : 0.059999999999999998,
-        "output" : 0.25
+        "output" : 0.15
       },
       "id" : "ibm-granite\/granite-4.2-8b",
       "input" : [
@@ -36337,18 +36152,18 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 65536,
+      "contextWindow" : 200000,
       "cost" : {
-        "cacheRead" : 0.059999999999999998,
+        "cacheRead" : 0.027,
         "cacheWrite" : 0,
-        "input" : 0.3,
-        "output" : 1.2
+        "input" : 0.27,
+        "output" : 1.08
       },
       "id" : "minimax\/minimax-m2.5",
       "input" : [
         "text"
       ],
-      "maxTokens" : 58982,
+      "maxTokens" : 128000,
       "name" : "MiniMax: MiniMax M2.5",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -37462,8 +37277,8 @@
       "cost" : {
         "cacheRead" : 0.2,
         "cacheWrite" : 0,
-        "input" : 2,
-        "output" : 10
+        "input" : 0.2375,
+        "output" : 8.4085
       },
       "id" : "moonshotai\/kimi-k3.1-pro",
       "input" : [
@@ -40168,17 +39983,17 @@
       },
       "contextWindow" : 1050000,
       "cost" : {
-        "cacheRead" : 0.4,
-        "cacheWrite" : 5,
-        "input" : 4,
-        "output" : 20,
+        "cacheRead" : 0.44,
+        "cacheWrite" : 5.5,
+        "input" : 4.4,
+        "output" : 22,
         "tiers" : [
           {
-            "cacheRead" : 0.8,
-            "cacheWrite" : 10,
-            "input" : 8,
+            "cacheRead" : 0.88,
+            "cacheWrite" : 11,
+            "input" : 8.800000000000001,
             "inputTokensAbove" : 272000,
-            "output" : 30
+            "output" : 33
           }
         ]
       },
@@ -42945,10 +42760,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.035999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.17,
-        "output" : 0.25
+        "input" : 0.040000000000000001,
+        "output" : 0.058999999999999997
       },
       "id" : "qwen\/qwen3.5-9b",
       "input" : [
@@ -42965,7 +42780,7 @@
           }
         }
       },
-      "maxTokens" : 235929,
+      "maxTokens" : 40960,
       "name" : "Qwen: Qwen3.5-9B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -44790,6 +44605,42 @@
       "provider" : "openrouter",
       "reasoning" : false
     },
+    "unbiased\/pareto-26.10-preview" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.029999999999999999,
+        "cacheWrite" : 0,
+        "input" : 0.8,
+        "output" : 3.2
+      },
+      "id" : "unbiased\/pareto-26.10-preview",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 131072,
+      "name" : "Pareto 26.10 Preview",
+      "provider" : "openrouter",
+      "reasoning" : false
+    },
     "upstage\/solar-mini4" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -45754,12 +45605,12 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 202745,
+      "contextWindow" : 202752,
       "cost" : {
-        "cacheRead" : 0.247,
+        "cacheRead" : 0.26,
         "cacheWrite" : 0,
-        "input" : 1.33,
-        "output" : 4.18
+        "input" : 1.4,
+        "output" : 4.4
       },
       "id" : "z-ai\/glm-5.1",
       "input" : [
@@ -45815,9 +45666,9 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.178,
+        "cacheRead" : 0.118,
         "cacheWrite" : 0,
-        "input" : 0.527,
+        "input" : 0.35,
         "output" : 1.075
       },
       "id" : "z-ai\/glm-5.2:batch",
@@ -45928,10 +45779,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.02,
+        "cacheRead" : 0.01,
         "cacheWrite" : 0,
-        "input" : 0.047,
-        "output" : 0.060999999999999999
+        "input" : 0.050000000000000003,
+        "output" : 0.18
       },
       "id" : "z-ai\/glm-5.3-flash:batch",
       "input" : [
@@ -45948,7 +45799,7 @@
           }
         }
       },
-      "maxTokens" : 943718,
+      "maxTokens" : 131072,
       "name" : "Z.ai: GLM 5.3 Flash (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -46097,16 +45948,16 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.1,
+        "cacheRead" : 0.118,
         "cacheWrite" : 0,
-        "input" : 0.45,
-        "output" : 2
+        "input" : 0.35,
+        "output" : 1.075
       },
       "id" : "z-ai\/glm-5.3:batch",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 943718,
       "name" : "Z.ai: GLM 5.3 (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
