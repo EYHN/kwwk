@@ -579,5 +579,11 @@
         "serviceTiers": ["priority"]
       }
     }
+  },
+  "mistral": {
+    "$note": "Mistral's own models page says its DeepSeek V4.1 Flash takes text and image inputs; models.dev, and so pi-mono, lists it text-only (2026-11-12, after magpie da5d54e). Only Mistral's row: the same model at another vendor keeps that vendor's input list.",
+    "deepseek-v4-1-flash-1017": {
+      "input": ["text", "image"]
+    }
   }
 }

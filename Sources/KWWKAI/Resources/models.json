@@ -20701,7 +20701,8 @@
       },
       "id" : "deepseek-v4-1-flash-1017",
       "input" : [
-        "text"
+        "text",
+        "image"
       ],
       "maxTokens" : 128000,
       "name" : "DeepSeek V4.1 Flash 1017",

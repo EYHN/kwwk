@@ -10,6 +10,10 @@ import Foundation
 /// Reasoning: Mistral's REST chat endpoint does not accept `reasoning_effort`
 /// (magistral models reason automatically), so the hint is stripped before
 /// delegating to avoid hard 400s.
+///
+/// Images: Mistral refuses a request with more than 20 images (400 "Total
+/// number of images exceeds the maximum allowed of 20."), so the oldest
+/// images past the newest 20 are replaced by a short text before encoding.
 public final class MistralConversationsProvider: APIProvider, @unchecked Sendable {
     public let api: String
     private let inner: OpenAICompletionsProvider
@@ -30,10 +34,70 @@ public final class MistralConversationsProvider: APIProvider, @unchecked Sendabl
 
     public func stream(model: Model, context: Context, options: StreamOptions?) -> AssistantMessageStream {
         var newContext = context
-        newContext.messages = Self.normalizeToolIds(TranscriptTools.withoutSystemMessages(context.messages))
+        newContext.messages = Self.limitImages(
+            Self.normalizeToolIds(TranscriptTools.withoutSystemMessages(context.messages)),
+            countToolResultImages: model.input.contains(.image)
+        )
         var opts = options
         opts?.reasoning = nil
         return inner.stream(model: model, context: newContext, options: opts)
+    }
+
+    // MARK: - Image limit
+
+    /// The most images Mistral takes in one request; past it the API answers
+    /// 400 "Total number of images exceeds the maximum allowed of 20."
+    /// (ported from magpie 8d5bcf1).
+    static let maxImages = 20
+
+    /// The text that stands where an image was left out.
+    static let imageLeftOutText = "[An earlier image is left out of this request.]"
+
+    /// Keep at most `maxImages` images, the newest ones: each older image is
+    /// replaced in place by `imageLeftOutText`, so the turns around it stay.
+    /// A transcript within the limit comes back unchanged. Tool-result images
+    /// count only when `countToolResultImages` is set, since the chat encoder
+    /// forwards them only for a model that takes images.
+    static func limitImages(
+        _ messages: [Message],
+        max: Int = maxImages,
+        countToolResultImages: Bool = true
+    ) -> [Message] {
+        var total = 0
+        for message in messages {
+            switch message {
+            case .user(let u):
+                total += u.content.filter { if case .image = $0 { return true }; return false }.count
+            case .toolResult(let tr) where countToolResultImages:
+                total += tr.content.filter { if case .image = $0 { return true }; return false }.count
+            default:
+                break
+            }
+        }
+        guard total > max else { return messages }
+        var toDrop = total - max
+        let placeholder = TextContent(text: imageLeftOutText)
+        return messages.map { message in
+            guard toDrop > 0 else { return message }
+            switch message {
+            case .user(var u):
+                u.content = u.content.map { block in
+                    guard toDrop > 0, case .image = block else { return block }
+                    toDrop -= 1
+                    return .text(placeholder)
+                }
+                return .user(u)
+            case .toolResult(var tr) where countToolResultImages:
+                tr.content = tr.content.map { block in
+                    guard toDrop > 0, case .image = block else { return block }
+                    toDrop -= 1
+                    return .text(placeholder)
+                }
+                return .toolResult(tr)
+            default:
+                return message
+            }
+        }
     }
 
     // MARK: - Tool-call id normalization
