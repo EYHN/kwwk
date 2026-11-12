@@ -182,7 +182,7 @@ public final class MCPOAuthAdapter: MCPAuthProvider, @unchecked Sendable {
         provider: any MCPOAuthClientProvider,
         serverURL: URL? = nil,
         interactive: Bool = true,
-        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient()
+        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient.shared
     ) {
         self.init(
             provider: provider,

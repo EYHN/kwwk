@@ -37,7 +37,7 @@ public struct MCPOAuthOptions: Sendable {
         forceReauthorization: Bool = false,
         skipIssuerMetadataValidation: Bool = false,
         interactive: Bool = true,
-        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient()
+        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient.shared
     ) {
         self.serverURL = serverURL
         self.authorizationCode = authorizationCode
@@ -353,7 +353,7 @@ public enum MCPOAuth {
         callbackParameters: [String: String],
         scope: String? = nil,
         resourceMetadataURL: URL? = nil,
-        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient()
+        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient.shared
     ) async throws {
         let iss = callbackParameters["iss"]
         guard let code = callbackParameters["code"], !code.isEmpty else {

@@ -259,7 +259,7 @@ final class CLIMCPOAuthProvider: MCPOAuthClientRegistrationStore, MCPOAuthDiscov
     /// switches accounts), check `state`, and exchange the code.
     func login(
         openBrowser: Bool = true,
-        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient(),
+        httpClient: any MCPAuthHTTPClient = URLSessionMCPAuthHTTPClient.shared,
         timeoutSeconds: Double = 300
     ) async throws {
         let callback = try OAuthCallbackServer(port: callbackPort, path: "/callback")

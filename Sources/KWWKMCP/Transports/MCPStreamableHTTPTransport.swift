@@ -56,7 +56,7 @@ public final class MCPStreamableHTTPTransport: MCPTransport, Sendable {
     /// - Parameters:
     ///   - headers: Extra request headers. A token from `auth` replaces any
     ///     `Authorization` header here.
-    ///   - httpClient: Injected for tests; defaults to a fresh URLSession client.
+    ///   - httpClient: Injected for tests; defaults to the shared URLSession client.
     ///   - requestTimeoutSeconds: Idle timeout of each POST.
     ///   - auth: How to authenticate; nil sends `headers` only.
     ///   - authHTTPClient: Client of the OAuth requests (discovery, tokens).
@@ -72,10 +72,10 @@ public final class MCPStreamableHTTPTransport: MCPTransport, Sendable {
     ) {
         self.url = url
         self.headers = headers
-        self.httpClient = httpClient ?? URLSessionHTTPClient()
+        self.httpClient = httpClient ?? URLSessionHTTPClient.shared
         self.requestTimeoutSeconds = requestTimeoutSeconds
         self.auth = auth
-        let authHTTP = authHTTPClient ?? URLSessionMCPAuthHTTPClient()
+        let authHTTP = authHTTPClient ?? URLSessionMCPAuthHTTPClient.shared
         self.authHTTPClient = authHTTP
         switch auth {
         case .provider(let provider):
