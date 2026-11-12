@@ -23,6 +23,7 @@ public final class SubagentHistoryStore: Sendable {
         var snapshot: SubagentHistorySnapshot
         var awaitingTaskId: Bool
         var modelOverride: String?
+        var thinkingLevelOverride: ThinkingLevel?
         var live: SubagentLiveChild?
         var pendingSteers: [String] = []
         /// The run that owns the entry right now. Calls carrying another
@@ -175,6 +176,7 @@ public final class SubagentHistoryStore: Sendable {
         prompt: String,
         model: String,
         modelOverride: String? = nil,
+        thinkingLevelOverride: ThinkingLevel? = nil,
         status: SubagentHistoryStatus = .running,
         awaitingTaskId: Bool? = nil,
         runToken: UUID? = nil,
@@ -228,6 +230,7 @@ public final class SubagentHistoryStore: Sendable {
                 ),
                 awaitingTaskId: awaitingTaskId ?? false,
                 modelOverride: modelOverride,
+                thinkingLevelOverride: thinkingLevelOverride,
                 runToken: runToken
             )
             state.childSessionIds.append(childSessionId)
@@ -366,6 +369,7 @@ public final class SubagentHistoryStore: Sendable {
                 subagentType: entry.snapshot.subagentType,
                 description: entry.snapshot.description,
                 modelOverride: entry.modelOverride,
+                thinkingLevelOverride: entry.thinkingLevelOverride,
                 messages: entry.snapshot.messages,
                 previousStatus: previousStatus,
                 carriedMessages: carried,

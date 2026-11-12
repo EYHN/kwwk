@@ -405,6 +405,7 @@ internal final class SubagentToolContext: @unchecked Sendable {
         launch: SubagentLaunchInfo,
         prompt: String,
         modelOverride: String?,
+        thinkingLevelOverride: ThinkingLevel?,
         childSessionId: String,
         resumeMessages: [Message]? = nil
     ) -> SubagentInvocationRunner {
@@ -414,6 +415,7 @@ internal final class SubagentToolContext: @unchecked Sendable {
             launch: launch,
             taskPrompt: prompt,
             modelOverride: modelOverride,
+            thinkingLevelOverride: thinkingLevelOverride,
             resumeMessages: resumeMessages,
             parentSnapshot: parentSnapshot,
             limiter: limiter,
@@ -512,6 +514,11 @@ internal func _createAgentTool(context: SubagentToolContext) -> AgentTool {
                 "type": .string("string"),
                 "description": .string("Optional model id override. Omit to use the subagent definition's model or inherit the parent model."),
             ]),
+            "thinking_level": .object([
+                "type": .string("string"),
+                "enum": .array(subagentThinkingLevelNames.map { .string($0) }),
+                "description": .string("Optional reasoning effort for this subagent. Omit to inherit your own level. Use lower for mechanical lookups, higher for hard reasoning; models without that level use the nearest one they support."),
+            ]),
             "timeout": context.timeoutParameter,
             "run_in_background": .object([
                 "type": .string("boolean"),
@@ -556,6 +563,7 @@ internal func _createAgentTool(context: SubagentToolContext) -> AgentTool {
                 launch: launch,
                 prompt: input.prompt,
                 modelOverride: input.modelOverride,
+                thinkingLevelOverride: input.thinkingLevelOverride,
                 childSessionId: makeSubagentSessionId(parent: context.sessionId, name: definition.name)
             )
             do {
@@ -674,6 +682,7 @@ internal func _createAgentSendTool(context: SubagentToolContext) -> AgentTool {
                         (ticket.carriedMessages + [input.message]).joined(separator: "\n\n")
                     ),
                     modelOverride: ticket.modelOverride,
+                    thinkingLevelOverride: ticket.thinkingLevelOverride,
                     childSessionId: ticket.childSessionId,
                     resumeMessages: resumableSubagentMessages(ticket.messages)
                 )
@@ -1161,6 +1170,7 @@ private struct AgentToolInput {
     var subagentType: String
     var name: String?
     var modelOverride: String?
+    var thinkingLevelOverride: ThinkingLevel?
     var runInBackground: Bool?
     /// Foreground wait, already clamped to `[1, maxForegroundTimeoutSeconds]`.
     var timeoutSeconds: Int
@@ -1174,7 +1184,8 @@ private func parseAgentToolInput(
         throw CodingToolError.invalidArgument("agent: expected object input")
     }
     let allowedKeys: Set<String> = [
-        "description", "prompt", "subagent_type", "name", "model", "run_in_background", "timeout",
+        "description", "prompt", "subagent_type", "name", "model", "thinking_level",
+        "run_in_background", "timeout",
     ]
     if let unknown = obj.keys.filter({ !allowedKeys.contains($0) }).sorted().first {
         throw CodingToolError.invalidArgument("agent: unknown argument `\(unknown)`")
@@ -1209,15 +1220,35 @@ private func parseAgentToolInput(
     let modelOverride = try optionalTrimmedString("model").flatMap { model in
         model.isEmpty ? nil : model
     }
+    let thinkingLevelOverride = try optionalTrimmedString("thinking_level").flatMap { raw in
+        try parseSubagentThinkingLevel(raw)
+    }
     return AgentToolInput(
         description: description,
         prompt: prompt,
         subagentType: subagentType,
         name: name,
         modelOverride: modelOverride,
+        thinkingLevelOverride: thinkingLevelOverride,
         runInBackground: try parseRunInBackground(obj, tool: "agent"),
         timeoutSeconds: try parseForegroundTimeout(obj, limits: limits, tool: "agent")
     )
+}
+
+private let subagentThinkingLevelNames = [
+    ThinkingLevel.off, .minimal, .low, .medium, .high, .xhigh, .max,
+].map(\.rawValue)
+
+/// Blank or `inherit` means no override; anything else must name a level.
+private func parseSubagentThinkingLevel(_ raw: String) throws -> ThinkingLevel? {
+    let value = raw.lowercased()
+    if value.isEmpty || value == "inherit" { return nil }
+    guard let level = ThinkingLevel(rawValue: value) else {
+        throw CodingToolError.invalidArgument(
+            "agent: `thinking_level` must be one of \(subagentThinkingLevelNames.joined(separator: ", ")), or omitted to inherit"
+        )
+    }
+    return level
 }
 
 private struct AgentSendInput {
@@ -1654,6 +1685,7 @@ public struct SubagentRunner: Sendable {
         type: String,
         prompt: String,
         modelOverride: String? = nil,
+        thinkingLevelOverride: ThinkingLevel? = nil,
         cancellation: CancellationHandle? = nil,
         onUpdate: AgentToolUpdate? = nil
     ) async throws -> SubagentResult {
@@ -1662,7 +1694,8 @@ public struct SubagentRunner: Sendable {
             definition: definition,
             prompt: prompt,
             description: "",
-            modelOverride: modelOverride
+            modelOverride: modelOverride,
+            thinkingLevelOverride: thinkingLevelOverride
         )
         do {
             return try await runner.run(cancellation: cancellation, onUpdate: onUpdate)
@@ -1676,7 +1709,8 @@ public struct SubagentRunner: Sendable {
         type: String,
         prompt: String,
         description: String,
-        modelOverride: String? = nil
+        modelOverride: String? = nil,
+        thinkingLevelOverride: ThinkingLevel? = nil
     ) async throws -> StartedSubagentTask {
         guard let backgroundManager else {
             throw CodingToolError.invalidArgument("SubagentRunner.startBackground requires a BackgroundTaskManager")
@@ -1686,7 +1720,8 @@ public struct SubagentRunner: Sendable {
             definition: definition,
             prompt: prompt,
             description: description,
-            modelOverride: modelOverride
+            modelOverride: modelOverride,
+            thinkingLevelOverride: thinkingLevelOverride
         )
         runner = try runner.queuingForCapacity()
         let bgRunner = SubagentBackgroundRunner(
@@ -1723,7 +1758,8 @@ public struct SubagentRunner: Sendable {
         definition: SubagentDefinition,
         prompt: String,
         description: String,
-        modelOverride: String?
+        modelOverride: String?,
+        thinkingLevelOverride: ThinkingLevel?
     ) throws -> SubagentInvocationRunner {
         let agentId = try historyStore.reserveAgentId(
             parentSessionId: parentSessionId,
@@ -1736,6 +1772,7 @@ public struct SubagentRunner: Sendable {
             launch: SubagentLaunchInfo(agentId: agentId, description: description),
             taskPrompt: prompt,
             modelOverride: modelOverride,
+            thinkingLevelOverride: thinkingLevelOverride,
             resumeMessages: nil,
             parentSnapshot: parentSnapshot,
             limiter: limiter,
@@ -1890,6 +1927,8 @@ internal struct SubagentInvocationRunner: Sendable {
     var launch: SubagentLaunchInfo
     var taskPrompt: String
     var modelOverride: String?
+    /// Nil inherits the parent's thinking level.
+    var thinkingLevelOverride: ThinkingLevel?
     /// The transcript a resumed run continues from; nil for a first run.
     var resumeMessages: [Message]?
     var parentSnapshot: @Sendable () -> SubagentParentSnapshot
@@ -1919,6 +1958,7 @@ internal struct SubagentInvocationRunner: Sendable {
         launch: SubagentLaunchInfo,
         taskPrompt: String,
         modelOverride: String?,
+        thinkingLevelOverride: ThinkingLevel? = nil,
         resumeMessages: [Message]?,
         parentSnapshot: @escaping @Sendable () -> SubagentParentSnapshot,
         limiter: SubagentLimiter,
@@ -1942,6 +1982,7 @@ internal struct SubagentInvocationRunner: Sendable {
         self.launch = launch
         self.taskPrompt = taskPrompt
         self.modelOverride = modelOverride
+        self.thinkingLevelOverride = thinkingLevelOverride
         self.resumeMessages = resumeMessages
         self.parentSnapshot = parentSnapshot
         self.limiter = limiter
@@ -1990,6 +2031,7 @@ internal struct SubagentInvocationRunner: Sendable {
             prompt: taskPrompt,
             model: model.id,
             modelOverride: modelOverride,
+            thinkingLevelOverride: thinkingLevelOverride,
             status: .queued,
             awaitingTaskId: true,
             runToken: runToken,
@@ -2039,6 +2081,7 @@ internal struct SubagentInvocationRunner: Sendable {
             prompt: taskPrompt,
             model: model.id,
             modelOverride: modelOverride,
+            thinkingLevelOverride: thinkingLevelOverride,
             runToken: runToken,
             firstMessageIndex: resumeMessages?.count
         )
@@ -2175,7 +2218,7 @@ internal struct SubagentInvocationRunner: Sendable {
             initialState: AgentInitialState(
                 systemPrompt: systemPrompt,
                 model: model,
-                thinkingLevel: parent.thinkingLevel,
+                thinkingLevel: thinkingLevelOverride ?? parent.thinkingLevel,
                 tools: tools,
                 messages: resumeMessages ?? []
             ),

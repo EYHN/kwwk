@@ -160,6 +160,7 @@ struct SubagentResumeTicket: Sendable {
     var subagentType: String
     var description: String
     var modelOverride: String?
+    var thinkingLevelOverride: ThinkingLevel?
     var messages: [Message]
     var previousStatus: SubagentHistoryStatus
     /// Follow-ups that were queued for a run that never read them; they
