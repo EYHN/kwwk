@@ -385,9 +385,13 @@ public struct ProviderFailure: Error, LocalizedError, Codable, Sendable, Hashabl
                 // Structured transport evidence uses the producer's native
                 // errno constants. Never interpret a legacy text's number as
                 // local errno: Darwin and Linux assign different values.
+                // EPROTO is a broken connection too: macOS 27.3's URLSession
+                // fails a WebSocket with it mid-stream on fragmented
+                // compressed messages; a new connection does not hit it.
                 return [
                     Int(ECONNRESET), Int(ECONNABORTED), Int(ENOTCONN), Int(EPIPE),
-                    Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH)
+                    Int(ETIMEDOUT), Int(ECONNREFUSED), Int(ENETUNREACH), Int(EHOSTUNREACH),
+                    Int(EPROTO)
                 ].contains(code) ? .transport : .invalidRequest
             }
             // Legacy diagnostics can cross platform boundaries. Require a

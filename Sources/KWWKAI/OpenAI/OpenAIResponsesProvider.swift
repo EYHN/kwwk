@@ -42,6 +42,8 @@ public final class OpenAIResponsesProvider:
     /// Request-body fields merged in last (so they override defaults). Use
     /// for vendor quirks like ChatGPT Codex requiring `store: false`.
     public let bodyOverrides: [String: JSONValue]
+    /// WebSocket endpoints that broke mid-response; process-wide by default.
+    public let webSocketEndpoints: OpenAIResponsesWebSocketEndpoints
     private let sessions = OpenAIResponsesSessionStore()
 
     public init(
@@ -55,8 +57,10 @@ public final class OpenAIResponsesProvider:
         urlBuilder: URLBuilder? = nil,
         webSocketURLBuilder: WebSocketURLBuilder? = nil,
         maxWebSocketFailures: Int = 3,
-        authHeaderBuilder: AuthHeaderBuilder? = nil
+        authHeaderBuilder: AuthHeaderBuilder? = nil,
+        webSocketEndpoints: OpenAIResponsesWebSocketEndpoints = .shared
     ) {
+        self.webSocketEndpoints = webSocketEndpoints
         self.api = api
         self.client = client
         self.webSocketClient = webSocketClient
@@ -252,32 +256,48 @@ public final class OpenAIResponsesProvider:
         let seals = Self.seals(in: request.input)
         let holdSealRefusal = holdSealRefusal && !seals.isEmpty
         let transport = options?.transport ?? .auto
+        let wsURL = webSocketURLBuilder(url)
+        let endpointUnusable = webSocketEndpoints.isUnusable(wsURL)
         if transport != .sse,
            let webSocketClient,
-           !session.webSocketDisabled {
-            let wsURL = webSocketURLBuilder(url)
+           !session.webSocketDisabled,
+           !endpointUnusable {
             await options?.emitVerbose(
                 source: "openai.responses.websocket",
                 message: "attempting WebSocket stream",
                 metadata: ["url": .string(wsURL.absoluteString)]
             )
-            let wsResult = await runWebSocket(
-                client: webSocketClient,
-                url: wsURL,
-                request: request,
-                out: out,
-                model: model,
-                options: options,
-                session: session,
-                holdSealRefusal: holdSealRefusal
-            )
+            var wsResult = WebSocketRunResult.retryWebSocket
+            // A socket that broke mid-response before any output is asked
+            // again on a fresh connection until the endpoint's failure budget
+            // is spent; then the turn goes to HTTP.
+            for round in 0..<maxWebSocketFailures {
+                if round > 0 {
+                    await options?.emitVerbose(
+                        source: "openai.responses.websocket",
+                        message: "retrying on a fresh WebSocket connection",
+                        metadata: ["attempt": .int(round + 1)]
+                    )
+                }
+                wsResult = await runWebSocket(
+                    client: webSocketClient,
+                    url: wsURL,
+                    request: request,
+                    out: out,
+                    model: model,
+                    options: options,
+                    session: session,
+                    holdSealRefusal: holdSealRefusal
+                )
+                if wsResult != .retryWebSocket { break }
+            }
             switch wsResult {
             case .completed:
                 return .finished
             case .sealsRefused:
                 session.refuse(seals: seals)
                 return .sealsRefused
-            case .fallbackToHTTP:
+            case .fallbackToHTTP, .retryWebSocket:
                 await options?.emitVerbose(
                     source: "openai.responses.http",
                     message: "falling back to HTTP stream"
@@ -290,6 +310,12 @@ public final class OpenAIResponsesProvider:
             await options?.emitVerbose(
                 source: "openai.responses.websocket",
                 message: "WebSocket disabled after repeated failures; using HTTP"
+            )
+        } else if transport != .sse, webSocketClient != nil, endpointUnusable {
+            await options?.emitVerbose(
+                source: "openai.responses.websocket",
+                message: "WebSocket endpoint failed repeatedly earlier in this process; using HTTP",
+                metadata: ["url": .string(wsURL.absoluteString)]
             )
         }
 
@@ -380,6 +406,8 @@ public final class OpenAIResponsesProvider:
     private enum WebSocketRunResult {
         case completed
         case fallbackToHTTP
+        /// Broke mid-response before any output; ask again over WebSocket.
+        case retryWebSocket
         case failedWithoutFallback
         case sealsRefused
     }
@@ -483,7 +511,7 @@ public final class OpenAIResponsesProvider:
                 Self.finishWebSocketFailure(error, out: out, state: state)
                 return .failedWithoutFallback
             }
-            let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+            let failure = recordWebSocketFailure(session: session, url: url)
             await options?.emitVerbose(
                 source: verboseSource,
                 message: "WebSocket setup failed; falling back to HTTP",
@@ -491,12 +519,13 @@ public final class OpenAIResponsesProvider:
                     "disabled": .bool(failure.disabled),
                     "error": .string(error.displayDescription),
                     "failure_count": .int(failure.count),
+                    "endpoint_failure_count": .int(failure.endpointCount),
                 ]
             )
             return .fallbackToHTTP
         }
         guard let connection else {
-            let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+            let failure = recordWebSocketFailure(session: session, url: url)
             await options?.emitVerbose(
                 source: verboseSource,
                 message: "WebSocket setup failed; falling back to HTTP",
@@ -504,6 +533,7 @@ public final class OpenAIResponsesProvider:
                     "disabled": .bool(failure.disabled),
                     "error": .string("connection was nil"),
                     "failure_count": .int(failure.count),
+                    "endpoint_failure_count": .int(failure.endpointCount),
                 ]
             )
             return .fallbackToHTTP
@@ -524,6 +554,9 @@ public final class OpenAIResponsesProvider:
                 // one is sent as an increment of.
                 session.resetWebSocketState()
                 return .sealsRefused
+            }
+            if result.completed {
+                webSocketEndpoints.recordSuccess(url)
             }
             if result.completed, let responseId = result.message.responseId {
                 session.recordCompletedResponse(
@@ -546,7 +579,7 @@ public final class OpenAIResponsesProvider:
                     Self.finishAborted(out: out, state: state)
                     return .completed
                 }
-                let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+                let failure = recordWebSocketFailure(session: session, url: url)
                 if !progress.hasReceivedEvent {
                     await options?.emitVerbose(
                         source: verboseSource,
@@ -554,6 +587,7 @@ public final class OpenAIResponsesProvider:
                         metadata: [
                             "disabled": .bool(failure.disabled),
                             "failure_count": .int(failure.count),
+                            "endpoint_failure_count": .int(failure.endpointCount),
                         ]
                     )
                     return .fallbackToHTTP
@@ -564,6 +598,7 @@ public final class OpenAIResponsesProvider:
                     metadata: [
                         "disabled": .bool(failure.disabled),
                         "failure_count": .int(failure.count),
+                        "endpoint_failure_count": .int(failure.endpointCount),
                     ]
                 )
                 let err = AssistantMessage.makeError(
@@ -599,7 +634,7 @@ public final class OpenAIResponsesProvider:
                 Self.finishWebSocketFailure(error, out: out, state: state)
                 return .failedWithoutFallback
             }
-            let failure = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+            let failure = recordWebSocketFailure(session: session, url: url)
             if !progress.hasReceivedEvent {
                 await options?.emitVerbose(
                     source: verboseSource,
@@ -608,10 +643,42 @@ public final class OpenAIResponsesProvider:
                         "disabled": .bool(failure.disabled),
                         "error": .string(error.displayDescription),
                         "failure_count": .int(failure.count),
+                        "endpoint_failure_count": .int(failure.endpointCount),
                     ]
                 )
                 return .fallbackToHTTP
             }
+            // The socket broke after the response began. On macOS 27.3
+            // (CFNetwork 3896.300.31) URLSession fails with EPROTO on the
+            // second permessage-deflate message that arrives in fragments, and
+            // a gateway that fragments every event (magpie) breaks every
+            // turn right after `response.created`. The failure counted
+            // against the endpoint above; once its budget is spent the
+            // endpoint is HTTP-only for the rest of the process.
+            if state.snapshot().content.isEmpty {
+                // Only `.start` (an empty partial) has reached `out`: no
+                // text, thinking or tool call. Asking again repeats nothing
+                // the caller has seen, so retry the same request — on a fresh
+                // WebSocket while the budget lasts, then over HTTP. The new
+                // stream opens with its own `.start`.
+                let toHTTP = failure.disabled || failure.endpointUnusable
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: toHTTP
+                        ? "WebSocket failed after response event before any output; retrying over HTTP"
+                        : "WebSocket failed after response event before any output; retrying over WebSocket",
+                    metadata: [
+                        "error": .string(error.displayDescription),
+                        "endpoint_failure_count": .int(failure.endpointCount),
+                        "url": .string(url.absoluteString),
+                    ]
+                )
+                return toHTTP ? .fallbackToHTTP : .retryWebSocket
+            }
+            // Output is already on `out` and cannot be taken back here.
+            // Settle as a retryable transport error: the agent loop rewinds
+            // the partial (`streamRewind`) and asks again — over WebSocket
+            // while the endpoint's budget lasts, over HTTP after.
             await options?.emitVerbose(
                 source: verboseSource,
                 message: "WebSocket failed after response event; returning stream error",
@@ -619,6 +686,7 @@ public final class OpenAIResponsesProvider:
                     "disabled": .bool(failure.disabled),
                     "error": .string(error.displayDescription),
                     "failure_count": .int(failure.count),
+                    "endpoint_failure_count": .int(failure.endpointCount),
                 ]
             )
             let err = AssistantMessage.makeError(
@@ -631,6 +699,18 @@ public final class OpenAIResponsesProvider:
             out.end(err)
             return .failedWithoutFallback
         }
+    }
+
+    /// Counts a WebSocket failure against both the session and the endpoint.
+    private func recordWebSocketFailure(
+        session: OpenAIResponsesSessionState,
+        url: URL
+    ) -> OpenAIResponsesWebSocketFailureStatus {
+        var status = session.recordWebSocketFailure(maxFailures: maxWebSocketFailures)
+        let endpoint = webSocketEndpoints.recordFailure(url, threshold: maxWebSocketFailures)
+        status.endpointCount = endpoint.count
+        status.endpointUnusable = endpoint.unusable
+        return status
     }
 
     private static func finishAborted(out: AssistantMessageStream, state: OpenAIResponsesState) {
@@ -1630,6 +1710,52 @@ private struct WebSocketSSESequence: AsyncSequence, Sendable {
     }
 }
 
+/// Consecutive WebSocket transport failures per endpoint, process-wide.
+/// Failures before or during a response count; a completed response resets
+/// the count. When it reaches the threshold the endpoint is HTTP-only for the
+/// rest of the process: such failures are a property of the platform's
+/// WebSocket stack against that endpoint (macOS 27.3's CFNetwork fails
+/// fragmented compressed messages), not of one session.
+public final class OpenAIResponsesWebSocketEndpoints: Sendable {
+    public struct Failure: Sendable, Equatable {
+        public var count: Int
+        public var unusable: Bool
+    }
+
+    private struct State {
+        var failures: [String: Int] = [:]
+        var unusable: Set<String> = []
+    }
+
+    public static let shared = OpenAIResponsesWebSocketEndpoints()
+    private let state = NIOLockedValueBox(State())
+
+    public init() {}
+
+    public func isUnusable(_ url: URL) -> Bool {
+        state.withLockedValue { $0.unusable.contains(url.absoluteString) }
+    }
+
+    public func consecutiveFailures(_ url: URL) -> Int {
+        state.withLockedValue { $0.failures[url.absoluteString, default: 0] }
+    }
+
+    @discardableResult
+    public func recordFailure(_ url: URL, threshold: Int) -> Failure {
+        state.withLockedValue { state in
+            let key = url.absoluteString
+            let count = state.failures[key, default: 0] + 1
+            state.failures[key] = count
+            if count >= max(1, threshold) { state.unusable.insert(key) }
+            return Failure(count: count, unusable: state.unusable.contains(key))
+        }
+    }
+
+    public func recordSuccess(_ url: URL) {
+        state.withLockedValue { $0.failures[url.absoluteString] = 0 }
+    }
+}
+
 private final class WebSocketStreamProgress: Sendable {
     private let receivedEvent = NIOLockedValueBox(false)
 
@@ -1688,6 +1814,8 @@ private struct OpenAIResponsesLastResponse: Sendable {
 private struct OpenAIResponsesWebSocketFailureStatus: Sendable {
     var count: Int
     var disabled: Bool
+    var endpointCount = 0
+    var endpointUnusable = false
 }
 
 private struct OpenAIResponsesWebSocketPayload: Sendable {
