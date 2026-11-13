@@ -50,17 +50,27 @@ public final class MistralConversationsProvider: APIProvider, @unchecked Sendabl
     /// (ported from magpie 8d5bcf1).
     static let maxImages = 20
 
+    /// How many of the oldest images go at a time once a transcript is past
+    /// `maxImages`. Dropping only as many as the limit asked moved the cut by
+    /// one image with every new screenshot, so the request changed from the
+    /// oldest kept image on and Mistral's prompt cache missed from there each
+    /// turn. In steps, the cut moves once in `imageStep` images and the turns
+    /// between send the same prefix (ported from magpie 01f3349).
+    static let imageStep = 10
+
     /// The text that stands where an image was left out.
     static let imageLeftOutText = "[An earlier image is left out of this request.]"
 
-    /// Keep at most `maxImages` images, the newest ones: each older image is
-    /// replaced in place by `imageLeftOutText`, so the turns around it stay.
+    /// Keep at most `maxImages` images, the newest ones: the oldest go
+    /// `step` at a time, each replaced in place by `imageLeftOutText`, so the
+    /// turns around it stay.
     /// A transcript within the limit comes back unchanged. Tool-result images
     /// count only when `countToolResultImages` is set, since the chat encoder
     /// forwards them only for a model that takes images.
     static func limitImages(
         _ messages: [Message],
         max: Int = maxImages,
+        step: Int = imageStep,
         countToolResultImages: Bool = true
     ) -> [Message] {
         var total = 0
@@ -75,7 +85,7 @@ public final class MistralConversationsProvider: APIProvider, @unchecked Sendabl
             }
         }
         guard total > max else { return messages }
-        var toDrop = total - max
+        var toDrop = Swift.min(total, (total - max + step - 1) / step * step)
         let placeholder = TextContent(text: imageLeftOutText)
         return messages.map { message in
             guard toDrop > 0 else { return message }

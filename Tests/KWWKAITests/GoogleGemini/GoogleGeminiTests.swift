@@ -348,6 +348,31 @@ struct GoogleGeminiTests {
         #expect(high?["thinkingBudget"] == nil)
     }
 
+    // Gemini 4 Hydrogen lists XHIGH (magpie 15500d4); a Gemini that lists
+    // high at most, or that the catalog does not describe, stays at HIGH.
+    @Test("a level above high goes as the nearest the catalog lists, else HIGH")
+    func aboveHighFollowsCatalog() async throws {
+        let hydrogen = Self.levelModel("gemini-4-hydrogen", [
+            "off": nil, "minimal": nil, "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh", "max": nil,
+        ])
+        let carbon = Self.levelModel("gemini-4-carbon", [
+            "off": nil, "minimal": nil, "low": "low", "medium": "medium", "high": "high", "xhigh": nil, "max": nil,
+        ])
+        let unlisted = Self.reasoningModel("gemini-4-unlisted")
+        for (model, reasoning, want) in [
+            (hydrogen, ReasoningLevel.xhigh, "XHIGH"), (hydrogen, .max, "XHIGH"), (hydrogen, .high, "HIGH"),
+            (carbon, .xhigh, "HIGH"), (carbon, .max, "HIGH"), (unlisted, .max, "HIGH"),
+        ] {
+            let got = try await Self.sentThinkingConfig(model, reasoning)?["thinkingLevel"] as? String
+            #expect(got == want, "\(model.id) at \(reasoning)")
+        }
+        // the catalog's own Hydrogen rows list xhigh
+        for provider in ["google", "google-vertex"] {
+            let row = try #require(ModelsCatalog.model(provider: provider, id: "gemini-4-hydrogen"))
+            #expect(supportedThinkingLevels(row).contains(.xhigh), "\(provider)")
+        }
+    }
+
     @Test("a level the catalog lists, or a model it does not describe, goes as before")
     func listedLevelsUnchanged() async throws {
         let flash = Self.levelModel("gemini-3.5-flash", [

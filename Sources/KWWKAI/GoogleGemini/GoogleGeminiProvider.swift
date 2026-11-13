@@ -384,10 +384,8 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
             if usesThinkingLevel(id) {
                 // Gemini 3.x and Gemma 4 take a string `thinkingLevel`
                 // (MINIMAL/LOW/MEDIUM/HIGH) rather than an integer budget.
-                thinking["thinkingLevel"] = catalogThinkingLevel(
-                    geminiThinkingLevel(reasoning, modelId: id),
-                    model: model
-                )
+                thinking["thinkingLevel"] = aboveHighLevel(reasoning, model: model)
+                    ?? catalogThinkingLevel(geminiThinkingLevel(reasoning, modelId: id), model: model)
             } else {
                 // Gemini 2.x integer budget. Always emit (per-level table for
                 // 2.5 models, -1 dynamic fallback otherwise) to match pi's
@@ -454,6 +452,17 @@ public final class GoogleGeminiProvider: APIProvider, @unchecked Sendable {
         case .medium: return "MEDIUM"
         case .high, .xhigh, .max: return "HIGH"
         }
+    }
+
+    /// xhigh or max as the nearest level above high the catalog lists for the
+    /// model, or nil to leave it at the family table's HIGH. Gemini 4
+    /// Hydrogen takes XHIGH (Google's model page: LOW, MEDIUM, HIGH, XHIGH);
+    /// every Gemini before it takes high at most (magpie 15500d4).
+    private static func aboveHighLevel(_ reasoning: ReasoningLevel, model: Model) -> String? {
+        guard reasoning == .xhigh || reasoning == .max else { return nil }
+        let nearest = clampThinkingLevel(model, ModelThinkingLevel(reasoning: reasoning))
+        guard nearest == .xhigh || nearest == .max else { return nil }
+        return ((model.thinkingLevelMap?[nearest.rawValue] ?? nil) ?? nearest.rawValue).uppercased()
     }
 
     /// A `thinkingLevel` the family table chose, moved to one the model has

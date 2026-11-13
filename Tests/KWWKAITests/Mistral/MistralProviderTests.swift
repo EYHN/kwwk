@@ -117,12 +117,12 @@ struct MistralProviderTests {
         }
     }
 
-    @Test("past 20 images the oldest are replaced by a short text, the newest 20 stay")
+    @Test("past 20 images the oldest are replaced by a short text, ten at a time")
     func keepsNewestTwentyImages() {
         let out = MistralConversationsProvider.limitImages(shots(26))
         #expect(out.count == 26)
-        #expect(imageData(out) == (6..<26).map { "AAAA\($0)" })
-        #expect(placeholders(out) == 6)
+        #expect(imageData(out) == (10..<26).map { "AAAA\($0)" })
+        #expect(placeholders(out) == 10)
         // every turn's own text stays
         for (i, message) in out.enumerated() {
             let texts: [String]
@@ -148,6 +148,26 @@ struct MistralProviderTests {
         #expect(MistralConversationsProvider.limitImages(messages, countToolResultImages: false) == messages)
     }
 
+    // magpie 01f3349: a conversation reading a screenshot a turn, past 20 of
+    // them, missed Mistral's prompt cache every turn as the cut moved by one
+    // image each time. Each turn's transcript is the one before with the new
+    // turn added, until the cut moves ten images later.
+    @Test("past 20 images the prefix changes only every ten new images")
+    func limitKeepsPrefix() {
+        // one transcript cut at each turn, so a message is the same value
+        // in every request it goes in
+        let all = shots(60)
+        var moved: [Int] = []
+        var prev = MistralConversationsProvider.limitImages(Array(all.prefix(20)))
+        for n in 21...60 {
+            let cur = MistralConversationsProvider.limitImages(Array(all.prefix(n)))
+            #expect(imageData(cur).count <= MistralConversationsProvider.maxImages, "\(n) shots")
+            if Array(cur.prefix(prev.count)) != prev { moved.append(n) }
+            prev = cur
+        }
+        #expect(moved == [21, 31, 41, 51])
+    }
+
     @Test("the cap reaches the request body Mistral gets")
     func requestBodyCarriesTwentyImages() async throws {
         let client = StubSSEClient(body: CrossProviderSwitchTests.openaiDone)
@@ -164,10 +184,10 @@ struct MistralProviderTests {
         let body = try #require(client.lastRequest?.body)
         let text = try #require(String(data: body, encoding: .utf8))
         // JSONSerialization may escape "/", so count the base64 prefix
-        #expect(text.components(separatedBy: "base64,AAAA").count - 1 == 20)
+        #expect(text.components(separatedBy: "base64,AAAA").count - 1 == 16)
         #expect(text.contains("base64,AAAA25\""))
-        #expect(text.contains("base64,AAAA6\""))
-        #expect(!text.contains("base64,AAAA5\""))
+        #expect(text.contains("base64,AAAA10\""))
+        #expect(!text.contains("base64,AAAA9\""))
         #expect(text.contains("shot 0"))
         #expect(text.contains(MistralConversationsProvider.imageLeftOutText))
     }

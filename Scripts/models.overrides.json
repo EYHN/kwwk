@@ -585,5 +585,77 @@
     "deepseek-v4-1-flash-1017": {
       "input": ["text", "image"]
     }
+  },
+  "google": {
+    "$note": "Gemini 4 Hydrogen (released 2026-11-12), which pi-mono does not list yet (pi HEAD and pi.dev, 2026-11-13). Window, output, price and levels are models.dev's google and google-vertex rows, which match Google's model page and magpie 51c3ecc: 1,048,576 in, 65,536 out, $1.50 / $0.075 cached / $7.50, thinking LOW to XHIGH. The rest is Gemini 4 Carbon's row on the same provider. Drop once pi lists it.",
+    "gemini-4-hydrogen": {
+      "api": "google-generative-ai",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
+      "contextWindow": 1048576,
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.075,
+        "cacheWrite": 0
+      },
+      "id": "gemini-4-hydrogen",
+      "input": ["text", "image"],
+      "inputLimits": {
+        "images": {
+          "maxPerRequest": 3600,
+          "resize": {"jpegQuality": 80, "maxBytes": 4718592, "maxHeight": 2000, "maxWidth": 2000}
+        },
+        "maxRequestBytes": 20971520
+      },
+      "maxTokens": 65536,
+      "name": "Gemini 4 Hydrogen",
+      "provider": "google",
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "$replace": true,
+        "high": "high",
+        "low": "low",
+        "max": null,
+        "medium": "medium",
+        "minimal": null,
+        "off": null,
+        "xhigh": "xhigh"
+      }
+    }
+  },
+  "google-vertex": {
+    "$note": "Gemini 4 Hydrogen (released 2026-11-12), which pi-mono does not list yet (pi HEAD and pi.dev, 2026-11-13). Window, output, price and levels are models.dev's google and google-vertex rows, which match Google's model page and magpie 51c3ecc: 1,048,576 in, 65,536 out, $1.50 / $0.075 cached / $7.50, thinking LOW to XHIGH. The rest is Gemini 4 Carbon's row on the same provider. Drop once pi lists it.",
+    "gemini-4-hydrogen": {
+      "api": "google-vertex",
+      "baseUrl": "https://{location}-aiplatform.googleapis.com",
+      "contextWindow": 1048576,
+      "cost": {
+        "input": 1.5,
+        "output": 7.5,
+        "cacheRead": 0.075,
+        "cacheWrite": 0
+      },
+      "id": "gemini-4-hydrogen",
+      "input": ["text", "image"],
+      "inputLimits": {
+        "images": {
+          "resize": {"jpegQuality": 80, "maxBytes": 4718592, "maxHeight": 2000, "maxWidth": 2000}
+        }
+      },
+      "maxTokens": 65536,
+      "name": "Gemini 4 Hydrogen",
+      "provider": "google-vertex",
+      "reasoning": true,
+      "thinkingLevelMap": {
+        "$replace": true,
+        "high": "high",
+        "low": "low",
+        "max": null,
+        "medium": "medium",
+        "minimal": null,
+        "off": null,
+        "xhigh": "xhigh"
+      }
+    }
   }
 }
