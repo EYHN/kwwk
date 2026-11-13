@@ -33747,10 +33747,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0060000000000000001,
+        "cacheRead" : 0.0030000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.3,
-        "output" : 1.2
+        "input" : 0.15,
+        "output" : 0.6
       },
       "id" : "deepseek\/deepseek-v4.1-flash-1017",
       "input" : [
@@ -35661,6 +35661,31 @@
       ],
       "maxTokens" : 262144,
       "name" : "inclusionAI: Ling 3.1 Flash",
+      "provider" : "openrouter",
+      "reasoning" : true
+    },
+    "kt\/midm-k-3.0-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 261795,
+      "cost" : {
+        "cacheRead" : 0.040000000000000001,
+        "cacheWrite" : 0,
+        "input" : 0.2,
+        "output" : 0.8
+      },
+      "id" : "kt\/midm-k-3.0-pro",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 235615,
+      "name" : "KT: Mi:dm K 3.0 Pro",
       "provider" : "openrouter",
       "reasoning" : true
     },
@@ -37591,6 +37616,31 @@
         "off" : "none",
         "xhigh" : null
       }
+    },
+    "motif-technologies\/motif-3" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsDeveloperRole" : false,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 262144,
+      "cost" : {
+        "cacheRead" : 0.059999999999999998,
+        "cacheWrite" : 0,
+        "input" : 0.3,
+        "output" : 1.2
+      },
+      "id" : "motif-technologies\/motif-3",
+      "input" : [
+        "text"
+      ],
+      "maxTokens" : 235929,
+      "name" : "Motif Technologies: Motif 3",
+      "provider" : "openrouter",
+      "reasoning" : true
     },
     "nex-agi\/nex-n2.5-pro" : {
       "api" : "openai-completions",
@@ -43088,10 +43138,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.072999999999999995,
+        "cacheRead" : 0.060999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.081000000000000003,
-        "output" : 0.119
+        "input" : 0.067000000000000004,
+        "output" : 0.099000000000000005
       },
       "id" : "qwen\/qwen3.5-9b",
       "input" : [
@@ -44168,10 +44218,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.050000000000000003,
+        "cacheRead" : 0.025000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.2,
-        "output" : 0.6
+        "input" : 0.1,
+        "output" : 0.3
       },
       "id" : "ricursiveai\/ripple-65b-preview",
       "input" : [
