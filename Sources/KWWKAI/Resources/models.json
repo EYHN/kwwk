@@ -16494,6 +16494,47 @@
         "xhigh" : null
       }
     },
+    "gemini-4-hydrogen" : {
+      "api" : "google-generative-ai",
+      "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.075,
+        "cacheWrite" : 0,
+        "input" : 1.5,
+        "output" : 7.5
+      },
+      "id" : "gemini-4-hydrogen",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerRequest" : 3600,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        },
+        "maxRequestBytes" : 20971520
+      },
+      "maxTokens" : 65536,
+      "name" : "Gemini 4 Hydrogen",
+      "provider" : "google",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "gemini-flash-latest" : {
       "api" : "google-generative-ai",
       "baseUrl" : "https:\/\/generativelanguage.googleapis.com\/v1beta",
@@ -17264,6 +17305,45 @@
         "minimal" : null,
         "off" : null,
         "xhigh" : null
+      }
+    },
+    "gemini-4-hydrogen" : {
+      "api" : "google-vertex",
+      "baseUrl" : "https:\/\/{location}-aiplatform.googleapis.com",
+      "contextWindow" : 1048576,
+      "cost" : {
+        "cacheRead" : 0.075,
+        "cacheWrite" : 0,
+        "input" : 1.5,
+        "output" : 7.5
+      },
+      "id" : "gemini-4-hydrogen",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 65536,
+      "name" : "Gemini 4 Hydrogen",
+      "provider" : "google-vertex",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : null,
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
       }
     },
     "gemini-robotics-er-2-preview" : {
