@@ -865,20 +865,91 @@ struct OpenAIResponsesTests {
         #expect(http.lastRequest != nil)
     }
 
-    @Test("reconnects on the next request after a WebSocket stream failure")
-    func webSocketStreamFailureReconnectsNextRequest() async throws {
+    /// macOS 27.3 (CFNetwork 3896.300.31) fails a URLSession WebSocket with
+    /// EPROTO on the second fragmented permessage-deflate message.
+    static let webSocketProtocolError = NSError(domain: NSPOSIXErrorDomain, code: Int(EPROTO))
+
+    @Test("EPROTO from the socket is a retryable transport failure")
+    func eprotoIsTransport() {
+        let failure = ProviderFailure.capture(Self.webSocketProtocolError)
+        #expect(failure.category == .transport)
+        #expect(failure.isRetryable)
+    }
+
+    @Test("retries over HTTP when WebSocket fails after response.created and skips WebSocket afterwards")
+    func webSocketFailureAfterResponseCreatedRetriesOverHTTP() async throws {
         let responseCreated = """
         {"type":"response.created","response":{"id":"resp_partial","status":"in_progress"}}
         """
         let firstConnection = StubWebSocketConnection(
             batches: [[responseCreated]],
-            receiveError: StubWebSocketError.receive
+            receiveError: Self.webSocketProtocolError
         )
         let secondConnection = StubWebSocketConnection(batches: [Self.webSocketMessages(from: Self.textSSE)])
         let ws = StubWebSocketClient(connections: [firstConnection, secondConnection])
-        let http = StubSSEClient(body: Self.textSSE)
-        let provider = OpenAIResponsesProvider(client: http, webSocketClient: ws, defaultAPIKey: "k")
-        let options = StreamOptions(sessionId: "ws-reconnect-after-stream-error")
+        let http = StubSSEClient(body: Self.textSSE.replacingOccurrences(of: "resp_1", with: "resp_http"))
+        let endpoints = OpenAIResponsesWebSocketEndpoints()
+        let provider = OpenAIResponsesProvider(
+            client: http,
+            webSocketClient: ws,
+            defaultAPIKey: "k",
+            webSocketEndpoints: endpoints
+        )
+
+        let first = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "hi"))]),
+            options: StreamOptions(sessionId: "ws-fail-after-created")
+        )
+        var types: [String] = []
+        for await event in first { types.append(event.type) }
+        let firstResult = await first.result()
+        #expect(firstResult.stopReason == .stop)
+        #expect(firstResult.responseId == "resp_http")
+        #expect(firstResult.content.count == 1)
+        if case .text(let text) = firstResult.content.first { #expect(text.text == "Hello, world") }
+        // The WebSocket's empty `.start`, then the HTTP stream's own.
+        #expect(types.filter { $0 == "start" }.count == 2)
+        #expect(types.filter { $0 == "text_delta" }.count == 2)
+        #expect(types.last == "done")
+        #expect(ws.connectCount == 1)
+        #expect(firstConnection.closed)
+        let body = try Self.jsonObject(String(decoding: try #require(http.lastRequest?.body), as: UTF8.self))
+        #expect((body["input"] as? [[String: Any]])?.count == 1)
+        #expect(endpoints.isUnusable(try #require(URL(string: "wss://api.openai.com/v1/responses"))))
+
+        // Later turns, in any session, go straight to HTTP.
+        http.lastRequest = nil
+        let second = provider.stream(
+            model: Self.model,
+            context: Context(messages: [.user(UserMessage(text: "again"))]),
+            options: StreamOptions(sessionId: "another-session")
+        )
+        for await _ in second {}
+        #expect(await second.result().responseId == "resp_http")
+        #expect(ws.connectCount == 1)
+        #expect(http.lastRequest != nil)
+    }
+
+    @Test("a WebSocket failure after output was streamed settles as a retryable error and the next turn uses HTTP")
+    func webSocketFailureAfterOutputReturnsRetryableError() async throws {
+        let partial = [
+            #"{"type":"response.created","response":{"id":"resp_partial","status":"in_progress"}}"#,
+            #"{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}"#,
+            #"{"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}"#,
+            #"{"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"Hel"}"#,
+        ]
+        let connection = StubWebSocketConnection(batches: [partial], receiveError: Self.webSocketProtocolError)
+        let ws = StubWebSocketClient(connection: connection)
+        let http = StubSSEClient(body: Self.textSSE.replacingOccurrences(of: "resp_1", with: "resp_http"))
+        let endpoints = OpenAIResponsesWebSocketEndpoints()
+        let provider = OpenAIResponsesProvider(
+            client: http,
+            webSocketClient: ws,
+            defaultAPIKey: "k",
+            webSocketEndpoints: endpoints
+        )
+        let options = StreamOptions(sessionId: "ws-fail-after-output")
 
         let first = provider.stream(
             model: Self.model,
@@ -887,10 +958,13 @@ struct OpenAIResponsesTests {
         )
         for await _ in first {}
         let firstResult = await first.result()
+        // Streamed text cannot be taken back inside the provider: the turn
+        // settles as an error the agent loop rewinds and retries.
         #expect(firstResult.stopReason == .error)
         #expect(firstResult.errorMessage?.contains("WebSocket stream failed") == true)
+        #expect(firstResult.providerFailure?.category == .transport)
+        #expect(firstResult.providerFailure?.isRetryable == true)
         #expect(http.lastRequest == nil)
-        #expect(ws.connectCount == 1)
 
         let second = provider.stream(
             model: Self.model,
@@ -898,9 +972,9 @@ struct OpenAIResponsesTests {
             options: options
         )
         for await _ in second {}
-        #expect(await second.result().responseId == "resp_1")
-        #expect(ws.connectCount == 2)
-        #expect(http.lastRequest == nil)
+        #expect(await second.result().responseId == "resp_http")
+        #expect(ws.connectCount == 1)
+        #expect(http.lastRequest != nil)
     }
 
     @Test("treats cancelled WebSocket receive failure as abort without disabling WebSocket")

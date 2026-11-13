@@ -42,6 +42,8 @@ public final class OpenAIResponsesProvider:
     /// Request-body fields merged in last (so they override defaults). Use
     /// for vendor quirks like ChatGPT Codex requiring `store: false`.
     public let bodyOverrides: [String: JSONValue]
+    /// WebSocket endpoints that broke mid-response; process-wide by default.
+    public let webSocketEndpoints: OpenAIResponsesWebSocketEndpoints
     private let sessions = OpenAIResponsesSessionStore()
 
     public init(
@@ -55,8 +57,10 @@ public final class OpenAIResponsesProvider:
         urlBuilder: URLBuilder? = nil,
         webSocketURLBuilder: WebSocketURLBuilder? = nil,
         maxWebSocketFailures: Int = 3,
-        authHeaderBuilder: AuthHeaderBuilder? = nil
+        authHeaderBuilder: AuthHeaderBuilder? = nil,
+        webSocketEndpoints: OpenAIResponsesWebSocketEndpoints = .shared
     ) {
+        self.webSocketEndpoints = webSocketEndpoints
         self.api = api
         self.client = client
         self.webSocketClient = webSocketClient
@@ -252,10 +256,12 @@ public final class OpenAIResponsesProvider:
         let seals = Self.seals(in: request.input)
         let holdSealRefusal = holdSealRefusal && !seals.isEmpty
         let transport = options?.transport ?? .auto
+        let wsURL = webSocketURLBuilder(url)
+        let endpointUnusable = webSocketEndpoints.isUnusable(wsURL)
         if transport != .sse,
            let webSocketClient,
-           !session.webSocketDisabled {
-            let wsURL = webSocketURLBuilder(url)
+           !session.webSocketDisabled,
+           !endpointUnusable {
             await options?.emitVerbose(
                 source: "openai.responses.websocket",
                 message: "attempting WebSocket stream",
@@ -290,6 +296,12 @@ public final class OpenAIResponsesProvider:
             await options?.emitVerbose(
                 source: "openai.responses.websocket",
                 message: "WebSocket disabled after repeated failures; using HTTP"
+            )
+        } else if transport != .sse, webSocketClient != nil, endpointUnusable {
+            await options?.emitVerbose(
+                source: "openai.responses.websocket",
+                message: "WebSocket endpoint failed mid-response earlier in this process; using HTTP",
+                metadata: ["url": .string(wsURL.absoluteString)]
             )
         }
 
@@ -612,6 +624,32 @@ public final class OpenAIResponsesProvider:
                 )
                 return .fallbackToHTTP
             }
+            // The socket broke after the response began. On macOS 27.3
+            // (CFNetwork 3896.300.31) URLSession fails with EPROTO on the
+            // second permessage-deflate message that arrives in fragments, and
+            // a gateway that fragments every event (magpie) breaks every
+            // turn right after `response.created`. Do not try this endpoint
+            // over WebSocket again in this process.
+            webSocketEndpoints.markUnusable(url)
+            if state.snapshot().content.isEmpty {
+                // Only `.start` (an empty partial) has reached `out`: no
+                // text, thinking or tool call. Asking again over HTTP repeats
+                // nothing the caller has seen, so retry the same request
+                // there. The HTTP stream opens with its own `.start`.
+                await options?.emitVerbose(
+                    source: verboseSource,
+                    message: "WebSocket failed after response event before any output; retrying over HTTP",
+                    metadata: [
+                        "error": .string(error.displayDescription),
+                        "url": .string(url.absoluteString),
+                    ]
+                )
+                return .fallbackToHTTP
+            }
+            // Output is already on `out` and cannot be taken back here.
+            // Settle as a retryable transport error: the agent loop rewinds
+            // the partial (`streamRewind`) and asks again, and that request
+            // now goes straight to HTTP.
             await options?.emitVerbose(
                 source: verboseSource,
                 message: "WebSocket failed after response event; returning stream error",
@@ -1627,6 +1665,26 @@ private struct WebSocketSSESequence: AsyncSequence, Sendable {
             }
             return nil
         }
+    }
+}
+
+/// WebSocket endpoints that failed with a transport error after a response
+/// had begun. Such a failure is a property of the platform's WebSocket stack
+/// against that endpoint (macOS 27.3's CFNetwork fails fragmented compressed
+/// messages), so it outlives a session: every later request to the endpoint
+/// in this process goes straight to HTTP/SSE.
+public final class OpenAIResponsesWebSocketEndpoints: Sendable {
+    public static let shared = OpenAIResponsesWebSocketEndpoints()
+    private let unusable = NIOLockedValueBox(Set<String>())
+
+    public init() {}
+
+    public func isUnusable(_ url: URL) -> Bool {
+        unusable.withLockedValue { $0.contains(url.absoluteString) }
+    }
+
+    public func markUnusable(_ url: URL) {
+        _ = unusable.withLockedValue { $0.insert(url.absoluteString) }
     }
 }
 
