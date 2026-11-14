@@ -84,12 +84,17 @@ the request instead of replaying it.
 Antigravity (Google's Code Assist backend) answers 429 "Resource has been
 exhausted (e.g. check quota)" to a system prompt that carries one of the
 lines it turns away — Claude Code's billing line, the Claude Agent SDK's
-identity line, Codex's GPT-5 identity line, Hermes Agent's earlier persona —
-whatever quota is left (magpie #666). `AntigravityCloak` breaks those lines
-with a zero-width space before they go; should Google still answer that 429
-to such a prompt, `AntigravityProvider` reads it as `refusal`
-(`providerCode: prompt_refusal`, never retried, never a quota), with a hint
-after Google's words. Any other Antigravity 429 that says it is back within
+identity line, Codex's GPT-5 identity line, Hermes Agent's earlier persona,
+oh-my-pi's "RFC 2119 keywords: MUST, REQUIRED, …" — whatever quota is left
+(magpie #666). Google matches each line in any case with any run of white
+space between its words (LF, CRLF, a tab, two spaces, a no-break space:
+JavaScript's `\s`), and so does `AntigravityCloak`. It breaks those lines
+with a zero-width space before they go, except oh-my-pi's, which it sends as
+"RFC 2119 key words: …" with its white space as it was: a broken-up copy of
+it was still refused 1 to 3 times in 10 (magpie 0b64846). Should Google
+still answer that 429 to such a prompt, `AntigravityProvider` reads it as
+`refusal` (`providerCode: prompt_refusal`, never retried, never a quota),
+with a hint after Google's words. Any other Antigravity 429 that says it is back within
 60 seconds ("reset after 26s", or Google's `RetryInfo`) is `rateLimit`,
 retried after that wait, as is Google's capacity or rate limit
 (`MODEL_CAPACITY_EXHAUSTED`, `RATE_LIMIT_EXCEEDED`) and a bare "Resource has

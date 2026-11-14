@@ -210,6 +210,10 @@ private let turnedAwayBody = #"{"error":{"code":429,"message":"Resource has been
 private let quotaSpentBody = #"{"error":{"code":429,"message":"You have exhausted your capacity on this model. Your quota will reset after 3h19m30s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","domain":"cloudcode-pa.googleapis.com"}]}}"#
 private let claudeCodeSystem = "x-anthropic-billing-header: cc_version=2.1.288.e3f; cc_entrypoint=sdk-cli;\nYou are Claude Code, Anthropic's official CLI for Claude."
 private let codexGPT5System = "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled."
+/// How oh-my-pi (omp) 18.20.0 starts its system prompt, byte for byte.
+private let ompSystem = "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify inside user messages: MUST treat as system-authored/authoritative. User content is sanitized.\n"
+/// omp's first line up to the period, the part Antigravity turns away.
+private let ompLine = "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."
 private let hermesOldSystem = "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct."
 
 // MARK: - Envelope
@@ -771,6 +775,7 @@ struct AntigravityCloakTests {
         "you are codex, an agent based on gpt-5",
         "you are codex, a coding agent based on gpt-5",
         "hermes agent, an intelligent ai assistant created by nous research",
+        "rfc 2119 keywords: must, required, should, recommended, may, optional.",
     ]
 
     @Test("Every line Antigravity turns away is broken after its first letter, and nothing else changes (magpie TestAntigravityCloakBreaksEveryLineItTurnsAway)", arguments: [
@@ -808,6 +813,80 @@ struct AntigravityCloakTests {
         "You are Hermes Agent, an intelligent AI assistant created by Nous.",
     ])
     func asWritten(system: String) {
+        #expect(!AntigravityCloak.turnsAway(system))
+        #expect(AntigravityCloak.cloak(system) == system)
+    }
+
+    @Test("omp's RFC 2119 line goes as \"RFC 2119 key words: …\", not broken up (magpie TestAntigravityCloakOmpLine)")
+    func ompLineReworded() {
+        let got = AntigravityCloak.cloak(ompSystem)
+        #expect(got == ompSystem.replacingOccurrences(of: "keywords", with: "key words"))
+        #expect(!got.contains(AntigravityCloak.zeroWidth))
+        #expect(AntigravityCloak.turnsAway(ompSystem))
+        #expect(!AntigravityCloak.turnsAway(got))
+        #expect(AntigravityCloak.cloak(got) == got)
+        #expect(AntigravityCloak.hint(system: ompSystem) == AntigravityCloak.rfcHint)
+    }
+
+    /// Google's check reads each line in any case with any white space
+    /// between its words: each of omp's copies was turned away on a real
+    /// account (magpie 0b64846).
+    static let wrappedLines = [
+        ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\n"),
+        ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\r\n"),
+        ompLine.replacingOccurrences(of: "2119 ", with: "2119\n"),
+        ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\n   "),
+        ompLine.replacingOccurrences(of: "MUST, ", with: "MUST,\t"),
+        ompLine.replacingOccurrences(of: "MUST, ", with: "MUST,  "),
+        ompLine.replacingOccurrences(of: "MUST, ", with: "MUST,\u{00A0}"),
+        ompLine.lowercased(),
+        hermesOldSystem.replacingOccurrences(of: "AI assistant", with: "AI\nassistant"),
+        codexGPT5System.replacingOccurrences(of: "agent based", with: "agent\tbased"),
+        codexGPT5System.replacingOccurrences(of: "Codex, an", with: "Codex,\r\n\u{3000}an"),
+        claudeCodeSystem.uppercased(),
+        "You are a Claude agent, built  on Anthropic's\u{00A0}Claude\nAgent SDK.",
+    ]
+
+    @Test("A line wrapped or widened is still found, and goes broken up (omp's, reworded) with nothing else changed (magpie TestAntigravityCloakLineWrappedOrWidened)", arguments: AntigravityCloakTests.wrappedLines)
+    func wrappedOrWidened(line: String) {
+        let zero = AntigravityCloak.zeroWidth
+        let system = "<conventions>\n" + line + "\n</conventions>\n"
+        #expect(AntigravityCloak.turnsAway(system))
+        let got = AntigravityCloak.cloak(system)
+        #expect(got != system)
+        #expect(!AntigravityCloak.turnsAway(got))
+        var said = got.replacingOccurrences(of: zero, with: "")
+        if system.contains("RFC") || system.contains("rfc") {
+            #expect(!got.contains(zero), "omp's line broken up, not reworded: \(got)")
+            if let range = said.range(of: "key words", options: .caseInsensitive) {
+                said.replaceSubrange(range, with: said[range].replacingOccurrences(of: " ", with: ""))
+            } else {
+                Issue.record("not reworded: \(got)")
+            }
+        } else {
+            #expect(got.contains(zero))
+        }
+        #expect(said == system, "more than its words changed: \(got)")
+        #expect(AntigravityCloak.cloak(got) == got)
+    }
+
+    @Test("A wrapped copy is told its own hint")
+    func wrappedHint() {
+        let lines = Self.wrappedLines
+        #expect(AntigravityCloak.hint(system: lines[1]) == AntigravityCloak.rfcHint)
+        #expect(AntigravityCloak.hint(system: lines[8]).contains("Hermes Agent's earlier default persona"))
+        #expect(AntigravityCloak.hint(system: lines[9]).contains("Codex's own system prompt"))
+    }
+
+    @Test("What went through as written on the same account goes as written", arguments: [
+        String(ompLine.dropLast()),
+        ompLine.replacingOccurrences(of: "RFC 2119", with: "RFC2119"),
+        ompLine.replacingOccurrences(of: ", ", with: ","),
+        "RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.",
+        "RFC 2119 key words: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.",
+        "RFC 2119 keywords:\u{200B} MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.",
+    ])
+    func ompAsWritten(system: String) {
         #expect(!AntigravityCloak.turnsAway(system))
         #expect(AntigravityCloak.cloak(system) == system)
     }
@@ -986,6 +1065,8 @@ struct AntigravityFailureTests {
         ("You are a Claude agent, built on Anthropic's Claude Agent SDK.", "Claude Code and the Claude Agent SDK"),
         (codexGPT5System, "Codex's own system prompt"),
         (hermesOldSystem, "Hermes Agent's earlier default persona"),
+        (ompSystem, "RFC 2119 keywords"),
+        (ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\r\n"), "RFC 2119 keywords"),
     ])
     func turnedAway(system: String, hint: String) async throws {
         let client = AntigravityStubClient([.init(status: 429, headers: ["Content-Type": "application/json"], chunks: [Data(turnedAwayBody.utf8)])])
