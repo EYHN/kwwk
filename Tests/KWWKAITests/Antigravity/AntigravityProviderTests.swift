@@ -215,6 +215,18 @@ private let ompSystem = "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED,
 /// omp's first line up to the period, the part Antigravity turns away.
 private let ompLine = "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."
 private let hermesOldSystem = "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct."
+/// pi 1.5.0's default system prompt as it builds it (buildSystemPromptSections
+/// in dist/core/system-prompt.js), with its four default tools, an empty
+/// skills list and a working directory (magpie `piDefaultSystem`).
+private let piDefaultSystem = "You are a coding assistant running inside pi, a coding agent harness. Help users inspect files, run commands, and modify code.\n\n<tools>\n- read: Read the contents of a file\n- bash: Execute a bash command in the current working directory\n- edit: Make precise file edits with exact text replacement\n- write: Create or overwrite files\n\nAdditional tools may be available.\n</tools>\n\n<rules>\n- Use bash for file operations like ls, rg, find\n- Be concise in your responses\n- Show file paths clearly when working with files\n</rules>\n\n<docs>\nPi documentation (read only when the user asks about the harness itself, its SDK, extensions, themes, skills, or TUI):\n- Main documentation: /usr/lib/node_modules/@earendil-works/pi/README.md\n</docs>\n\n<cwd>\n/Users/me/project\n</cwd>"
+/// The first line of each of OpenCode 2.0.25's prompts.
+private let openCodeSystem = [
+    "You are OpenCode, a coding agent that helps users with software engineering tasks.",
+    "You are opencode, an interactive CLI tool that helps users with software engineering tasks.",
+    "You are OpenCode, the best coding agent on the planet.",
+]
+/// How Codex 0.165's prompt for a model it has none of its own for begins.
+private let codexCLISystem = "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. Codex CLI is an open source project led by OpenAI. You are expected to be precise, safe, and helpful."
 
 // MARK: - Envelope
 
@@ -834,7 +846,9 @@ private func unsaid(_ got: String) -> String {
     }
     var got = got.replacingOccurrences(of: "built on the Claude Agent SDK by Anthropic", with: "built on Anthropic's Claude Agent SDK")
     got = replacing(#"built(\s+)on(\s+)gpt-5"#, got, "based$1on$2GPT-5")
-    got = replacing(#"built(\s+)by(\s+)nous"#, got, "created$1by$2Nous")
+    got = replacing(#"(assistant\s+)built(\s+by\s+nous)"#, got, "$1created$2")
+    got = replacing(#"\b(you)'re"#, got, "$1 are")
+    got = got.replacingOccurrences(of: "running within pi", with: "running inside pi")
     if let range = got.range(of: "key words") {
         got.replaceSubrange(range, with: "keywords")
     }
@@ -848,8 +862,12 @@ struct AntigravityCloakTests {
         "built on anthropic's claude agent sdk",
         "you are codex, an agent based on gpt-5",
         "you are codex, a coding agent based on gpt-5",
-        "hermes agent, an intelligent ai assistant created by nous research",
+        "an intelligent ai assistant created by nous research",
         "rfc 2119 keywords: must, required, should, recommended, may, optional.",
+        "you are hermes agent",
+        "you are opencode",
+        "you are a coding agent running in the codex cli",
+        "a coding assistant running inside pi",
     ]
 
     @Test("Claude Code 2.1.316's blocks: the billing line left out, the Agent SDK's line reworded, an older broken-up copy alike; the Code tab's main line as written (magpie TestAntigravityCloakClaudeCode2316)", arguments: ["sdk-cli", "claude-desktop"])
@@ -871,7 +889,14 @@ struct AntigravityCloakTests {
         "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace.",
         hermesOldSystem,
         hermesOldSystem.uppercased(),
+        "You are Hermes Agent, built by Nous Research. Be direct.",
+        "You are Hermes Agent, an intelligent AI assistant created by Nous.",
         ompLine,
+        piDefaultSystem,
+        openCodeSystem[0],
+        openCodeSystem[1],
+        openCodeSystem[2],
+        codexCLISystem,
         // twice, and after text whose lower case is longer than it is
         "İstanbul ✓ " + codexGPT5System + "\n\n" + hermesOldSystem + "\n" + codexGPT5System,
     ])
@@ -904,12 +929,14 @@ struct AntigravityCloakTests {
 
     @Test("What Antigravity answers is sent as written", arguments: [
         "",
-        "You are opencode, an interactive CLI tool.",
         "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
         "You are a Claude agent, built on the Claude Agent SDK by Anthropic.",
         "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.",
-        "You are Hermes Agent, built by Nous Research. Be direct.",
-        "You are Hermes Agent, an intelligent AI assistant created by Nous.",
+        "You are Codex, an agent based on GPT-6.",
+        "You're Hermes Agent, built by Nous Research. Be direct.",
+        "You're OpenCode, the best coding agent on the planet.",
+        "You are a coding assistant running within pi, a coding agent harness.",
+        "Hermes Agent, an intelligent AI assistant built by Nous Research.",
     ])
     func asWritten(system: String) {
         #expect(!AntigravityCloak.turnsAway(system))
@@ -963,8 +990,40 @@ struct AntigravityCloakTests {
     func wrappedHint() {
         let lines = Self.wrappedLines
         #expect(AntigravityCloak.hint(system: lines[1]) == AntigravityCloak.rfcHint)
-        #expect(AntigravityCloak.hint(system: lines[8]).contains("Hermes Agent's earlier default persona"))
+        #expect(AntigravityCloak.hint(system: lines[8]) == AntigravityCloak.hermesHint)
         #expect(AntigravityCloak.hint(system: lines[9]).contains("Codex's own system prompt"))
+    }
+
+    @Test("Hermes' persona, today's and the earlier one, goes as \"You're Hermes Agent, …\" (magpie TestAntigravityAnswersHermesAndCodexByDefault)")
+    func hermesPersonas() {
+        #expect(AntigravityCloak.cloak(hermesOldSystem) == hermesOldSystem
+            .replacingOccurrences(of: "created by", with: "built by")
+            .replacingOccurrences(of: "You are Hermes", with: "You're Hermes"))
+        #expect(AntigravityCloak.cloak("You are Hermes Agent, built by Nous Research. Be direct.") == "You're Hermes Agent, built by Nous Research. Be direct.")
+    }
+
+    @Test("pi's, OpenCode's and Codex CLI's lines go reworded, the rest of each prompt as written (magpie e6e0585)")
+    func agentLines() {
+        #expect(AntigravityCloak.cloak(piDefaultSystem) == piDefaultSystem.replacingOccurrences(of: "running inside pi", with: "running within pi"))
+        for system in openCodeSystem {
+            #expect(AntigravityCloak.cloak(system) == "You're" + String(system.dropFirst("You are".count)))
+        }
+        #expect(AntigravityCloak.cloak(codexCLISystem) == codexCLISystem.replacingOccurrences(of: "You are a coding agent", with: "You're a coding agent"))
+    }
+
+    @Test("Each agent's prompt is told its own hint (magpie TestAntigravityHermesHint)", arguments: [
+        (hermesOldSystem, AntigravityCloak.hermesHint),
+        ("You are Hermes Agent, built by Nous Research.", AntigravityCloak.hermesHint),
+        (piDefaultSystem, AntigravityCloak.piHint),
+        (openCodeSystem[0], AntigravityCloak.openCodeHint),
+        (openCodeSystem[1], AntigravityCloak.openCodeHint),
+        (openCodeSystem[2], AntigravityCloak.openCodeHint),
+        (codexCLISystem, AntigravityCloak.codexCLIHint),
+    ])
+    func agentHint(system: String, hint: String) {
+        #expect(AntigravityCloak.hint(system: system) == hint)
+        #expect(AntigravityCloak.hint(system: codexGPT5System).contains("Codex's own system prompt"))
+        #expect(AntigravityCloak.hint(system: claudeCodeSystem).contains("Claude Code and the Claude Agent SDK"))
     }
 
     @Test("What went through as written on the same account goes as written", arguments: [
@@ -1160,7 +1219,11 @@ struct AntigravityFailureTests {
         (claudeCodeSystem, "Claude Code and the Claude Agent SDK"),
         ("You are a Claude agent, built on Anthropic's Claude Agent SDK.", "Claude Code and the Claude Agent SDK"),
         (codexGPT5System, "Codex's own system prompt"),
-        (hermesOldSystem, "Hermes Agent's earlier default persona"),
+        (hermesOldSystem, "Hermes Agent's default persona"),
+        ("You are Hermes Agent, built by Nous Research.", "Hermes Agent's default persona"),
+        (piDefaultSystem, "pi's default system prompt"),
+        (openCodeSystem[0], "OpenCode's system prompt"),
+        (codexCLISystem, "Codex's prompt for a model it has none of its own for"),
         (ompSystem, "RFC 2119 keywords"),
         (ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\r\n"), "RFC 2119 keywords"),
     ])
