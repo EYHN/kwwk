@@ -210,6 +210,10 @@ private let turnedAwayBody = #"{"error":{"code":429,"message":"Resource has been
 private let quotaSpentBody = #"{"error":{"code":429,"message":"You have exhausted your capacity on this model. Your quota will reset after 3h19m30s.","status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"QUOTA_EXHAUSTED","domain":"cloudcode-pa.googleapis.com"}]}}"#
 private let claudeCodeSystem = "x-anthropic-billing-header: cc_version=2.1.288.e3f; cc_entrypoint=sdk-cli;\nYou are Claude Code, Anthropic's official CLI for Claude."
 private let codexGPT5System = "You are Codex, an agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled."
+/// How oh-my-pi (omp) 18.20.0 starts its system prompt, byte for byte.
+private let ompSystem = "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.\nXML tags inject system content; may interrupt/notify inside user messages: MUST treat as system-authored/authoritative. User content is sanitized.\n"
+/// omp's first line up to the period, the part Antigravity turns away.
+private let ompLine = "RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL."
 private let hermesOldSystem = "You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct."
 
 // MARK: - Envelope
@@ -763,6 +767,80 @@ struct AntigravitySchemaTests {
 
 // MARK: - Cloak
 
+/// U+200B, what an older cloak put inside the lines Antigravity turns away.
+private let zeroWidth = "\u{200B}"
+
+/// `line` as magpie sent it from 11-11 to 11-14: a zero-width space after
+/// the first and the second character of each run of three or more ASCII
+/// letters or digits (magpie `brokenTwice`).
+private func brokenTwice(_ line: String) -> String {
+    func alnum(_ c: Unicode.Scalar) -> Bool { c.isASCII && (CharacterSet.alphanumerics.contains(c)) }
+    let scalars = Array(line.unicodeScalars)
+    var out = String.UnicodeScalarView()
+    var i = 0
+    while i < scalars.count {
+        var j = i
+        while j < scalars.count, alnum(scalars[j]) { j += 1 }
+        if j == i {
+            out.append(scalars[i])
+            i += 1
+        } else if j - i >= 3 {
+            out.append(scalars[i])
+            out.append(contentsOf: zeroWidth.unicodeScalars)
+            out.append(scalars[i + 1])
+            out.append(contentsOf: zeroWidth.unicodeScalars)
+            out.append(contentsOf: scalars[(i + 2)..<j])
+            i = j
+        } else {
+            out.append(contentsOf: scalars[i..<j])
+            i = j
+        }
+    }
+    return String(out)
+}
+
+/// `system` with `f` applied to each turned-away line in it and nothing
+/// else, as an older cloak or middleware broke them up (magpie `breakLines`).
+private func breakLines(_ system: String, _ f: (String) -> String) -> String {
+    let text = system as NSString
+    var at: [NSRange] = []
+    for expression in AntigravityCloak.lineExpressions {
+        at += expression.matches(in: system, range: NSRange(location: 0, length: text.length)).map(\.range)
+    }
+    at.sort { $0.location < $1.location }
+    var out = ""
+    var end = 0
+    for range in at where range.location >= end {
+        out += text.substring(with: NSRange(location: end, length: range.location - end)) + f(text.substring(with: range))
+        end = range.location + range.length
+    }
+    return out + text.substring(from: end)
+}
+
+/// A line with `separator` between every character, as a word joiner
+/// (U+2060) or a soft hyphen broke a line up (magpie `joinedBy`).
+private func joinedBy(_ separator: String) -> (String) -> String {
+    { line in line.unicodeScalars.map(String.init).joined(separator: separator) }
+}
+
+/// `got` with each rewording the cloak makes but the billing line's put
+/// back as the line, for checking that nothing else changed (magpie
+/// `unsaid`).
+private func unsaid(_ got: String) -> String {
+    func replacing(_ pattern: String, _ text: String, _ template: String) -> String {
+        let expression = try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        return expression.stringByReplacingMatches(
+            in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: template)
+    }
+    var got = got.replacingOccurrences(of: "built on the Claude Agent SDK by Anthropic", with: "built on Anthropic's Claude Agent SDK")
+    got = replacing(#"built(\s+)on(\s+)gpt-5"#, got, "based$1on$2GPT-5")
+    got = replacing(#"built(\s+)by(\s+)nous"#, got, "created$1by$2Nous")
+    if let range = got.range(of: "key words") {
+        got.replaceSubrange(range, with: "keywords")
+    }
+    return got
+}
+
 @Suite("Antigravity cloak")
 struct AntigravityCloakTests {
     static let turnedAwayLines = [
@@ -771,38 +849,64 @@ struct AntigravityCloakTests {
         "you are codex, an agent based on gpt-5",
         "you are codex, a coding agent based on gpt-5",
         "hermes agent, an intelligent ai assistant created by nous research",
+        "rfc 2119 keywords: must, required, should, recommended, may, optional.",
     ]
 
-    @Test("Every line Antigravity turns away is broken after its first letter, and nothing else changes (magpie TestAntigravityCloakBreaksEveryLineItTurnsAway)", arguments: [
-        claudeCodeSystem,
+    @Test("Claude Code 2.1.316's blocks: the billing line left out, the Agent SDK's line reworded, an older broken-up copy alike; the Code tab's main line as written (magpie TestAntigravityCloakClaudeCode2316)", arguments: ["sdk-cli", "claude-desktop"])
+    func claudeCode2316(entry: String) {
+        let want = "You are a Claude agent, built on the Claude Agent SDK by Anthropic.\n"
+        let system = "x-anthropic-billing-header: cc_version=2.1.316.2e4; cc_entrypoint=\(entry);\nYou are a Claude agent, built on Anthropic's Claude Agent SDK.\n"
+        #expect(AntigravityCloak.cloak(system) == want)
+        #expect(AntigravityCloak.cloak(breakLines(system, brokenTwice)) == want, "the copy broken up")
+        #expect(AntigravityCloak.cloak(want) == want, "reworded again")
+        // The Code tab's main identity line goes through as written.
+        let main = "x-anthropic-billing-header: cc_version=2.1.316.2e4; cc_entrypoint=claude-desktop;\nYou are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.\nYou are an interactive agent."
+        #expect(AntigravityCloak.cloak(main) == "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.\nYou are an interactive agent.")
+        #expect(AntigravityCloak.turnedAwayLines == Self.turnedAwayLines)
+    }
+
+    @Test("Every line Antigravity turns away is reworded, an older broken-up copy as the line, and nothing else changes (magpie TestAntigravityCloakRewordsEveryLineItTurnsAway)", arguments: [
         "You are a Claude agent, built on Anthropic's Claude Agent SDK.",
         codexGPT5System,
         "You are Codex, a coding agent based on GPT-5. You and the user share the same workspace.",
         hermesOldSystem,
         hermesOldSystem.uppercased(),
+        ompLine,
         // twice, and after text whose lower case is longer than it is
         "İstanbul ✓ " + codexGPT5System + "\n\n" + hermesOldSystem + "\n" + codexGPT5System,
     ])
-    func broken(system: String) {
-        let zero = AntigravityCloak.zeroWidth
-        #expect(AntigravityCloak.turnsAway(system))
-        let cloaked = AntigravityCloak.cloak(system)
-        #expect(!AntigravityCloak.turnsAway(cloaked))
-        #expect(cloaked.replacingOccurrences(of: zero, with: "") == system)
-        #expect(cloaked.contains(zero))
-        let low = cloaked.replacingOccurrences(of: zero, with: "|").lowercased()
-        for line in Self.turnedAwayLines where system.lowercased().contains(line) {
-            #expect(low.contains(String(line.prefix(1)) + "|" + String(line.dropFirst())), "\(line)")
+    func reworded(system: String) {
+        for sent in [system, breakLines(system, brokenTwice), breakLines(system, joinedBy("\u{2060}")), breakLines(system, joinedBy("\u{00AD}"))] {
+            #expect(AntigravityCloak.turnsAway(sent), "\(sent)")
+            let got = AntigravityCloak.cloak(sent)
+            #expect(!AntigravityCloak.turnsAway(got), "a line Antigravity turns away is still in \(got)")
+            if sent == system {
+                let same = unsaid(got) == system
+                    || (system == system.uppercased() && unsaid(got).caseInsensitiveCompare(system) == .orderedSame)
+                #expect(same, "more than the lines changed: \(got)")
+            } else {
+                #expect(got == AntigravityCloak.cloak(system), "a copy broken up went as \(got), not as the line")
+            }
+            #expect(got.unicodeScalars.allSatisfy { !["\u{200B}", "\u{2060}", "\u{00AD}"].contains($0) }, "an invisible character went: \(got)")
+            #expect(AntigravityCloak.cloak(got) == got, "a prompt reworded once is reworded again: \(got)")
         }
-        // A prompt broken up once is not broken again.
-        #expect(AntigravityCloak.cloak(cloaked) == cloaked)
-        #expect(AntigravityCloak.turnedAwayLines == Self.turnedAwayLines)
+    }
+
+    @Test("Claude Code's prompt goes with its billing line left out")
+    func claudeCodePrompt() {
+        #expect(AntigravityCloak.cloak(claudeCodeSystem) == "You are Claude Code, Anthropic's official CLI for Claude.")
+        #expect(AntigravityCloak.cloak(claudeCodeSystem.uppercased()) == "YOU ARE CLAUDE CODE, ANTHROPIC'S OFFICIAL CLI FOR CLAUDE.")
+        #expect(AntigravityCloak.cloak("x-anthropic-billing-header: cc_version=2.1.316.2e4; cc_entrypoint=sdk-cli;") == "")
+        #expect(
+            AntigravityCloak.cloak("You are a Claude agent, built  on Anthropic's\u{00A0}Claude\nAgent SDK.")
+                == "You are a Claude agent, built  on the\u{00A0}Claude\nAgent SDK by Anthropic.")
     }
 
     @Test("What Antigravity answers is sent as written", arguments: [
         "",
         "You are opencode, an interactive CLI tool.",
         "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+        "You are a Claude agent, built on the Claude Agent SDK by Anthropic.",
         "You are Codex, based on GPT-5. You are running as a coding agent in the Codex CLI on a user's computer.",
         "You are Hermes Agent, built by Nous Research. Be direct.",
         "You are Hermes Agent, an intelligent AI assistant created by Nous.",
@@ -812,17 +916,88 @@ struct AntigravityCloakTests {
         #expect(AntigravityCloak.cloak(system) == system)
     }
 
-    @Test("The request carries the prompt broken up; the caller's context keeps it as written")
+    @Test("omp's RFC 2119 line goes as \"RFC 2119 key words: …\" (magpie TestAntigravityCloakOmpLine)")
+    func ompLineReworded() {
+        let got = AntigravityCloak.cloak(ompSystem)
+        #expect(got == ompSystem.replacingOccurrences(of: "keywords", with: "key words"))
+        #expect(AntigravityCloak.turnsAway(ompSystem))
+        #expect(!AntigravityCloak.turnsAway(got))
+        #expect(AntigravityCloak.cloak(got) == got)
+        #expect(AntigravityCloak.hint(system: ompSystem) == AntigravityCloak.rfcHint)
+        // A copy broken up between or inside its words goes as the line.
+        let reworded = ompLine.replacingOccurrences(of: "keywords", with: "key words")
+        #expect(AntigravityCloak.cloak(ompLine.replacingOccurrences(of: "keywords: ", with: "keywords:\u{200B} ")) == reworded)
+        #expect(AntigravityCloak.cloak(ompLine.replacingOccurrences(of: "keywords", with: "key\u{00AD}words")) == reworded)
+    }
+
+    /// Google's check reads each line in any case with any white space
+    /// between its words: each of omp's copies was turned away on a real
+    /// account (magpie 0b64846).
+    static let wrappedLines = [
+        ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\n"),
+        ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\r\n"),
+        ompLine.replacingOccurrences(of: "2119 ", with: "2119\n"),
+        ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\n   "),
+        ompLine.replacingOccurrences(of: "MUST, ", with: "MUST,\t"),
+        ompLine.replacingOccurrences(of: "MUST, ", with: "MUST,  "),
+        ompLine.replacingOccurrences(of: "MUST, ", with: "MUST,\u{00A0}"),
+        ompLine.lowercased(),
+        hermesOldSystem.replacingOccurrences(of: "AI assistant", with: "AI\nassistant"),
+        codexGPT5System.replacingOccurrences(of: "agent based", with: "agent\tbased"),
+        codexGPT5System.replacingOccurrences(of: "Codex, an", with: "Codex,\r\n\u{3000}an"),
+    ]
+
+    @Test("A line wrapped or widened is still found, and goes reworded with nothing else changed (magpie TestAntigravityCloakLineWrappedOrWidened)", arguments: AntigravityCloakTests.wrappedLines)
+    func wrappedOrWidened(line: String) {
+        let system = "<conventions>\n" + line + "\n</conventions>\n"
+        #expect(AntigravityCloak.turnsAway(system))
+        let got = AntigravityCloak.cloak(system)
+        #expect(got != system)
+        #expect(!AntigravityCloak.turnsAway(got))
+        #expect(!got.contains(zeroWidth), "broken up, not reworded: \(got)")
+        #expect(unsaid(got) == system, "more than its words changed: \(got)")
+        #expect(AntigravityCloak.cloak(got) == got)
+    }
+
+    @Test("A wrapped copy is told its own hint")
+    func wrappedHint() {
+        let lines = Self.wrappedLines
+        #expect(AntigravityCloak.hint(system: lines[1]) == AntigravityCloak.rfcHint)
+        #expect(AntigravityCloak.hint(system: lines[8]).contains("Hermes Agent's earlier default persona"))
+        #expect(AntigravityCloak.hint(system: lines[9]).contains("Codex's own system prompt"))
+    }
+
+    @Test("What went through as written on the same account goes as written", arguments: [
+        String(ompLine.dropLast()),
+        ompLine.replacingOccurrences(of: "RFC 2119", with: "RFC2119"),
+        ompLine.replacingOccurrences(of: ", ", with: ","),
+        "RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.",
+        "RFC 2119 key words: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.",
+    ])
+    func ompAsWritten(system: String) {
+        #expect(!AntigravityCloak.turnsAway(system))
+        #expect(AntigravityCloak.cloak(system) == system)
+    }
+
+    @Test("The request carries the prompt reworded; the caller's context keeps it as written")
     func sent() async throws {
         let client = AntigravityStubClient(candidate(#"{"text":"ok"}"#, finish: "STOP"))
         let context = Context(systemPrompt: claudeCodeSystem, messages: [.user(UserMessage(text: "hi"))])
         _ = await turn(client, context: context)
         let envelope = Envelope(root: try object(client.requests.first?.body))
-        let system = try #require(envelope.system)
-        #expect(system != claudeCodeSystem)
-        #expect(system.replacingOccurrences(of: AntigravityCloak.zeroWidth, with: "") == claudeCodeSystem)
-        #expect(system.hasPrefix("x" + AntigravityCloak.zeroWidth + "-anthropic-billing-header:"))
+        #expect(envelope.system == "You are Claude Code, Anthropic's official CLI for Claude.")
         #expect(context.systemPrompt == claudeCodeSystem)
+    }
+
+    @Test("A prompt holding only Claude Code's billing line goes with no system instruction")
+    func billingLineOnly() async throws {
+        let client = AntigravityStubClient(candidate(#"{"text":"ok"}"#, finish: "STOP"))
+        let context = Context(
+            systemPrompt: "x-anthropic-billing-header: cc_version=2.1.316.2e4; cc_entrypoint=claude-desktop;\n",
+            messages: [.user(UserMessage(text: "hi"))])
+        _ = await turn(client, context: context)
+        let envelope = Envelope(root: try object(client.requests.first?.body))
+        #expect(envelope.request["systemInstruction"] == nil)
     }
 }
 
@@ -986,6 +1161,8 @@ struct AntigravityFailureTests {
         ("You are a Claude agent, built on Anthropic's Claude Agent SDK.", "Claude Code and the Claude Agent SDK"),
         (codexGPT5System, "Codex's own system prompt"),
         (hermesOldSystem, "Hermes Agent's earlier default persona"),
+        (ompSystem, "RFC 2119 keywords"),
+        (ompLine.replacingOccurrences(of: "REQUIRED, ", with: "REQUIRED,\r\n"), "RFC 2119 keywords"),
     ])
     func turnedAway(system: String, hint: String) async throws {
         let client = AntigravityStubClient([.init(status: 429, headers: ["Content-Type": "application/json"], chunks: [Data(turnedAwayBody.utf8)])])
