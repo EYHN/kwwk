@@ -88,10 +88,18 @@ identity line, Codex's GPT-5 identity line, Hermes Agent's earlier persona,
 oh-my-pi's "RFC 2119 keywords: MUST, REQUIRED, …" — whatever quota is left
 (magpie #666). Google matches each line in any case with any run of white
 space between its words (LF, CRLF, a tab, two spaces, a no-break space:
-JavaScript's `\s`), and so does `AntigravityCloak`. It breaks those lines
-with a zero-width space before they go, except oh-my-pi's, which it sends as
-"RFC 2119 key words: …" with its white space as it was: a broken-up copy of
-it was still refused 1 to 3 times in 10 (magpie 0b64846). Should Google
+JavaScript's `\s`), and so does `AntigravityCloak`. It rewords each line
+with the same meaning before it goes, every other word and white space as
+written (magpie b325718): the billing line is left out to its line's end (a
+prompt holding only it goes with no system instruction), "built on the
+Claude Agent SDK by Anthropic", Codex's "built on GPT-5", Hermes' "built by
+Nous Research", oh-my-pi's "RFC 2119 key words: …". Claude Code's main
+identity line ("… running within the Claude Agent SDK") goes as written.
+Until 11-14 the lines went broken up by zero-width spaces; since then
+Google's check reads past invisible characters and turned every broken-up
+line away 5 of 5, so a line is also matched with U+200B, U+2060, a soft
+hyphen or another invisible character inside or between its words, and a
+copy an older cloak broke up is reworded as the line. Should Google
 still answer that 429 to such a prompt, `AntigravityProvider` reads it as
 `refusal` (`providerCode: prompt_refusal`, never retried, never a quota),
 with a hint after Google's words. Any other Antigravity 429 that says it is back within

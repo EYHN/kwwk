@@ -7,11 +7,13 @@ import Foundation
 /// case and with any run of white space between its words, is answered 429
 /// "Resource has been exhausted (e.g. check quota)" on every model whatever
 /// quota is left, while the same words in a message go through (magpie
-/// #666). Each line is broken up before it goes by a zero-width space after
-/// its first letter, which Google lets through and the model reads past;
-/// each line so broken was answered on a real account where the line as
-/// written was turned away. oh-my-pi's RFC 2119 line is reworded instead
-/// (magpie 0b64846).
+/// #666). Each line goes reworded with the same meaning (`said`). Until
+/// 11-14 they went broken up by zero-width spaces, which Google let through;
+/// since then its check reads past invisible characters: every line here,
+/// broken up by U+200B or U+2060, was turned away 5 of 5 on a real account,
+/// and Claude Desktop's Code tab got nothing but the refusal, while each
+/// rewording went through (magpie b325718). A mention of the Claude Agent
+/// SDK elsewhere ("running within the Claude Agent SDK") goes as written.
 enum AntigravityCloak {
     /// The lines, lower-cased, words separated by single spaces, each tried
     /// on a real account:
@@ -21,7 +23,7 @@ enum AntigravityCloak {
     ///   - Hermes Agent's earlier default persona;
     ///   - the line oh-my-pi (omp) starts its system prompt with.
     static let turnedAwayLines = [
-        "x-anthropic-billing-header:",
+        billingLine,
         "built on anthropic's claude agent sdk",
         "you are codex, an agent based on gpt-5",
         "you are codex, a coding agent based on gpt-5",
@@ -29,41 +31,83 @@ enum AntigravityCloak {
         rfcLine,
     ]
 
+    /// Claude Code's billing line, as `turnedAwayLines` has it.
+    static let billingLine = "x-anthropic-billing-header:"
+
     /// The line oh-my-pi (omp) 18.20.0 starts its system prompt with, and
     /// its advisor's and live mode's, which Antigravity turns away as it does
     /// the others (omp on an Antigravity account got the 429; magpie
     /// 0b64846).
     static let rfcLine = "rfc 2119 keywords: must, required, should, recommended, may, optional."
 
-    /// U+200B, what goes inside a line Antigravity turns away.
-    static let zeroWidth = "\u{200B}"
-
     /// A run of white space as Google's check reads it: JavaScript's `\s`
     /// (tab, LF, VT, FF, CR, every Zs space such as NBSP, U+2028, U+2029,
     /// U+FEFF). On a real account omp's line was turned away just as well
     /// wrapped with LF or CRLF, indented, with a tab, two spaces or a
-    /// no-break space between two of its words. U+200B is not in it, so a
-    /// line already broken up isn't one any more.
+    /// no-break space between two of its words.
     private static let space = #"[\x{0009}-\x{000D}\p{Zs}\x{2028}\x{2029}\x{FEFF}]+"#
 
-    /// `line` matched in any case with any run of white space between its
-    /// words (magpie `agLineRe`).
+    /// The characters Google's check reads past since 11-14 (soft hyphen,
+    /// Mongolian vowel separator, U+200B–U+200F, U+2060–U+2064, U+FEFF): a
+    /// line broken up by them is turned away as the line itself (magpie
+    /// `agInvisible`).
+    private static let invisible = #"[\x{00AD}\x{180E}\x{200B}-\x{200F}\x{2060}-\x{2064}\x{FEFF}]"#
+
+    private static let invisibleExpression = try! NSRegularExpression(pattern: invisible)
+
+    /// `line` matched in any case, with any run of white space between its
+    /// words and any invisible characters inside them, so a copy someone
+    /// broke up (an older cloak, magpie's or kwwk's) is found as the line.
+    /// Claude Code's billing line is matched to the end of its line, since it
+    /// goes whole (magpie `agLineRe`).
     private static func lineExpression(_ line: String) -> NSRegularExpression {
-        let pattern = line.split(separator: " ", omittingEmptySubsequences: false)
-            .map { NSRegularExpression.escapedPattern(for: String($0)) }
-            .joined(separator: space)
+        let words = line.split(separator: " ", omittingEmptySubsequences: false).map { word in
+            word.unicodeScalars
+                .map { NSRegularExpression.escapedPattern(for: String($0)) }
+                .joined(separator: invisible + "*")
+        }
+        var pattern = words.joined(separator: invisible + "*" + space + invisible + "*")
+        if line == billingLine {
+            pattern += #"[^\n]*\n?"#
+        }
         return try! NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }
 
     /// `turnedAwayLines` as `lineExpression` matches them, in the same order.
-    private static let lineExpressions = turnedAwayLines.map(lineExpression)
+    static let lineExpressions = turnedAwayLines.map(lineExpression)
 
-    /// How omp's line goes: "key words", RFC 2119's own term, for its
-    /// "keywords". A copy broken up by zero-width spaces, like the other
-    /// lines, was still turned away 1 to 3 times in 10 on a real account
-    /// (U+200B, U+2060 or a soft hyphen alike), "key words" 0 in 30, and
-    /// the model reads the same rule in it.
+    private static let sdkSaidAs = try! NSRegularExpression(
+        pattern: "^(built" + space + "on" + space + ")anthropic's(" + space + ")(claude" + space + "agent" + space + "sdk)$",
+        options: [.caseInsensitive])
+    private static let basedOn = try! NSRegularExpression(pattern: "based(" + space + ")on", options: [.caseInsensitive])
+    private static let createdBy = try! NSRegularExpression(pattern: "created(" + space + ")by", options: [.caseInsensitive])
     private static let rfcSaidAs = try! NSRegularExpression(pattern: "(key)(words)", options: [.caseInsensitive])
+
+    /// How each line of `turnedAwayLines` goes, in the same order, given the
+    /// line as it was matched with its invisible characters taken out and
+    /// its white space as it was (magpie `agSaidAs`):
+    ///   - Claude Code's billing line not at all, to the end of its line: it
+    ///     is Anthropic's, and no Antigravity model reads anything in it;
+    ///   - the Agent SDK's "built on Anthropic's Claude Agent SDK" as "built
+    ///     on the Claude Agent SDK by Anthropic";
+    ///   - Codex's "based on GPT-5" as "built on GPT-5";
+    ///   - Hermes' "created by Nous Research" as "built by Nous Research", as
+    ///     Hermes' current persona says it;
+    ///   - omp's "keywords" as "key words", RFC 2119's own term.
+    private static func said(_ line: Int, _ matched: String) -> String {
+        switch line {
+        case 0: return ""
+        case 1: return replace(sdkSaidAs, in: matched, with: "$1the$2$3 by Anthropic")
+        case 2, 3: return replace(basedOn, in: matched, with: "built$1on")
+        case 4: return replace(createdBy, in: matched, with: "built$1by")
+        default: return replace(rfcSaidAs, in: matched, with: "$1 $2")
+        }
+    }
+
+    private static func replace(_ expression: NSRegularExpression, in text: String, with template: String) -> String {
+        expression.stringByReplacingMatches(
+            in: text, range: NSRange(location: 0, length: (text as NSString).length), withTemplate: template)
+    }
 
     /// Whether `system` carries `line`, one of `turnedAwayLines`.
     private static func says(_ system: String, _ line: String) -> Bool {
@@ -72,55 +116,39 @@ enum AntigravityCloak {
     }
 
     private static func matches(_ expression: NSRegularExpression, in text: String) -> Bool {
-        expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+        expression.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
     }
 
-    /// Whether `system` carries a line Antigravity turns away.
+    /// Whether `system` carries a line Antigravity turns away, broken up by
+    /// invisible characters or not.
     static func turnsAway(_ system: String) -> Bool {
         lineExpressions.contains { matches($0, in: system) }
     }
 
-    /// `system` with each line Antigravity turns away broken up by a
-    /// zero-width space after its first letter, wherever, in whatever case
-    /// and with whatever white space it is, and every other character as the
-    /// caller wrote it. A line already broken up is not one any more and is
-    /// left alone. omp's RFC 2119 line goes as "RFC 2119 key words: …"
-    /// instead, every white space in it as it was.
+    /// `system` with each line Antigravity turns away said as `said` says,
+    /// wherever, in whatever case and with whatever white space it is,
+    /// broken up by invisible characters or not, and every other character as
+    /// the caller wrote it. A prompt holding only Claude Code's billing line
+    /// comes back empty, and goes with no system instruction.
     static func cloak(_ system: String) -> String {
         guard turnsAway(system) else { return system }
-        let text = rewordRFC(system)
-        var breaks: [String.Index] = []
-        for expression in lineExpressions {
-            for match in expression.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
-                guard let range = Range(match.range, in: text), !range.isEmpty else { continue }
-                breaks.append(text.unicodeScalars.index(after: range.lowerBound))
+        let text = system as NSString
+        var found: [(range: NSRange, line: Int)] = []
+        for (line, expression) in lineExpressions.enumerated() {
+            for match in expression.matches(in: system, range: NSRange(location: 0, length: text.length)) {
+                found.append((match.range, line))
             }
         }
-        guard !breaks.isEmpty else { return text }
+        found.sort { $0.range.location < $1.range.location }
         var out = ""
-        var previous = text.startIndex
-        for at in Set(breaks).sorted() {
-            out.unicodeScalars.append(contentsOf: text.unicodeScalars[previous..<at])
-            out += zeroWidth
-            previous = at
+        var previous = 0
+        for (range, line) in found where range.location >= previous {
+            out += text.substring(with: NSRange(location: previous, length: range.location - previous))
+            out += said(line, replace(invisibleExpression, in: text.substring(with: range), with: ""))
+            previous = range.location + range.length
         }
-        out.unicodeScalars.append(contentsOf: text.unicodeScalars[previous...])
+        out += text.substring(from: previous)
         return out
-    }
-
-    /// `system` with every copy of omp's line said as "key words".
-    private static func rewordRFC(_ system: String) -> String {
-        guard let at = turnedAwayLines.firstIndex(of: rfcLine) else { return system }
-        let matches = lineExpressions[at].matches(in: system, range: NSRange(system.startIndex..., in: system))
-        guard !matches.isEmpty else { return system }
-        let out = NSMutableString(string: system)
-        for match in matches.reversed() {
-            let said = out.substring(with: match.range)
-            let reworded = rfcSaidAs.stringByReplacingMatches(
-                in: said, range: NSRange(location: 0, length: (said as NSString).length), withTemplate: "$1 $2")
-            out.replaceCharacters(in: match.range, with: reworded)
-        }
-        return out as String
     }
 
     /// Whether what Antigravity said is the refusal's words, on either shape

@@ -152,9 +152,10 @@ enum AntigravityRequest {
             contents.append(["role": "user", "parts": [["text": continueText]]])
         }
         var request: [String: Any] = ["contents": contents]
-        if let system = systemPrompt, !system.isEmpty {
-            // The lines Google turns away, broken up (AntigravityCloak).
-            request["systemInstruction"] = ["role": "user", "parts": [["text": AntigravityCloak.cloak(system)]]]
+        // The lines Google turns away, reworded (AntigravityCloak); a prompt
+        // that held only Claude Code's billing line goes with none.
+        if let system = systemPrompt.map(AntigravityCloak.cloak), !system.isEmpty {
+            request["systemInstruction"] = ["role": "user", "parts": [["text": system]]]
         }
 
         var sendsTools = !tools.isEmpty
