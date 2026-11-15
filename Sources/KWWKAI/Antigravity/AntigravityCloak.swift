@@ -14,22 +14,49 @@ import Foundation
 /// and Claude Desktop's Code tab got nothing but the refusal, while each
 /// rewording went through (magpie b325718). A mention of the Claude Agent
 /// SDK elsewhere ("running within the Claude Agent SDK") goes as written.
+/// Since the evening of 11-14 Hermes', OpenCode's, Codex CLI's and pi's
+/// identity lines are turned away too (magpie e6e0585).
 enum AntigravityCloak {
     /// The lines, lower-cased, words separated by single spaces, each tried
     /// on a real account:
     ///   - Claude Code's billing line and the Claude Agent SDK's identity
     ///     line (Claude Desktop's chats);
     ///   - the identity lines of Codex's own prompts for its GPT-5 models;
-    ///   - Hermes Agent's earlier default persona;
-    ///   - the line oh-my-pi (omp) starts its system prompt with.
+    ///   - Hermes Agent's earlier default persona ("You are Hermes Agent,
+    ///     an intelligent AI assistant created by Nous Research. …"), which a
+    ///     SOUL.md the user edited keeps; since 11-14 turned away with "built
+    ///     by" too, and as "You're Hermes Agent, …" with "created by";
+    ///   - the line oh-my-pi (omp) starts its system prompt with;
+    ///   - since the evening of 11-14, 3 of 3 or 5 of 5 each on a real
+    ///     account, on gemini-3-flash and claude-sonnet-4-6 alike: "You are
+    ///     Hermes Agent" (today's persona, "You are Hermes Agent, built by
+    ///     Nous Research.", and the earlier one), "You are OpenCode" (each of
+    ///     OpenCode 2.0.25's prompts), "You are a coding agent running in the
+    ///     Codex CLI" (Codex 0.165's prompt for a model it has none of its own
+    ///     for) and "a coding assistant running inside pi" (pi 1.5.0's default
+    ///     prompt). Codex's prompt for GPT-6, Claude Code's, Gemini CLI's,
+    ///     Qwen Code's, Cline's, Kilo's, goose's, Amp's, Droid's, Kimi CLI's,
+    ///     Aider's and Cursor's went through as written (magpie e6e0585).
     static let turnedAwayLines = [
         billingLine,
         "built on anthropic's claude agent sdk",
         "you are codex, an agent based on gpt-5",
         "you are codex, a coding agent based on gpt-5",
-        "hermes agent, an intelligent ai assistant created by nous research",
+        hermesEarlierLine,
         rfcLine,
+        hermesLine,
+        openCodeLine,
+        codexCLILine,
+        piLine,
     ]
+
+    /// Hermes' earlier persona from after its name, so it doesn't overlap
+    /// `hermesLine` and each goes reworded.
+    static let hermesEarlierLine = "an intelligent ai assistant created by nous research"
+    static let hermesLine = "you are hermes agent"
+    static let openCodeLine = "you are opencode"
+    static let codexCLILine = "you are a coding agent running in the codex cli"
+    static let piLine = "a coding assistant running inside pi"
 
     /// Claude Code's billing line, as `turnedAwayLines` has it.
     static let billingLine = "x-anthropic-billing-header:"
@@ -82,6 +109,8 @@ enum AntigravityCloak {
     private static let basedOn = try! NSRegularExpression(pattern: "based(" + space + ")on", options: [.caseInsensitive])
     private static let createdBy = try! NSRegularExpression(pattern: "created(" + space + ")by", options: [.caseInsensitive])
     private static let rfcSaidAs = try! NSRegularExpression(pattern: "(key)(words)", options: [.caseInsensitive])
+    private static let youAre = try! NSRegularExpression(pattern: "^(you)" + space + "are", options: [.caseInsensitive])
+    private static let inside = try! NSRegularExpression(pattern: "inside", options: [.caseInsensitive])
 
     /// How each line of `turnedAwayLines` goes, in the same order, given the
     /// line as it was matched with its invisible characters taken out and
@@ -93,14 +122,21 @@ enum AntigravityCloak {
     ///   - Codex's "based on GPT-5" as "built on GPT-5";
     ///   - Hermes' "created by Nous Research" as "built by Nous Research", as
     ///     Hermes' current persona says it;
-    ///   - omp's "keywords" as "key words", RFC 2119's own term.
+    ///   - omp's "keywords" as "key words", RFC 2119's own term;
+    ///   - "You are Hermes Agent", "You are OpenCode" and Codex CLI's line as
+    ///     "You're …" (5 of 5 each; Hermes' earlier persona with "built by"
+    ///     as well, 5 of 5);
+    ///   - pi's "running inside pi" as "running within pi" (5 of 5 on both
+    ///     models).
     private static func said(_ line: Int, _ matched: String) -> String {
         switch line {
         case 0: return ""
         case 1: return replace(sdkSaidAs, in: matched, with: "$1the$2$3 by Anthropic")
         case 2, 3: return replace(basedOn, in: matched, with: "built$1on")
         case 4: return replace(createdBy, in: matched, with: "built$1by")
-        default: return replace(rfcSaidAs, in: matched, with: "$1 $2")
+        case 5: return replace(rfcSaidAs, in: matched, with: "$1 $2")
+        case 6, 7, 8: return replace(youAre, in: matched, with: "$1're")
+        default: return replace(inside, in: matched, with: "within")
         }
     }
 
@@ -176,9 +212,17 @@ enum AntigravityCloak {
                 + "so it is not a quota and waiting won't help; a chat begun on a GPT model keeps that prompt, "
                 + "so start a new chat on this model"
         }
-        if says(system, "hermes agent, an intelligent ai assistant created by nous research") {
-            return "Antigravity answers this 429 to Hermes Agent's earlier default persona whatever quota is left, "
-                + "so it is not a quota and waiting won't help; Hermes' current default persona goes through"
+        if says(system, codexCLILine) {
+            return codexCLIHint
+        }
+        if says(system, hermesLine) || says(system, hermesEarlierLine) {
+            return hermesHint
+        }
+        if says(system, openCodeLine) {
+            return openCodeHint
+        }
+        if says(system, piLine) {
+            return piHint
         }
         if says(system, rfcLine) {
             return rfcHint
@@ -186,6 +230,29 @@ enum AntigravityCloak {
         return "Antigravity answers this 429 to the system prompt of Claude Code and the Claude Agent SDK "
             + "whatever quota is left, so it is not a quota and waiting won't help; use another provider for these chats"
     }
+
+    /// The hint for Hermes Agent's persona, today's or the earlier one
+    /// (magpie `antigravityHermesHint`).
+    static let hermesHint = "Antigravity answers this 429 to Hermes Agent's default persona (\"You are Hermes Agent, …\" in its SOUL.md), "
+        + "the current one and the earlier one alike, whatever quota is left, so it is not a quota and waiting won't help; "
+        + "it is sent as \"You're Hermes Agent, …\", which goes through, so start SOUL.md another way, "
+        + "or use another provider for these chats"
+
+    /// The hint for OpenCode's prompts (magpie `antigravityOpenCodeHint`).
+    static let openCodeHint = "Antigravity answers this 429 to OpenCode's system prompt (\"You are OpenCode, …\") whatever quota is left, "
+        + "so it is not a quota and waiting won't help; that line is sent as \"You're OpenCode, …\", which goes through, "
+        + "so use another provider for these chats"
+
+    /// The hint for Codex's prompt for a model it has none of its own for
+    /// (magpie `antigravityCodexCLIHint`).
+    static let codexCLIHint = "Antigravity answers this 429 to Codex's prompt for a model it has none of its own for "
+        + "(\"You are a coding agent running in the Codex CLI\") whatever quota is left, so it is not a quota and waiting won't help; "
+        + "that line is sent as \"You're …\", which goes through, so use another provider for these chats"
+
+    /// The hint for pi's default prompt (magpie `antigravityPiHint`).
+    static let piHint = "Antigravity answers this 429 to pi's default system prompt (\"You are a coding assistant running inside pi\") "
+        + "whatever quota is left, so it is not a quota and waiting won't help; that line is sent as \"running within pi\", "
+        + "which goes through, so give pi a system prompt of your own (--system-prompt) or use another provider for these chats"
 
     /// The hint for omp's RFC 2119 line (magpie `antigravityRFCHint`).
     static let rfcHint = "Antigravity answers this 429 to the line \"RFC 2119 keywords: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL.\" "

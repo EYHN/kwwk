@@ -85,15 +85,21 @@ Antigravity (Google's Code Assist backend) answers 429 "Resource has been
 exhausted (e.g. check quota)" to a system prompt that carries one of the
 lines it turns away — Claude Code's billing line, the Claude Agent SDK's
 identity line, Codex's GPT-5 identity line, Hermes Agent's earlier persona,
-oh-my-pi's "RFC 2119 keywords: MUST, REQUIRED, …" — whatever quota is left
-(magpie #666). Google matches each line in any case with any run of white
+oh-my-pi's "RFC 2119 keywords: MUST, REQUIRED, …"; since the evening of
+11-14 also "You are Hermes Agent" (Hermes' current persona), "You are
+OpenCode", Codex CLI's "You are a coding agent running in the Codex CLI"
+and pi's "a coding assistant running inside pi" — whatever quota is left
+(magpie #666, e6e0585). Codex's GPT-6 prompt, Claude Code's own line, Gemini
+CLI, Qwen Code, Cline, Kilo, goose, Amp, Droid, Kimi, Aider and Cursor pass
+as written. Google matches each line in any case with any run of white
 space between its words (LF, CRLF, a tab, two spaces, a no-break space:
 JavaScript's `\s`), and so does `AntigravityCloak`. It rewords each line
 with the same meaning before it goes, every other word and white space as
 written (magpie b325718): the billing line is left out to its line's end (a
 prompt holding only it goes with no system instruction), "built on the
 Claude Agent SDK by Anthropic", Codex's "built on GPT-5", Hermes' "built by
-Nous Research", oh-my-pi's "RFC 2119 key words: …". Claude Code's main
+Nous Research", oh-my-pi's "RFC 2119 key words: …", "You're" for Hermes',
+OpenCode's and Codex CLI's "You are", pi's "running within pi". Claude Code's main
 identity line ("… running within the Claude Agent SDK") goes as written.
 Until 11-14 the lines went broken up by zero-width spaces; since then
 Google's check reads past invisible characters and turned every broken-up
@@ -102,7 +108,8 @@ hyphen or another invisible character inside or between its words, and a
 copy an older cloak broke up is reworded as the line. Should Google
 still answer that 429 to such a prompt, `AntigravityProvider` reads it as
 `refusal` (`providerCode: prompt_refusal`, never retried, never a quota),
-with a hint after Google's words. Any other Antigravity 429 that says it is back within
+with a hint after Google's words that names the agent (Codex, Codex CLI,
+Hermes, OpenCode, pi, oh-my-pi). Any other Antigravity 429 that says it is back within
 60 seconds ("reset after 26s", or Google's `RetryInfo`) is `rateLimit`,
 retried after that wait, as is Google's capacity or rate limit
 (`MODEL_CAPACITY_EXHAUSTED`, `RATE_LIMIT_EXCEEDED`) and a bare "Resource has
