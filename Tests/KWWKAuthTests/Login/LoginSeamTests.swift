@@ -22,7 +22,7 @@ struct LoginSeamTests {
         return callbacks
     }
 
-    @Test("Claude binds its registered redirect and exchanges the verifier through the app's presenter")
+    @Test("Claude binds its registered redirect, sends its own state and exchanges the verifier through the app's presenter")
     func anthropicThroughSeams() async throws {
         let client = QueuedHTTPClient([
             .response(status: 200, body: #"{"access_token":"a","refresh_token":"r","expires_in":28800}"#),
@@ -41,12 +41,14 @@ struct LoginSeamTests {
         let query = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems)
         let state = try #require(query.first { $0.name == "state" }?.value)
         #expect(query.first { $0.name == "redirect_uri" }?.value == loopback.redirectURI)
-        #expect(query.first { $0.name == "code_challenge" }?.value == PKCE.base64URL(Data(SHA256.hash(data: Data(state.utf8)))))
         let request = try #require(client.requests.first)
         let data = try #require(request.body)
         let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        let verifier = try #require(body["code_verifier"])
+        #expect(query.first { $0.name == "code_challenge" }?.value == PKCE.base64URL(Data(SHA256.hash(data: Data(verifier.utf8)))))
+        // The state is a value of its own; the verifier stays in the token request.
+        #expect(state != verifier)
         #expect(body["state"] == state)
-        #expect(body["code_verifier"] == state)
         #expect(body["code"] == "the-code")
         #expect(body["redirect_uri"] == loopback.redirectURI)
         #expect(credentials.refresh == "r")
@@ -98,6 +100,42 @@ struct LoginSeamTests {
             )
         }
         #expect(made.value?.stopped == true)
+    }
+
+    @Test("No redirect sign-in shows its PKCE verifier in the page it opens", arguments: [
+        ("anthropic", #"{"access_token":"a","refresh_token":"r","expires_in":3600}"#),
+        ("openai-codex", #"{"access_token":"a","refresh_token":"r","expires_in":3600}"#),
+        ("devin", #"{"token":"t"}"#),
+        ("openrouter", #"{"key":"k"}"#),
+    ])
+    func verifierStaysOutOfThePage(providerId: String, grant: String) async throws {
+        let client = QueuedHTTPClient([.response(status: 200, body: grant)])
+        let presenter = RecordingPresenter()
+        _ = try await OAuthSubscriptions.login(
+            providerId: providerId,
+            callbacks: callbacks(presenter: presenter, params: ["code": "c"], made: LoopbackBox()),
+            client: client
+        )
+        let page = try #require(presenter.shown.first)
+        let request = try #require(client.requests.first)
+        let verifier = try #require(codeVerifier(in: request.body))
+        #expect(!verifier.isEmpty)
+        #expect(!page.absoluteString.contains(verifier))
+    }
+
+    /// The `code_verifier` a token request sends, as JSON or as a form.
+    private func codeVerifier(in body: Data?) -> String? {
+        guard let body else { return nil }
+        if let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] {
+            return json["code_verifier"] as? String
+        }
+        for pair in String(decoding: body, as: UTF8.self).split(separator: "&") {
+            let parts = pair.split(separator: "=", maxSplits: 1)
+            if parts.count == 2, parts[0] == "code_verifier" {
+                return String(parts[1]).removingPercentEncoding
+            }
+        }
+        return nil
     }
 
     @Test("Codex binds the registered redirect, shows the page through the presenter and keeps the account id")
