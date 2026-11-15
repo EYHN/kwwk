@@ -86,6 +86,10 @@ public enum OAuthLogin {
         client: HTTPClient = URLSessionHTTPClient()
     ) async throws -> OAuthCredentials {
         let pkce = PKCE.random()
+        // The state is its own random value, drawn in the verifier's shape
+        // (32 random bytes, base64url). The verifier itself goes only in the
+        // token request's `code_verifier`, never in the browser's URL.
+        let state = PKCE.random().verifier
         let provider = AnthropicOAuthProvider()
         let server = try await openLoopback(callbacks, port: 53692)
         defer { server.stop() }
@@ -101,7 +105,7 @@ public enum OAuthLogin {
             URLQueryItem(name: "scope", value: scope),
             URLQueryItem(name: "code_challenge", value: pkce.challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "state", value: pkce.verifier),
+            URLQueryItem(name: "state", value: state),
         ]
 
         callbacks.onProgress("waiting for Anthropic callback on \(redirect)…")
@@ -113,7 +117,7 @@ public enum OAuthLogin {
         guard let code = params["code"], !code.isEmpty else {
             throw OAuthError.invalidResponse("anthropic callback had no code")
         }
-        guard params["state"] == pkce.verifier else {
+        guard params["state"] == state else {
             throw OAuthError.invalidResponse("anthropic OAuth state mismatch")
         }
 
@@ -122,7 +126,7 @@ public enum OAuthLogin {
             "grant_type": "authorization_code",
             "client_id": provider.clientID,
             "code": code,
-            "state": pkce.verifier,
+            "state": state,
             "redirect_uri": redirect,
             "code_verifier": pkce.verifier,
         ]
