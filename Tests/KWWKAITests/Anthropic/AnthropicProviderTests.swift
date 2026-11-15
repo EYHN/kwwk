@@ -462,6 +462,37 @@ struct AnthropicProviderTests {
         #expect(json["temperature"] == nil)
     }
 
+    // Native compaction asks for ~1.8k tokens with the turn's reasoning. On an
+    // adaptive-only Claude, thinking alone could spend that and Anthropic then
+    // returned a compaction block with `"content": null`.
+    @Test("adaptive thinking raises a low explicit cap to preserve answer headroom")
+    func adaptiveThinkingRaisesLowExplicitMaxTokens() async throws {
+        var model = Self.reasoningModel
+        model.maxTokens = 128_000
+        var compat = ModelCompat()
+        compat.forceAdaptiveThinking = true
+        model.compat = compat
+        func body(maxTokens: Int?, reasoning: ReasoningLevel?, routeCeiling: Int? = nil) throws -> [String: Any] {
+            let data = try AnthropicProvider.encodeBody(
+                model: model,
+                context: Context(messages: [.user(UserMessage(text: "hi"))]),
+                options: StreamOptions(maxTokens: maxTokens, reasoning: reasoning),
+                maximumOutputTokens: routeCeiling
+            )
+            return try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+
+        let high = try body(maxTokens: 1_800, reasoning: .high)
+        #expect((high["thinking"] as? [String: Any])?["type"] as? String == "adaptive")
+        #expect(high["max_tokens"] as? Int == 20_384)
+        #expect(try body(maxTokens: 1_800, reasoning: .low)["max_tokens"] as? Int == 6_048)
+        // The OAuth route ceiling still wins over the floor.
+        #expect(try body(maxTokens: 1_800, reasoning: .high, routeCeiling: 8_000)["max_tokens"] as? Int == 8_000)
+        // Caps already above the floor and requests without thinking are unchanged.
+        #expect(try body(maxTokens: 32_000, reasoning: .high)["max_tokens"] as? Int == 32_000)
+        #expect(try body(maxTokens: 1_800, reasoning: nil)["max_tokens"] as? Int == 1_800)
+    }
+
     @Test("signed thinking block is replayed even when its text is empty")
     func emptyThinkingWithSignaturePreserved() async throws {
         let client = StubSSEClient(body: Self.textSSE)

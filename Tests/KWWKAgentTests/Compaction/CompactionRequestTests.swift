@@ -502,6 +502,56 @@ struct CompactionRequestTests {
         #expect(await attempts.count == 1)
     }
 
+    @Test("an Anthropic native compaction with no summary falls back to a local summary")
+    func emptyNativeSummaryUsesLocal() async throws {
+        let model = Model(
+            id: "claude-opus-5-5",
+            api: "anthropic-messages",
+            provider: "anthropic",
+            contextWindow: 200_000,
+            maxTokens: 64_000
+        )
+        let attempts = CompactionAttempts()
+        let config = AgentContextCompactionConfig(
+            minMessages: 2,
+            keepRecentTokens: 40,
+            nativeCompaction: { _, _, _, _ in
+                _ = await attempts.next()
+                return nil
+            }
+        )
+        let messages: [Message] = [
+            .user(UserMessage(text: String(repeating: "A", count: 240_000))),
+            .assistant(AssistantMessage(
+                content: [.text(TextContent(text: "done"))],
+                api: model.api,
+                provider: model.provider,
+                model: model.id
+            )),
+            .user(UserMessage(text: "next"))
+        ]
+        let result = try await AgentContextCompactor.compactMessages(
+            messages: messages,
+            model: model,
+            sessionId: nil,
+            config: config,
+            streamFn: { model, _, _ in
+                let stream = AssistantMessageStream()
+                stream.end(AssistantMessage(
+                    content: [.text(TextContent(text: "local summary"))],
+                    api: model.api,
+                    provider: model.provider,
+                    model: model.id
+                ))
+                return stream
+            }
+        ).get()
+        #expect(await attempts.count == 1)
+        guard case .user(let recap) = result.messages.first else { Issue.record("missing recap"); return }
+        #expect(recap.nativeCompaction == nil)
+        #expect(recap.content.contains { if case .text(let t) = $0 { return t.text.contains("local summary") }; return false })
+    }
+
     private func history() -> [Message] {
         (0..<3).flatMap { index in
             [

@@ -43,8 +43,10 @@ public struct NativeCompactionResult: Sendable {
     }
 }
 
-/// Return nil when the route does not support native compaction. Errors from
-/// an available route remain errors so authentication and outages stay visible.
+/// Return nil when the route does not support native compaction, or when it
+/// answered but produced no summary to replay; the caller then writes a local
+/// summary. Errors from an available route remain errors so authentication
+/// and outages stay visible.
 public protocol NativeCompactionProvider: APIProvider {
     func compact(
         model: Model,
