@@ -124,7 +124,7 @@
     }
   },
   "github-copilot": {
-    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists. claude-fable-5.2 and gemini-4-carbon (2026-11-11, no signed-in Copilot account at hand) take their siblings' limits (claude-fable-5.1, gemini-4-argon) until read off Copilot's /models: a window kept too small only compacts early, one too large overflows.",
+    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists. claude-fable-5.2 and gemini-4-carbon (2026-11-11) and gemini-4-hydrogen (2026-11-16), with no signed-in Copilot account at hand, take their siblings' limits (claude-fable-5.1, gemini-4-argon) until read off Copilot's /models: a window kept too small only compacts early, one too large overflows.",
     "claude-fable-5": {
       "contextWindow": 264000,
       "maxTokens": 64000
@@ -170,6 +170,9 @@
       "contextWindow": 265536
     },
     "gemini-4-carbon": {
+      "contextWindow": 265536
+    },
+    "gemini-4-hydrogen": {
       "contextWindow": 265536
     },
     "gpt-5.3-codex": {
@@ -584,78 +587,6 @@
     "$note": "Mistral's own models page says its DeepSeek V4.1 Flash takes text and image inputs; models.dev, and so pi-mono, lists it text-only (2026-11-12, after magpie da5d54e). Only Mistral's row: the same model at another vendor keeps that vendor's input list.",
     "deepseek-v4-1-flash-1017": {
       "input": ["text", "image"]
-    }
-  },
-  "google": {
-    "$note": "Gemini 4 Hydrogen (released 2026-11-12), which pi-mono does not list yet (pi HEAD and pi.dev, 2026-11-13). Window, output, price and levels are models.dev's google and google-vertex rows, which match Google's model page and magpie 51c3ecc: 1,048,576 in, 65,536 out, $1.50 / $0.075 cached / $7.50, thinking LOW to XHIGH. The rest is Gemini 4 Carbon's row on the same provider. Drop once pi lists it.",
-    "gemini-4-hydrogen": {
-      "api": "google-generative-ai",
-      "baseUrl": "https://generativelanguage.googleapis.com/v1beta",
-      "contextWindow": 1048576,
-      "cost": {
-        "input": 1.5,
-        "output": 7.5,
-        "cacheRead": 0.075,
-        "cacheWrite": 0
-      },
-      "id": "gemini-4-hydrogen",
-      "input": ["text", "image"],
-      "inputLimits": {
-        "images": {
-          "maxPerRequest": 3600,
-          "resize": {"jpegQuality": 80, "maxBytes": 4718592, "maxHeight": 2000, "maxWidth": 2000}
-        },
-        "maxRequestBytes": 20971520
-      },
-      "maxTokens": 65536,
-      "name": "Gemini 4 Hydrogen",
-      "provider": "google",
-      "reasoning": true,
-      "thinkingLevelMap": {
-        "$replace": true,
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": "xhigh"
-      }
-    }
-  },
-  "google-vertex": {
-    "$note": "Gemini 4 Hydrogen (released 2026-11-12), which pi-mono does not list yet (pi HEAD and pi.dev, 2026-11-13). Window, output, price and levels are models.dev's google and google-vertex rows, which match Google's model page and magpie 51c3ecc: 1,048,576 in, 65,536 out, $1.50 / $0.075 cached / $7.50, thinking LOW to XHIGH. The rest is Gemini 4 Carbon's row on the same provider. Drop once pi lists it.",
-    "gemini-4-hydrogen": {
-      "api": "google-vertex",
-      "baseUrl": "https://{location}-aiplatform.googleapis.com",
-      "contextWindow": 1048576,
-      "cost": {
-        "input": 1.5,
-        "output": 7.5,
-        "cacheRead": 0.075,
-        "cacheWrite": 0
-      },
-      "id": "gemini-4-hydrogen",
-      "input": ["text", "image"],
-      "inputLimits": {
-        "images": {
-          "resize": {"jpegQuality": 80, "maxBytes": 4718592, "maxHeight": 2000, "maxWidth": 2000}
-        }
-      },
-      "maxTokens": 65536,
-      "name": "Gemini 4 Hydrogen",
-      "provider": "google-vertex",
-      "reasoning": true,
-      "thinkingLevelMap": {
-        "$replace": true,
-        "high": "high",
-        "low": "low",
-        "max": null,
-        "medium": "medium",
-        "minimal": null,
-        "off": null,
-        "xhigh": "xhigh"
-      }
     }
   }
 }
