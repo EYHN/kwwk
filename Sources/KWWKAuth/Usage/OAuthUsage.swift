@@ -84,7 +84,6 @@ public enum OAuthUsage {
             KimiCodingUsageReader(site: .china),
             KimiCodingUsageReader(site: .global),
             KiroUsageReader(),
-            AntigravityUsageReader(),
             QoderUsageReader(site: .global),
             QoderUsageReader(site: .cn),
             WorkBuddyUsageReader(site: .china),
