@@ -237,12 +237,6 @@ struct KwwkCLI {
             ))
             Foundation.exit(1)
         }
-        guard ModelsCatalog.model(provider: "antigravity", id: AntigravityModels.defaultModelId) != nil else {
-            FileHandle.standardError.write(Data(
-                "kwwk: self-test failed: Antigravity model catalog is missing\n".utf8
-            ))
-            Foundation.exit(1)
-        }
         guard ModelsCatalog.model(provider: "qoder", id: QoderModels.defaultModelId) != nil else {
             FileHandle.standardError.write(Data(
                 "kwwk: self-test failed: Qoder model catalog is missing\n".utf8
