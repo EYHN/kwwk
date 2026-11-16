@@ -202,6 +202,14 @@ extension AnthropicProvider {
             messages.append(encoded)
         }
         messages.append(contentsOf: pendingToolChanges)
+        if endsWithNativeCompaction(context.messages),
+           messages.last?["role"] as? String == "assistant" {
+            // A compaction that summarized the whole transcript leaves only
+            // the replayed compaction block, which is an assistant turn.
+            // Models without prefill reject an assistant-final request, so
+            // ask to continue. This synthetic turn is not persisted.
+            messages.append(["role": "user", "content": [["type": "text", "text": continueAfterCompaction]]])
+        }
         if context.messages.contains(where: {
             if case .user(let user) = $0 { return user.nativeCompaction?.api == "anthropic-messages" }
             return false
@@ -224,6 +232,17 @@ extension AnthropicProvider {
         }
         root["messages"] = messages
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+    }
+
+    static let continueAfterCompaction = "Continue the task from the compaction summary above."
+
+    /// Whether the last conversational message is a replayed Anthropic
+    /// compaction, which is encoded as an assistant turn. System messages
+    /// only carry tool changes and never end a conversation.
+    static func endsWithNativeCompaction(_ messages: [Message]) -> Bool {
+        let last = messages.last { if case .system = $0 { return false }; return true }
+        guard case .user(let user)? = last else { return false }
+        return user.nativeCompaction?.api == "anthropic-messages"
     }
 
     static let inlineToolsBeta = "inline-tools-2026-09-15"
