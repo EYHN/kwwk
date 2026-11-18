@@ -23108,36 +23108,6 @@
       "provider" : "nvidia",
       "reasoning" : true
     },
-    "openai\/gpt-oss-20b" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsLongCacheRetention" : false,
-        "supportsReasoningEffort" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : false
-      },
-      "contextWindow" : 131072,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "headers" : {
-        "NVCF-POLL-SECONDS" : "3600"
-      },
-      "id" : "openai\/gpt-oss-20b",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 131072,
-      "name" : "GPT OSS 20B",
-      "provider" : "nvidia",
-      "reasoning" : true
-    },
     "poolside\/laguna-xs-2.1" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/integrate.api.nvidia.com\/v1",
@@ -27313,51 +27283,6 @@
       },
       "maxTokens" : 131072,
       "name" : "GLM-5.3-Flash",
-      "provider" : "opencode",
-      "reasoning" : true,
-      "thinkingLevelMap" : {
-        "high" : "high",
-        "low" : "low",
-        "max" : "max",
-        "medium" : null,
-        "minimal" : null,
-        "off" : null,
-        "xhigh" : null
-      }
-    },
-    "glm-5.3-flash-free" : {
-      "api" : "openai-completions",
-      "baseUrl" : "https:\/\/opencode.ai\/inference\/openai\/v1",
-      "compat" : {
-        "maxTokensField" : "max_tokens",
-        "supportsDeveloperRole" : false,
-        "supportsStore" : false,
-        "supportsStrictMode" : true
-      },
-      "contextWindow" : 200000,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0,
-        "output" : 0
-      },
-      "id" : "glm-5.3-flash-free",
-      "input" : [
-        "text",
-        "image"
-      ],
-      "inputLimits" : {
-        "images" : {
-          "resize" : {
-            "jpegQuality" : 80,
-            "maxBytes" : 4718592,
-            "maxHeight" : 2000,
-            "maxWidth" : 2000
-          }
-        }
-      },
-      "maxTokens" : 32000,
-      "name" : "GLM-5.3-Flash Free",
       "provider" : "opencode",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -33976,18 +33901,18 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 163840,
+      "contextWindow" : 128000,
       "cost" : {
-        "cacheRead" : 0.35,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.5,
-        "output" : 2.15
+        "input" : 0.571,
+        "output" : 2.286
       },
       "id" : "deepseek\/deepseek-r1-0528",
       "input" : [
         "text"
       ],
-      "maxTokens" : 32768,
+      "maxTokens" : 32000,
       "name" : "DeepSeek: R1 0528",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -36001,7 +35926,7 @@
         "cacheRead" : 0.040000000000000001,
         "cacheWrite" : 0,
         "input" : 0.080000000000000002,
-        "output" : 0.35
+        "output" : 0.45
       },
       "id" : "google\/gemma-3-27b-it",
       "input" : [
@@ -36034,10 +35959,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.042500000000000003,
+        "cacheRead" : 0.050000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.076499999999999999,
-        "output" : 0.255
+        "input" : 0.089999999999999997,
+        "output" : 0.3
       },
       "id" : "google\/gemma-4-26b-a4b-it",
       "input" : [
@@ -37218,10 +37143,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0074999999999999997,
+        "cacheRead" : 0.014999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.074999999999999997,
-        "output" : 0.3
+        "input" : 0.15,
+        "output" : 0.6
       },
       "id" : "minimax\/minimax-m3.1-flash",
       "input" : [
@@ -42531,6 +42456,112 @@
         "xhigh" : "xhigh"
       }
     },
+    "openai\/gpt-6.2-astra-pro:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20,
+        "tiers" : [
+          {
+            "cacheRead" : 0.4,
+            "cacheWrite" : 10,
+            "input" : 8,
+            "inputTokensAbove" : 272000,
+            "output" : 30
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-astra-pro:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Astra Pro (batch)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-astra:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20,
+        "tiers" : [
+          {
+            "cacheRead" : 0.4,
+            "cacheWrite" : 10,
+            "input" : 8,
+            "inputTokensAbove" : 272000,
+            "output" : 30
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-astra:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Astra (batch)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "openai\/gpt-6.2-sol" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -42626,6 +42657,112 @@
       },
       "maxTokens" : 128000,
       "name" : "OpenAI: GPT-6.2 Sol Pro",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-sol-pro:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.050000000000000003,
+        "cacheWrite" : 1.25,
+        "input" : 1,
+        "output" : 5,
+        "tiers" : [
+          {
+            "cacheRead" : 0.1,
+            "cacheWrite" : 2.5,
+            "input" : 2,
+            "inputTokensAbove" : 272000,
+            "output" : 7.5
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-sol-pro:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Sol Pro (batch)",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-sol:batch" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.050000000000000003,
+        "cacheWrite" : 1.25,
+        "input" : 1,
+        "output" : 5,
+        "tiers" : [
+          {
+            "cacheRead" : 0.1,
+            "cacheWrite" : 2.5,
+            "input" : 2,
+            "inputTokensAbove" : 272000,
+            "output" : 7.5
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-sol:batch",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Sol (batch)",
       "provider" : "openrouter",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -43808,16 +43945,16 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0,
+        "cacheRead" : 0.070000000000000007,
         "cacheWrite" : 0,
-        "input" : 0.089999999999999997,
+        "input" : 0.1,
         "output" : 1.1
       },
       "id" : "qwen\/qwen3-next-80b-a3b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 16384,
+      "maxTokens" : 235929,
       "name" : "Qwen: Qwen3 Next 80B A3B Instruct",
       "provider" : "openrouter",
       "reasoning" : false
@@ -43979,8 +44116,8 @@
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.26,
-        "output" : 2.6
+        "input" : 0.3,
+        "output" : 2.4
       },
       "id" : "qwen\/qwen3.5-27b",
       "input" : [
@@ -43997,7 +44134,7 @@
           }
         }
       },
-      "maxTokens" : 81920,
+      "maxTokens" : 65536,
       "name" : "Qwen: Qwen3.5-27B",
       "provider" : "openrouter",
       "reasoning" : true
@@ -44601,10 +44738,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.037499999999999999,
+        "cacheRead" : 0.058999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 1.875
+        "input" : 0.059999999999999998,
+        "output" : 2.2
       },
       "id" : "qwen\/qwen3.8-27b",
       "input" : [
@@ -45379,10 +45516,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.020625000000000001,
+        "cacheRead" : 0.033000000000000002,
         "cacheWrite" : 0,
-        "input" : 0.082500000000000004,
-        "output" : 0.33
+        "input" : 0.132,
+        "output" : 0.528
       },
       "id" : "tencent\/hy3",
       "input" : [
@@ -45528,10 +45665,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0378,
+        "cacheRead" : 0.042000000000000003,
         "cacheWrite" : 0,
-        "input" : 0.7506,
-        "output" : 2.2509
+        "input" : 0.834,
+        "output" : 2.501
       },
       "id" : "tencent\/hy4-preview",
       "input" : [
@@ -46504,18 +46641,18 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1024000,
+      "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.0035999999999999999,
+        "cacheRead" : 0.096000000000000002,
         "cacheWrite" : 0,
-        "input" : 0.435,
-        "output" : 0.87
+        "input" : 0.48,
+        "output" : 1.8
       },
       "id" : "xiaomi\/mimo-v2.5-pro",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131072,
+      "maxTokens" : 235929,
       "name" : "Xiaomi: MiMo-V2.5-Pro",
       "provider" : "openrouter",
       "reasoning" : true
@@ -46750,7 +46887,7 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.055,
+        "cacheRead" : 0.050000000000000003,
         "cacheWrite" : 0,
         "input" : 0.3,
         "output" : 0.9
@@ -51131,6 +51268,122 @@
         "xhigh" : "xhigh"
       }
     },
+    "gpt-6.2-astra" : {
+      "api" : "pi-messages",
+      "baseUrl" : "https:\/\/radius.pi.dev\/v1",
+      "contextWindow" : 272000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "enabled" : true,
+      "id" : "gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "lab" : "OpenAI",
+      "maxTokens" : 128000,
+      "name" : "GPT 6.2 Astra",
+      "provider" : "radius",
+      "providers" : [
+        {
+          "credential" : "radius",
+          "id" : "openrouter",
+          "name" : "OpenRouter",
+          "source" : "radius"
+        }
+      ],
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-sol" : {
+      "api" : "pi-messages",
+      "baseUrl" : "https:\/\/radius.pi.dev\/v1",
+      "contextWindow" : 272000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "enabled" : true,
+      "id" : "gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "lab" : "OpenAI",
+      "maxTokens" : 128000,
+      "name" : "GPT 6.2 Sol",
+      "provider" : "radius",
+      "providers" : [
+        {
+          "credential" : "radius",
+          "id" : "openrouter",
+          "name" : "OpenRouter",
+          "source" : "radius"
+        }
+      ],
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "grok-4.7" : {
       "api" : "pi-messages",
       "baseUrl" : "https:\/\/radius.pi.dev\/v1",
@@ -52228,50 +52481,6 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
-    "alibaba\/qwen-3-235b" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.22,
-        "output" : 0.88
-      },
-      "id" : "alibaba\/qwen-3-235b",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 16384,
-      "name" : "Qwen3 235B A22B",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : false
-    },
-    "alibaba\/qwen3-coder" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0.021999999999999999,
-        "cacheWrite" : 0,
-        "input" : 0.22,
-        "output" : 1.8
-      },
-      "id" : "alibaba\/qwen3-coder",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 32768,
-      "name" : "Qwen3 Coder 480B A35B Instruct",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : false
-    },
     "alibaba\/qwen3-coder-30b-a3b" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -52360,43 +52569,21 @@
       "compat" : {
         "allowEmptySignature" : true
       },
-      "contextWindow" : 262114,
+      "contextWindow" : 262144,
       "cost" : {
         "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 1.2
+        "input" : 0.089999999999999997,
+        "output" : 1.1
       },
       "id" : "alibaba\/qwen3-next-80b-a3b-instruct",
       "input" : [
         "text"
       ],
-      "maxTokens" : 262114,
+      "maxTokens" : 32768,
       "name" : "Qwen3 Next 80B A3B Instruct",
       "provider" : "vercel-ai-gateway",
       "reasoning" : false
-    },
-    "alibaba\/qwen3-next-80b-a3b-thinking" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 262144,
-      "cost" : {
-        "cacheRead" : 0,
-        "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 1.2
-      },
-      "id" : "alibaba\/qwen3-next-80b-a3b-thinking",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 262144,
-      "name" : "Qwen3 Next 80B A3B Thinking",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
     },
     "alibaba\/qwen3-vl-instruct" : {
       "api" : "anthropic-messages",
@@ -56475,28 +56662,6 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
-    "minimax\/minimax-m2" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 205000,
-      "cost" : {
-        "cacheRead" : 0.029999999999999999,
-        "cacheWrite" : 0.375,
-        "input" : 0.3,
-        "output" : 1.2
-      },
-      "id" : "minimax\/minimax-m2",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 205000,
-      "name" : "MiniMax M2",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
-    },
     "minimax\/minimax-m2.1" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
@@ -56505,8 +56670,8 @@
       },
       "contextWindow" : 204800,
       "cost" : {
-        "cacheRead" : 0.029999999999999999,
-        "cacheWrite" : 0.375,
+        "cacheRead" : 0.15,
+        "cacheWrite" : 0,
         "input" : 0.3,
         "output" : 1.2
       },
@@ -56519,38 +56684,16 @@
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
-    "minimax\/minimax-m2.1-lightning" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 204800,
-      "cost" : {
-        "cacheRead" : 0.029999999999999999,
-        "cacheWrite" : 0.375,
-        "input" : 0.3,
-        "output" : 2.4
-      },
-      "id" : "minimax\/minimax-m2.1-lightning",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 131072,
-      "name" : "MiniMax M2.1 Lightning",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
-    },
     "minimax\/minimax-m2.5" : {
       "api" : "anthropic-messages",
       "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
       "compat" : {
         "allowEmptySignature" : true
       },
-      "contextWindow" : 204800,
+      "contextWindow" : 1000000,
       "cost" : {
-        "cacheRead" : 0.029999999999999999,
-        "cacheWrite" : 0.375,
+        "cacheRead" : 0,
+        "cacheWrite" : 0,
         "input" : 0.3,
         "output" : 1.2
       },
@@ -56558,30 +56701,8 @@
       "input" : [
         "text"
       ],
-      "maxTokens" : 131000,
+      "maxTokens" : 8192,
       "name" : "MiniMax M2.5",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
-    },
-    "minimax\/minimax-m2.5-highspeed" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 204800,
-      "cost" : {
-        "cacheRead" : 0.029999999999999999,
-        "cacheWrite" : 0.375,
-        "input" : 0.6,
-        "output" : 2.4
-      },
-      "id" : "minimax\/minimax-m2.5-highspeed",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 131000,
-      "name" : "MiniMax M2.5 High Speed",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
@@ -56591,41 +56712,19 @@
       "compat" : {
         "allowEmptySignature" : true
       },
-      "contextWindow" : 204800,
+      "contextWindow" : 196608,
       "cost" : {
-        "cacheRead" : 0.059999999999999998,
-        "cacheWrite" : 0.375,
-        "input" : 0.3,
-        "output" : 1.2
+        "cacheRead" : 0.042000000000000003,
+        "cacheWrite" : 0,
+        "input" : 0.21,
+        "output" : 0.84
       },
       "id" : "minimax\/minimax-m2.7",
       "input" : [
         "text"
       ],
-      "maxTokens" : 131000,
+      "maxTokens" : 196608,
       "name" : "MiniMax M2.7",
-      "provider" : "vercel-ai-gateway",
-      "reasoning" : true
-    },
-    "minimax\/minimax-m2.7-highspeed" : {
-      "api" : "anthropic-messages",
-      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
-      "compat" : {
-        "allowEmptySignature" : true
-      },
-      "contextWindow" : 204800,
-      "cost" : {
-        "cacheRead" : 0.059999999999999998,
-        "cacheWrite" : 0.375,
-        "input" : 0.6,
-        "output" : 2.4
-      },
-      "id" : "minimax\/minimax-m2.7-highspeed",
-      "input" : [
-        "text"
-      ],
-      "maxTokens" : 131100,
-      "name" : "MiniMax M2.7 High Speed",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true
     },
