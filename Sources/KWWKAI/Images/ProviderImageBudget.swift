@@ -24,15 +24,30 @@ enum ProviderImageBudget {
         TextContent(text: imageOmissionText)
     )
 
+    /// Devin refuses a request over 32 MiB and relays each upstream's image
+    /// rules. kwwk has no byte clamp, so 40 images at the 500 KiB resize
+    /// target (27.3 MB base64) stay under it. Claude rejects edges over
+    /// 3,000 px past 20 images, and Devin relays images as sent. Measured by
+    /// oh-my-pi (can1357/oh-my-pi#19619).
+    static let devinLimit = 40
+    static let devinClaudeLimit = 20
+
     static func limit(for provider: String) -> Int {
         limits[provider] ?? defaultLimit
+    }
+
+    static func limit(for model: Model) -> Int {
+        if model.provider == "devin" {
+            return model.id.hasPrefix("claude-") ? devinClaudeLimit : devinLimit
+        }
+        return limit(for: model.provider)
     }
 
     static func clamp(_ context: Context, for model: Model) -> Context {
         guard model.input.contains(.image) else { return context }
 
         let imageCount = countImages(in: context.messages)
-        var remainingImageCountToDrop = imageCount - limit(for: model.provider)
+        var remainingImageCountToDrop = imageCount - limit(for: model)
         guard remainingImageCountToDrop > 0 else { return context }
 
         var clamped = context
