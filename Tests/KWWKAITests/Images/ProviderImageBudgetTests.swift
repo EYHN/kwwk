@@ -23,6 +23,22 @@ struct ProviderImageBudgetTests {
         #expect(ProviderImageBudget.limit(for: "some-new-provider") == 5)
     }
 
+    @Test("Devin keeps 40 images, Claude on Devin 20")
+    func devinLimits() {
+        func devin(_ id: String) -> Model {
+            Model(id: id, api: "devin-agent", provider: "devin", input: [.text, .image])
+        }
+        #expect(ProviderImageBudget.limit(for: devin("gemini-3-7-flash")) == 40)
+        #expect(ProviderImageBudget.limit(for: devin("gpt-6-sol")) == 40)
+        #expect(ProviderImageBudget.limit(for: devin("claude-haiku-5-5")) == 20)
+        #expect(ProviderImageBudget.limit(for: visionModel(provider: "openai")) == 200)
+
+        let context = Context(messages: [
+            .user(UserMessage(content: (0..<12).map { image("image-\($0)") })),
+        ])
+        #expect(ProviderImageBudget.clamp(context, for: devin("gemini-3-7-flash")) == context)
+    }
+
     @Test("drops the oldest images while preserving text and stored context")
     func dropsOldestImages() {
         let context = Context(messages: (0..<8).map { index in
