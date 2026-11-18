@@ -9206,6 +9206,108 @@
         "xhigh" : "xhigh"
       }
     },
+    "gpt-6.2-astra" : {
+      "api" : "azure-openai-responses",
+      "baseUrl" : "",
+      "compat" : {
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Astra",
+      "provider" : "azure",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-sol" : {
+      "api" : "azure-openai-responses",
+      "baseUrl" : "",
+      "compat" : {
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Sol",
+      "provider" : "azure",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "gpt-daybreak-blue-latest" : {
       "api" : "azure-openai-responses",
       "baseUrl" : "",
@@ -24837,6 +24939,124 @@
         "xhigh" : "xhigh"
       }
     },
+    "gpt-6.2-astra" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/api.openai.com\/v1",
+      "compat" : {
+        "supportsAdditionalTools" : true,
+        "supportsExplicitPromptCacheMode" : true,
+        "supportsMidConvoEffort" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true,
+        "supportsToolSearch" : true
+      },
+      "contextWindow" : 272000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerRequest" : 1500,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        },
+        "maxRequestBytes" : 536870912
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Astra",
+      "provider" : "openai",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-sol" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/api.openai.com\/v1",
+      "compat" : {
+        "supportsAdditionalTools" : true,
+        "supportsExplicitPromptCacheMode" : true,
+        "supportsMidConvoEffort" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true,
+        "supportsStrictMode" : true,
+        "supportsToolSearch" : true
+      },
+      "contextWindow" : 272000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "maxPerRequest" : 1500,
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        },
+        "maxRequestBytes" : 536870912
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Sol",
+      "provider" : "openai",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "gpt-daybreak-blue-latest" : {
       "api" : "openai-responses",
       "baseUrl" : "https:\/\/api.openai.com\/v1",
@@ -25632,6 +25852,114 @@
         "medium" : "medium",
         "minimal" : "low",
         "off" : "none",
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-astra" : {
+      "api" : "openai-codex-responses",
+      "baseUrl" : "https:\/\/chatgpt.com\/backend-api",
+      "compat" : {
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true,
+        "supportsToolSearch" : true
+      },
+      "contextWindow" : 272000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Astra",
+      "provider" : "openai-codex",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : "low",
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-sol" : {
+      "api" : "openai-codex-responses",
+      "baseUrl" : "https:\/\/chatgpt.com\/backend-api",
+      "compat" : {
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true,
+        "supportsToolSearch" : true
+      },
+      "contextWindow" : 500000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Sol",
+      "provider" : "openai-codex",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : "low",
+        "off" : null,
         "xhigh" : "xhigh"
       }
     }
@@ -28118,6 +28446,114 @@
       },
       "maxTokens" : 128000,
       "name" : "GPT-6.1 Sol",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-astra" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/opencode.ai\/inference\/openai\/v1",
+      "compat" : {
+        "sessionAffinityFormat" : "openai-nosession",
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Astra",
+      "provider" : "opencode",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "gpt-6.2-sol" : {
+      "api" : "openai-responses",
+      "baseUrl" : "https:\/\/opencode.ai\/inference\/openai\/v1",
+      "compat" : {
+        "sessionAffinityFormat" : "openai-nosession",
+        "supportsAdditionalTools" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsOpenAIGrammarTools" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Sol",
       "provider" : "opencode",
       "reasoning" : true,
       "thinkingLevelMap" : {
@@ -30951,17 +31387,17 @@
       },
       "contextWindow" : 1050000,
       "cost" : {
-        "cacheRead" : 1,
-        "cacheWrite" : 12.5,
-        "input" : 10,
-        "output" : 50,
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
         "tiers" : [
           {
-            "cacheRead" : 2,
-            "cacheWrite" : 25,
-            "input" : 20,
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
             "inputTokensAbove" : 272000,
-            "output" : 75
+            "output" : 60
           }
         ]
       },
@@ -33867,10 +34303,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.0041999999999999997,
+        "cacheRead" : 0.0060000000000000001,
         "cacheWrite" : 0,
-        "input" : 0.14,
-        "output" : 0.42
+        "input" : 0.3,
+        "output" : 1.2
       },
       "id" : "deepseek\/deepseek-v4.1-flash",
       "input" : [
@@ -33887,7 +34323,7 @@
           }
         }
       },
-      "maxTokens" : 393216,
+      "maxTokens" : 943718,
       "name" : "DeepSeek: DeepSeek V4.1 Flash",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -35598,10 +36034,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.050000000000000003,
+        "cacheRead" : 0.042500000000000003,
         "cacheWrite" : 0,
-        "input" : 0.089999999999999997,
-        "output" : 0.3
+        "input" : 0.076499999999999999,
+        "output" : 0.255
       },
       "id" : "google\/gemma-4-26b-a4b-it",
       "input" : [
@@ -36782,10 +37218,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.014999999999999999,
+        "cacheRead" : 0.0074999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.15,
-        "output" : 0.6
+        "input" : 0.074999999999999997,
+        "output" : 0.3
       },
       "id" : "minimax\/minimax-m3.1-flash",
       "input" : [
@@ -37116,10 +37552,10 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.040000000000000001,
+        "cacheRead" : 0.043999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.4,
-        "output" : 2
+        "input" : 0.44,
+        "output" : 2.2
       },
       "id" : "mistralai\/mistral-medium-3",
       "input" : [
@@ -37242,10 +37678,10 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.040000000000000001,
+        "cacheRead" : 0.043999999999999997,
         "cacheWrite" : 0,
-        "input" : 0.4,
-        "output" : 2
+        "input" : 0.44,
+        "output" : 2.2
       },
       "id" : "mistralai\/mistral-medium-3.1",
       "input" : [
@@ -37362,12 +37798,12 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 32768,
+      "contextWindow" : 128000,
       "cost" : {
-        "cacheRead" : 0.01,
+        "cacheRead" : 0,
         "cacheWrite" : 0,
-        "input" : 0.1,
-        "output" : 0.3
+        "input" : 0.074999999999999997,
+        "output" : 0.2
       },
       "id" : "mistralai\/mistral-small-3.2-24b-instruct",
       "input" : [
@@ -37384,7 +37820,7 @@
           }
         }
       },
-      "maxTokens" : 26214,
+      "maxTokens" : 16384,
       "name" : "Mistral: Mistral Small 3.2 24B",
       "provider" : "openrouter",
       "reasoning" : false
@@ -37646,10 +38082,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.16,
+        "cacheRead" : 0.17,
         "cacheWrite" : 0,
-        "input" : 0.6,
-        "output" : 3.5
+        "input" : 0.7,
+        "output" : 3.75
       },
       "id" : "moonshotai\/kimi-k2.7-code",
       "input" : [
@@ -41988,6 +42424,220 @@
         "xhigh" : "xhigh"
       }
     },
+    "openai\/gpt-6.2-astra" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Astra",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-astra-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-astra-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Astra Pro",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-sol" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsMidConvoSystemMessages" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Sol",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-sol-pro" : {
+      "api" : "openai-completions",
+      "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
+      "compat" : {
+        "sendSessionAffinityHeaders" : true,
+        "supportsStrictMode" : true,
+        "thinkingFormat" : "openrouter"
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-sol-pro",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "OpenAI: GPT-6.2 Sol Pro",
+      "provider" : "openrouter",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "high" : "high",
+        "low" : "low",
+        "max" : "max",
+        "medium" : "medium",
+        "minimal" : null,
+        "off" : null,
+        "xhigh" : "xhigh"
+      }
+    },
     "openai\/gpt-audio" : {
       "api" : "openai-completions",
       "baseUrl" : "https:\/\/openrouter.ai\/api\/v1",
@@ -42081,16 +42731,16 @@
       },
       "contextWindow" : 131072,
       "cost" : {
-        "cacheRead" : 0.037499999999999999,
+        "cacheRead" : 0.0089999999999999993,
         "cacheWrite" : 0,
-        "input" : 0.074999999999999997,
-        "output" : 0.3
+        "input" : 0.017999999999999999,
+        "output" : 0.089999999999999997
       },
       "id" : "openai\/gpt-oss-20b",
       "input" : [
         "text"
       ],
-      "maxTokens" : 65536,
+      "maxTokens" : 117964,
       "name" : "OpenAI: gpt-oss-20b",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -44729,10 +45379,10 @@
       },
       "contextWindow" : 262144,
       "cost" : {
-        "cacheRead" : 0.033000000000000002,
+        "cacheRead" : 0.020625000000000001,
         "cacheWrite" : 0,
-        "input" : 0.132,
-        "output" : 0.528
+        "input" : 0.082500000000000004,
+        "output" : 0.33
       },
       "id" : "tencent\/hy3",
       "input" : [
@@ -44878,10 +45528,10 @@
       },
       "contextWindow" : 1048576,
       "cost" : {
-        "cacheRead" : 0.042000000000000003,
+        "cacheRead" : 0.0378,
         "cacheWrite" : 0,
-        "input" : 0.834,
-        "output" : 2.501
+        "input" : 0.7506,
+        "output" : 2.2509
       },
       "id" : "tencent\/hy4-preview",
       "input" : [
@@ -46361,12 +47011,12 @@
         "supportsStrictMode" : true,
         "thinkingFormat" : "openrouter"
       },
-      "contextWindow" : 1048576,
+      "contextWindow" : 1048575,
       "cost" : {
         "cacheRead" : 0.029999999999999999,
         "cacheWrite" : 0,
-        "input" : 0.039899999999999998,
-        "output" : 0.078399999999999997
+        "input" : 0.15,
+        "output" : 0.5
       },
       "id" : "z-ai\/glm-5.3-flash",
       "input" : [
@@ -46383,7 +47033,7 @@
           }
         }
       },
-      "maxTokens" : 131072,
+      "maxTokens" : 943717,
       "name" : "Z.ai: GLM 5.3 Flash",
       "provider" : "openrouter",
       "reasoning" : true,
@@ -59621,6 +60271,186 @@
       },
       "maxTokens" : 128000,
       "name" : "GPT-6.1 Terra (Fast)",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-astra" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.4,
+        "cacheWrite" : 10,
+        "input" : 8,
+        "output" : 40,
+        "tiers" : [
+          {
+            "cacheRead" : 0.8,
+            "cacheWrite" : 20,
+            "input" : 16,
+            "inputTokensAbove" : 272000,
+            "output" : 60
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-astra",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Astra",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-astra-fast" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.8,
+        "cacheWrite" : 20,
+        "input" : 16,
+        "output" : 80,
+        "tiers" : [
+          {
+            "cacheRead" : 1.6,
+            "cacheWrite" : 40,
+            "input" : 32,
+            "inputTokensAbove" : 272000,
+            "output" : 120
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-astra-fast",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Astra (Fast)",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-sol" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.1,
+        "cacheWrite" : 2.5,
+        "input" : 2,
+        "output" : 10,
+        "tiers" : [
+          {
+            "cacheRead" : 0.2,
+            "cacheWrite" : 5,
+            "input" : 4,
+            "inputTokensAbove" : 272000,
+            "output" : 15
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-sol",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Sol",
+      "provider" : "vercel-ai-gateway",
+      "reasoning" : true,
+      "thinkingLevelMap" : {
+        "xhigh" : "xhigh"
+      }
+    },
+    "openai\/gpt-6.2-sol-fast" : {
+      "api" : "anthropic-messages",
+      "baseUrl" : "https:\/\/ai-gateway.vercel.sh",
+      "compat" : {
+        "allowEmptySignature" : true
+      },
+      "contextWindow" : 1050000,
+      "cost" : {
+        "cacheRead" : 0.2,
+        "cacheWrite" : 5,
+        "input" : 4,
+        "output" : 20,
+        "tiers" : [
+          {
+            "cacheRead" : 0.4,
+            "cacheWrite" : 10,
+            "input" : 8,
+            "inputTokensAbove" : 272000,
+            "output" : 30
+          }
+        ]
+      },
+      "id" : "openai\/gpt-6.2-sol-fast",
+      "input" : [
+        "text",
+        "image"
+      ],
+      "inputLimits" : {
+        "images" : {
+          "resize" : {
+            "jpegQuality" : 80,
+            "maxBytes" : 4718592,
+            "maxHeight" : 2000,
+            "maxWidth" : 2000
+          }
+        }
+      },
+      "maxTokens" : 128000,
+      "name" : "GPT-6.2 Sol (Fast)",
       "provider" : "vercel-ai-gateway",
       "reasoning" : true,
       "thinkingLevelMap" : {
