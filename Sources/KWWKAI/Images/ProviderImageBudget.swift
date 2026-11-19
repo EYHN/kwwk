@@ -28,11 +28,18 @@ enum ProviderImageBudget {
         limits[provider] ?? defaultLimit
     }
 
+    /// An explicit `compat.maxImagesPerRequest` wins; otherwise the table,
+    /// read by the provider the model behaves like.
+    static func limit(for model: Model) -> Int {
+        if let explicit = model.compat?.maxImagesPerRequest { return max(0, explicit) }
+        return limit(for: model.behaviorProvider)
+    }
+
     static func clamp(_ context: Context, for model: Model) -> Context {
         guard model.input.contains(.image) else { return context }
 
         let imageCount = countImages(in: context.messages)
-        var remainingImageCountToDrop = imageCount - limit(for: model.provider)
+        var remainingImageCountToDrop = imageCount - limit(for: model)
         guard remainingImageCountToDrop > 0 else { return context }
 
         var clamped = context

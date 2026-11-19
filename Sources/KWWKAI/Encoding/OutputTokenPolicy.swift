@@ -64,12 +64,22 @@ public enum OutputTokenPolicy {
     }
 
     public static func isOpenRouter(_ model: Model) -> Bool {
-        model.provider.lowercased() == "openrouter"
+        model.behaviorProvider.lowercased() == "openrouter"
             || model.baseURL.lowercased().contains("openrouter.ai")
     }
 
-    private static func omitsAutomaticLimit(for model: Model) -> Bool {
-        isOpenRouter(model)
+    /// Whether the automatic limit stays off the wire, so only an explicit
+    /// `StreamOptions.maxTokens` is sent. `compat.omitsAutomaticOutputLimit`
+    /// when set, else OpenRouter's rule.
+    public static func omitsAutomaticLimit(for model: Model) -> Bool {
+        model.compat?.omitsAutomaticOutputLimit ?? isOpenRouter(model)
+    }
+
+    /// Whether a route with no automatic limit plans around the smaller
+    /// answer reserve (15% of the window) rather than a quarter of it.
+    /// `compat.usesSmallAnswerReserve` when set, else OpenRouter's rule.
+    public static func usesSmallAnswerReserve(for model: Model) -> Bool {
+        model.compat?.usesSmallAnswerReserve ?? isOpenRouter(model)
     }
 
     private static func usesOpenAIOutputPolicy(_ model: Model) -> Bool {

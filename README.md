@@ -707,6 +707,52 @@ call `registerBuiltinsFromEnvironment(env:)` with an environment snapshot.
 OpenRouter) there are `Models.xaiGrok(id:)`, `Models.groq(id:)`,
 `Models.openRouter(id:)` helpers.
 
+Some behaviour follows the model's `provider` name rather than its wire
+format: how many images a request may carry, whether the model's `maxTokens`
+goes on the wire as an automatic output limit, how much of the window the
+agent reserves for the answer, whether a response's `usage.cost` is taken as
+the billed cost, and the chat-completions defaults for OpenRouter. A gateway
+that relays several vendors under its own provider name keeps a vendor's
+behaviour by setting the matching `ModelCompat` field; each is `nil` by
+default, and `nil` means the value the provider name gives.
+
+| `ModelCompat` field | Controls | When `nil` |
+|---|---|---|
+| `maxImagesPerRequest` | Images per request; `stream()` replaces the oldest beyond it with a note | 90 for `anthropic`, `amazon-bedrock`, `openrouter`; 200 for `openai`, `openai-codex`, `chatgpt-codex`, `google`, `google-vertex`; otherwise 5 |
+| `omitsAutomaticOutputLimit` | Send an output-token limit only when `StreamOptions.maxTokens` is set | `true` for OpenRouter, else `false` |
+| `usesSmallAnswerReserve` | With no automatic limit, the agent reserves 15% of the window (at least 16,384 tokens, at most a quarter of a small window) instead of a quarter | `true` for OpenRouter, else `false` |
+| `trustsReportedCost` | Chat completions: `usage.cost` is the turn's billed cost | `true` for OpenRouter, else `false` |
+| `maxToolCallIdLength` | Longest tool-call id sent; longer ones from another model are hashed | 40 for `openai`, else 64 |
+| `sendsPromptCacheKey` | Chat completions: send the session id as `prompt_cache_key` | Sent to `api.openai.com`, or with long cache retention |
+| `behavesLikeProvider` | The provider name all of the above, the chat-completions defaults (`thinkingFormat`, `cacheControlFormat`, `supportsDeveloperRole`, `sendSessionAffinityHeaders`, `sessionAffinityFormat`, …) and `ProviderAttribution.attributionHeaders(for:)` read | `Model.provider` |
+
+An explicit field wins over `behavesLikeProvider`, which wins over
+`provider`. Neither changes what `provider` identifies: registration,
+credentials, catalog lookups, a subagent's `model` override and the
+same-model checks on replayed history still read `provider`, so an assistant
+turn recorded under one provider name is replayed to another as a different
+model's turn.
+
+```swift
+var compat = ModelCompat()
+compat.behavesLikeProvider = "openrouter"   // everything OpenRouter's name gives
+// or field by field:
+compat.thinkingFormat = "openrouter"
+compat.supportsDeveloperRole = true         // false unless the id is anthropic/* or openai/*
+compat.cacheControlFormat = "anthropic"     // anthropic/* ids only
+compat.sendSessionAffinityHeaders = true
+compat.sessionAffinityFormat = "openrouter"
+compat.maxImagesPerRequest = 90
+compat.omitsAutomaticOutputLimit = true
+compat.usesSmallAnswerReserve = true
+compat.trustsReportedCost = true
+let model = Model(
+    id: "anthropic/claude-sonnet-5", api: "openai-completions",
+    provider: "my-gateway", baseURL: "https://gateway.example/v1",
+    compat: compat
+)
+```
+
 To use a subscription (OAuth) token instead of a raw API key, drive the
 flow via `KWWKAI.OAuth` / `OAuthLogin` — the same code path the CLI's
 in-session `/login` command uses.

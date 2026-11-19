@@ -70,8 +70,9 @@ extension OpenAICompletionsProvider {
         // (e.g. OpenRouter `anthropic/*`) — those are different, conflicting wire
         // shapes. Only apply native cache when we did NOT apply the anthropic one.
         let openAINativeCache = compat.cacheControlFormat != "anthropic"
-            && (model.baseURL.contains("api.openai.com")
-                || (retention == .long && compat.supportsLongCacheRetention))
+            && (model.compat?.sendsPromptCacheKey
+                ?? (model.baseURL.contains("api.openai.com")
+                    || (retention == .long && compat.supportsLongCacheRetention)))
         if openAINativeCache, retention != .none,
            let sid = clampOpenAIPromptCacheKey(options?.sessionId) {
             root["prompt_cache_key"] = sid
@@ -117,7 +118,7 @@ extension OpenAICompletionsProvider {
 
     static func resolveCompat(_ model: Model) -> ResolvedCompletionsCompat {
         let url = model.baseURL.lowercased()
-        let provider = model.provider
+        let provider = model.behaviorProvider
         func has(_ s: String) -> Bool { url.contains(s) }
         let isZai = provider == "zai" || provider == "zai-coding-cn" || has("api.z.ai") || has("bigmodel.cn")
         let isTogether = provider == "together" || has("api.together.ai") || has("api.together.xyz")

@@ -192,7 +192,7 @@ public enum TransformMessages {
     /// The mapping keeps no state, so a call and its result always agree.
     static func normalizeId(_ id: String, model: Model) -> String {
         let callId = id.firstIndex(of: "|").map { String(id[..<$0]) } ?? id
-        let limit = id.contains("|") || model.provider == "openai" ? 40 : 64
+        let limit = id.contains("|") ? min(40, idLimit(for: model)) : idLimit(for: model)
         let marked = callId.hasPrefix(idMark) || callId.hasPrefix(hashMark)
         if isSafeId(callId), !marked, callId.count <= limit {
             return callId
@@ -203,6 +203,14 @@ public enum TransformMessages {
         }
         let digest = SHA256.hash(data: Data(callId.utf8)).map { String(format: "%02x", $0) }.joined()
         return hashMark + String(digest.prefix(limit - hashMark.count))
+    }
+
+    /// Longest id the target takes: `compat.maxToolCallIdLength` when set
+    /// (never under 16, so a hashed id keeps some of its digest), else 40
+    /// for `openai` and 64 otherwise.
+    static func idLimit(for model: Model) -> Int {
+        if let explicit = model.compat?.maxToolCallIdLength { return max(16, explicit) }
+        return model.behaviorProvider == "openai" ? 40 : 64
     }
 
     /// Prefix of a tool-call id `normalizeId` base64url-encoded.
@@ -315,7 +323,7 @@ public enum TransformMessages {
     }
 
     private static func freshId(for id: String, taken: inout Set<String>, model: Model) -> String {
-        let limit = model.provider == "openai" ? 40 : 64
+        let limit = idLimit(for: model)
         var n = 2
         while true {
             var candidate = "\(id)_\(n)"

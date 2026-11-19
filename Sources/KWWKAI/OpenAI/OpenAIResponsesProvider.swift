@@ -756,7 +756,7 @@ public final class OpenAIResponsesProvider:
     /// xAI's own API, by provider or host. Its rules below are the ones the
     /// Grok Build backend applies too (magpie-plugins packages/grok).
     static func isXai(_ model: Model) -> Bool {
-        model.provider == "xai" || model.baseURL.lowercased().contains("api.x.ai")
+        model.behaviorProvider == "xai" || model.baseURL.lowercased().contains("api.x.ai")
     }
 
     /// Grok keys a conversation's prompt cache by the `x-grok-conv-id`
@@ -1361,7 +1361,7 @@ public final class OpenAIResponsesProvider:
                 // Required so encrypted reasoning round-trips across turns when
                 // the response isn't persisted server-side (`store: false`).
                 root["include"] = .array([.string("reasoning.encrypted_content")])
-            } else if model.provider != "github-copilot" {
+            } else if model.behaviorProvider != "github-copilot" {
                 // Disabled-reasoning branch. `thinkingLevelMap.off`:
                 // absent / explicit-null / string (matches Completions
                 // OpenAICompletionsProvider.swift:504-506). Explicit null means

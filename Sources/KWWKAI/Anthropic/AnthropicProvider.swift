@@ -224,7 +224,7 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
     private static func usesServerSideFallback(model: Model, url: URL, options: StreamOptions?) -> Bool {
         options?.anthropicServerSideFallback == true
             && url.scheme == "https" && url.host?.lowercased() == "api.anthropic.com"
-            && model.provider == "anthropic" && model.api == "anthropic-messages"
+            && model.behaviorProvider == "anthropic" && model.api == "anthropic-messages"
             && serverFallbackModels.contains(model.id)
     }
 
