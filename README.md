@@ -173,7 +173,7 @@ loaded, even while their servers are still connecting.
 Add `kwwk` as a SwiftPM dependency:
 
 ```swift
-.package(url: "https://github.com/EYHN/kwwk", branch: "main"),
+.package(url: "https://github.com/yellowplushq/kwwk", branch: "main"),
 ```
 
 Then depend on the libraries you need:
