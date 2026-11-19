@@ -139,7 +139,7 @@ public enum ProviderAttribution {
 
     /// Convenience overload taking a `Model`.
     public static func attributionHeaders(for model: Model) -> [String: String]? {
-        attributionHeaders(provider: model.provider, baseURL: model.baseURL)
+        attributionHeaders(provider: model.behaviorProvider, baseURL: model.baseURL)
     }
 
     /// Merge attribution headers for `model` with any caller-supplied header

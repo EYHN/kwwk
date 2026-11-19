@@ -213,13 +213,15 @@ final class OpenAICompletionsState: @unchecked Sendable {
         // catalog's cheapest-provider price, and reports the charge in USD as
         // `usage.cost` on every response. Use it, split across the parts in
         // the catalog's proportions.
-        let isOpenRouter = provider == "openrouter" || model.baseURL.lowercased().contains("openrouter.ai")
+        // `compat.trustsReportedCost` says so for a relay under another name.
+        let trustsReportedCost = model.compat?.trustsReportedCost
+            ?? (model.behaviorProvider == "openrouter" || model.baseURL.lowercased().contains("openrouter.ai"))
         let billed: Double? = switch obj["cost"] {
         case .double(let d)?: d
         case .int(let n)?: Double(n)
         default: nil
         }
-        if isOpenRouter, let billed {
+        if trustsReportedCost, let billed {
             let estimate = usage.cost
             let scale = estimate.total > 0 ? billed / estimate.total : 0
             usage.cost = Cost(

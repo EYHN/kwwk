@@ -78,7 +78,7 @@ final class AnthropicStreamState: @unchecked Sendable {
         guard let requestModel else { return }
         func pricedModel(_ id: String?) -> Model {
             guard fallbackEnabled, let id, id != requestModel.id else { return requestModel }
-            return ModelsCatalog.model(provider: requestModel.provider, id: id) ?? requestModel
+            return ModelsCatalog.model(provider: requestModel.behaviorProvider, id: id) ?? requestModel
         }
         guard fallbackEnabled, let iterations = usage.anthropicIterations, !iterations.isEmpty else {
             usage.cost = calculateCost(model: pricedModel(responseModel), usage: usage)

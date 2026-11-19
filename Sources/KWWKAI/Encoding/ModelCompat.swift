@@ -77,7 +77,79 @@ public struct ModelCompat: Codable, Sendable, Hashable {
     /// provider default (Devin: disabled).
     public var supportsParallelToolCalls: Bool?
 
+    // MARK: provider-keyed behaviour (any API)
+    //
+    // Everything below is decided from `Model.provider` (and, for OpenRouter,
+    // the base URL) when left nil. A gateway that relays several vendors
+    // under its own provider name sets them to keep a vendor's behaviour
+    // without wearing that vendor's label.
+
+    /// The provider name behaviour detection reads in place of
+    /// `Model.provider`: the image limit, the output-limit and answer-reserve
+    /// policy, the billed-cost reading, the tool-call id length, the
+    /// chat-completions wire defaults (`thinkingFormat`, `cacheControlFormat`,
+    /// `supportsDeveloperRole`, session affinity, …), the xAI, Kimi and
+    /// Copilot request rules, and `ProviderAttribution.attributionHeaders(for:)`.
+    /// A base URL that names a vendor still counts as before.
+    ///
+    /// It changes behaviour only. `Model.provider` stays what registration,
+    /// credentials, the catalog, a subagent's model override and the
+    /// same-model checks on replayed history go by. nil or empty ⇒
+    /// `Model.provider`. Each field below, when set, wins over the provider
+    /// named here.
+    public var behavesLikeProvider: String?
+    /// Images one request may carry; `stream()` replaces the oldest beyond it
+    /// with a text note. nil ⇒ by provider: 90 for `anthropic`,
+    /// `amazon-bedrock` and `openrouter`, 200 for `openai`, `openai-codex`,
+    /// `chatgpt-codex`, `google` and `google-vertex`, otherwise 5. Set it when
+    /// the endpoint behind an unlisted provider name takes more than 5.
+    public var maxImagesPerRequest: Int?
+    /// Leave the output-token field off the wire unless the caller passes
+    /// `StreamOptions.maxTokens`, instead of sending the model's `maxTokens`
+    /// as the automatic limit. nil ⇒ true for OpenRouter (provider
+    /// `openrouter` or an `openrouter.ai` base URL), false otherwise. Set it
+    /// for a relay whose upstreams reject or over-reserve a catalog-sized
+    /// limit. See `OutputTokenPolicy.omitsAutomaticLimit(for:)`.
+    public var omitsAutomaticOutputLimit: Bool?
+    /// With no automatic output limit on the wire, plan the agent's context
+    /// budget around a smaller answer reserve: 15% of the window, at least
+    /// 16,384 tokens but never more than a quarter of a small window, rather
+    /// than a flat quarter of the window. nil ⇒ true for OpenRouter, false
+    /// otherwise. No effect while an automatic limit is sent: that limit is
+    /// the reserve. See `OutputTokenPolicy.usesSmallAnswerReserve(for:)`.
+    public var usesSmallAnswerReserve: Bool?
+    /// Chat completions: take the response's `usage.cost` (USD) as the billed
+    /// cost of the turn, split across input/output/cache in the catalog's
+    /// proportions and marked `Cost.billed`, instead of the catalog estimate.
+    /// nil ⇒ true for OpenRouter, false otherwise. Set it for a relay that
+    /// reports what it charged in the same field.
+    public var trustsReportedCost: Bool?
+    /// Longest tool-call id the endpoint accepts; a longer one from another
+    /// model's turn is replaced by a hash of that length. nil ⇒ 40 for
+    /// provider `openai`, otherwise 64. An id that came from the Responses
+    /// API (`call|item`) is held to 40 whatever is set here. Values under 16
+    /// are raised to 16 so a hashed id stays distinct.
+    public var maxToolCallIdLength: Int?
+    /// Chat completions: send the session id as `prompt_cache_key` (OpenAI's
+    /// prompt-cache routing key) whenever caching is on. nil ⇒ sent when the
+    /// base URL is `api.openai.com`, or with long cache retention where
+    /// `supportsLongCacheRetention` allows; false never sends it. Never sent
+    /// alongside `cacheControlFormat: "anthropic"`. Set it for a relay that
+    /// forwards the key to OpenAI.
+    public var sendsPromptCacheKey: Bool?
+
     public init() {}
+}
+
+extension Model {
+    /// The provider name behaviour detection reads:
+    /// `compat.behavesLikeProvider` when set, else `provider`. Identity —
+    /// registration, credentials, catalog lookups, same-model checks — keeps
+    /// reading `provider`.
+    public var behaviorProvider: String {
+        if let like = compat?.behavesLikeProvider, !like.isEmpty { return like }
+        return provider
+    }
 }
 
 /// Thinking levels pi exposes per model. `off` is the only level for
