@@ -17,7 +17,7 @@ struct OpenCodeRegistrationTests {
     private static let key = OAuthCredentials(access: "oc_sk_test", refresh: "", expires: .max)
 
     @Test("registerStored puts every wire of the plan under its own scope", arguments: [
-        ("opencode-go", "glm-5.2", "OpenCode Go"),
+        ("opencode-go", "glm-5.3", "OpenCode Go"),
         ("opencode", "claude-sonnet-5", "OpenCode Zen"),
     ])
     func registerStoredOpenCode(id: String, defaultModel: String, name: String) async throws {
@@ -57,7 +57,7 @@ struct OpenCodeRegistrationTests {
                 extras: ["defaultModel": .string("claude-haiku-5-5")]
             ), for: id)
             for (model, api) in [
-                ("glm-5.2", "openai-completions"),
+                ("glm-5.3", "openai-completions"),
                 ("grok-4.7", "openai-responses"),
                 ("claude-haiku-5-5", "anthropic-messages"),
                 ("gemini-4-argon", "google-generative-ai"),
@@ -83,13 +83,13 @@ struct OpenCodeRegistrationTests {
         try await withSharedAPIRegistry {
             await APIRegistry.shared.unregisterScope(OpenCodePlan.go.id)
             let resolved = try #require(await resolveEnvAuth(
-                modelOverride: "opencode-go/glm-5.2",
+                modelOverride: "opencode-go/glm-5.3",
                 environment: ["OPENCODE_API_KEY": "oc_sk_env"]
             ))
-            #expect(resolved.model.id == "glm-5.2")
+            #expect(resolved.model.id == "glm-5.3")
             #expect(resolved.model.provider == OpenCodePlan.go.id)
             #expect(resolved.model.baseURL == OpenCodePlan.go.rootURL)
-            #expect(resolved.modelLabel == "glm-5.2 · OpenCode Go (env)")
+            #expect(resolved.modelLabel == "glm-5.3 · OpenCode Go (env)")
             let registered = await APIRegistry.shared.provider(scope: OpenCodePlan.go.id, api: "openai-completions")
             #expect(registered is OpenCodeRequestProvider)
             await APIRegistry.shared.unregisterScope(OpenCodePlan.go.id)

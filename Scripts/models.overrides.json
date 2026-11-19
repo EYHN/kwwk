@@ -124,7 +124,7 @@
     }
   },
   "github-copilot": {
-    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists. claude-fable-5.2 and gemini-4-carbon (2026-11-11) and gemini-4-hydrogen (2026-11-16), with no signed-in Copilot account at hand, take their siblings' limits (claude-fable-5.1, gemini-4-argon) until read off Copilot's /models: a window kept too small only compacts early, one too large overflows.",
+    "$note": "Copilot's own limits and list, read from GET api.githubcopilot.com/models with a signed-in account on 2026-10-13, rechecked 2026-11-10. pi-mono carries each vendor's native window (1M for most), which Copilot does not give: a session would overflow long before kwwk thought to compact. contextWindow is Copilot's max_prompt_tokens + max_output_tokens (never above its max_context_window_tokens), since kwwk budgets a prompt as the window less the output reserve. A null is a model Copilot no longer lists. claude-fable-5.2 and gemini-4-carbon (2026-11-11) and gemini-4-hydrogen (2026-11-16), and gemini-4-neon, gpt-6.2-astra and gpt-6.2-sol (2026-11-19), with no signed-in Copilot account at hand, take their siblings' limits (claude-fable-5.1, gemini-4-argon, gpt-6.1-sol) until read off Copilot's /models; mai-code-2 and mai-code-2-flash (2026-11-19), with no sibling, take the window of Copilot's other Responses-wire models (400k): a window kept too small only compacts early, one too large overflows.",
     "claude-fable-5": {
       "contextWindow": 264000,
       "maxTokens": 64000
@@ -175,6 +175,9 @@
     "gemini-4-hydrogen": {
       "contextWindow": 265536
     },
+    "gemini-4-neon": {
+      "contextWindow": 265536
+    },
     "gpt-5.3-codex": {
       "contextWindow": 400000
     },
@@ -203,12 +206,24 @@
     "gpt-6.1-terra": {
       "contextWindow": 400000
     },
+    "gpt-6.2-astra": {
+      "contextWindow": 400000
+    },
+    "gpt-6.2-sol": {
+      "contextWindow": 400000
+    },
     "grok-4.5": null,
     "grok-4.6": {
       "contextWindow": 328000
     },
     "grok-4.7": {
       "contextWindow": 328000
+    },
+    "mai-code-2": {
+      "contextWindow": 400000
+    },
+    "mai-code-2-flash": {
+      "contextWindow": 400000
     }
   },
   "zai": {

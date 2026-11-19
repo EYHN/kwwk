@@ -42,7 +42,7 @@ public struct OpenCodePlan: Sendable, Hashable {
         id: "opencode-go",
         name: "OpenCode Go",
         rootURL: "https://opencode.ai/inference/go",
-        defaultModel: "glm-5.2"
+        defaultModel: "glm-5.3"
     )
     public static let zen = OpenCodePlan(
         id: "opencode",

@@ -721,7 +721,7 @@ conversation in `x-opencode-session`, which Go requires. The key travels
 with the returned `ResolvedAuth`, so registering the plan again for another
 key never changes a running session's. An exported `OPENCODE_API_KEY` serves
 both plans and is read as Zen unless the model names the plan:
-`kwwk --model opencode-go/glm-5.2`.
+`kwwk --model opencode-go/glm-5.3`.
 
 ### Updating the model catalog
 
