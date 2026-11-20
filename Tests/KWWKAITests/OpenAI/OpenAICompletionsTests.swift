@@ -470,6 +470,55 @@ struct OpenAICompletionsTests {
         #expect(userCache?["ttl"] as? String == "1h")
     }
 
+    @Test("anthropic cache_control trailing breakpoint follows the tool loop onto the newest tool result")
+    func anthropicCacheControlMarksNewestToolResult() async throws {
+        var model = Self.model
+        model.provider = "openrouter"
+        model.baseURL = "https://openrouter.ai/api"
+        var compat = ModelCompat()
+        compat.cacheControlFormat = "anthropic"
+        model.compat = compat
+
+        let client = StubSSEClient(body: Self.textSSE)
+        let provider = OpenAICompletionsProvider(client: client, defaultAPIKey: "k")
+        let call = AssistantMessage(
+            content: [.toolCall(ToolCall(id: "call_1", name: "noop", arguments: ["x": 1]))],
+            api: "openai-completions",
+            provider: "openrouter",
+            model: "anthropic/claude-opus-5.5",
+            stopReason: .toolUse
+        )
+        _ = provider.stream(
+            model: model,
+            context: Context(
+                systemPrompt: "Be concise.",
+                messages: [
+                    .user(UserMessage(text: "hi")),
+                    .assistant(call),
+                    .toolResult(ToolResultMessage(
+                        toolCallId: "call_1",
+                        toolName: "noop",
+                        content: [.text(TextContent(text: "ok"))]
+                    )),
+                ],
+                tools: [Tool(name: "noop", description: "n", parameters: ["type": "object"])]
+            ),
+            options: StreamOptions(cacheRetention: .short)
+        )
+        await Self.waitForRequest(client)
+        let json = try Self.decodeBody(client)
+        let messages = json["messages"] as? [[String: Any]] ?? []
+        func marked(_ message: [String: Any]) -> Bool {
+            (message["content"] as? [[String: Any]])?.contains { $0["cache_control"] != nil } ?? false
+        }
+        let tool = try #require(messages.last)
+        #expect(tool["role"] as? String == "tool")
+        #expect(tool["tool_call_id"] as? String == "call_1")
+        #expect(marked(tool))
+        // One trailing breakpoint, not one on the earlier prose as well.
+        #expect(messages.filter { ["user", "assistant", "tool"].contains($0["role"] as? String) && marked($0) }.count == 1)
+    }
+
     @Test("anthropic cache_control endpoint does not also emit prompt_cache_key")
     func anthropicCacheExcludesNativeCache() async throws {
         var model = Self.model

@@ -461,8 +461,16 @@ extension OpenAICompletionsProvider {
             toolEntries[toolEntries.count - 1]["cache_control"] = cacheControl
             tools = toolEntries
         }
+        // The trailing breakpoint goes on the newest message that can carry
+        // one, tool results included. In a tool loop the history grows by
+        // `tool` messages and text-less assistant `tool_calls` turns; skipping
+        // `tool` left the marker on the last message with prose, so every
+        // turn after it was billed as uncached input (measured 2026-11-20 on
+        // an Opus Agent: the read stayed at 42k for 15 minutes while the
+        // prompt grew to 140k), and Anthropic's 20-block lookback then missed
+        // the old entry once the marker finally moved.
         for index in messages.indices.reversed() {
-            guard ["user", "assistant"].contains(messages[index]["role"] as? String) else { continue }
+            guard ["user", "assistant", "tool"].contains(messages[index]["role"] as? String) else { continue }
             if addCacheControl(cacheControl, toTextContentOf: &messages[index]) { break }
         }
     }
