@@ -738,7 +738,6 @@ var compat = ModelCompat()
 compat.behavesLikeProvider = "openrouter"   // everything OpenRouter's name gives
 // or field by field:
 compat.thinkingFormat = "openrouter"
-compat.supportsDeveloperRole = true         // false unless the id is anthropic/* or openai/*
 compat.cacheControlFormat = "anthropic"     // anthropic/* ids only
 compat.sendSessionAffinityHeaders = true
 compat.sessionAffinityFormat = "openrouter"
