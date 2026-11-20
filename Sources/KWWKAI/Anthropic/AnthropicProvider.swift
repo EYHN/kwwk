@@ -122,10 +122,16 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
               let block = content.first(where: {
                   guard case .object(let item) = $0 else { return false }
                   return item["type"] == .string("compaction")
-              }), case .object(let item) = block,
-              case .string(let summary) = item["content"],
-              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              }), case .object(let item) = block else {
             throw ProviderFailure(message: "Anthropic compaction returned no summary")
+        }
+        // A compaction stop whose block holds no text (`"content": null`
+        // when thinking used up max_tokens) is neither an auth problem nor an
+        // outage: the route worked but produced nothing to replay. Let the
+        // pipeline write a local summary instead of failing the turn.
+        guard case .string(let summary) = item["content"],
+              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
         }
         return NativeCompactionResult(
             summary: summary,

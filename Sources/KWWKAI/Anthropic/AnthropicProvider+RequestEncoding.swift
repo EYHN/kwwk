@@ -51,6 +51,18 @@ extension AnthropicProvider {
                 // from the unconstrained `max` effort.
                 root["thinking"] = ["type": "adaptive", "display": "summarized"]
                 root["output_config"] = ["effort": adaptiveEffort(model, reasoning)]
+                // Adaptive thinking spends the same max_tokens as the answer,
+                // and Claude picks how much to think. Apply the budget
+                // branch's floor so a low caller cap (native compaction asks
+                // for ~1.8k) cannot be spent on thinking alone: Anthropic then
+                // ends the turn with an empty answer, or a compaction block
+                // whose content is null. The route ceiling still wins.
+                let expectedThinking = options?.thinkingBudgets?.budget(for: reasoning)
+                    ?? defaultThinkingBudget(for: reasoning)
+                maxTokens = min(
+                    max(maxTokens, addingWithoutOverflow(expectedThinking, minimumAnswerHeadroomTokens)),
+                    routeCeiling
+                )
                 thinkingEnabled = true
             } else {
                 var thinkingBudget = options?.thinkingBudgets?.budget(for: reasoning)
