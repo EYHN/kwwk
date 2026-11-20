@@ -12,7 +12,7 @@ enum AgentRequestBudget {
         if let automaticLimit = OutputTokenPolicy.automaticLimit(for: model) {
             return min(max(1, automaticLimit), window)
         }
-        if OutputTokenPolicy.isOpenRouter(model) {
+        if OutputTokenPolicy.usesSmallAnswerReserve(for: model) {
             let proportional = max(
                 1,
                 (window / 100) * 15 + (window % 100) * 15 / 100
