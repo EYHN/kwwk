@@ -79,9 +79,14 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         guard Self.supportsNativeCompaction(model: model, baseURL: base) else { return nil }
         let fallbackEnabled = Self.usesServerSideFallback(model: model, url: url, options: options)
         var nativeContext = context
-        if case .assistant? = nativeContext.messages.last {
+        let assistantFinal: Bool
+        if case .assistant? = nativeContext.messages.last { assistantFinal = true }
+        else { assistantFinal = Self.endsWithNativeCompaction(nativeContext.messages) }
+        if assistantFinal {
             // Do not let an assistant-final transcript become an unsupported
-            // prefill. This synthetic control message is not persisted.
+            // prefill; a replayed compaction is an assistant turn too, and
+            // this asks to compact rather than the encoder's request to
+            // continue. This synthetic control message is not persisted.
             nativeContext.messages.append(.user(UserMessage(
                 text: "Compact the preceding conversation; do not continue the task."
             )))

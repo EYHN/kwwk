@@ -158,6 +158,44 @@ struct NativeCompactionTests {
         #expect(body["messages"]?.arrayValue?.last?["role"] == "user")
     }
 
+    static func bareRecap() -> Message {
+        var recap = UserMessage(text: "ledger", source: .compaction)
+        recap.nativeCompaction = NativeCompactionPayload(model: claude,
+            items: [["type": "compaction", "content": "summary", "encrypted_content": "signed"]])
+        return .user(recap)
+    }
+
+    @Test func anthropicBareCompactionEndsWithUser() throws {
+        // The whole transcript was summarized, so only the replayed
+        // compaction (an assistant turn) and a tool change remain.
+        let tool = Tool(name: "read", description: "read files", parameters: ["type": "object"])
+        let encoded = try AnthropicProvider.encodeBody(model: Self.claude,
+            context: Context(messages: [Self.bareRecap(), .system(SystemMessage(toolsAdded: [tool]))]),
+            options: nil)
+        let body = try JSONDecoder().decode([String: JSONValue].self, from: encoded)
+        let messages = try #require(body["messages"]?.arrayValue)
+        #expect(messages.first?["role"] == "assistant")
+        let last = try #require(messages.last)
+        #expect(last["role"] == "user")
+        #expect(last["content"]?.arrayValue?.first?["text"] == .string(AnthropicProvider.continueAfterCompaction))
+
+        let kept = try AnthropicProvider.encodeBody(model: Self.claude,
+            context: Context(messages: [Self.bareRecap(), .user(UserMessage(text: "next"))]), options: nil)
+        #expect(!String(decoding: kept, as: UTF8.self).contains(AnthropicProvider.continueAfterCompaction))
+    }
+
+    @Test func anthropicCompactAfterBareCompactionIsNotAPrefill() async throws {
+        let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}]}"#)
+        _ = try await AnthropicProvider(client: client).compact(model: Self.claude,
+            context: Context(messages: [Self.bareRecap()]), instructions: "", options: nil)
+        let body = try JSONDecoder().decode([String: JSONValue].self, from: #require(client.lastRequest?.body))
+        let last = try #require(body["messages"]?.arrayValue?.last)
+        #expect(last["role"] == "user")
+        let text = String(decoding: try JSONEncoder().encode(last), as: UTF8.self)
+        #expect(text.contains("Compact the preceding conversation"))
+        #expect(!text.contains(AnthropicProvider.continueAfterCompaction))
+    }
+
     @Test func explicitResponsesV1RouteStillWorks() async throws {
         var model = Self.codex
         model.api = "openai-responses"
