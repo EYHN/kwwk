@@ -75,6 +75,41 @@ struct OpenAICompletionsTests {
         #expect(explicit["max_completion_tokens"] as? Int == 8_192)
     }
 
+    @Test("only OpenAI's own API gets the developer role by default (pi #10741)")
+    func developerRoleDefault() throws {
+        func systemRole(provider: String, baseURL: String, id: String = "gpt-4o-mini",
+                        developerRole: Bool? = nil) throws -> String? {
+            var model = Self.model
+            model.id = id
+            model.provider = provider
+            model.baseURL = baseURL
+            model.reasoning = true
+            if let developerRole {
+                var compat = ModelCompat()
+                compat.supportsDeveloperRole = developerRole
+                model.compat = compat
+            }
+            let body = try OpenAICompletionsProvider.encodeBodyDict(
+                model: model,
+                context: Context(systemPrompt: "Be concise.", messages: [.user(UserMessage(text: "hi"))]),
+                options: nil
+            )
+            return (body["messages"] as? [[String: Any]])?.first?["role"] as? String
+        }
+        #expect(try systemRole(provider: "openai", baseURL: "https://api.openai.com/v1") == "developer")
+        #expect(try systemRole(provider: "custom", baseURL: "https://api.openai.com/v1") == "developer")
+        #expect(try systemRole(provider: "openrouter", baseURL: "https://openrouter.ai/api/v1",
+                               id: "openai/gpt-5-mini") == "system")
+        #expect(try systemRole(provider: "qwen-token-plan-individual",
+                               baseURL: "https://token-plan.maas.qwencloudapi.com/compatible-mode/v1") == "system")
+        #expect(try systemRole(provider: "groq", baseURL: "https://api.groq.com/openai/v1") == "system")
+        // The catalog's flag still wins either way.
+        #expect(try systemRole(provider: "openai", baseURL: "https://api.openai.com/v1",
+                               developerRole: false) == "system")
+        #expect(try systemRole(provider: "groq", baseURL: "https://api.groq.com/openai/v1",
+                               developerRole: true) == "developer")
+    }
+
     @Test("streams text content")
     func basicText() async throws {
         let client = StubSSEClient(body: Self.textSSE)
