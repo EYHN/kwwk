@@ -136,8 +136,11 @@ extension OpenAICompletionsProvider {
         let isNonStandard = isNvidia || isCerebras || isGrok || isTogether || isChutes
             || isDeepSeek || isZai || isMoonshot || isOpencode || isCloudflareWorkers
             || isCfGateway || isAntLing
-        let openRouterDeveloperRole = isOpenRouter
-            && (model.id.hasPrefix("anthropic/") || model.id.hasPrefix("openai/"))
+        // The developer role is OpenAI's; other hosts' chat templates often
+        // reject it, and every host takes system. Only OpenAI's own API gets
+        // developer by default, as in pi (b82477b, pi #10741), whose catalog
+        // no longer carries `supportsDeveloperRole: false`.
+        let isOpenAI = provider == "openai" || has("api.openai.com")
         let useMaxTokens = isChutes || isMoonshot || isCfGateway || isTogether || isNvidia || isAntLing
 
         let detectedReasoningEffort = !isGrok && !isZai && !isMoonshot && !isTogether
@@ -152,8 +155,7 @@ extension OpenAICompletionsProvider {
         let c = model.compat
         return ResolvedCompletionsCompat(
             supportsStore: c?.supportsStore ?? !isNonStandard,
-            supportsDeveloperRole: c?.supportsDeveloperRole
-                ?? (openRouterDeveloperRole || (!isNonStandard && !isOpenRouter)),
+            supportsDeveloperRole: c?.supportsDeveloperRole ?? isOpenAI,
             supportsReasoningEffort: c?.supportsReasoningEffort ?? detectedReasoningEffort,
             supportsUsageInStreaming: c?.supportsUsageInStreaming ?? true,
             maxTokensField: c?.maxTokensField ?? (useMaxTokens ? "max_tokens" : "max_completion_tokens"),

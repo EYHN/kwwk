@@ -11,7 +11,7 @@ import Testing
 struct OpenCodeGatewayTests {
     /// (plan, wire, model id, where the request must go)
     @Test("each wire goes to its own path under the plan, the key as a bearer token", arguments: [
-        (OpenCodePlan.go, "openai-completions", "glm-5.2",
+        (OpenCodePlan.go, "openai-completions", "glm-5.3",
          "https://opencode.ai/inference/go/openai/v1/chat/completions"),
         (OpenCodePlan.go, "openai-responses", "grok-4.7",
          "https://opencode.ai/inference/go/openai/v1/responses"),
@@ -19,7 +19,7 @@ struct OpenCodeGatewayTests {
          "https://opencode.ai/inference/go/anthropic/v1/messages"),
         (OpenCodePlan.go, "google-generative-ai", "gemini-4-argon",
          "https://opencode.ai/inference/go/google/v1beta/models/gemini-4-argon:streamGenerateContent?alt=sse"),
-        (OpenCodePlan.zen, "openai-completions", "glm-5.2",
+        (OpenCodePlan.zen, "openai-completions", "glm-5.3",
          "https://opencode.ai/inference/openai/v1/chat/completions"),
         (OpenCodePlan.zen, "openai-responses", "gpt-5.5",
          "https://opencode.ai/inference/openai/v1/responses"),
@@ -69,7 +69,7 @@ struct OpenCodeGatewayTests {
                 ProviderVariants.openCodeProviders(plan: .go, apiKey: "k", client: client).first
             )
             let stream = provider.stream(
-                model: Model(id: "glm-5.2", api: provider.api, provider: OpenCodePlan.go.id, headers: modelHeaders),
+                model: Model(id: "glm-5.3", api: provider.api, provider: OpenCodePlan.go.id, headers: modelHeaders),
                 context: Context(messages: [.user(UserMessage(text: "hi"))]),
                 options: options
             )

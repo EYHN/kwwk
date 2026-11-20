@@ -20,7 +20,7 @@ import Testing
 struct LiveOpenCodeTests {
     /// One model per wire the plan serves.
     static let models: [String: [String]] = [
-        OpenCodePlan.go.id: ["glm-5.2", "grok-4.7", "claude-haiku-5-5", "gemini-4-argon"],
+        OpenCodePlan.go.id: ["glm-5.3", "grok-4.7", "claude-haiku-5-5", "gemini-4-argon"],
         OpenCodePlan.zen.id: ["glm-5.3-flash", "gpt-5-nano", "claude-haiku-4-5", "gemini-3.5-flash-lite"],
     ]
 

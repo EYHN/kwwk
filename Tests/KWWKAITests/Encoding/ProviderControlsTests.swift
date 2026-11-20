@@ -88,17 +88,26 @@ struct ProviderControlsTests {
             let openRouter = label == "openrouter"
             #expect(compat.thinkingFormat == (openRouter ? "openrouter" : "openai"))
             #expect(compat.cacheControlFormat == (openRouter ? "anthropic" : nil))
-            #expect(compat.supportsDeveloperRole == true)
+            // Only OpenAI's name sends the developer role (pi #10741).
+            #expect(compat.supportsDeveloperRole == (label == "openai"))
             #expect(compat.sendSessionAffinityHeaders == openRouter)
             #expect(compat.sessionAffinityFormat == (openRouter ? "openrouter" : "openai"))
             #expect(compat.supportsStore == true)
             #expect(compat.maxTokensField == "max_completion_tokens")
         }
-        // OpenRouter grants the developer role to anthropic/ and openai/ ids only.
-        #expect(OpenAICompletionsProvider.resolveCompat(Self.model("openrouter", id: "x/y"))
-            .supportsDeveloperRole == false)
-        #expect(OpenAICompletionsProvider.resolveCompat(Self.model("some-relay", id: "x/y"))
-            .supportsDeveloperRole == true)
+        // OpenRouter no longer grants it to anthropic/ and openai/ ids; any id
+        // gets system there, and developer under OpenAI's name or base URL.
+        for id in ["x/y", "openai/gpt-6"] {
+            #expect(OpenAICompletionsProvider.resolveCompat(Self.model("openrouter", id: id))
+                .supportsDeveloperRole == false)
+            #expect(OpenAICompletionsProvider.resolveCompat(Self.model("some-relay", id: id))
+                .supportsDeveloperRole == false)
+            #expect(OpenAICompletionsProvider.resolveCompat(Self.model("openai", id: id))
+                .supportsDeveloperRole == true)
+            #expect(OpenAICompletionsProvider.resolveCompat(
+                Self.model("some-relay", id: id, baseURL: "https://api.openai.com/v1")
+            ).supportsDeveloperRole == true)
+        }
     }
 
     @Test("unset, prompt_cache_key follows the base URL and long retention")
@@ -247,7 +256,6 @@ struct ProviderControlsTests {
     static func openRouterControls(id: String) -> (inout ModelCompat) -> Void {
         { compat in
             compat.thinkingFormat = "openrouter"
-            compat.supportsDeveloperRole = id.hasPrefix("anthropic/") || id.hasPrefix("openai/")
             if id.hasPrefix("anthropic/") { compat.cacheControlFormat = "anthropic" }
             compat.sendSessionAffinityHeaders = true
             compat.sessionAffinityFormat = "openrouter"

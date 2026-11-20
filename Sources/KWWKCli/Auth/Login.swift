@@ -223,7 +223,7 @@ let loginProviders: [LoginEntry] = [
                     key: "defaultModel",
                     label: "Default model id",
                     hint: "(optional)",
-                    placeholder: "glm-5.2",
+                    placeholder: "glm-5.3",
                     required: false
                 ),
             ],
