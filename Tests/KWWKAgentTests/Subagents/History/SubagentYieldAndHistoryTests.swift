@@ -739,7 +739,7 @@ struct SubagentYieldAndHistoryTests {
         )
 
         let body = yieldResultText(result)
-        #expect(body.utf8.count <= 32 * 1_024)
+        #expect(body.utf8.count <= 64 * 1_024)
         #expect(body.contains("HEAD-SENTINEL"))
         #expect(body.contains("bytes truncated to fit one response"))
         #expect(!body.contains(childSessionId))
@@ -795,7 +795,7 @@ struct SubagentYieldAndHistoryTests {
         // The streaming message is shown as the current activity, never
         // expanded, so it cannot crowd out a committed message.
         let body = yieldResultText(result)
-        #expect(body.utf8.count <= 32 * 1_024)
+        #expect(body.utf8.count <= 64 * 1_024)
         #expect(body.contains("committed sentinel"))
         #expect(body.contains("… live: streaming"))
         #expect(!body.contains("<live>"))

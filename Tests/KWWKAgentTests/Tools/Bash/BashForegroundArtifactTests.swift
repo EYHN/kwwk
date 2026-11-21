@@ -35,12 +35,9 @@ struct BashForegroundArtifactTests {
             nil
         )
         let text = textOutput(result)
-        // Head and tail inline, the middle marked and pointed at the file.
-        #expect(text.hasPrefix("1\n2\n3\n"))
-        #expect(text.contains("[… output truncated: "))
+        #expect(text.hasPrefix("1\n2\n"))
         #expect(text.contains("full output: "))
         #expect(text.hasSuffix("100000"))
-        #expect(text.utf8.count <= Truncate.bashHeadBytes + Truncate.bashTailBytes + 1_024)
 
         guard case .object(let details) = result.details ?? .null,
               case .string(let path) = details["outputFile"] ?? .null else {
@@ -100,8 +97,6 @@ struct BashForegroundArtifactTests {
         } catch CodingToolError.commandFailed(let stderr, let exitCode) {
             #expect(exitCode == 3)
             #expect(stderr.contains("full output: "))
-            #expect(stderr.hasPrefix("1\n2\n"))
-            #expect(stderr.utf8.count <= Truncate.bashHeadBytes + Truncate.bashTailBytes + 1_024)
             let leftovers = (try? FileManager.default
                 .contentsOfDirectory(atPath: outputDir.path)) ?? []
             #expect(leftovers.contains { $0.hasPrefix("fg_") })

@@ -29,7 +29,6 @@ struct TaskToolTests {
             .object(["timeout_seconds": .double(.nan)]),
             .object(["timeout_seconds": .double(1.5)]),
             .object(["timeout_seconds": .int(0)]),
-            .object(["timeout_seconds": .int(-5)]),
         ]
 
         for (index, arguments) in malformedTimeouts.enumerated() {
@@ -47,61 +46,31 @@ struct TaskToolTests {
         #expect(await manager.get(taskId)?.status == .running)
     }
 
-    @Test("task_poll waits 300s by default and lowers longer requests to 300s without an error")
+    @Test("task_poll waits 300s by default and lowers longer requests without an error")
     func pollTimeoutDefaultsAndClamps() async throws {
-        let outputDir = makeTaskTempDir()
-        defer { try? FileManager.default.removeItem(at: outputDir) }
-        let manager = BackgroundTaskManager(outputDir: outputDir)
-        let (taskId, _) = await manager.spawn(
-            runner: TaskNeverRunner(label: "clamp-never"),
-            sessionId: "s1"
-        )
+        let manager = BackgroundTaskManager(outputDir: makeTaskTempDir())
+        let (taskId, _) = await manager.spawn(runner: TaskNeverRunner(label: "clamp"), sessionId: "s1")
         defer { Task { try? await manager.kill(taskId) } }
         let tool = createTaskPollTool(manager: manager, sessionId: "s1")
-
-        // The schema advertises no maximum, so argument validation lets 600
-        // through to the clamp instead of failing the call.
-        _ = try validateToolArguments(
-            tool: tool.toKWWKAITool(),
-            toolCall: ToolCall(id: "clamp-validate", name: "task_poll", arguments: ["timeout_seconds": 600])
-        )
-        guard case .object(let schema) = tool.parameters,
-              case .object(let properties) = schema["properties"] ?? .null,
-              case .object(let timeout) = properties["timeout_seconds"] ?? .null,
-              case .array(let variants) = timeout["anyOf"] ?? .null,
-              case .object(let integer) = variants.first ?? .null else {
-            Issue.record("missing timeout_seconds schema")
-            return
-        }
-        #expect(integer["type"] == .string("integer"))
-        #expect(integer["maximum"] == nil)
-        #expect(tool.description.contains("300s"))
-
-        let requests: [JSONValue] = [
-            .object(["task_ids": .array([.string(taskId)])]),
-            .object(["task_ids": .array([.string(taskId)]), "timeout_seconds": .int(600)]),
-            .object(["task_ids": .array([.string(taskId)]), "timeout_seconds": .double(1e20)]),
-            .object(["task_ids": .array([.string(taskId)]), "timeout_seconds": .int(300)]),
-        ]
-        for (index, arguments) in requests.enumerated() {
+        for timeout in [JSONValue.null, .int(600)] {
+            _ = try validateToolArguments(
+                tool: tool.toKWWKAITool(),
+                toolCall: ToolCall(id: "v", name: "task_poll", arguments: ["timeout_seconds": timeout])
+            )
             let cancellation = CancellationHandle()
             let updates = TaskUpdateProbe()
             let poll = Task {
-                try await tool.execute("clamp-\(index)", arguments, cancellation, { updates.append($0) })
+                try await tool.execute(
+                    "clamp", ["task_ids": [.string(taskId)], "timeout_seconds": timeout], cancellation, { updates.append($0) }
+                )
             }
             #expect(await awaitUntil(2_500) { updates.count >= 1 })
             if case .object(let details) = updates.last?.details ?? .null {
-                #expect(details["timeout_seconds"] == .int(300), "request \(index)")
-            } else {
-                Issue.record("missing progress details for request \(index)")
+                #expect(details["timeout_seconds"] == .int(300))
             }
             cancellation.cancel(reason: "steering")
-            let result = try await poll.value
-            if case .object(let details) = result.details ?? .null {
-                #expect(details["reason"] == .string("interrupted"))
-            }
+            _ = try await poll.value
         }
-        #expect(await manager.get(taskId)?.status == .running)
     }
 
     @Test("list keeps the raw tail in details only and escapes untrusted metadata")

@@ -40,8 +40,7 @@ public func createFindTool(
         Find files matching a glob pattern. A pattern without a slash matches the file \
         name at any depth, so `*.swift` finds every Swift file in the tree. Use a slash \
         to scope it: `Sources/*.swift` matches only that directory's top level, and \
-        `Sources/**/*.swift` recurses under it. Returns up to \(Truncate.findDefaultLimit) paths \
-        unless `limit` says otherwise, and at most \(Truncate.formatSize(Truncate.listingMaxBytes)) of text.
+        `Sources/**/*.swift` recurses under it.
         """,
         parameters: parameters,
         execute: { _, args, cancellation, _ in
@@ -70,19 +69,19 @@ public func createFindTool(
                 return nil
             }()
 
-            let cap = limit.map { max(0, $0) } ?? Truncate.findDefaultLimit
+            let cap = max(0, limit ?? Truncate.findDefaultLimit)
             // One past the cap tells whether more matches exist.
             let found = try await ops.find(pattern: pattern, cwd: root, limit: min(cap, Int.max - 1) + 1)
+            let (text, matches) = cappedListing(found, limit: cap)
             if found.isEmpty {
                 return AgentToolResult(
                     content: [.text(TextContent(text: "No files match \(pattern)"))],
                     details: .object(["files": .array([])])
                 )
             }
-            let listing = cappedListing(found, limit: cap, explicitLimit: limit != nil)
             return AgentToolResult(
-                content: [.text(TextContent(text: listing.text))],
-                details: .object(["files": .array(listing.shown.map { .string($0) })])
+                content: [.text(TextContent(text: text))],
+                details: .object(["files": .array(matches.map { .string($0) })])
             )
         }
     )
@@ -92,26 +91,19 @@ public func createFindTool(
     return tool
 }
 
-/// The first `limit` entries that fit in `Truncate.listingMaxBytes`, plus a
-/// notice when any were left out. Shared by `find` and `ls`.
-func cappedListing(
-    _ entries: [String],
-    limit: Int,
-    explicitLimit: Bool
-) -> (text: String, shown: [String]) {
-    var shown = Array(entries.prefix(limit))
-    let byCount = entries.count > shown.count
-    let fitting = Truncate.entriesFitting(shown, maxBytes: Truncate.listingMaxBytes)
-    let byBytes = fitting < shown.count
-    shown = Array(shown.prefix(fitting))
+/// The first `limit` entries within `Truncate.defaultMaxBytes`, with a notice
+/// when any were left out. Shared by `find` and `ls`.
+func cappedListing(_ entries: [String], limit: Int) -> (text: String, shown: [String]) {
+    var shown: [String] = []
+    var bytes = 0
+    for entry in entries.prefix(limit) {
+        bytes += entry.utf8.count + 1
+        if bytes > Truncate.defaultMaxBytes { break }
+        shown.append(entry)
+    }
     var text = shown.joined(separator: "\n")
-    if byBytes {
-        text += "\n\n[truncated: showing the first \(shown.count) entries (\(Truncate.formatSize(Truncate.listingMaxBytes)) limit); narrow the pattern or path to see the rest]"
-    } else if byCount {
-        let hint = explicitLimit
-            ? "pass a larger limit or narrow the pattern or path"
-            : "pass limit or narrow the pattern or path"
-        text += "\n\n[truncated: showing the first \(shown.count) entries; more exist — \(hint)]"
+    if shown.count < entries.count {
+        text += "\n\n[truncated: showing the first \(shown.count) entries; pass a larger limit or narrow the pattern or path]"
     }
     return (text, shown)
 }

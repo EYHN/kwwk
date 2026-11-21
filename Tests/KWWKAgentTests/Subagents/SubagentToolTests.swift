@@ -225,64 +225,30 @@ struct SubagentToolTests {
         }
     }
 
-    @Test("a large foreground result is cut inline and saved in full", arguments: [false, true])
-    func foregroundLargeResultIsSavedToFile(withManager: Bool) async throws {
+    @Test("a foreground result over 16KB is saved to a file and cut inline")
+    func largeResultIsSaved() async throws {
         let faux = await registerFauxProvider()
         defer { faux.unregister() }
-        let answer = "RESULT-HEAD\n"
-            + (1...4_000).map { "finding \($0) <tag> & detail" }.joined(separator: "\n")
-            + "\nRESULT-TAIL"
-        #expect(answer.utf8.count > 40 * 1024)
+        let answer = "RESULT-HEAD\n" + String(repeating: "finding\n", count: 5_000) + "RESULT-TAIL"
         faux.setResponses([.message(subagentYieldMessage(answer))])
-        let outputDir = makeTempDir()
-        defer { try? FileManager.default.removeItem(at: outputDir) }
         let tool = createAgentTool(
             cwd: FileManager.default.currentDirectoryPath,
             subagents: [minimalSubagent()],
             parentModel: faux.getModel(),
             parentTools: .readOnly,
-            backgroundManager: withManager ? BackgroundTaskManager(outputDir: outputDir) : nil,
-            sessionId: "parent",
             bashEnvironment: testBashEnvironment
         )
-
-        let result = try await tool.execute(
+        let text = resultText(try await tool.execute(
             "call-large",
-            .object([
-                "description": .string("large answer"),
-                "prompt": .string("answer at length"),
-                "subagent_type": .string("mini"),
-            ]),
+            .object(["description": "large", "prompt": "answer at length", "subagent_type": "mini"]),
             nil,
             nil
-        )
-
-        let text = resultText(result)
-        // 16KB of raw text inline; XML escaping of `<`, `>`, `&` adds the rest.
-        #expect(text.utf8.count <= subagentResultInlineMaxBytes * 3 / 2)
+        ))
         #expect(text.contains("RESULT-HEAD"))
-        #expect(text.contains("RESULT-TAIL"))
-        #expect(text.contains("&lt;tag&gt; &amp; detail"))
-        #expect(text.contains("[… result truncated: "))
-        guard case .object(let details) = result.details ?? .null,
-              case .string(let path) = details["result_file"] ?? .null else {
-            Issue.record("expected details.result_file")
-            return
-        }
-        defer { try? FileManager.default.removeItem(atPath: path) }
-        #expect(text.contains("full result: \(path)"))
-        if withManager {
-            #expect(path.hasPrefix(outputDir.path))
-        }
-        #expect(try String(contentsOfFile: path, encoding: .utf8) == answer)
-    }
-
-    @Test("a result within the inline cap is returned whole with no file")
-    func boundSubagentResultPassesSmallResults() {
-        let small = String(repeating: "a<b", count: 1_000)
-        let bounded = boundSubagentResult(small, agentId: "x", artifactDirectory: nil)
-        #expect(bounded.fullResultPath == nil)
-        #expect(bounded.text == String(repeating: "a&lt;b", count: 1_000))
+        #expect(!text.contains("RESULT-TAIL"))
+        #expect(text.utf8.count < 13 * 1024)
+        let path = try #require(text.firstMatch(of: #/full result: (\S+)/#)?.output.1)
+        #expect(try String(contentsOfFile: String(path), encoding: .utf8) == answer)
     }
 
     @Test("SDK SubagentRunner can run a subagent directly")

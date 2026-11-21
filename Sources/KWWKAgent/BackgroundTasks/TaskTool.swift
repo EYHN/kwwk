@@ -3,13 +3,9 @@ import KWWKAI
 
 private let taskListLimitRange = 1...50
 private let taskReadLimitRange = 1...32_768
-/// task_poll waits at most this long. A larger request is lowered to it,
-/// not rejected: a rejected 600 costs a whole extra request, and a return at
-/// the 5-minute prompt-cache TTL keeps the next request's cache warm.
+/// task_poll's default and longest wait; a larger request is lowered to it,
+/// not rejected, so a 600 does not cost a whole extra request.
 let taskPollMaxTimeoutSeconds = 300
-/// Omitted `timeout_seconds` waits the full cap: polling is only for when the
-/// agent is otherwise blocked, and a steering notice still interrupts it.
-let taskPollDefaultTimeoutSeconds = 300
 
 private func taskDeliveryConsumer(
     sessionId: String?,
@@ -329,7 +325,7 @@ private func makeTaskPollTool(
                     "type": .string("integer"),
                     "minimum": .int(1),
                 ],
-                description: "Maximum wait in seconds. Default and max \(taskPollMaxTimeoutSeconds); a larger value is lowered to \(taskPollMaxTimeoutSeconds), not rejected. Usually omit it."
+                description: "Maximum wait in seconds. Default and max \(taskPollMaxTimeoutSeconds); larger values are lowered to it."
             ),
         ]),
         "additionalProperties": .bool(false),
@@ -615,19 +611,18 @@ private func taskBoundedInteger(
 }
 
 private func taskTimeout(_ value: JSONValue?) throws -> Int {
-    guard let value, !isBlankToolArgument(value) else { return taskPollDefaultTimeoutSeconds }
-    // `Int(exactly:)` rejects NaN, infinity and fractions; a finite whole
-    // double past `Int` is still just "too long" and clamps like any other.
+    guard let value, !isBlankToolArgument(value) else { return taskPollMaxTimeoutSeconds }
+    // `Int(exactly:)` rejects NaN, infinity and fractions; any whole number
+    // past the cap is lowered to it.
     let raw: Int?
     switch value {
     case .int(let integer): raw = integer
-    case .double(let double) where double.isFinite && double.rounded() == double:
-        raw = double >= Double(taskPollMaxTimeoutSeconds) ? taskPollMaxTimeoutSeconds : Int(double)
+    case .double(let double): raw = Int(exactly: min(double, Double(taskPollMaxTimeoutSeconds)))
     default: raw = nil
     }
     guard let raw, raw >= 1 else {
         throw CodingToolError.invalidArgument(
-            "task_poll: `timeout_seconds` must be a finite integer of at least 1 (values above \(taskPollMaxTimeoutSeconds) are lowered to \(taskPollMaxTimeoutSeconds))"
+            "task_poll: `timeout_seconds` must be a finite integer of at least 1"
         )
     }
     return min(raw, taskPollMaxTimeoutSeconds)

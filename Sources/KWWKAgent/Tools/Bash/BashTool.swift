@@ -668,44 +668,21 @@ private func runBashLegacy(
     ops: BashOperations,
     cancellation: CancellationHandle?
 ) async throws -> AgentToolResult {
-    let result: BashExecutionResult
-    do {
-        result = try await ops.execute(
-            command: input.command,
-            timeout: input.timeoutSeconds * 1000,
-            cancellation: cancellation
-        )
-    } catch CodingToolError.commandFailed(let stderr, let exitCode) {
-        // A failing command's output is bounded the same way.
-        throw CodingToolError.commandFailed(
-            stderr: boundLegacyBashOutput(stderr).text,
-            exitCode: exitCode
-        )
-    }
-    let bounded = boundLegacyBashOutput(
+    let result = try await ops.execute(
+        command: input.command,
+        timeout: input.timeoutSeconds * 1000,
+        cancellation: cancellation
+    )
+    let body = boundBashOutput(
         [result.stdout, result.stderr].filter { !$0.isEmpty }.joined(separator: "\n")
     )
-    var details: [String: JSONValue] = [
-        "exitCode": .int(Int(result.exitCode)),
-        "durationMs": .int(result.durationMs),
-    ]
-    if let fullOutputPath = bounded.fullOutputPath {
-        details["outputFile"] = .string(fullOutputPath)
-    }
     return AgentToolResult(
-        content: [.text(TextContent(text: bounded.text))],
-        details: .object(details)
+        content: [.text(TextContent(text: body))],
+        details: .object([
+            "exitCode": .int(Int(result.exitCode)),
+            "durationMs": .int(result.durationMs),
+        ])
     )
-}
-
-/// The pipe path has no output file of its own: save one only when the
-/// inline text loses the middle, so the marker can point at it.
-private func boundLegacyBashOutput(_ output: String) -> (text: String, fullOutputPath: String?) {
-    let bounded = Truncate.truncateHeadTail(output)
-    let fullOutputPath = bounded.truncated
-        ? Truncate.saveFullOutput(output, prefix: "bash")
-        : nil
-    return (renderBashHeadTail(bounded, fullOutputPath: fullOutputPath).text, fullOutputPath)
 }
 
 // MARK: - Foreground/adopted process wrapper
@@ -764,45 +741,29 @@ private final class ForegroundBashExecution: Sendable {
         )
     }
 
-    /// Read the completed command's output, bounded to the bash head/tail
-    /// budget. A file up to `wholeReadLimit` is read whole (so the marker can
-    /// count the omitted lines); a larger one is read as two windows so a
-    /// multi-GB log never lands in memory. The full output stays on disk at
-    /// `outputFile`, and the marker points at `fullOutputPath` (if given).
+    /// Read the completed command's output, bounded to the read tool's budget.
+    /// Reads only the tail window of the file so a multi-GB log never lands in
+    /// memory; the full output stays on disk at `outputFile`. When the output
+    /// was truncated, the returned notice points at `fullOutputPath` (if given)
+    /// so the model can grep the artifact for the omitted middle.
     func readOutput(fullOutputPath: String? = nil) -> (text: String, truncated: Bool) {
         guard let handle = try? FileHandle(forReadingFrom: outputFile) else {
             return ("", false)
         }
         defer { try? handle.close() }
-        let size = Int((try? handle.seekToEnd()) ?? 0)
+        let size = (try? handle.seekToEnd()) ?? 0
         if size == 0 { return ("", false) }
-        let wholeReadLimit = 4 * 1024 * 1024
-        let window = 64 * 1024
-        func read(at offset: Int, count: Int) -> [UInt8]? {
-            guard (try? handle.seek(toOffset: UInt64(offset))) != nil,
-                  let data = try? handle.read(upToCount: count) else { return nil }
-            return [UInt8](data)
+        // Read a generous tail window, then apply the line/byte budget on top.
+        let window: UInt64 = 4 * 1024 * 1024
+        let startOffset = size > window ? size - window : 0
+        guard (try? handle.seek(toOffset: startOffset)) != nil,
+              let data = try? handle.read(upToCount: Int(size - startOffset)) else {
+            return ("", false)
         }
-        let prefix: [UInt8]
-        let suffix: [UInt8]
-        if size <= wholeReadLimit {
-            guard let whole = read(at: 0, count: size) else { return ("", false) }
-            prefix = whole
-            suffix = whole
-        } else {
-            guard let head = read(at: 0, count: window),
-                  let tail = read(at: size - window, count: window) else { return ("", false) }
-            prefix = head
-            suffix = tail
-        }
-        let result = Truncate.truncateHeadTail(
-            prefix: prefix,
-            suffix: suffix,
-            totalBytes: size,
-            headBytes: Truncate.bashHeadBytes,
-            tailBytes: Truncate.bashTailBytes
+        return boundBashOutputDetailed(
+            String(decoding: data, as: UTF8.self),
+            fullOutputPath: fullOutputPath
         )
-        return renderBashHeadTail(result, fullOutputPath: fullOutputPath)
     }
 
     private func awaitExitStatus() async -> SpawnedBashProcess.ExitStatus {

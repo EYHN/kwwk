@@ -9,17 +9,13 @@ public enum Truncate {
     /// How long a grep may run before it returns what it has (seconds).
     public static let grepDefaultTimeBudgetSeconds: Double = 30
     public static let grepMaxTimeBudgetSeconds: Double = 600
-    /// Inline bash output keeps this much of the start (the command's first
-    /// errors) and of the end (its summary); the middle goes to a file.
+    /// Inline bash output: the first and last bytes; the middle stays in the output file.
     public static let bashHeadBytes = 4 * 1024
     public static let bashTailBytes = 12 * 1024
-    /// `read` without a `limit` returns at most this many lines.
+    /// Defaults when the call passes no `limit`.
     public static let readDefaultLimit = 500
-    /// `find` / `ls` without a `limit` list at most this many entries.
     public static let findDefaultLimit = 1000
     public static let lsDefaultLimit = 500
-    /// Total listing text `find` / `ls` return, whatever the limit.
-    public static let listingMaxBytes = 50 * 1024
 
     public struct Result: Sendable {
         public var content: String
@@ -206,153 +202,6 @@ public enum Truncate {
             maxLines: maxLines,
             maxBytes: maxBytes
         )
-    }
-
-    public struct HeadTailResult: Sendable, Equatable {
-        /// The whole content when not truncated.
-        public var head: String
-        public var tail: String
-        public var truncated: Bool
-        public var totalBytes: Int
-        public var omittedBytes: Int
-        /// Lines cut from the middle; nil when the middle was never read.
-        public var omittedLines: Int?
-    }
-
-    /// Keep the first `headBytes` and the last `tailBytes` of `content`, cut
-    /// on line boundaries where one falls in budget, otherwise on a UTF-8
-    /// scalar boundary. A "\r" stays with its line, so CRLF text is never
-    /// split inside a line ending.
-    public static func truncateHeadTail(
-        _ content: String,
-        headBytes: Int = bashHeadBytes,
-        tailBytes: Int = bashTailBytes
-    ) -> HeadTailResult {
-        let bytes = Array(content.utf8)
-        return truncateHeadTail(
-            prefix: bytes,
-            suffix: bytes,
-            totalBytes: bytes.count,
-            headBytes: headBytes,
-            tailBytes: tailBytes
-        )
-    }
-
-    /// Head/tail cut over a content of `totalBytes` known only by its first
-    /// bytes (`prefix`) and last bytes (`suffix`), as when a large file is
-    /// read in two windows. The omitted line count is reported only when
-    /// `suffix` is the whole content.
-    static func truncateHeadTail(
-        prefix: [UInt8],
-        suffix: [UInt8],
-        totalBytes: Int,
-        headBytes: Int,
-        tailBytes: Int
-    ) -> HeadTailResult {
-        let headBytes = max(0, headBytes)
-        let tailBytes = max(0, tailBytes)
-        if totalBytes <= headBytes + tailBytes, prefix.count == totalBytes {
-            return HeadTailResult(
-                head: String(decoding: prefix, as: UTF8.self),
-                tail: "",
-                truncated: false,
-                totalBytes: totalBytes,
-                omittedBytes: 0,
-                omittedLines: 0
-            )
-        }
-
-        // Head: through the last line that fits; a first line over budget
-        // keeps its start.
-        let headLimit = min(headBytes, prefix.count)
-        var headEnd: Int
-        var headEndsAtNewline = false
-        if let newline = prefix[..<headLimit].lastIndex(of: 0x0A) {
-            headEnd = newline
-            headEndsAtNewline = true
-        } else {
-            headEnd = headLimit
-            while headEnd > 0, headEnd < prefix.count, isUTF8Continuation(prefix[headEnd]) {
-                headEnd -= 1
-            }
-        }
-
-        // Tail: from the first line start in budget (a trailing newline ends
-        // the last line, it does not start one); a last line over budget
-        // keeps its end.
-        let suffixStart = max(0, suffix.count - tailBytes)
-        let searchEnd = suffix.last == 0x0A ? suffix.count - 1 : suffix.count
-        var tailStart: Int
-        if suffixStart < searchEnd,
-           let newline = suffix[suffixStart..<searchEnd].firstIndex(of: 0x0A) {
-            tailStart = newline + 1
-        } else {
-            tailStart = suffixStart
-            while tailStart < suffix.count, isUTF8Continuation(suffix[tailStart]) {
-                tailStart += 1
-            }
-        }
-
-        let suffixOffset = totalBytes - suffix.count
-        let middleStart = headEnd
-        let middleEnd = max(middleStart, suffixOffset + tailStart)
-        var omittedLines: Int?
-        if suffix.count == totalBytes {
-            let newlines = suffix[middleStart..<middleEnd].reduce(0) { $0 + ($1 == 0x0A ? 1 : 0) }
-            omittedLines = max(0, newlines - (headEndsAtNewline ? 1 : 0))
-        }
-        return HeadTailResult(
-            head: String(decoding: prefix[..<headEnd], as: UTF8.self),
-            tail: String(decoding: suffix[tailStart...], as: UTF8.self),
-            truncated: true,
-            totalBytes: totalBytes,
-            omittedBytes: middleEnd - middleStart,
-            omittedLines: omittedLines
-        )
-    }
-
-    private static func isUTF8Continuation(_ byte: UInt8) -> Bool {
-        byte & 0xC0 == 0x80
-    }
-
-    /// How many leading `entries` fit, newline-joined, in `maxBytes`.
-    static func entriesFitting(_ entries: [String], maxBytes: Int) -> Int {
-        var used = 0
-        for (index, entry) in entries.enumerated() {
-            used += entry.utf8.count + (index > 0 ? 1 : 0)
-            if used > maxBytes { return index }
-        }
-        return entries.count
-    }
-
-    /// Write `text` to a new private file so a model can reach output that was
-    /// cut from its inline result. Returns the path, or nil if writing failed.
-    static func saveFullOutput(
-        _ text: String,
-        directory: URL? = nil,
-        prefix: String,
-        fileExtension: String = "log"
-    ) -> String? {
-        let dir = directory ?? FileManager.default.temporaryDirectory
-            .appendingPathComponent("kwwk-tool-output", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(
-                at: dir,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            let url = dir.appendingPathComponent(
-                "\(prefix)_\(UUID().uuidString.prefix(8)).\(fileExtension)"
-            )
-            guard FileManager.default.createFile(
-                atPath: url.path,
-                contents: Data(text.utf8),
-                attributes: [.posixPermissions: 0o600]
-            ) else { return nil }
-            return url.path
-        } catch {
-            return nil
-        }
     }
 
     /// The longest suffix of `text` that fits in `limit` UTF-8 bytes, cut on
