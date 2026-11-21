@@ -3,7 +3,13 @@ import KWWKAI
 
 private let taskListLimitRange = 1...50
 private let taskReadLimitRange = 1...32_768
-private let taskPollTimeoutRange = 1...300
+/// task_poll waits at most this long. A larger request is lowered to it,
+/// not rejected: a rejected 600 costs a whole extra request, and a return at
+/// the 5-minute prompt-cache TTL keeps the next request's cache warm.
+let taskPollMaxTimeoutSeconds = 300
+/// Omitted `timeout_seconds` waits the full cap: polling is only for when the
+/// agent is otherwise blocked, and a steering notice still interrupts it.
+let taskPollDefaultTimeoutSeconds = 300
 
 private func taskDeliveryConsumer(
     sessionId: String?,
@@ -321,10 +327,9 @@ private func makeTaskPollTool(
             "timeout_seconds": optionalTaskParameter(
                 [
                     "type": .string("integer"),
-                    "minimum": .int(taskPollTimeoutRange.lowerBound),
-                    "maximum": .int(taskPollTimeoutRange.upperBound),
+                    "minimum": .int(1),
                 ],
-                description: "Maximum wait in seconds."
+                description: "Maximum wait in seconds. Default and max \(taskPollMaxTimeoutSeconds); a larger value is lowered to \(taskPollMaxTimeoutSeconds), not rejected. Usually omit it."
             ),
         ]),
         "additionalProperties": .bool(false),
@@ -332,7 +337,7 @@ private func makeTaskPollTool(
     var tool = AgentTool(
         name: "task_poll",
         label: "task_poll",
-        description: "Wait until any watched background task finishes; use only when otherwise blocked.",
+        description: "Wait until any watched background task finishes; use only when otherwise blocked. Waits up to \(taskPollMaxTimeoutSeconds)s by default.",
         parameters: parameters,
         interruptible: true,
         execute: { _, args, cancellation, onUpdate in
@@ -610,21 +615,22 @@ private func taskBoundedInteger(
 }
 
 private func taskTimeout(_ value: JSONValue?) throws -> Int {
-    guard let value, !isBlankToolArgument(value) else { return 30 }
-    let range = taskPollTimeoutRange
-    // `Int(exactly:)` rejects NaN, infinity, fractions and values outside `Int`.
+    guard let value, !isBlankToolArgument(value) else { return taskPollDefaultTimeoutSeconds }
+    // `Int(exactly:)` rejects NaN, infinity and fractions; a finite whole
+    // double past `Int` is still just "too long" and clamps like any other.
     let raw: Int?
     switch value {
     case .int(let integer): raw = integer
-    case .double(let double): raw = Int(exactly: double)
+    case .double(let double) where double.isFinite && double.rounded() == double:
+        raw = double >= Double(taskPollMaxTimeoutSeconds) ? taskPollMaxTimeoutSeconds : Int(double)
     default: raw = nil
     }
-    guard let raw, range.contains(raw) else {
+    guard let raw, raw >= 1 else {
         throw CodingToolError.invalidArgument(
-            "task_poll: `timeout_seconds` must be a finite integer from \(range.lowerBound) through \(range.upperBound)"
+            "task_poll: `timeout_seconds` must be a finite integer of at least 1 (values above \(taskPollMaxTimeoutSeconds) are lowered to \(taskPollMaxTimeoutSeconds))"
         )
     }
-    return raw
+    return min(raw, taskPollMaxTimeoutSeconds)
 }
 
 private func taskIsVisible(_ snapshot: BackgroundTaskSnapshot, sessionId: String?) -> Bool {

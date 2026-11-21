@@ -5,15 +5,20 @@ public struct ReadToolOptions: Sendable {
     public var operations: ReadOperations
     public var maxLines: Int
     public var maxBytes: Int
+    /// Lines returned when the call passes no `limit` (never above
+    /// `maxLines`). An explicit `limit` can read up to `maxLines`.
+    public var defaultLimit: Int
 
     public init(
         operations: ReadOperations = LocalReadOperations(),
         maxLines: Int = Truncate.defaultMaxLines,
-        maxBytes: Int = Truncate.defaultMaxBytes
+        maxBytes: Int = Truncate.defaultMaxBytes,
+        defaultLimit: Int = Truncate.readDefaultLimit
     ) {
         self.operations = operations
         self.maxLines = maxLines
         self.maxBytes = maxBytes
+        self.defaultLimit = defaultLimit
     }
 }
 
@@ -65,11 +70,12 @@ public func createReadTool(
     let ops = options.operations
     let maxLines = options.maxLines
     let maxBytes = options.maxBytes
+    let defaultLimit = max(1, min(options.defaultLimit, maxLines))
 
     var tool = AgentTool(
         name: "read",
         label: "read",
-        description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files. Images are resized and recompressed before they enter the conversation.",
+        description: "Read the contents of a text or image file. Without `limit` it returns up to \(defaultLimit) lines; pass offset/limit to page (limit up to \(maxLines) lines, \(Truncate.formatSize(maxBytes)) per call). Images are resized and recompressed before they enter the conversation.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
@@ -131,9 +137,11 @@ public func createReadTool(
             let selectedContent = window.content
             let userLimitedLines: Int? = limit == nil ? nil : window.lines
 
+            // No `limit`: a default window, continued with `offset`.
+            let lineCap = limit == nil ? defaultLimit : maxLines
             let trunc = Truncate.truncateHead(
                 selectedContent,
-                maxLines: maxLines,
+                maxLines: lineCap,
                 maxBytes: maxBytes
             )
             var outputText: String
@@ -148,7 +156,9 @@ public func createReadTool(
                 let endDisplay = startDisplay + trunc.outputLines - 1
                 let nextOffset = endDisplay + 1
                 outputText = trunc.content
-                if trunc.truncatedBy == "lines" {
+                if trunc.truncatedBy == "lines" && limit == nil && lineCap < maxLines {
+                    outputText += "\n\n[Showing lines \(startDisplay)-\(endDisplay) of \(totalLines) (default window). Use offset=\(nextOffset) to continue, or pass limit (up to \(maxLines)) to read more at once.]"
+                } else if trunc.truncatedBy == "lines" {
                     outputText += "\n\n[Showing lines \(startDisplay)-\(endDisplay) of \(totalLines). Use offset=\(nextOffset) to continue.]"
                 } else {
                     outputText += "\n\n[Showing lines \(startDisplay)-\(endDisplay) of \(totalLines) (\(Truncate.formatSize(maxBytes)) limit). Use offset=\(nextOffset) to continue.]"

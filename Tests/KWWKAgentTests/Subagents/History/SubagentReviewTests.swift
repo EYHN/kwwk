@@ -539,7 +539,7 @@ struct SubagentReviewTests {
 
     // MARK: - agent_history rendering
 
-    @Test("regression: agent_history pages count invisible tool results, and one wide message exceeds the 64 KiB cap")
+    @Test("regression: agent_history pages count invisible tool results, and one wide message exceeds the 32 KiB cap")
     func bugHistoryCapWithManyToolCalls() async throws {
         let store = SubagentHistoryStore()
         store.begin(
@@ -578,10 +578,10 @@ struct SubagentReviewTests {
             nil
         )
         let body = reviewText(result)
-        #expect(body.utf8.count <= 64 * 1_024 + 512, "agent_history returned \(body.utf8.count) bytes")
+        #expect(body.utf8.count <= 32 * 1_024 + 512, "agent_history returned \(body.utf8.count) bytes")
     }
 
-    @Test("regression: tool_call detail exceeds the 64 KiB cap when the result is one long line")
+    @Test("regression: tool_call detail exceeds the 32 KiB cap when the result is one long line")
     func bugToolCallDetailSingleHugeLine() async throws {
         let store = SubagentHistoryStore()
         store.begin(
@@ -613,7 +613,7 @@ struct SubagentReviewTests {
             nil,
             nil
         ))
-        #expect(body.utf8.count <= 64 * 1_024 + 512, "tool_call detail returned \(body.utf8.count) bytes")
+        #expect(body.utf8.count <= 32 * 1_024 + 512, "tool_call detail returned \(body.utf8.count) bytes")
     }
 
     @Test("tool_call numbering skips thinking and text, counts yield calls, and matches detail addressing")

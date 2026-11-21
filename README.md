@@ -384,7 +384,7 @@ session ids are not exposed to the model. The registry is process-local,
 keeps at most 32 terminal children (least recently active evicted first)
 subject to a 16 MiB estimated transcript budget, and does not survive
 application restart; an evicted child cannot be resumed. Each response is
-capped at 64 KiB.
+capped at 32 KiB.
 
 `agent`, `agent_send`, `agent_history`, and the `task_*` tools treat an
 optional argument sent as `null`, `""`, or whitespace exactly like an omitted

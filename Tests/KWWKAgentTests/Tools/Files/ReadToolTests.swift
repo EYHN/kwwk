@@ -70,7 +70,7 @@ struct ReadToolTests {
         let lines = (1...2500).map { "Line \($0)" }.joined(separator: "\n")
         try write(lines, to: file)
 
-        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000))
+        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000, defaultLimit: 2000))
         let result = try await tool.execute("call-3", ["path": .string(file.path)], nil, nil)
         let output = textOutput(result)
         #expect(output.contains("Line 1"))
@@ -129,7 +129,7 @@ struct ReadToolTests {
         let lines = (1...2500).map { "Line \($0)" }.joined(separator: "\n")
         try write(lines, to: file)
 
-        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000))
+        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000, defaultLimit: 2000))
         let result = try await tool.execute("call-6", ["path": .string(file.path)], nil, nil)
         guard case .object(let details) = result.details ?? .null,
               case .object(let trunc) = details["truncation"] ?? .null else {
@@ -140,6 +140,73 @@ struct ReadToolTests {
         #expect(trunc["truncatedBy"] == .string("lines"))
         #expect(trunc["totalLines"] == .int(2500))
         #expect(trunc["outputLines"] == .int(2000))
+    }
+
+    @Test("without a limit, read returns the 500-line default window and how to continue")
+    func defaultWindow() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("long.txt")
+        try write((1...3000).map { "Line \($0)" }.joined(separator: "\n"), to: file)
+
+        let tool = createReadTool(cwd: dir.path)
+        let output = textOutput(try await tool.execute("call-default", ["path": .string(file.path)], nil, nil))
+        #expect(output.hasPrefix("Line 1\n"))
+        #expect(output.contains("\nLine 500\n"))
+        #expect(!output.contains("Line 501"))
+        #expect(output.contains("[Showing lines 1-500 of 3000 (default window). Use offset=501 to continue"))
+
+        // The default window also applies from an offset.
+        let paged = textOutput(try await tool.execute(
+            "call-default-offset",
+            ["path": .string(file.path), "offset": 501],
+            nil,
+            nil
+        ))
+        #expect(paged.hasPrefix("Line 501\n"))
+        #expect(paged.contains("\nLine 1000\n"))
+        #expect(!paged.contains("Line 1001"))
+        #expect(paged.contains("Use offset=1001 to continue"))
+    }
+
+    @Test("an explicit limit still reads up to the 2000-line cap")
+    func explicitLimitBeyondDefault() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("long.txt")
+        try write((1...3000).map { "Line \($0)" }.joined(separator: "\n"), to: file)
+
+        let tool = createReadTool(cwd: dir.path)
+        let output = textOutput(try await tool.execute(
+            "call-explicit",
+            ["path": .string(file.path), "limit": 2000],
+            nil,
+            nil
+        ))
+        #expect(output.contains("\nLine 2000\n"))
+        #expect(!output.contains("Line 2001"))
+        #expect(output.contains("[1000 more lines in file. Use offset=2001 to continue.]"))
+        let capped = textOutput(try await tool.execute(
+            "call-explicit-cap",
+            ["path": .string(file.path), "limit": 2500],
+            nil,
+            nil
+        ))
+        #expect(capped.contains("[Showing lines 1-2000 of 3000. Use offset=2001 to continue.]"))
+    }
+
+    @Test("a short file without a limit is returned whole")
+    func shortFileUntouched() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("short.txt")
+        let text = (1...500).map { "Line \($0)" }.joined(separator: "\n")
+        try write(text, to: file)
+
+        let tool = createReadTool(cwd: dir.path)
+        let result = try await tool.execute("call-short", ["path": .string(file.path)], nil, nil)
+        #expect(textOutput(result) == text)
+        #expect(result.details == nil)
     }
 
     @Test("normalizes detected images and includes coordinate mapping")

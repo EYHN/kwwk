@@ -57,7 +57,7 @@ public func createLSTool(
     var tool = AgentTool(
         name: "ls",
         label: "ls",
-        description: "List the contents of a directory.",
+        description: "List the contents of a directory. Returns up to \(Truncate.lsDefaultLimit) entries unless `limit` says otherwise, and at most \(Truncate.formatSize(Truncate.listingMaxBytes)) of text.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
@@ -81,17 +81,22 @@ public func createLSTool(
                 return nil
             }()
 
-            var entries = try await ops.list(path: path)
-            if let limit { entries = Array(entries.prefix(max(0, limit))) }
-            let lines = entries.map { entry -> String in
+            let all = try await ops.list(path: path)
+            let lines = all.map { entry -> String in
                 switch entry.kind {
                 case .directory: return "\(entry.name)/"
                 case .symlink: return "\(entry.name)@"
                 case .file: return "\(entry.name)"
                 }
             }
+            let listing = cappedListing(
+                lines,
+                limit: limit.map { max(0, $0) } ?? Truncate.lsDefaultLimit,
+                explicitLimit: limit != nil
+            )
+            let entries = all.prefix(listing.shown.count)
             return AgentToolResult(
-                content: [.text(TextContent(text: lines.joined(separator: "\n")))],
+                content: [.text(TextContent(text: listing.text))],
                 details: .object([
                     "entries": .array(entries.map { e in
                         .object([
