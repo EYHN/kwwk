@@ -190,6 +190,20 @@ struct NativeCompactionTests {
             )
         }
     }
+
+    @Test("Anthropic compaction usage sums the iterations")
+    func anthropicUsage() async throws {
+        let body = #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}],"usage":{"input_tokens":0,"output_tokens":0,"iterations":[{"input_tokens":3,"cache_read_input_tokens":200000,"cache_creation_input_tokens":1200,"output_tokens":5000},{"input_tokens":2,"output_tokens":7}]}}"#
+        let result = try #require(try await AnthropicProvider(client: StubSSEClient(body: body)).compact(
+            model: Self.claude, context: Context(messages: [.user(UserMessage(text: "history"))]),
+            instructions: "", options: nil))
+        let usage = try #require(result.usage)
+        #expect(usage.input == 5)
+        #expect(usage.output == 5_007)
+        #expect(usage.cacheRead == 200_000)
+        #expect(usage.cacheWrite == 1_200)
+        #expect(usage.totalTokens == 206_212)
+    }
 }
 
 private extension JSONValue {

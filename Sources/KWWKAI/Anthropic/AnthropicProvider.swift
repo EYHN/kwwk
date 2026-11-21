@@ -129,8 +129,30 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         }
         return NativeCompactionResult(
             summary: summary,
-            payload: NativeCompactionPayload(model: model, items: [block])
+            payload: NativeCompactionPayload(model: model, items: [block]),
+            usage: Self.compactionUsage(json["usage"], model: model)
         )
+    }
+
+    /// The summarizing pass is billed in `usage.iterations`, which the
+    /// top-level counts omit: sum the iterations when present.
+    static func compactionUsage(_ value: JSONValue?, model: Model) -> Usage? {
+        guard case .object(let reported)? = value else { return nil }
+        var entries: [JSONValue] = [.object(reported)]
+        if case .array(let iterations)? = reported["iterations"], !iterations.isEmpty { entries = iterations }
+        var total = Usage()
+        for case .object(let entry) in entries {
+            let state = AnthropicStreamState(api: model.api, provider: model.provider, modelId: model.id)
+            state.applyUsageDelta(entry)
+            total.input += state.usage.input
+            total.output += state.usage.output
+            total.cacheRead += state.usage.cacheRead
+            total.cacheWrite += state.usage.cacheWrite
+            total.cacheWrite1h += state.usage.cacheWrite1h
+        }
+        total.totalTokens = total.input + total.output + total.cacheRead + total.cacheWrite
+        total.cost = calculateCost(model: model, usage: total)
+        return total
     }
 
     static func supportsNativeCompaction(model: Model, baseURL: String? = nil) -> Bool {

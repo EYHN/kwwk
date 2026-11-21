@@ -37,9 +37,12 @@ public struct NativeCompactionPayload: Codable, Sendable, Hashable {
 public struct NativeCompactionResult: Sendable {
     public var summary: String
     public var payload: NativeCompactionPayload
-    public init(summary: String, payload: NativeCompactionPayload) {
+    /// What the compaction request was billed, when the provider reports it.
+    public var usage: Usage?
+    public init(summary: String, payload: NativeCompactionPayload, usage: Usage? = nil) {
         self.summary = summary
         self.payload = payload
+        self.usage = usage
     }
 }
 

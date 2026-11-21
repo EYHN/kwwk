@@ -181,7 +181,9 @@ public enum AgentContextCompactor {
             }
             context.tools = context.tools.filter { !unload.contains($0.name) }
         }
-        let usageCollector = CompactionUsageCollector()
+        var onVerbose: (@Sendable (VerboseEvent) async -> Void)?
+        if agent.state.verboseEnabled { onVerbose = { @Sendable event in await agent.emitVerbose(event) } }
+        let usageCollector = CompactionUsageCollector(onVerbose: onVerbose)
         defer { agent.noteCompactionUsage(usageCollector.usage) }
         let result = await CompactionUsageCollector.$current.withValue(usageCollector) {
             await compactContext(

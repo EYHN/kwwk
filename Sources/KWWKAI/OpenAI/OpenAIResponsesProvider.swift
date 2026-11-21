@@ -189,7 +189,15 @@ public final class OpenAIResponsesProvider:
                 model: model,
                 items: items,
                 fallbackMessages: TransformMessages.expandNativeCompaction(context.messages)
-            )
+            ),
+            usage: json["usage"].flatMap { value -> Usage? in
+                guard case .object(let reported) = value else { return nil }
+                let state = OpenAIResponsesState(api: model.api, provider: model.provider, modelId: model.id)
+                state.applyUsage(reported)
+                var usage = state.usage
+                usage.cost = calculateCost(model: model, usage: usage)
+                return usage
+            }
         )
     }
 

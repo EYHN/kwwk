@@ -33,7 +33,8 @@ struct CompactionRequestTests {
         }
         let outcome = await AgentContextCompactor.compactAgent(agent: agent, sessionId: nil, config: config)
         guard case .failed = outcome else { Issue.record("Expected exhausted compaction"); return }
-        #expect(await attempts.count == maxAttempts)
+        // A failed native compaction falls back to the summary, which retries on its own.
+        #expect(await attempts.count == (native ? 2 : 1) * maxAttempts)
         #expect(agent.state.messages == original)
     }
 
@@ -303,7 +304,7 @@ struct CompactionRequestTests {
 
     """
 
-    @Test("native retry exhaustion leaves the Agent transcript unchanged")
+    @Test("a native authentication failure leaves the Agent transcript unchanged")
     func nativeFailurePreservesContext() async throws {
         let attempts = CompactionAttempts()
         let original = history()
@@ -313,12 +314,12 @@ struct CompactionRequestTests {
             summaryRetryPolicy: .init(baseDelayMs: 0),
             nativeCompaction: { _, _, _, _ in
                 _ = await attempts.next()
-                throw ProviderFailure(message: "overloaded", httpStatus: 529)
+                throw ProviderFailure(message: "unauthorized", httpStatus: 401)
             }
         )
         let outcome = await AgentContextCompactor.compactAgent(agent: agent, sessionId: nil, config: config)
         guard case .failed = outcome else { Issue.record("expected failure"); return }
-        #expect(await attempts.count == config.summaryRetryPolicy.maxAttempts)
+        #expect(await attempts.count == 1)
         #expect(agent.state.messages == original)
     }
 

@@ -878,7 +878,16 @@ extension Agent {
             return nil
         }
 
-        guard forced || isBlockingPreflight || AgentContextCompactor.shouldCompact(
+        // See `AgentAutoCompactOptions.coldCacheIdle`.
+        let coldCache: Bool = {
+            guard case .preflight = trigger, let idle = autoCompact.coldCacheIdle,
+                  usage.window > 0, usage.ratio >= threshold * 2 / 3,
+                  case .assistant(let last)? = context.messages.last(where: {
+                      if case .assistant = $0 { return true }; return false
+                  }) else { return false }
+            return Double(Timestamp.now() - last.timestamp) > idle * 1_000
+        }()
+        guard forced || isBlockingPreflight || coldCache || AgentContextCompactor.shouldCompact(
             context: measuredContext,
             model: model,
             threshold: threshold
@@ -914,6 +923,9 @@ extension Agent {
             return nil
         }
 
+        var compactionConfig = autoCompact.config
+        // On a cold cache native compaction re-writes the whole context too.
+        if coldCache { compactionConfig.useNativeCompaction = false }
         let recoveryTarget = automaticRecoveryTarget(
             model: model,
             threshold: threshold,
@@ -927,7 +939,7 @@ extension Agent {
             expectedContextRevision: stateSnapshot.revision,
             backgroundManager: autoCompact.backgroundManager,
             sessionId: sessionId,
-            config: autoCompact.config,
+            config: compactionConfig,
             targetTokens: recoveryTarget,
             additionalMessages: pendingMessages,
             respectMinimumMessages: false,
@@ -1000,6 +1012,10 @@ extension Agent {
         for listener in snapshotListeners() {
             await listener(event, cancellation)
         }
+    }
+
+    func emitVerbose(_ event: VerboseEvent) async {
+        await emitSynthetic(.verbose(event), cancellation: nil)
     }
 
     func emitIdleCompaction(_ event: AgentEvent, cancellation: CancellationHandle) async {

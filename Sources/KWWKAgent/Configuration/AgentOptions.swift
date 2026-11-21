@@ -33,15 +33,22 @@ public struct AgentAutoCompactOptions: Sendable {
     public var threshold: Double?
     public var config: AgentContextCompactionConfig
     public var backgroundManager: BackgroundTaskManager?
+    /// Seconds since the last assistant message after which the prompt cache
+    /// counts as expired (its TTL plus a margin). A request then compacts
+    /// first, by summary, once the context reaches 2/3 of `threshold`: it
+    /// would re-write the whole context to the cache anyway. `nil` is off.
+    public var coldCacheIdle: TimeInterval?
 
     public init(
         threshold: Double? = 0.75,
         config: AgentContextCompactionConfig = .init(),
-        backgroundManager: BackgroundTaskManager? = nil
+        backgroundManager: BackgroundTaskManager? = nil,
+        coldCacheIdle: TimeInterval? = nil
     ) {
         self.threshold = threshold
         self.config = config
         self.backgroundManager = backgroundManager
+        self.coldCacheIdle = coldCacheIdle
     }
 }
 

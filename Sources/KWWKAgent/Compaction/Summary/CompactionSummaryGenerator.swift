@@ -92,6 +92,10 @@ enum CompactionSummaryGenerator {
             temperature: nil,
             maxTokens: streamMaxTokens,
             apiKey: resolvedAuth?.token,
+            // The summary prompt (own system prompt, serialized transcript,
+            // fresh session id) is never sent again, so a cache write would
+            // only bill 1.25x for a prefix nothing reads.
+            cacheRetention: CacheRetention.none,
             // Provider-side conversation/checkpoint state belongs to the live
             // agent turn. A local summary request has a different system
             // prompt and must never overwrite that state (notably Cursor's
