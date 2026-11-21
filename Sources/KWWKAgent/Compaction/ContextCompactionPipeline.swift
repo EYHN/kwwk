@@ -138,23 +138,22 @@ enum ContextCompactionPipeline {
             guard previousCut != plan.firstKeptMessageIndex else { break }
             previousCut = plan.firstKeptMessageIndex
 
-            if !nativeFailed {
-                do {
-                    if let native = try await nativeReplacement(plan: plan, request: request,
-                                                                recapTokenBudget: recapTokenBudget) {
-                        return native
-                    }
-                } catch {
-                    // A summary uses the same route and credentials, so an
-                    // authentication failure stays an error. Anything else
-                    // (an unsupported beta, a relay without the endpoint, an
-                    // outage of the compaction feature) falls back to it.
-                    try checkCompactionCancellation(request.cancellation)
-                    guard !(error is CancellationError),
-                          ProviderFailure.capture(error).category != .authentication else { throw error }
-                    request.config.onNativeCompactionFailure?(error)
-                    nativeFailed = true
+            do {
+                if !nativeFailed, let native = try await nativeReplacement(plan: plan, request: request,
+                                                                           recapTokenBudget: recapTokenBudget) {
+                    return native
                 }
+            } catch {
+                // The summary uses the same credentials, so an authentication
+                // failure stays an error; anything else falls back to it.
+                try checkCompactionCancellation(request.cancellation)
+                guard !(error is CancellationError),
+                      ProviderFailure.capture(error).category != .authentication else { throw error }
+                await CompactionUsageCollector.current?.onVerbose?(VerboseEvent(
+                    source: "compaction",
+                    message: "native compaction failed, summarizing instead: \(error.displayDescription)"
+                ))
+                nativeFailed = true
             }
 
             let historySummary = try await summarizeHistory(plan: plan, request: request)
@@ -252,21 +251,11 @@ enum ContextCompactionPipeline {
             return plan.previousSummary
         }
         return try await summarizeInChunks(
-            messages: prunedSummaryInput(messages, request: request),
+            messages: ToolResultPruner.prune(messages),
             previousSummary: priorDurableSummary(for: plan),
             kind: .history,
             request: request
         )
-    }
-
-    /// The summary request's input with old tool results cleared; see
-    /// `AgentContextCompactionConfig.summaryInputPruning`.
-    static func prunedSummaryInput(
-        _ messages: [Message],
-        request: ContextCompactionPipelineRequest
-    ) -> [Message] {
-        guard let policy = request.config.summaryInputPruning else { return messages }
-        return ToolResultPruner.prune(messages, policy: policy).messages
     }
 
     private static func nativeReplacement(
@@ -285,7 +274,7 @@ enum ContextCompactionPipeline {
                 try await compactNative(model: model, context: context, instructions: instructions, options: options)
             }
         } else { return nil }
-        let anthropic = AnthropicMessagesWire.matches(api: request.contextModel.api)
+        let anthropic = request.contextModel.api == "anthropic-messages"
         if anthropic && measuredTokens(context: request.context, appending: [], model: request.contextModel) < 55_000 {
             return nil
         }
@@ -334,7 +323,6 @@ enum ContextCompactionPipeline {
         )
         guard let native = try await request.config.summaryRetryPolicy.run(cancellation: request.cancellation,
             operation: { try await compact(model, context, instructions, options) }) else { return nil }
-        // Billed whether or not the result is used below.
         if let usage = native.usage { CompactionUsageCollector.current?.add(usage) }
         var replacement = await makeReplacement(
             plan: plan,
@@ -367,7 +355,7 @@ enum ContextCompactionPipeline {
     ) async throws -> String? {
         guard !plan.turnPrefixToSummarize.isEmpty else { return nil }
         return try await summarizeInChunks(
-            messages: prunedSummaryInput(plan.turnPrefixToSummarize, request: request),
+            messages: ToolResultPruner.prune(plan.turnPrefixToSummarize),
             // With no intervening history, this is a later slice of the same
             // active turn. Update its prior prefix summary instead of starting
             // over and discarding the earlier slice. Once history advances,

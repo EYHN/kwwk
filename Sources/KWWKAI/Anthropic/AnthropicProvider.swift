@@ -134,42 +134,21 @@ public final class AnthropicProvider: APIProvider, NativeCompactionProvider, @un
         )
     }
 
-    /// A compaction response bills its summarizing pass in
-    /// `usage.iterations`; the top-level counts can omit it. Sum the
-    /// iterations when present, else read the top-level fields.
+    /// The summarizing pass is billed in `usage.iterations`, which the
+    /// top-level counts omit: sum the iterations when present.
     static func compactionUsage(_ value: JSONValue?, model: Model) -> Usage? {
         guard case .object(let reported)? = value else { return nil }
-        func count(_ entry: [String: JSONValue], _ key: String) -> Int {
-            if case .int(let value)? = entry[key] { return max(0, value) }
-            return 0
-        }
-        func usage(of entry: [String: JSONValue]) -> Usage {
-            var cacheWrite1h = 0
-            if case .object(let creation)? = entry["cache_creation"] {
-                cacheWrite1h = count(creation, "ephemeral_1h_input_tokens")
-            }
-            return Usage(
-                input: count(entry, "input_tokens"),
-                output: count(entry, "output_tokens"),
-                cacheRead: count(entry, "cache_read_input_tokens"),
-                cacheWrite: count(entry, "cache_creation_input_tokens"),
-                cacheWrite1h: cacheWrite1h
-            )
-        }
-        var total: Usage
-        if case .array(let iterations)? = reported["iterations"], !iterations.isEmpty {
-            total = Usage()
-            for case .object(let entry) in iterations {
-                let part = usage(of: entry)
-                total.input += part.input
-                total.output += part.output
-                total.cacheRead += part.cacheRead
-                total.cacheWrite += part.cacheWrite
-                total.cacheWrite1h += part.cacheWrite1h
-            }
-            total.anthropicIterations = iterations
-        } else {
-            total = usage(of: reported)
+        var entries: [JSONValue] = [.object(reported)]
+        if case .array(let iterations)? = reported["iterations"], !iterations.isEmpty { entries = iterations }
+        var total = Usage()
+        for case .object(let entry) in entries {
+            let state = AnthropicStreamState(api: model.api, provider: model.provider, modelId: model.id)
+            state.applyUsageDelta(entry)
+            total.input += state.usage.input
+            total.output += state.usage.output
+            total.cacheRead += state.usage.cacheRead
+            total.cacheWrite += state.usage.cacheWrite
+            total.cacheWrite1h += state.usage.cacheWrite1h
         }
         total.totalTokens = total.input + total.output + total.cacheRead + total.cacheWrite
         total.cost = calculateCost(model: model, usage: total)

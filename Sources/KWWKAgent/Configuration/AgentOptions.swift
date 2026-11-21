@@ -33,74 +33,22 @@ public struct AgentAutoCompactOptions: Sendable {
     public var threshold: Double?
     public var config: AgentContextCompactionConfig
     public var backgroundManager: BackgroundTaskManager?
-    /// Compact early when the prompt cache has expired. `nil` turns it off.
-    public var coldCache: AgentColdCacheCompactOptions?
+    /// Seconds since the last assistant message after which the prompt cache
+    /// counts as expired (its TTL plus a margin). A request then compacts
+    /// first, by summary, once the context reaches 2/3 of `threshold`: it
+    /// would re-write the whole context to the cache anyway. `nil` is off.
+    public var coldCacheIdle: TimeInterval?
 
     public init(
         threshold: Double? = 0.75,
         config: AgentContextCompactionConfig = .init(),
         backgroundManager: BackgroundTaskManager? = nil,
-        coldCache: AgentColdCacheCompactOptions? = .init()
+        coldCacheIdle: TimeInterval? = nil
     ) {
         self.threshold = threshold
         self.config = config
         self.backgroundManager = backgroundManager
-        self.coldCache = coldCache
-    }
-}
-
-/// Before a request, when the provider's prompt cache has certainly expired
-/// and the context is already large, compact first. The request would
-/// re-write the whole context to the cache anyway; a summary (sent without
-/// caching, its input pruned) plus a small context costs less than that,
-/// and every later turn reads less. Native compaction is skipped: on a cold
-/// cache it re-writes the whole context too.
-///
-/// The cache counts as expired once the newest assistant message is older
-/// than the TTL plus `margin`. The context must have reached
-/// `thresholdFraction` of `AgentAutoCompactOptions.threshold`, so it scales
-/// with the model's window.
-public struct AgentColdCacheCompactOptions: Sendable, Equatable {
-    /// The retention the agent's requests ask for: nil and `.short` mean the
-    /// 5-minute TTL, `.long` 1 hour, `.none` never triggers.
-    public var cacheRetention: CacheRetention?
-    public var margin: TimeInterval
-    public var thresholdFraction: Double
-
-    public init(
-        cacheRetention: CacheRetention? = nil,
-        margin: TimeInterval = 30,
-        thresholdFraction: Double = 2.0 / 3.0
-    ) {
-        self.cacheRetention = cacheRetention
-        self.margin = margin
-        self.thresholdFraction = thresholdFraction
-    }
-
-    /// Seconds a prompt-cache entry lives for, or nil with caching off.
-    public var ttl: TimeInterval? {
-        switch cacheRetention ?? .short {
-        case .none: nil
-        case .short: 300
-        case .long: 3_600
-        }
-    }
-
-    /// Whether a request sent `now` (unix ms) after `messages` finds the
-    /// cache expired and `usage` large enough to compact first.
-    func isDue(
-        messages: [Message],
-        usage: AgentContextUsage,
-        autoCompactThreshold: Double,
-        now: Int64
-    ) -> Bool {
-        guard let ttl, usage.window > 0, thresholdFraction > 0,
-              usage.ratio >= autoCompactThreshold * thresholdFraction,
-              let last = messages.last(where: {
-                  if case .assistant = $0 { return true }
-                  return false
-              }), case .assistant(let assistant) = last else { return false }
-        return Double(now - assistant.timestamp) > (ttl + margin) * 1_000
+        self.coldCacheIdle = coldCacheIdle
     }
 }
 

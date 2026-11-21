@@ -14,6 +14,10 @@ final class CompactionUsageCollector: Sendable {
     @TaskLocal static var current: CompactionUsageCollector?
 
     private let total = NIOLockedValueBox<Usage?>(nil)
+    /// The agent's `.verbose` event sink, when verbose mode is on.
+    let onVerbose: (@Sendable (VerboseEvent) async -> Void)?
+
+    init(onVerbose: (@Sendable (VerboseEvent) async -> Void)? = nil) { self.onVerbose = onVerbose }
 
     func add(_ usage: Usage) {
         total.withLockedValue { $0 = ($0 ?? Usage()).adding(usage) }

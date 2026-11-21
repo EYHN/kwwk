@@ -878,15 +878,14 @@ extension Agent {
             return nil
         }
 
-        // Only a request about to be sent finds the cache cold.
+        // See `AgentAutoCompactOptions.coldCacheIdle`.
         let coldCache: Bool = {
-            guard case .preflight = trigger, let options = autoCompact.coldCache else { return false }
-            return options.isDue(
-                messages: context.messages,
-                usage: usage,
-                autoCompactThreshold: threshold,
-                now: Timestamp.now()
-            )
+            guard case .preflight = trigger, let idle = autoCompact.coldCacheIdle,
+                  usage.window > 0, usage.ratio >= threshold * 2 / 3,
+                  case .assistant(let last)? = context.messages.last(where: {
+                      if case .assistant = $0 { return true }; return false
+                  }) else { return false }
+            return Double(Timestamp.now() - last.timestamp) > idle * 1_000
         }()
         guard forced || isBlockingPreflight || coldCache || AgentContextCompactor.shouldCompact(
             context: measuredContext,
@@ -894,12 +893,6 @@ extension Agent {
             threshold: threshold
         ) else {
             return nil
-        }
-        var compactionConfig = autoCompact.config
-        if coldCache {
-            // Native compaction sends the whole context, which a cold cache
-            // bills as a full write: more than the summary costs.
-            compactionConfig.useNativeCompaction = false
         }
 
         guard AgentContextCompactor.contextsMatchForCompaction(
@@ -930,6 +923,9 @@ extension Agent {
             return nil
         }
 
+        var compactionConfig = autoCompact.config
+        // On a cold cache native compaction re-writes the whole context too.
+        if coldCache { compactionConfig.useNativeCompaction = false }
         let recoveryTarget = automaticRecoveryTarget(
             model: model,
             threshold: threshold,
@@ -1016,6 +1012,10 @@ extension Agent {
         for listener in snapshotListeners() {
             await listener(event, cancellation)
         }
+    }
+
+    func emitVerbose(_ event: VerboseEvent) async {
+        await emitSynthetic(.verbose(event), cancellation: nil)
     }
 
     func emitIdleCompaction(_ event: AgentEvent, cancellation: CancellationHandle) async {
