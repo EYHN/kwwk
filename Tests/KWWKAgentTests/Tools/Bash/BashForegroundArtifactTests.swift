@@ -35,8 +35,8 @@ struct BashForegroundArtifactTests {
             nil
         )
         let text = textOutput(result)
-        #expect(text.hasPrefix("[output truncated:"))
-        #expect(text.contains("full output kept at "))
+        #expect(text.hasPrefix("1\n2\n"))
+        #expect(text.contains("full output: "))
         #expect(text.hasSuffix("100000"))
 
         guard case .object(let details) = result.details ?? .null,
@@ -68,7 +68,7 @@ struct BashForegroundArtifactTests {
         )
         let text = textOutput(result)
         #expect(text.contains("small-output"))
-        #expect(!text.contains("[output truncated:"))
+        #expect(!text.contains("output truncated"))
         if case .object(let details) = result.details ?? .null {
             #expect(details["outputFile"] == nil)
         }
@@ -96,7 +96,7 @@ struct BashForegroundArtifactTests {
             Issue.record("expected commandFailed for exit 3")
         } catch CodingToolError.commandFailed(let stderr, let exitCode) {
             #expect(exitCode == 3)
-            #expect(stderr.contains("full output kept at "))
+            #expect(stderr.contains("full output: "))
             let leftovers = (try? FileManager.default
                 .contentsOfDirectory(atPath: outputDir.path)) ?? []
             #expect(leftovers.contains { $0.hasPrefix("fg_") })

@@ -9,6 +9,13 @@ public enum Truncate {
     /// How long a grep may run before it returns what it has (seconds).
     public static let grepDefaultTimeBudgetSeconds: Double = 30
     public static let grepMaxTimeBudgetSeconds: Double = 600
+    /// Inline bash output: the first and last bytes; the middle stays in the output file.
+    public static let bashHeadBytes = 4 * 1024
+    public static let bashTailBytes = 12 * 1024
+    /// Defaults when the call passes no `limit`.
+    public static let readDefaultLimit = 500
+    public static let findDefaultLimit = 1000
+    public static let lsDefaultLimit = 500
 
     public struct Result: Sendable {
         public var content: String

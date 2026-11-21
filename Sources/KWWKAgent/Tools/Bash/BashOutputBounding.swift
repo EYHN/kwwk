@@ -1,9 +1,9 @@
 import Foundation
 import KWWKAI
 
-/// Bound bash output before it enters the transcript. Command output is most
-/// useful at the tail (errors and summaries land at the end), so keep the last
-/// lines/bytes within the read tool's budget. Callers that keep a full copy on
+/// Bound bash output before it enters the transcript: keep the first
+/// `Truncate.bashHeadBytes` (first errors) and the last `bashTailBytes`
+/// (summaries, final status) and mark the omitted middle. Callers that keep a full copy on
 /// disk (the flip/background paths) still expose it via the output file; this
 /// only bounds what the model sees inline, and is not duplicated into `details`.
 func boundBashOutput(_ text: String) -> String {
@@ -18,16 +18,15 @@ func boundBashOutputDetailed(
     _ text: String,
     fullOutputPath: String? = nil
 ) -> (text: String, truncated: Bool) {
-    let result = Truncate.truncateTail(text)
-    guard result.truncated else { return (result.content, false) }
-    let omitted = result.totalLines - result.outputLines
-    var notice = "[output truncated: \(omitted) earlier line(s) omitted; showing last "
-        + "\(result.outputLines) of \(result.totalLines) lines, "
-        + "\(Truncate.formatSize(result.totalBytes)) total"
+    let totalBytes = text.utf8.count
+    guard totalBytes > Truncate.bashHeadBytes + Truncate.bashTailBytes else { return (text, false) }
+    let head = Truncate.truncateHead(text, maxLines: .max, maxBytes: Truncate.bashHeadBytes)
+    let tail = Truncate.truncateTail(text, maxLines: .max, maxBytes: Truncate.bashTailBytes)
+    var notice = "[… output truncated: \(Truncate.formatSize(totalBytes - head.outputBytes - tail.outputBytes)) "
+        + "omitted from the middle of \(Truncate.formatSize(totalBytes))"
     if let fullOutputPath {
-        notice += "; full output kept at \(fullOutputPath) — grep that file to reach "
-            + "the omitted middle, e.g. grep -n \"error:\" \(bashShellQuote(fullOutputPath))"
+        notice += "; full output: \(fullOutputPath) — grep it for the omitted part, "
+            + "e.g. grep -n \"error:\" \(bashShellQuote(fullOutputPath))"
     }
-    notice += "]\n"
-    return (notice + result.content, true)
+    return (head.content + "\n" + notice + " …]\n" + tail.content, true)
 }

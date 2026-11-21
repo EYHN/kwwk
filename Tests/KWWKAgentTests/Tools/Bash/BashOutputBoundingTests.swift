@@ -28,8 +28,8 @@ struct BashOutputBoundingTests {
         // Completed (didn't hang), tail preserved, and bounded well under the
         // raw ~600KB the command emitted.
         #expect(text.hasSuffix("100000"))
-        #expect(text.hasPrefix("[output truncated:"))
-        #expect(text.utf8.count < 200_000)
+        #expect(text.hasPrefix("1\n2\n"))
+        #expect(text.utf8.count < 17 * 1024)
     }
 
     @Test("large stderr does not deadlock")

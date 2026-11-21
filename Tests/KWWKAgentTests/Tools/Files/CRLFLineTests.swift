@@ -85,7 +85,7 @@ struct CRLFLineTests {
         let file = dir.appendingPathComponent("big.txt")
         try write((1...2500).map { "Line \($0)\r\n" }.joined(), to: file)
 
-        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000))
+        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000, defaultLimit: 2000))
         let output = textOutput(try await tool.execute("call-crlf-5", ["path": .string(file.path)], nil, nil))
         // Compared as whole graphemes: the kept "\r" and the notice's "\n" make one "\r\n".
         #expect(output.hasPrefix("Line 1\r\nLine 2\r\n"))

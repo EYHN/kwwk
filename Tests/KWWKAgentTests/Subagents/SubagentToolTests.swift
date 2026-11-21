@@ -225,6 +225,32 @@ struct SubagentToolTests {
         }
     }
 
+    @Test("a foreground result over 16KB is saved to a file and cut inline")
+    func largeResultIsSaved() async throws {
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let answer = "RESULT-HEAD\n" + String(repeating: "finding\n", count: 5_000) + "RESULT-TAIL"
+        faux.setResponses([.message(subagentYieldMessage(answer))])
+        let tool = createAgentTool(
+            cwd: FileManager.default.currentDirectoryPath,
+            subagents: [minimalSubagent()],
+            parentModel: faux.getModel(),
+            parentTools: .readOnly,
+            bashEnvironment: testBashEnvironment
+        )
+        let text = resultText(try await tool.execute(
+            "call-large",
+            .object(["description": "large", "prompt": "answer at length", "subagent_type": "mini"]),
+            nil,
+            nil
+        ))
+        #expect(text.contains("RESULT-HEAD"))
+        #expect(!text.contains("RESULT-TAIL"))
+        #expect(text.utf8.count < 13 * 1024)
+        let path = try #require(text.firstMatch(of: #/full result: (\S+)/#)?.output.1)
+        #expect(try String(contentsOfFile: String(path), encoding: .utf8) == answer)
+    }
+
     @Test("SDK SubagentRunner can run a subagent directly")
     func sdkRunnerForeground() async throws {
         let faux = await registerFauxProvider()

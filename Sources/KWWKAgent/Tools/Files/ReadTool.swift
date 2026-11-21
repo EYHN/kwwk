@@ -5,15 +5,19 @@ public struct ReadToolOptions: Sendable {
     public var operations: ReadOperations
     public var maxLines: Int
     public var maxBytes: Int
+    /// Lines returned when the call passes no `limit`.
+    public var defaultLimit: Int
 
     public init(
         operations: ReadOperations = LocalReadOperations(),
         maxLines: Int = Truncate.defaultMaxLines,
-        maxBytes: Int = Truncate.defaultMaxBytes
+        maxBytes: Int = Truncate.defaultMaxBytes,
+        defaultLimit: Int = Truncate.readDefaultLimit
     ) {
         self.operations = operations
         self.maxLines = maxLines
         self.maxBytes = maxBytes
+        self.defaultLimit = defaultLimit
     }
 }
 
@@ -65,11 +69,12 @@ public func createReadTool(
     let ops = options.operations
     let maxLines = options.maxLines
     let maxBytes = options.maxBytes
+    let defaultLimit = min(options.defaultLimit, maxLines)
 
     var tool = AgentTool(
         name: "read",
         label: "read",
-        description: "Read the contents of a text or image file. Long outputs are truncated — use offset/limit for large files. Images are resized and recompressed before they enter the conversation.",
+        description: "Read the contents of a text or image file. Without `limit` it returns up to \(defaultLimit) lines; use offset/limit for large files. Images are resized and recompressed before they enter the conversation.",
         parameters: parameters,
         execute: { _, args, cancellation, _ in
             try cancellation?.throwIfCancelled()
@@ -133,7 +138,7 @@ public func createReadTool(
 
             let trunc = Truncate.truncateHead(
                 selectedContent,
-                maxLines: maxLines,
+                maxLines: limit == nil ? defaultLimit : maxLines,
                 maxBytes: maxBytes
             )
             var outputText: String

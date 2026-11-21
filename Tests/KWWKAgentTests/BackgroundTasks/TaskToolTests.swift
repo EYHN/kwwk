@@ -29,7 +29,6 @@ struct TaskToolTests {
             .object(["timeout_seconds": .double(.nan)]),
             .object(["timeout_seconds": .double(1.5)]),
             .object(["timeout_seconds": .int(0)]),
-            .object(["timeout_seconds": .int(301)]),
         ]
 
         for (index, arguments) in malformedTimeouts.enumerated() {
@@ -45,6 +44,33 @@ struct TaskToolTests {
             #expect(Date().timeIntervalSince(startedAt) < 0.25)
         }
         #expect(await manager.get(taskId)?.status == .running)
+    }
+
+    @Test("task_poll waits 300s by default and lowers longer requests without an error")
+    func pollTimeoutDefaultsAndClamps() async throws {
+        let manager = BackgroundTaskManager(outputDir: makeTaskTempDir())
+        let (taskId, _) = await manager.spawn(runner: TaskNeverRunner(label: "clamp"), sessionId: "s1")
+        defer { Task { try? await manager.kill(taskId) } }
+        let tool = createTaskPollTool(manager: manager, sessionId: "s1")
+        for timeout in [JSONValue.null, .int(600)] {
+            _ = try validateToolArguments(
+                tool: tool.toKWWKAITool(),
+                toolCall: ToolCall(id: "v", name: "task_poll", arguments: ["timeout_seconds": timeout])
+            )
+            let cancellation = CancellationHandle()
+            let updates = TaskUpdateProbe()
+            let poll = Task {
+                try await tool.execute(
+                    "clamp", ["task_ids": [.string(taskId)], "timeout_seconds": timeout], cancellation, { updates.append($0) }
+                )
+            }
+            #expect(await awaitUntil(2_500) { updates.count >= 1 })
+            if case .object(let details) = updates.last?.details ?? .null {
+                #expect(details["timeout_seconds"] == .int(300))
+            }
+            cancellation.cancel(reason: "steering")
+            _ = try await poll.value
+        }
     }
 
     @Test("list keeps the raw tail in details only and escapes untrusted metadata")

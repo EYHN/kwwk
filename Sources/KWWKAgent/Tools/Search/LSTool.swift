@@ -81,17 +81,18 @@ public func createLSTool(
                 return nil
             }()
 
-            var entries = try await ops.list(path: path)
-            if let limit { entries = Array(entries.prefix(max(0, limit))) }
-            let lines = entries.map { entry -> String in
+            let all = try await ops.list(path: path)
+            let lines = all.map { entry -> String in
                 switch entry.kind {
                 case .directory: return "\(entry.name)/"
                 case .symlink: return "\(entry.name)@"
                 case .file: return "\(entry.name)"
                 }
             }
+            let (text, shown) = cappedListing(lines, limit: max(0, limit ?? Truncate.lsDefaultLimit))
+            let entries = all.prefix(shown.count)
             return AgentToolResult(
-                content: [.text(TextContent(text: lines.joined(separator: "\n")))],
+                content: [.text(TextContent(text: text))],
                 details: .object([
                     "entries": .array(entries.map { e in
                         .object([

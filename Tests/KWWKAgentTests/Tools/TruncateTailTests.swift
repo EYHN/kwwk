@@ -63,17 +63,19 @@ struct TruncateTailTests {
     func boundSingleLine() {
         let big = String(repeating: "z", count: 120 * 1024) + " EXIT 1"
         let bounded = boundBashOutput(big)
-        #expect(bounded.hasPrefix("[output truncated:"))
-        #expect(bounded.contains("showing last 1 of 1 lines"))
+        #expect(bounded.contains("[… output truncated: "))
         #expect(bounded.hasSuffix("z EXIT 1"))
     }
 
-    @Test("boundBashOutput prepends a notice only when truncated")
-    func boundNotice() {
+    @Test("boundBashOutput keeps the head and tail of CRLF / multi-byte output within 16KB")
+    func boundHeadTail() {
         #expect(boundBashOutput("hello") == "hello")
-        let big = (1...5000).map { "row \($0)" }.joined(separator: "\n")
-        let bounded = boundBashOutput(big)
-        #expect(bounded.hasPrefix("[output truncated:"))
-        #expect(bounded.hasSuffix("row 5000"))
+        let big = (1...5000).map { "row \($0) é😀\r\n" }.joined()
+        let bounded = boundBashOutputDetailed(big, fullOutputPath: "/tmp/out.log").text
+        #expect(bounded.hasPrefix("row 1 é😀\r\nrow 2 é😀\r\n"))
+        #expect(bounded.hasSuffix("row 5000 é😀\r"))
+        #expect(bounded.contains("full output: /tmp/out.log"))
+        #expect(!bounded.contains("\u{FFFD}"))
+        #expect(bounded.utf8.count <= Truncate.bashHeadBytes + Truncate.bashTailBytes + 256)
     }
 }

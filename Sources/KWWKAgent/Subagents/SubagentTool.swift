@@ -945,7 +945,7 @@ private func completedSubagentToolResult(
         agentId: launch.agentId,
         subagentType: definition.name,
         resumedRun: launch.resumedRun,
-        result: result.text
+        result: inlineSubagentResult(result.text)
     )
     return AgentToolResult(
         content: [.text(TextContent(text: body))],
@@ -3616,6 +3616,21 @@ private func modelFacingSubagentFailure(
     }
     sections.append("agent_id: \(agentId) — read what it did with agent_history, or resume it with agent_send.")
     return sections.joined(separator: "\n\n")
+}
+
+/// A foreground result over 16KB is saved to a file; its first 12KB stays
+/// inline with the path, so one long report cannot flood the parent context.
+func inlineSubagentResult(_ text: String) -> String {
+    let total = text.utf8.count
+    guard total > 16 * 1024 else { return text }
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("kwwk-subagent-results")
+    let file = dir.appendingPathComponent("\(UUID().uuidString.prefix(8))-result.md")
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let saved = (try? Data(text.utf8).write(to: file)) != nil
+    let head = String(decoding: Data(text.utf8.prefix(12 * 1024)), as: UTF8.self)
+    let location = saved ? "full result: \(file.path) — read it with offset/limit" : "full result unavailable"
+    return head + "\n[… result truncated: showing the first \(Truncate.formatSize(head.utf8.count)) of "
+        + "\(Truncate.formatSize(total)); \(location) …]"
 }
 
 private func modelFacingSubagentSuccess(

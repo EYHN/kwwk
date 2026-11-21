@@ -69,15 +69,18 @@ public func createFindTool(
                 return nil
             }()
 
-            let matches = try await ops.find(pattern: pattern, cwd: root, limit: limit)
-            if matches.isEmpty {
+            let cap = max(0, limit ?? Truncate.findDefaultLimit)
+            // One past the cap tells whether more matches exist.
+            let found = try await ops.find(pattern: pattern, cwd: root, limit: min(cap, Int.max - 1) + 1)
+            let (text, matches) = cappedListing(found, limit: cap)
+            if found.isEmpty {
                 return AgentToolResult(
                     content: [.text(TextContent(text: "No files match \(pattern)"))],
                     details: .object(["files": .array([])])
                 )
             }
             return AgentToolResult(
-                content: [.text(TextContent(text: matches.joined(separator: "\n")))],
+                content: [.text(TextContent(text: text))],
                 details: .object(["files": .array(matches.map { .string($0) })])
             )
         }
@@ -86,4 +89,21 @@ public func createFindTool(
     tool.fileAccessCwd = cwd
     tool.codingToolCapabilities = .find
     return tool
+}
+
+/// The first `limit` entries within `Truncate.defaultMaxBytes`, with a notice
+/// when any were left out. Shared by `find` and `ls`.
+func cappedListing(_ entries: [String], limit: Int) -> (text: String, shown: [String]) {
+    var shown: [String] = []
+    var bytes = 0
+    for entry in entries.prefix(limit) {
+        bytes += entry.utf8.count + 1
+        if bytes > Truncate.defaultMaxBytes { break }
+        shown.append(entry)
+    }
+    var text = shown.joined(separator: "\n")
+    if shown.count < entries.count {
+        text += "\n\n[truncated: showing the first \(shown.count) entries; pass a larger limit or narrow the pattern or path]"
+    }
+    return (text, shown)
 }

@@ -70,7 +70,7 @@ struct ReadToolTests {
         let lines = (1...2500).map { "Line \($0)" }.joined(separator: "\n")
         try write(lines, to: file)
 
-        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000))
+        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000, defaultLimit: 2000))
         let result = try await tool.execute("call-3", ["path": .string(file.path)], nil, nil)
         let output = textOutput(result)
         #expect(output.contains("Line 1"))
@@ -78,6 +78,24 @@ struct ReadToolTests {
         #expect(!output.contains("Line 2001"))
         #expect(output.contains("Showing lines 1-2000 of 2500"))
         #expect(output.contains("offset=2001"))
+    }
+
+    @Test("without a limit, read returns 500 lines and the offset to continue")
+    func defaultWindow() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("long.txt")
+        try write((1...3000).map { "Line \($0)" }.joined(separator: "\n"), to: file)
+
+        let tool = createReadTool(cwd: dir.path)
+        let output = textOutput(try await tool.execute("call-default", ["path": .string(file.path)], nil, nil))
+        #expect(output.contains("\nLine 500\n"))
+        #expect(!output.contains("Line 501"))
+        #expect(output.contains("[Showing lines 1-500 of 3000. Use offset=501 to continue.]"))
+        let explicit = textOutput(try await tool.execute(
+            "call-explicit", ["path": .string(file.path), "limit": 2000], nil, nil
+        ))
+        #expect(explicit.contains("\nLine 2000\n"))
     }
 
     @Test("honours offset and limit parameters")
@@ -129,7 +147,7 @@ struct ReadToolTests {
         let lines = (1...2500).map { "Line \($0)" }.joined(separator: "\n")
         try write(lines, to: file)
 
-        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000))
+        let tool = createReadTool(cwd: dir.path, options: ReadToolOptions(maxLines: 2000, defaultLimit: 2000))
         let result = try await tool.execute("call-6", ["path": .string(file.path)], nil, nil)
         guard case .object(let details) = result.details ?? .null,
               case .object(let trunc) = details["truncation"] ?? .null else {
@@ -764,6 +782,22 @@ struct FindToolTests {
 
 @Suite("LS tool")
 struct LSToolTests {
+    @Test("find and ls cap their default listing and say more exist")
+    func defaultListingCaps() async throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for index in 1...1_001 { try write("", to: dir.appendingPathComponent("f\(index).txt")) }
+
+        let ls = textOutput(try await createLSTool(cwd: dir.path).execute("ls-cap", ["path": .string("")], nil, nil))
+        #expect(ls.components(separatedBy: "\n").filter { $0.hasSuffix(".txt") }.count == 500)
+        #expect(ls.hasSuffix("[truncated: showing the first 500 entries; pass a larger limit or narrow the pattern or path]"))
+        let find = textOutput(try await createFindTool(cwd: dir.path).execute("find-cap", ["pattern": "*.txt"], nil, nil))
+        // 1,001 absolute temp paths also pass the 50KB cap, which stops first.
+        let shown = find.components(separatedBy: "\n").filter { $0.hasSuffix(".txt") }.count
+        #expect(shown < 1_001 && find.utf8.count <= Truncate.defaultMaxBytes + 200)
+        #expect(find.contains("[truncated: showing the first \(shown) entries"))
+    }
+
     @Test("lists a directory's contents")
     func listsDirectory() async throws {
         let dir = makeTempDir()

@@ -1,7 +1,7 @@
 import Foundation
 import KWWKAI
 
-private let maxSubagentHistoryResponseBytes = 64 * 1_024
+private let maxSubagentHistoryResponseBytes = 32 * 1_024
 private let defaultSubagentHistoryMessages = 20
 private let maxSubagentHistoryMessages = 100
 private let defaultSubagentToolCallLines = 120
