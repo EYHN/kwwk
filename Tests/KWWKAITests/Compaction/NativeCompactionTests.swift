@@ -190,6 +190,74 @@ struct NativeCompactionTests {
             )
         }
     }
+
+    @Test("Anthropic compaction usage sums the iterations")
+    func anthropicUsage() async throws {
+        let body = #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}],"usage":{"input_tokens":0,"output_tokens":0,"iterations":[{"type":"compaction","input_tokens":3,"cache_read_input_tokens":200000,"cache_creation_input_tokens":1200,"output_tokens":5000},{"type":"message","input_tokens":2,"output_tokens":7}]}}"#
+        let result = try #require(try await AnthropicProvider(client: StubSSEClient(body: body)).compact(
+            model: Self.claude, context: Context(messages: [.user(UserMessage(text: "history"))]),
+            instructions: "", options: nil))
+        let usage = try #require(result.usage)
+        #expect(usage.input == 5)
+        #expect(usage.cacheRead == 200_000)
+        #expect(usage.cacheWrite == 1_200)
+        #expect(usage.output == 5_007)
+        #expect(usage.totalTokens == 206_212)
+        #expect(usage.anthropicIterations?.count == 2)
+        let flat = #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"summary"}],"usage":{"input_tokens":4,"cache_read_input_tokens":10,"output_tokens":6}}"#
+        let plain = try #require(try await AnthropicProvider(client: StubSSEClient(body: flat)).compact(
+            model: Self.claude, context: Context(messages: []), instructions: "", options: nil))
+        #expect(plain.usage?.input == 4)
+        #expect(plain.usage?.cacheRead == 10)
+        #expect(plain.usage?.output == 6)
+    }
+
+    @Test("Codex compaction usage comes from response.completed")
+    func codexUsage() async throws {
+        let sse = "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}}\n\n"
+            + "data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1000,\"input_tokens_details\":{\"cached_tokens\":900},\"output_tokens\":50}}}\n\n"
+        let provider = ProviderVariants.chatgptCodex(client: StubSSEClient(body: sse))
+        let result = try #require(try await provider.compact(model: Self.codex,
+            context: Context(messages: [.user(UserMessage(text: "goal"))]), instructions: "", options: nil))
+        #expect(result.usage?.input == 100)
+        #expect(result.usage?.cacheRead == 900)
+        #expect(result.usage?.output == 50)
+        let bare = try #require(try await ProviderVariants.chatgptCodex(client: StubSSEClient(body: Self.codexSSE))
+            .compact(model: Self.codex, context: Context(messages: []), instructions: "", options: nil))
+        #expect(bare.usage == nil)
+    }
+
+    // AirBuild registers AnthropicProvider as `airbuild-anthropic-messages-<id>`.
+    @Test("an Anthropic route under a host's own api name replays its compaction block")
+    func customAnthropicAPIName() async throws {
+        var model = Self.claude
+        model.api = "airbuild-anthropic-messages-team-agent"
+        var compat = ModelCompat()
+        compat.supportsServerCompaction = true
+        model.compat = compat
+        let client = StubSSEClient(body: #"{"stop_reason":"compaction","content":[{"type":"compaction","content":"Keep working","encrypted_content":"signed"}]}"#)
+        let provider = AnthropicProvider(api: model.api, client: client, defaultAPIKey: "token")
+        let result = try #require(try await provider.compact(model: model,
+            context: Context(messages: [.user(UserMessage(text: "history"))]), instructions: "", options: nil))
+        #expect(result.payload.isAnthropicMessages)
+        #expect(result.payload.canReplay(with: model))
+        #expect(result.payload.textSummary == "Keep working")
+        var recap = UserMessage(text: result.summary, source: .compaction)
+        recap.nativeCompaction = result.payload
+        let replay = String(decoding: try AnthropicProvider.encodeBody(model: model,
+            context: Context(messages: [.user(recap), .user(UserMessage(text: "next"))]), options: nil), as: UTF8.self)
+        #expect(replay.contains("signed"))
+        #expect(replay.contains("compact_20260112"))
+    }
+
+    @Test(arguments: [
+        ("anthropic-messages", true), ("airbuild-anthropic-messages-team-agent", true),
+        ("my-anthropic-messages", true), ("anthropic-messages-v2", true),
+        ("openai-responses", false), ("anthropic", false), ("anthropic-messagesx", false),
+    ])
+    func anthropicWireNames(api: String, matches: Bool) {
+        #expect(AnthropicMessagesWire.matches(api: api) == matches)
+    }
 }
 
 private extension JSONValue {

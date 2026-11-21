@@ -878,12 +878,28 @@ extension Agent {
             return nil
         }
 
-        guard forced || isBlockingPreflight || AgentContextCompactor.shouldCompact(
+        // Only a request about to be sent finds the cache cold.
+        let coldCache: Bool = {
+            guard case .preflight = trigger, let options = autoCompact.coldCache else { return false }
+            return options.isDue(
+                messages: context.messages,
+                usage: usage,
+                autoCompactThreshold: threshold,
+                now: Timestamp.now()
+            )
+        }()
+        guard forced || isBlockingPreflight || coldCache || AgentContextCompactor.shouldCompact(
             context: measuredContext,
             model: model,
             threshold: threshold
         ) else {
             return nil
+        }
+        var compactionConfig = autoCompact.config
+        if coldCache {
+            // Native compaction sends the whole context, which a cold cache
+            // bills as a full write: more than the summary costs.
+            compactionConfig.useNativeCompaction = false
         }
 
         guard AgentContextCompactor.contextsMatchForCompaction(
@@ -927,7 +943,7 @@ extension Agent {
             expectedContextRevision: stateSnapshot.revision,
             backgroundManager: autoCompact.backgroundManager,
             sessionId: sessionId,
-            config: autoCompact.config,
+            config: compactionConfig,
             targetTokens: recoveryTarget,
             additionalMessages: pendingMessages,
             respectMinimumMessages: false,

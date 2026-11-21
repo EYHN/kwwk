@@ -147,7 +147,7 @@ public final class OpenAIResponsesProvider:
             mergeHeader(&headers, name: key, value: value, append: false)
         }
         if let sessionId = options?.sessionId { headers["session_id"] = sessionId }
-        let json: [String: JSONValue]
+        var json: [String: JSONValue]
         if codex {
             let compacted = try await client.compactionSSE(
                 url: url,
@@ -158,7 +158,8 @@ public final class OpenAIResponsesProvider:
             // V2 compacts assistant history; original user messages remain
             // part of the replacement input, as in omp/Codex.
             let retained = input.filter { $0["role"] == .string("user") }
-            json = ["output": .array(retained + [compacted])]
+            json = ["output": .array(retained + [compacted.item])]
+            if let usage = compacted.usage { json["usage"] = .object(usage) }
         } else {
             json = try await client.compactionJSON(
                 url: url,
@@ -189,8 +190,19 @@ public final class OpenAIResponsesProvider:
                 model: model,
                 items: items,
                 fallbackMessages: TransformMessages.expandNativeCompaction(context.messages)
-            )
+            ),
+            usage: Self.compactionUsage(json["usage"], model: model)
         )
+    }
+
+    /// The compaction response's usage, mapped as a streamed turn's is.
+    static func compactionUsage(_ value: JSONValue?, model: Model) -> Usage? {
+        guard case .object(let reported)? = value else { return nil }
+        let state = OpenAIResponsesState(api: model.api, provider: model.provider, modelId: model.id)
+        state.applyUsage(reported)
+        var usage = state.usage
+        usage.cost = calculateCost(model: model, usage: usage)
+        return usage
     }
 
     private func run(

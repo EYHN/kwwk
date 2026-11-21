@@ -41,6 +41,13 @@ public struct AgentContextCompactionConfig: Sendable {
     /// Custom transports may supply native compaction. With no custom stream,
     /// nil resolves the registered provider automatically.
     public var nativeCompaction: NativeCompactionFn?
+    /// Old tool results cleared from the summary request's input (never from
+    /// native compaction, which shares the live prompt's cached prefix).
+    /// `nil` sends them as the transcript holds them.
+    public var summaryInputPruning: ToolResultPrunePolicy?
+    /// Told of a native compaction failure the summary path then covers, so
+    /// a host can log it; authentication failures are thrown instead.
+    public var onNativeCompactionFailure: (@Sendable (Error) -> Void)?
 
     public init(
         minMessages: Int = agentCompactMinMessages,
@@ -56,7 +63,9 @@ public struct AgentContextCompactionConfig: Sendable {
         maxSummaryAttempts: Int = 2,
         summaryRetryPolicy: ProviderRetryPolicy = .init(),
         useNativeCompaction: Bool = true,
-        nativeCompaction: NativeCompactionFn? = nil
+        nativeCompaction: NativeCompactionFn? = nil,
+        summaryInputPruning: ToolResultPrunePolicy? = .init(),
+        onNativeCompactionFailure: (@Sendable (Error) -> Void)? = nil
     ) {
         self.minMessages = minMessages
         self.toolOutputCharacterLimit = toolOutputCharacterLimit
@@ -72,6 +81,8 @@ public struct AgentContextCompactionConfig: Sendable {
         self.summaryRetryPolicy = summaryRetryPolicy
         self.nativeCompaction = nativeCompaction
         self.useNativeCompaction = useNativeCompaction
+        self.summaryInputPruning = summaryInputPruning
+        self.onNativeCompactionFailure = onNativeCompactionFailure
     }
 }
 

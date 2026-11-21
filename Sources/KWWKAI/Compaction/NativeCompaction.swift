@@ -22,11 +22,15 @@ public struct NativeCompactionPayload: Codable, Sendable, Hashable {
     public func canReplay(with model: Model) -> Bool {
         guard provider == model.provider && api == model.api,
               model.compat?.supportsServerCompaction != false else { return false }
-        return api != "anthropic-messages" || AnthropicProvider.supportsNativeCompaction(model: model)
+        return !isAnthropicMessages || AnthropicProvider.supportsNativeCompaction(model: model)
     }
 
+    /// Whether an Anthropic Messages provider produced this payload, under
+    /// the built-in api name or a host's own registration of the same wire.
+    public var isAnthropicMessages: Bool { AnthropicMessagesWire.matches(api: api) }
+
     public var textSummary: String? {
-        guard api == "anthropic-messages" else { return nil }
+        guard isAnthropicMessages else { return nil }
         return items.compactMap { item in
             if case .string(let text) = item["content"] { return text }
             return nil
@@ -34,12 +38,27 @@ public struct NativeCompactionPayload: Codable, Sendable, Hashable {
     }
 }
 
+/// Recognizes the Anthropic Messages wire by api name. Hosts register
+/// `AnthropicProvider` under their own api names so their routes do not
+/// clobber the built-in one; AirBuild uses `airbuild-anthropic-messages-<id>`.
+/// Any name with `anthropic-messages` as a dash-separated component counts.
+public enum AnthropicMessagesWire {
+    public static let api = "anthropic-messages"
+
+    public static func matches(api: String) -> Bool {
+        api == Self.api || "-\(api)-".contains("-\(Self.api)-")
+    }
+}
+
 public struct NativeCompactionResult: Sendable {
     public var summary: String
     public var payload: NativeCompactionPayload
-    public init(summary: String, payload: NativeCompactionPayload) {
+    /// Provider-reported usage of the compaction request, when it says.
+    public var usage: Usage?
+    public init(summary: String, payload: NativeCompactionPayload, usage: Usage? = nil) {
         self.summary = summary
         self.payload = payload
+        self.usage = usage
     }
 }
 
@@ -80,12 +99,13 @@ public func compactNative(
 extension HTTPClient {
     /// Codex V2 must finish and supply exactly one native compaction item.
     /// A partial item followed by EOF must never replace the source history.
+    /// Also returns `response.completed`'s usage object, when present.
     func compactionSSE(
         url: URL,
         headers: [String: String],
         body: Data,
         cancellation: CancellationHandle?
-    ) async throws -> JSONValue {
+    ) async throws -> (item: JSONValue, usage: [String: JSONValue]?) {
         try cancellation?.throwIfCancelled()
         let (response, chunks) = try await stream(
             url: url,
@@ -99,6 +119,7 @@ extension HTTPClient {
             throw await ProviderFailure.http(response, body: chunks)
         }
         var items: [JSONValue] = []
+        var usage: [String: JSONValue]?
         var completed = false
         for try await event in parseSSE(bytes: chunks) {
             try cancellation?.throwIfCancelled()
@@ -110,6 +131,9 @@ extension HTTPClient {
             if type == "response.output_item.done", let item = json["item"], item["type"] == "compaction" {
                 items.append(item)
             } else if type == "response.completed" || type == "response.done" {
+                if case .object(let response)? = json["response"], case .object(let reported)? = response["usage"] {
+                    usage = reported
+                }
                 completed = true
                 break
             } else if type == "error" || type == "response.failed" || type == "response.incomplete" {
@@ -124,7 +148,7 @@ extension HTTPClient {
                 message: "Invalid native compaction output: expected exactly one nonempty compaction item"
             )
         }
-        return items[0]
+        return (items[0], usage)
     }
 
     func compactionJSON(

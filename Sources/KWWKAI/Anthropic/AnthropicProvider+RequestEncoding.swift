@@ -203,7 +203,7 @@ extension AnthropicProvider {
         }
         messages.append(contentsOf: pendingToolChanges)
         if context.messages.contains(where: {
-            if case .user(let user) = $0 { return user.nativeCompaction?.api == "anthropic-messages" }
+            if case .user(let user) = $0 { return user.nativeCompaction?.isAnthropicMessages == true }
             return false
         }) {
             // Replaying a compaction block requires the strategy to remain
@@ -424,7 +424,7 @@ extension AnthropicProvider {
             // changes; otherwise the top-level list holds every tool.
             return nil
         case .user(let u):
-            if let native = u.nativeCompaction, native.api == "anthropic-messages" {
+            if let native = u.nativeCompaction, native.isAnthropicMessages {
                 var blocks = native.items.compactMap { anyFromJSONValue($0) as? [String: Any] }
                 // The host recap also carries current background-task/fact
                 // ledgers, which are not part of the provider's summary.
